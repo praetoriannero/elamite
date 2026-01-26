@@ -77,9 +77,13 @@ func_arg_list: expr ("," expr)* [","]
 ?atom: ident
      | integer
      | float
+     | bool
      | string_concat
      | func_call_expr
      | "(" expr ")"
+
+bool: "true" -> bool_true
+    | "false" -> bool_false
 
 struct_field: ident ":" ident ","
 

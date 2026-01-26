@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from dataclasses import dataclass
-from lark import Lark, Transformer
+from lark import Lark, Transformer, v_args
 from pathlib import Path
 from pprint import pprint
 
@@ -85,7 +85,12 @@ class Float:
     value: str
 
 
-type Expr = Identifier | Integer | Float | String | FuncCall | BinaryOp | UnaryOp
+@dataclass
+class Bool:
+    value: bool
+
+
+type Expr = Identifier | Integer | Float | Bool | String | FuncCall | BinaryOp | UnaryOp
 
 
 @dataclass
@@ -168,7 +173,7 @@ class UnOp(Enum):
     Der = "*"
 
 
-class Tree(Transformer):
+class Builder(Transformer):
     NULL = str
     MUT = str
 
@@ -216,6 +221,12 @@ class Tree(Transformer):
 
     def mut(self, mut):
         return "mut"
+
+    def bool_true(self, atom):
+        return Bool(True)
+
+    def bool_false(self, atom):
+        return Bool(False)
 
     def start(self, module):
         return module[0]
@@ -265,7 +276,8 @@ class Tree(Transformer):
     def func_arg_list(self, args):
         return args
 
-    def symbol(self, symbol_def):
+    @v_args(meta=True)
+    def symbol(self, meta, symbol_def):
         return symbol_def
 
     def block(self, block):
@@ -383,14 +395,29 @@ class Tree(Transformer):
 
 
 class Analyzer:
-    def __init__(self, ast: dict):
-        pass
+    def __init__(self, ast: dict, bin_type: ProjectType):
+        self.scope = {}  # our current namespace
+        self.locals: dict[Identifier, Type] = {}  # exist in the current scope
+        self.globals: dict[Identifier, Type] = {}  # exist in the global scope
 
     def visit_symbol(self, symbol: Symbol):
         pass
 
     def visit_func(self, func: FuncDef):
         pass
+
+
+class Transpiler:
+    """
+    Convert the IR to C
+    """
+
+    pass
+
+
+class ProjectType(Enum):
+    BIN = 0
+    LIB = 1
 
 
 class OptLevel(Enum):
@@ -406,7 +433,11 @@ class CompilerOptions:
 
 
 class Compiler:
-    def __init__(self, ast: Tree, options: CompilerOptions):
+    """
+    Compile the code
+    """
+
+    def __init__(self, ast: dict, options: CompilerOptions):
         pass
 
 
@@ -415,27 +446,32 @@ if __name__ == "__main__":
     with open("elamite.lark", "r") as input_handle:
         lines = input_handle.read()
 
-    builder = Lark(lines, transformer=Tree(), parser="lalr")
+    parser = Lark(lines, propagate_positions=True, parser="lalr")
+    builder = Builder()
+
+    def parse(source, parser, builder):
+        tree = parser.parse(source)
+        return builder.transform(tree)
 
     empty_example = ""
-    pprint(builder.parse(empty_example))
+    pprint(parse(empty_example, parser, builder))
 
     struct_def_example = "struct foo{a: qux,}"
-    ast = builder.parse(struct_def_example)
+    ast = parse(struct_def_example, parser, builder)
     pprint(ast)
 
     func_def_example = "fn qux(a: bar, b: baz) {}"
-    ast = builder.parse(func_def_example)
+    ast = parse(func_def_example, parser, builder)
     pprint(ast)
 
     func_def_w_return_type = "fn qux() -> baz {}"
-    pprint(builder.parse(func_def_w_return_type))
+    pprint(parse(func_def_w_return_type, parser, builder))
 
     multi_symbol_example = struct_def_example + " " + func_def_example
-    pprint(builder.parse(multi_symbol_example))
+    pprint(parse(multi_symbol_example, parser, builder))
 
     assignment_example = "const y: f32 = 10.0;"
-    pprint(builder.parse(assignment_example))
+    pprint(parse(assignment_example, parser, builder))
 
     func_def_w_body_ret_type = """
     fn qux() -> null {
@@ -443,9 +479,10 @@ if __name__ == "__main__":
         let mut z: u32 = 4;
         x && z;
         x += 1;
+        let j = false;
         let y = 0 - -1 + (2 * 3) << (4 / 5);
         let y = x + 1;
         print(x);
     }
     """
-    pprint(builder.parse(func_def_w_body_ret_type))
+    pprint(parse(func_def_w_body_ret_type, parser, builder))
