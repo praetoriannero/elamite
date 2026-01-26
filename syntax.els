@@ -1,0 +1,83 @@
+import std;
+
+
+enum Outer {
+    True,
+    False,
+}
+
+module {
+    struct Inner {
+        a: i32,
+        b: u64,
+    }
+
+    struct Outer {
+        Default,
+        CaseA,
+        CaseB,
+    }
+}
+
+struct Vec<T> {
+    item: T,
+}
+
+
+struct Example {
+    a: i32,
+    b: string,
+    c: vec<f64>,
+}
+
+let lambda = | x: &u64 | -> string {
+    return format("{}", x);
+}
+
+union TestUnion {
+    i32,
+    string,
+    vec<string>,
+}
+
+default Example {
+    a: 0,
+    b: "",
+    c: Vec<f64>::default(),
+}
+
+impl Example {
+    fn new() -> Self {
+        return Example{a: 10, b: "test"};
+    }
+
+    fn foo(a: Example) -> &mut f32 {
+        let _x: f32 = 0.0;
+        let mut y = _x.pow(2);
+        return &y;
+    }
+}
+
+enum Result<T, U> {
+    Ok(T),
+    Error(U),
+}
+
+
+struct Ok{}
+
+
+struct Error{}
+
+
+fn main() -> Result<Ok, Error> {
+    var x: u64 = 0;
+    x += 1;
+    print("{}", x);
+    print("Hello, world!");
+
+    let err: Result<Ok, Error> = default();
+    match err {
+        case 
+    }
+}

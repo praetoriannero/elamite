@@ -1,0 +1,50 @@
+Keywords:
+    Local Statements:
+        Control Flow:
+            return
+                return -1;
+
+            if
+                if x != 0 {
+                    return -1;
+                }
+
+            else
+                if x != 0 {
+                    return -1;
+                } else if (x == 2) {
+                    return -2;
+                } else {
+                    return 0;
+                }
+
+        Loops:
+            for
+                for x in 0..5 {
+                    println("{}", x);
+                }
+
+            while
+                let mut x = 0;
+                while x <= 5 {
+                    x += 1;
+                    println("{}", x);
+                }
+
+        Pattern:
+            match
+            case
+
+        Assignment
+            let
+            mut
+
+        Range
+            in
+
+    Types:
+        fn
+        struct
+        enum
+        impl
+        abstract

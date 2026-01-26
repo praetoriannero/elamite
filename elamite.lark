@@ -1,0 +1,150 @@
+start: module
+
+module: symbol*
+
+symbol: struct_def
+      | func_def
+      | global_stmt
+      | enum_def
+
+struct_def: "struct" ident "{" struct_field* "}"
+
+global_stmt: (CONST | (STATIC mut?)) ident ":" ident "=" expr ";"
+
+enum_def: "enum" ident "{" enum_field* "}"
+
+block: stmt*
+
+stmt: assign_stmt
+    | init_stmt
+    | return_stmt
+    | bare_stmt
+    | for_stmt
+    | while_stmt
+    | if_stmt
+
+slice: "[" integer ".." ("=" | "<")? integer "]"
+
+?bare_stmt: expr ";"
+break_stmt: "break" ";"
+continue_stmt: "continue" ";"
+assign_stmt: ident assign_op expr ";"
+init_stmt: "let" mut? ident (":" type)? "=" expr ";"
+return_stmt: "return" expr ";"
+for_stmt: "for" ident "in" (ident | slice) "{" block "}"
+while_stmt: "while" expr "{" block "}"
+if_stmt: "if" expr "{" block "}" ("else" "if" expr "{" block "}")* ("else" "{" block "}")?
+
+func_call_expr: ident "(" func_arg_list? ")"
+
+func_arg_list: expr ("," expr)* [","]
+
+?expr: logical_or
+?logical_or: logical_or "||" logical_and -> or_op
+           | logical_and
+?logical_and: logical_and "&&" comp -> and_op
+            | comp
+?comp: comp "==" bit_or -> eq_op
+     | comp "!=" bit_or -> ne_op
+     | comp ">" bit_or -> gt_op
+     | comp "<" bit_or -> lt_op
+     | comp "<=" bit_or -> lte_op
+     | comp ">=" bit_or -> gte_op
+     | bit_or
+?bit_or: bit_or "|" bit_xor -> bwor_op
+       | bit_xor
+?bit_xor: bit_xor "^" bit_and -> bwxor_op
+        | bit_and
+?bit_and: bit_and "&" shift -> bwand_op
+        | shift
+?shift: shift "<<" add -> shl_op
+      | shift ">>" add -> shr_op
+      | add
+?add: add "+" mul -> add_op
+    | add "-" mul -> sub_op
+    | mul
+?mul: mul "*" factor-> mul_op
+    | mul "/" factor-> div_op
+    | mul "%" factor-> mod_op
+    | factor
+?factor: "+" atom -> factor_plus
+       | "-" atom -> factor_neg
+       | "~" atom -> factor_binv
+       | "!" atom -> factor_not
+       | "&" atom -> factor_ref
+       | "*" atom -> factor_deref
+       | atom
+?atom: ident
+     | integer
+     | float
+     | string_concat
+     | func_call_expr
+     | "(" expr ")"
+
+struct_field: ident ":" ident ","
+
+enum_field: ident ","
+
+func_def: "fn" ident "(" func_param_list? ")" ("->" type)? "{" block "}"
+func_param_list: func_param ("," func_param)*
+func_param: ident ":" ident
+
+type: ident | array
+
+fq_ident: (ident "::")* ident
+
+!assign_op: "+=" -> plus_equal
+          | "-=" -> minus_equal
+          | "*=" -> times_equal
+          | "/=" -> div_equal
+          | "%=" -> mod_equal
+          | "<<=" -> shl_equal
+          | ">>=" -> shr_equal
+          | "&=" -> bwand_equal
+          | "|=" -> bwor_equal
+          | "^=" -> bwxor_equal
+          | "=" -> equal
+
+string_concat: STRING+
+mut: "mut"
+array: "[" ident ";" integer "]"
+ident: /[A-Za-z_][A-Za-z0-9_]*/
+float: FLOAT_NUMBER
+integer: DEC_NUMBER | HEX_NUMBER | BIN_NUMBER | OCT_NUMBER
+
+// await should probably be part of the expr rule
+// AWAIT: "await"
+STATIC: "static"
+CONST: "const"
+
+STRING: /([ubf]?r?|r[ubf])("(?!"").*?(?<!\\)(\\\\)*?"|'(?!'').*?(?<!\\)(\\\\)*?')/i
+
+TRUE: "true"
+FALSE: "false"
+STRTYPE: "string"
+BOOL: "bool"
+F16: "f16"
+F32: "f32"
+F64: "f64"
+I8: "i8"
+I16: "i16"
+I32: "i32"
+I64: "i64"
+U8: "u8"
+U16: "u16"
+U32: "u32"
+U64: "u64"
+
+%ignore /[\t \f\n]+/  // WS
+
+_SPECIAL_DEC: "0".."9"        ("_"?  "0".."9"                       )*
+DEC_NUMBER:   "1".."9"        ("_"?  "0".."9"                       )*
+          |   "0"             ("_"?  "0"                            )* /(?![1-9])/
+HEX_NUMBER.2: "0" ("x" | "X") ("_"? ("0".."9" | "a".."f" | "A".."F"))+
+OCT_NUMBER.2: "0" ("o" | "O") ("_"?  "0".."7"                       )+
+BIN_NUMBER.2: "0" ("b" | "B") ("_"?  "0".."1"                       )+
+
+_EXP: ("e"|"E") ["+" | "-"] _SPECIAL_DEC
+DECIMAL: "." _SPECIAL_DEC | _SPECIAL_DEC "." _SPECIAL_DEC?
+FLOAT_NUMBER.2: _SPECIAL_DEC _EXP | DECIMAL _EXP?
+// IMAG_NUMBER.2: (_SPECIAL_DEC      | FLOAT_NUMBER) ("J" | "j")
