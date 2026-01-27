@@ -31,7 +31,7 @@ class EnumDef(Symbol):
 
 @dataclass
 class FuncDef(Symbol):
-    params: list[FuncParam] | None
+    params: list[FuncParam]
     ret_type: Type | None
     body: list
 
@@ -56,18 +56,33 @@ class StructField:
 
 
 @dataclass
-class VarDecl:
+class LetStmt:
     ident: Identifier
-    type: Type
+    type: Type | None
     value: str
     mut: bool
 
 
 @dataclass
-class VarAssign:
+class AssignStmt:
     op: AssignOp
     lhs: Identifier
     rhs: Expr
+
+
+@dataclass
+class ReturnStmt:
+    expr: Expr
+
+
+@dataclass
+class ExprStmt:
+    expr: Expr
+
+
+@dataclass
+class ForStmt:
+    pass
 
 
 @dataclass(frozen=True)
@@ -99,8 +114,13 @@ class String:
 
 
 @dataclass
-class FuncCall:
+class AtomExpr:
     ident: Identifier
+    expr: Expr
+
+
+@dataclass
+class FuncCall:
     args: list[Expr]
 
 
@@ -180,10 +200,6 @@ class Builder(Transformer):
     def ident(self, ident):
         return Identifier(str(ident[0]))
 
-    def func_call_expr(self, expr):
-        args = [] if len(expr) == 1 else expr[1]
-        return FuncCall(expr[0], args)
-
     def integer(self, integer):
         value = str(integer[0])
         return Integer(value)
@@ -195,11 +211,7 @@ class Builder(Transformer):
     def stmt(self, stmt):
         return stmt[0]
 
-    def init_stmt(self, stmt):
-        def _recover_type(expr):
-            # TODO
-            return None
-
+    def let_stmt(self, stmt):
         idx = 0
         mut = False
         if "mut" == stmt[idx]:
@@ -215,9 +227,12 @@ class Builder(Transformer):
             expr = stmt[idx]
         else:
             expr = stmt[idx]
-            type = _recover_type(stmt[idx])
+            type = None  # determined during analysis
 
-        return VarDecl(ident, type, expr, mut)
+        return LetStmt(ident, type, expr, mut)
+
+    def expr_stmt(self, stmt):
+        return ExprStmt(*stmt)
 
     def mut(self, mut):
         return "mut"
@@ -253,7 +268,7 @@ class Builder(Transformer):
 
     def func_def(self, func_def):
         ret_type = None
-        param_list = None
+        param_list = []
         if len(func_def) == 3:
             if isinstance(func_def[-2], Type):
                 ident, ret_type, body = func_def
@@ -273,7 +288,18 @@ class Builder(Transformer):
         ident, type = func_param
         return FuncParam(ident, type)
 
-    def func_arg_list(self, args):
+    def atom_expr(self, expr):
+        print(expr)
+        input()
+        return AtomExpr(*expr)
+
+    def func_call(self, func_call):
+        args = []
+        if len(func_call):
+            args = func_call[0]
+        return FuncCall(args)
+
+    def arg_list(self, args):
         return args
 
     @v_args(meta=True)
@@ -289,7 +315,7 @@ class Builder(Transformer):
 
     def assign_stmt(self, assign_stmt):
         lhs, op, rhs = assign_stmt
-        return VarAssign(op, lhs, rhs)
+        return AssignStmt(op, lhs, rhs)
 
     def and_op(self, expr):
         return BinaryOp(BinOp.And, *expr)
@@ -395,7 +421,17 @@ class Builder(Transformer):
 
 
 class Analyzer:
-    def __init__(self, ast: dict, bin_type: ProjectType):
+    """
+    Performs the following on the AST:
+        - type checking between LHS and RHS
+        - type inference on LHS
+        - correct initialization
+        - control flow validation
+        - dead code elimination
+        - constant folding
+    """
+
+    def __init__(self, ast: dict, bin_type: ProjectType) -> None:
         self.scope = {}  # our current namespace
         self.locals: dict[Identifier, Type] = {}  # exist in the current scope
         self.globals: dict[Identifier, Type] = {}  # exist in the global scope
@@ -405,6 +441,9 @@ class Analyzer:
 
     def visit_func(self, func: FuncDef):
         pass
+
+    def analyze(self) -> dict:
+        return {}
 
 
 class Transpiler:
@@ -483,6 +522,7 @@ if __name__ == "__main__":
         let y = 0 - -1 + (2 * 3) << (4 / 5);
         let y = x + 1;
         print(x);
+        x.foo().bar.new();
     }
     """
     pprint(parse(func_def_w_body_ret_type, parser, builder))

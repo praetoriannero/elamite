@@ -15,30 +15,33 @@ enum_def: "enum" ident "{" enum_field* "}"
 
 block: stmt*
 
-stmt: assign_stmt
-    | init_stmt
-    | return_stmt
-    | bare_stmt
-    | for_stmt
-    | while_stmt
-    | if_stmt
+?stmt: assign_stmt
+     | let_stmt
+     | return_stmt
+     | expr_stmt
+     | for_stmt
+     | while_stmt
+     | if_stmt
+     | break_stmt
+     | continue_stmt
 
-slice: "[" integer ".." ("=" | "<")? integer "]"
 
-?bare_stmt: expr ";"
+expr_stmt: expr ";"
 break_stmt: "break" ";"
 continue_stmt: "continue" ";"
 assign_stmt: ident assign_op expr ";"
-init_stmt: "let" mut? ident (":" type)? "=" expr ";"
+let_stmt: "let" mut? ident (":" type)? "=" expr ";"
 return_stmt: "return" expr ";"
-for_stmt: "for" ident "in" (ident | slice) "{" block "}"
+for_stmt: "for" ident "in" expr "{" block "}"
 while_stmt: "while" expr "{" block "}"
 if_stmt: "if" expr "{" block "}" ("else" "if" expr "{" block "}")* ("else" "{" block "}")?
 
-func_call_expr: ident "(" func_arg_list? ")"
+arg_list: expr ("," expr)* [","]
 
-func_arg_list: expr ("," expr)* [","]
-
+// ?atom_expr: expr "." atom_expr -> get_attr
+//           | expr "[" slice "]" -> get_slice
+//           | expr "(" arg_list? ")" -> func_call
+//           | expr
 ?expr: logical_or
 ?logical_or: logical_or "||" logical_and -> or_op
            | logical_and
@@ -67,20 +70,25 @@ func_arg_list: expr ("," expr)* [","]
     | mul "/" factor-> div_op
     | mul "%" factor-> mod_op
     | factor
-?factor: "+" atom -> factor_plus
-       | "-" atom -> factor_neg
-       | "~" atom -> factor_binv
-       | "!" atom -> factor_not
-       | "&" atom -> factor_ref
-       | "*" atom -> factor_deref
-       | atom
+?factor: "+" atom_expr -> factor_plus
+       | "-" atom_expr -> factor_neg
+       | "~" atom_expr -> factor_binv
+       | "!" atom_expr -> factor_not
+       | "&" atom_expr -> factor_ref
+       | "*" atom_expr -> factor_deref
+       | atom_expr
+?atom_expr: atom postfix*
 ?atom: ident
      | integer
      | float
      | bool
      | string_concat
-     | func_call_expr
+     | array
      | "(" expr ")"
+
+postfix: "." ident -> get_attr
+       | "[" slice "]" -> get_slice
+       | "(" arg_list? ")" -> func_call
 
 bool: "true" -> bool_true
     | "false" -> bool_false
@@ -109,9 +117,12 @@ fq_ident: (ident "::")* ident
           | "^=" -> bwxor_equal
           | "=" -> equal
 
+slice: expr "[" expr "]"
+range: expr? ".." ("=" | "<")? expr?
+     | "[" range "]"
 string_concat: STRING+
 mut: "mut"
-array: "[" ident ";" integer "]"
+array: "[" ident ";" expr "]"
 ident: /[A-Za-z_][A-Za-z0-9_]*/
 float: FLOAT_NUMBER
 integer: DEC_NUMBER | HEX_NUMBER | BIN_NUMBER | OCT_NUMBER
