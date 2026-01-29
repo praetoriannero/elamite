@@ -108,6 +108,9 @@ class Bool:
 type Expr = Identifier | Integer | Float | Bool | String | FuncCall | BinaryOp | UnaryOp
 
 
+type PostFix = GetAttr | GetSlice | FuncCall
+
+
 @dataclass
 class String:
     value: str
@@ -116,12 +119,44 @@ class String:
 @dataclass
 class AtomExpr:
     ident: Identifier
-    expr: Expr
+    postfixes: list[PostFix]
 
 
 @dataclass
 class FuncCall:
     args: list[Expr]
+
+
+@dataclass
+class GetAttr:
+    ident: Identifier
+
+
+@dataclass
+class GetSlice:
+    slice: Range | Expr
+
+
+@dataclass
+class Range:
+    start: RangeStart | None
+    end: RangeEnd | None
+    inclusive: RangeInclusive | None
+
+
+@dataclass
+class RangeStart:
+    value: Expr
+
+
+@dataclass
+class RangeInclusive:
+    is_incl: bool
+
+
+@dataclass
+class RangeEnd:
+    value: Expr
 
 
 @dataclass
@@ -289,15 +324,45 @@ class Builder(Transformer):
         return FuncParam(ident, type)
 
     def atom_expr(self, expr):
-        print(expr)
-        input()
-        return AtomExpr(*expr)
+        return AtomExpr(expr[0], expr[1:])
 
     def func_call(self, func_call):
         args = []
         if len(func_call):
             args = func_call[0]
         return FuncCall(args)
+
+    def get_attr(self, get_attr):
+        return GetAttr(get_attr[0])
+
+    def get_slice(self, get_slice):
+        return GetSlice(get_slice[0])
+
+    def range(self, range):
+        range_start = None
+        range_end = None
+        range_incl = None
+
+        for elem in range:
+            if isinstance(elem, RangeStart):
+                range_start = elem
+
+            if isinstance(elem, RangeEnd):
+                range_end = elem
+
+            if isinstance(elem, RangeInclusive):
+                range_incl = elem
+
+        return Range(range_start, range_end, range_incl)
+
+    def range_inclusive(self, range_incl):
+        return RangeInclusive(True)
+
+    def range_start(self, rstart):
+        return RangeStart(rstart[0])
+
+    def range_end(self, rend):
+        return RangeEnd(rend[0])
 
     def arg_list(self, args):
         return args
@@ -516,6 +581,7 @@ if __name__ == "__main__":
     fn qux() -> null {
         let mut x = 0;
         let mut z: u32 = 4;
+        x[..10].base.clear().reverse();
         x && z;
         x += 1;
         let j = false;

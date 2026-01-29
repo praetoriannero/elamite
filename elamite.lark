@@ -87,7 +87,7 @@ arg_list: expr ("," expr)* [","]
      | "(" expr ")"
 
 postfix: "." ident -> get_attr
-       | "[" slice "]" -> get_slice
+       | "[" (range | expr) "]" -> get_slice
        | "(" arg_list? ")" -> func_call
 
 bool: "true" -> bool_true
@@ -117,9 +117,11 @@ fq_ident: (ident "::")* ident
           | "^=" -> bwxor_equal
           | "=" -> equal
 
-slice: expr "[" expr "]"
-range: expr? ".." ("=" | "<")? expr?
+range: range_start? ".." range_inclusive? range_end?
      | "[" range "]"
+range_start: expr
+range_end: expr
+range_inclusive: "="
 string_concat: STRING+
 mut: "mut"
 array: "[" ident ";" expr "]"
