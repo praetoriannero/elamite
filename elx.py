@@ -33,11 +33,11 @@ class EnumDef(Symbol):
 class FuncDef(Symbol):
     params: list[FuncParam]
     ret_type: Type | None
-    body: list
+    block: list[Stmt]
 
 
 @dataclass
-class GlobalStmt(Symbol):
+class GlobalDef(Symbol):
     item_type: str
     type: str
     expr: str
@@ -55,6 +55,7 @@ class StructField:
     type: str
 
 
+@dataclass
 @dataclass
 class LetStmt:
     ident: Identifier
@@ -82,7 +83,35 @@ class ExprStmt:
 
 @dataclass
 class ForStmt:
+    ident: Identifier
+    iterator: Expr
+    block: list[Stmt]
+
+
+@dataclass
+class WhileStmt:
     pass
+
+
+@dataclass
+class IfStmt:
+    pass
+
+
+@dataclass
+class BreakStmt:
+    pass
+
+
+@dataclass
+class ContinueStmt:
+    pass
+
+
+@dataclass
+class ModuleStmt:
+    ident: Identifier
+    block: list[Stmt]
 
 
 @dataclass(frozen=True)
@@ -109,6 +138,29 @@ type Expr = Identifier | Integer | Float | Bool | String | FuncCall | BinaryOp |
 
 
 type PostFix = GetAttr | GetSlice | FuncCall
+
+
+type Item = FuncDef | StructDef | GlobalDef | EnumDef | ModuleDef
+
+
+type Stmt = (
+    AssignStmt
+    | LetStmt
+    | ReturnStmt
+    | ExprStmt
+    | ForStmt
+    | WhileStmt
+    | IfStmt
+    | BreakStmt
+    | ContinueStmt
+    | ModuleStmt
+)
+
+
+@dataclass
+class ModuleDef:
+    ident: Identifier
+    block: list[Stmt]
 
 
 @dataclass
@@ -269,6 +321,9 @@ class Builder(Transformer):
     def expr_stmt(self, stmt):
         return ExprStmt(*stmt)
 
+    def for_stmt(self, stmt):
+        return ForStmt(stmt[0], stmt[1], stmt[2])
+
     def mut(self, mut):
         return "mut"
 
@@ -285,7 +340,7 @@ class Builder(Transformer):
         if not symbols:
             return {}
 
-        return {Symbol(symbol[0].ident): symbol[0] for symbol in symbols}
+        return {symbol[0].ident: symbol[0] for symbol in symbols}
 
     def fq_ident(self, ident):
         return SEP.join([str(i) for i in ident])
@@ -367,6 +422,11 @@ class Builder(Transformer):
     def arg_list(self, args):
         return args
 
+    def module_stmt(self, module):
+        ident = module[0]
+        block = module[1:]
+        return ModuleStmt(ident, block[0])
+
     @v_args(meta=True)
     def symbol(self, meta, symbol_def):
         return symbol_def
@@ -374,9 +434,9 @@ class Builder(Transformer):
     def block(self, block):
         return block
 
-    def global_stmt(self, global_stmt):
-        item_type, ident, type, expr = global_stmt
-        return GlobalStmt(ident, item_type, type, expr)
+    def global_def(self, global_def):
+        item_type, ident, type, expr = global_def
+        return GlobalDef(ident, item_type, type, expr)
 
     def assign_stmt(self, assign_stmt):
         lhs, op, rhs = assign_stmt
@@ -497,18 +557,33 @@ class Analyzer:
     """
 
     def __init__(self, ast: dict, bin_type: ProjectType) -> None:
-        self.scope = {}  # our current namespace
-        self.locals: dict[Identifier, Type] = {}  # exist in the current scope
-        self.globals: dict[Identifier, Type] = {}  # exist in the global scope
+        self.ast = ast
+        self.bin_type = bin_type
 
-    def visit_symbol(self, symbol: Symbol):
+        if self.bin_type == ProjectType.BIN:
+            self._verify_main()
+
+        self.scope = {}
+        self.local = {}
+
+    def _verify_main(self):
         pass
+
+    def visit_block(self):
+        pass
+
+    def visit_symbol(self, ident: Identifier, item: Item):
+        if isinstance(item, FuncDef):
+            self.visit_func(item)
 
     def visit_func(self, func: FuncDef):
         pass
 
     def analyze(self) -> dict:
-        return {}
+        for ident, symbol in self.ast.items():
+            self.visit_symbol(ident, symbol)
+
+        return self.ast
 
 
 class Transpiler:
@@ -517,6 +592,9 @@ class Transpiler:
     """
 
     pass
+
+    def convert(self):
+        pass
 
 
 class ProjectType(Enum):
@@ -544,6 +622,9 @@ class Compiler:
     def __init__(self, ast: dict, options: CompilerOptions):
         pass
 
+    def compile(self):
+        pass
+
 
 if __name__ == "__main__":
     lines = None
@@ -557,31 +638,17 @@ if __name__ == "__main__":
         tree = parser.parse(source)
         return builder.transform(tree)
 
-    empty_example = ""
-    pprint(parse(empty_example, parser, builder))
-
-    struct_def_example = "struct foo{a: qux,}"
-    ast = parse(struct_def_example, parser, builder)
-    pprint(ast)
-
-    func_def_example = "fn qux(a: bar, b: baz) {}"
-    ast = parse(func_def_example, parser, builder)
-    pprint(ast)
-
-    func_def_w_return_type = "fn qux() -> baz {}"
-    pprint(parse(func_def_w_return_type, parser, builder))
-
-    multi_symbol_example = struct_def_example + " " + func_def_example
-    pprint(parse(multi_symbol_example, parser, builder))
-
-    assignment_example = "const y: f32 = 10.0;"
-    pprint(parse(assignment_example, parser, builder))
-
     func_def_w_body_ret_type = """
     fn qux() -> null {
+        module kez {
+            let m = false;
+            for j in iterator {
+                m = true;
+            }
+        }
         let mut x = 0;
         let mut z: u32 = 4;
-        x[..10].base.clear().reverse();
+        x[..10].base.clear().reverse() * z;
         x && z;
         x += 1;
         let j = false;
@@ -591,4 +658,25 @@ if __name__ == "__main__":
         x.foo().bar.new();
     }
     """
+
     pprint(parse(func_def_w_body_ret_type, parser, builder))
+
+    # empty_example = ""
+    # pprint(parse(empty_example, parser, builder))
+    #
+    # struct_def_example = "struct foo{a: qux,}"
+    # ast = parse(struct_def_example, parser, builder)
+    # pprint(ast)
+    #
+    # func_def_example = "fn qux(a: bar, b: baz) {}"
+    # ast = parse(func_def_example, parser, builder)
+    # pprint(ast)
+    #
+    # func_def_w_return_type = "fn qux() -> baz {}"
+    # pprint(parse(func_def_w_return_type, parser, builder))
+    #
+    # multi_symbol_example = struct_def_example + " " + func_def_example
+    # pprint(parse(multi_symbol_example, parser, builder))
+    #
+    # assignment_example = "const y: f32 = 10.0;"
+    # pprint(parse(assignment_example, parser, builder))

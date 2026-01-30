@@ -6,6 +6,7 @@ symbol: struct_def
       | func_def
       | global_stmt
       | enum_def
+      | module_stmt
 
 struct_def: "struct" ident "{" struct_field* "}"
 
@@ -24,7 +25,7 @@ block: stmt*
      | if_stmt
      | break_stmt
      | continue_stmt
-
+     | module_stmt
 
 expr_stmt: expr ";"
 break_stmt: "break" ";"
@@ -35,6 +36,7 @@ return_stmt: "return" expr ";"
 for_stmt: "for" ident "in" expr "{" block "}"
 while_stmt: "while" expr "{" block "}"
 if_stmt: "if" expr "{" block "}" ("else" "if" expr "{" block "}")* ("else" "{" block "}")?
+module_stmt: "module" ident "{" block "}"
 
 arg_list: expr ("," expr)* [","]
 
