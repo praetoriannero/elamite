@@ -385,6 +385,7 @@ class Builder(Transformer):
     def for_stmt(self, meta, stmt):
         return ForStmt(meta, stmt[0], stmt[1], stmt[2])
 
+    # conditionals
     @v_args(meta=True)
     def while_stmt(self, meta, stmt):
         return WhileStmt(meta, stmt[0], stmt[1])
@@ -429,12 +430,11 @@ class Builder(Transformer):
 
         return ReturnStmt(meta, expr)
 
-    # conditionals
-
     def start(self, module):
         return module[0]
 
     def module(self, symbols):
+        # TODO: handle case where a symbol is defined multiple times
         if not symbols:
             return {}
 
@@ -637,10 +637,6 @@ class Builder(Transformer):
         return AsOp.EQ
 
 
-class Discovery:
-    pass
-
-
 class Analyzer:
     """
     Performs the following on the AST:
@@ -734,6 +730,20 @@ class Transpiler:
 
     def convert(self):
         pass
+
+
+ELS_PATTERN = "*.els"
+
+
+class Discovery:
+    def __init__(self, dir_path: Path):
+        self.dir_path = dir_path
+        for file_path in self.dir_path.glob(ELS_PATTERN):
+            print(file_path)
+
+        # find config.toml
+        # discover all imports
+        # find all source files
 
 
 class ProjectType(Enum):

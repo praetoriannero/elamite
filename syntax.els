@@ -30,6 +30,14 @@ struct Example {
     c: vec<f64>,
 }
 
+struct Beta {
+    xi: i32,
+}
+
+struct Alpha: Beta {
+    phi: u64,
+}
+
 let lambda = | x: &u64 | -> string {
     return format("{}", x);
 }
