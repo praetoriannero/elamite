@@ -25,6 +25,9 @@ BazVariant elx__create_case_BazVariant_Foo() {
 
 int main() {
     BazVariant baz = elx__create_case_BazVariant_Foo();
+    BazVariant (*fn_ptr)() = &elx__create_case_BazVariant_Foo;
+    BazVariant baz2 = fn_ptr();
+
     printf("baz(case=%d, %d)\n", baz.tag, baz.inner.Foo);
 
     return 0;

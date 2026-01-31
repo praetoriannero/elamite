@@ -3,6 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass
 from lark import Lark, Transformer, v_args
+from lark.tree import Meta
 from pathlib import Path
 from pprint import pprint
 
@@ -11,10 +12,14 @@ SEP = "__"
 
 @dataclass(unsafe_hash=True)
 class Symbol:
+    """
+    Parent class for defining symbols, top level items in a module.
+    """
+
     ident: str
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class Module(Symbol):
     symbols: dict
 
@@ -56,8 +61,19 @@ class StructField:
 
 
 @dataclass
+class Stmt:
+    meta: Meta
+
+
 @dataclass
-class LetStmt:
+class AssignStmt(Stmt):
+    op: AssignOp
+    lhs: Identifier
+    rhs: Expr
+
+
+@dataclass
+class LetStmt(Stmt):
     ident: Identifier
     type: Type | None
     value: str
@@ -65,51 +81,59 @@ class LetStmt:
 
 
 @dataclass
-class AssignStmt:
-    op: AssignOp
-    lhs: Identifier
-    rhs: Expr
+class ReturnStmt(Stmt):
+    expr: Expr | None
 
 
 @dataclass
-class ReturnStmt:
+class ExprStmt(Stmt):
     expr: Expr
 
 
 @dataclass
-class ExprStmt:
-    expr: Expr
-
-
-@dataclass
-class ForStmt:
+class ForStmt(Stmt):
     ident: Identifier
     iterator: Expr
     block: list[Stmt]
 
 
 @dataclass
-class WhileStmt:
-    pass
+class WhileStmt(Stmt):
+    expr: Expr
+    block: list[Stmt]
 
 
 @dataclass
-class IfStmt:
-    pass
+class IfStmt(Stmt):
+    expr: Expr
+    block: list[Stmt]
+    elif_clauses: list[ElifClause]
+    else_clause: ElseClause | None
 
 
 @dataclass
-class BreakStmt:
-    pass
+class ElifClause(Stmt):
+    expr: Expr
+    block: list[Stmt]
 
 
 @dataclass
-class ContinueStmt:
-    pass
+class ElseClause(Stmt):
+    block: list[Stmt]
 
 
 @dataclass
-class ModuleStmt:
+class BreakStmt(Stmt):
+    expr: Expr | None
+
+
+@dataclass
+class ContinueStmt(Stmt):
+    expr: Expr | None
+
+
+@dataclass
+class ModuleStmt(Stmt):
     ident: Identifier
     block: list[Stmt]
 
@@ -134,6 +158,17 @@ class Bool:
     value: bool
 
 
+@dataclass
+class Unit:
+    pass
+
+
+@dataclass
+class Array:
+    size: Expr
+    type: Type
+
+
 type Expr = Identifier | Integer | Float | Bool | String | FuncCall | BinaryOp | UnaryOp
 
 
@@ -141,20 +176,6 @@ type PostFix = GetAttr | GetSlice | FuncCall
 
 
 type Item = FuncDef | StructDef | GlobalDef | EnumDef | ModuleDef
-
-
-type Stmt = (
-    AssignStmt
-    | LetStmt
-    | ReturnStmt
-    | ExprStmt
-    | ForStmt
-    | WhileStmt
-    | IfStmt
-    | BreakStmt
-    | ContinueStmt
-    | ModuleStmt
-)
 
 
 @dataclass
@@ -169,9 +190,24 @@ class String:
 
 
 @dataclass
-class AtomExpr:
+class PostfixExpr:
     ident: Identifier
     postfixes: list[PostFix]
+
+
+@dataclass
+class PrefixExpr:
+    prefixes: list[Prefix]
+    ident: Identifier
+
+
+class Prefix(Enum):
+    PLUS = "+"
+    NEG = "-"
+    BINV = "~"
+    NOT = "!"
+    REF = "&"
+    DEREF = "*"
 
 
 @dataclass
@@ -237,47 +273,47 @@ class Type:
 
 
 class BinOp(Enum):
-    Or = "||"
-    And = "&&"
-    Eq = "=="
-    Ne = "!="
-    Gt = ">"
-    Lt = "<"
-    Gte = ">="
-    Lte = "<="
-    Bor = "|"
-    Bxor = "^"
-    Band = "&"
-    Shl = "<<"
-    Shr = ">>"
-    Add = "+"
-    Sub = "-"
-    Mul = "*"
-    Div = "/"
-    Mod = "%"
+    OR = "||"
+    AND = "&&"
+    EQ = "=="
+    NE = "!="
+    GT = ">"
+    LT = "<"
+    GTE = ">="
+    LTE = "<="
+    BOR = "|"
+    BXOR = "^"
+    BAND = "&"
+    SHL = "<<"
+    SHR = ">>"
+    ADD = "+"
+    SUB = "-"
+    MUL = "*"
+    DIV = "/"
+    MOD = "%"
 
 
 class AsOp(Enum):
-    AddEq = "+="
-    SubEq = "-="
-    MulEq = "*="
-    DivEq = "/="
-    ModEq = "%="
-    ShlEq = "<<="
-    ShrEq = ">>="
-    AndEq = "&="
-    OrEq = "|="
-    XorEq = "^="
-    Eq = "="
+    ADDEQ = "+="
+    SUBEQ = "-="
+    MULEQ = "*="
+    DIVEQ = "/="
+    MODEQ = "%="
+    SHLEQ = "<<="
+    SHREQ = ">>="
+    ANDEQ = "&="
+    OREQ = "|="
+    XOREQ = "^="
+    EQ = "="
 
 
 class UnOp(Enum):
-    Pos = "+"
-    Neg = "-"
-    Bnot = "~"
-    Not = "!"
-    Ref = "&"
-    Der = "*"
+    POS = "+"
+    NEG = "-"
+    BNOT = "~"
+    NOT = "!"
+    REF = "&"
+    DER = "*"
 
 
 class Builder(Transformer):
@@ -295,10 +331,37 @@ class Builder(Transformer):
         value = str(float[0])
         return Float(value)
 
+    def mut(self, mut):
+        return "mut"
+
+    def bool_true(self, atom):
+        return Bool(True)
+
+    def bool_false(self, atom):
+        return Bool(False)
+
     def stmt(self, stmt):
         return stmt[0]
 
-    def let_stmt(self, stmt):
+    # namespacing
+    @v_args(meta=True)
+    def module_stmt(self, meta, module):
+        ident = module[0]
+        block = module[1:]
+        return ModuleStmt(meta, ident, block[0])
+
+    # block statements
+    @v_args(meta=True)
+    def expr_stmt(self, meta, stmt):
+        return ExprStmt(meta, *stmt)
+
+    @v_args(meta=True)
+    def assign_stmt(self, meta, assign_stmt):
+        lhs, op, rhs = assign_stmt
+        return AssignStmt(meta, op, lhs, rhs)
+
+    @v_args(meta=True)
+    def let_stmt(self, meta, stmt):
         idx = 0
         mut = False
         if "mut" == stmt[idx]:
@@ -316,22 +379,57 @@ class Builder(Transformer):
             expr = stmt[idx]
             type = None  # determined during analysis
 
-        return LetStmt(ident, type, expr, mut)
+        return LetStmt(meta, ident, type, expr, mut)
 
-    def expr_stmt(self, stmt):
-        return ExprStmt(*stmt)
+    @v_args(meta=True)
+    def for_stmt(self, meta, stmt):
+        return ForStmt(meta, stmt[0], stmt[1], stmt[2])
 
-    def for_stmt(self, stmt):
-        return ForStmt(stmt[0], stmt[1], stmt[2])
+    @v_args(meta=True)
+    def while_stmt(self, meta, stmt):
+        return WhileStmt(meta, stmt[0], stmt[1])
 
-    def mut(self, mut):
-        return "mut"
+    @v_args(meta=True)
+    def if_stmt(self, meta, stmt):
+        expr = stmt[0]
+        block = stmt[1]
+        elif_clauses = [clause for clause in stmt if isinstance(clause, ElifClause)]
+        if isinstance(stmt[-1], ElseClause):
+            else_clause = stmt[-1]
+        else:
+            else_clause = None
 
-    def bool_true(self, atom):
-        return Bool(True)
+        return IfStmt(meta, expr, block, elif_clauses, else_clause)
 
-    def bool_false(self, atom):
-        return Bool(False)
+    @v_args(meta=True)
+    def elif_clause(self, meta, clause):
+        return ElifClause(meta, clause[0], clause[1])
+
+    @v_args(meta=True)
+    def else_clause(self, meta, clause):
+        return ElseClause(meta, clause[0])
+
+    # control flow
+    @v_args(meta=True)
+    def break_stmt(self, meta, stmt):
+        # TODO: handle ident case
+        return BreakStmt(meta, None)
+
+    @v_args(meta=True)
+    def continue_stmt(self, meta, stmt):
+        # TODO: handle ident case
+        return ContinueStmt(meta, None)
+
+    @v_args(meta=True)
+    def return_stmt(self, meta, stmt):
+        if len(stmt):
+            expr = stmt[0]
+        else:
+            expr = None
+
+        return ReturnStmt(meta, expr)
+
+    # conditionals
 
     def start(self, module):
         return module[0]
@@ -378,8 +476,29 @@ class Builder(Transformer):
         ident, type = func_param
         return FuncParam(ident, type)
 
-    def atom_expr(self, expr):
-        return AtomExpr(expr[0], expr[1:])
+    def postfix_expr(self, expr):
+        return PostfixExpr(expr[0], expr[1:])
+
+    def prefix_expr(self, expr):
+        return PrefixExpr(expr[:-1], expr[-1])
+
+    def prefix_plus(self, _):
+        return Prefix.PLUS
+
+    def prefix_neg(self, _):
+        return Prefix.NEG
+
+    def prefix_binv(self, _):
+        return Prefix.BINV
+
+    def prefix_not(self, _):
+        return Prefix.NOT
+
+    def prefix_ref(self, _):
+        return Prefix.REF
+
+    def prefix_deref(self, _):
+        return Prefix.DEREF
 
     def func_call(self, func_call):
         args = []
@@ -422,11 +541,6 @@ class Builder(Transformer):
     def arg_list(self, args):
         return args
 
-    def module_stmt(self, module):
-        ident = module[0]
-        block = module[1:]
-        return ModuleStmt(ident, block[0])
-
     @v_args(meta=True)
     def symbol(self, meta, symbol_def):
         return symbol_def
@@ -438,111 +552,93 @@ class Builder(Transformer):
         item_type, ident, type, expr = global_def
         return GlobalDef(ident, item_type, type, expr)
 
-    def assign_stmt(self, assign_stmt):
-        lhs, op, rhs = assign_stmt
-        return AssignStmt(op, lhs, rhs)
-
     def and_op(self, expr):
-        return BinaryOp(BinOp.And, *expr)
+        return BinaryOp(BinOp.AND, *expr)
 
     def or_op(self, expr):
-        return BinaryOp(BinOp.Or, *expr)
+        return BinaryOp(BinOp.OR, *expr)
 
     def eq_op(self, expr):
-        return BinaryOp(BinOp.Eq, *expr)
+        return BinaryOp(BinOp.EQ, *expr)
 
     def ne_op(self, expr):
-        return BinaryOp(BinOp.Ne, *expr)
+        return BinaryOp(BinOp.NE, *expr)
 
     def gt_op(self, expr):
-        return BinaryOp(BinOp.Gt, *expr)
+        return BinaryOp(BinOp.GT, *expr)
 
     def lt_op(self, expr):
-        return BinaryOp(BinOp.Lt, *expr)
+        return BinaryOp(BinOp.LT, *expr)
 
     def gte_op(self, expr):
-        return BinaryOp(BinOp.Gte, *expr)
+        return BinaryOp(BinOp.GTE, *expr)
 
     def lte_op(self, expr):
-        return BinaryOp(BinOp.Lte, *expr)
+        return BinaryOp(BinOp.LTE, *expr)
 
     def bwor_op(self, expr):
-        return BinaryOp(BinOp.Bor, *expr)
+        return BinaryOp(BinOp.BOR, *expr)
 
     def bwxor_op(self, expr):
-        return BinaryOp(BinOp.Bxor, *expr)
+        return BinaryOp(BinOp.BXOR, *expr)
 
     def bwand_op(self, expr):
-        return BinaryOp(BinOp.Band, *expr)
+        return BinaryOp(BinOp.BAND, *expr)
 
     def shl_op(self, expr):
-        return BinaryOp(BinOp.Shl, *expr)
+        return BinaryOp(BinOp.SHL, *expr)
 
     def shr_op(self, expr):
-        return BinaryOp(BinOp.Shr, *expr)
+        return BinaryOp(BinOp.SHR, *expr)
 
     def add_op(self, expr):
-        return BinaryOp(BinOp.Add, *expr)
+        return BinaryOp(BinOp.ADD, *expr)
 
     def sub_op(self, expr):
-        return BinaryOp(BinOp.Sub, *expr)
+        return BinaryOp(BinOp.SUB, *expr)
 
     def mul_op(self, expr):
-        return BinaryOp(BinOp.Mul, *expr)
+        return BinaryOp(BinOp.MUL, *expr)
 
     def div_op(self, expr):
-        return BinaryOp(BinOp.Div, *expr)
+        return BinaryOp(BinOp.DIV, *expr)
 
     def mod_op(self, expr):
-        return BinaryOp(BinOp.Mod, *expr)
-
-    def factor_plus(self, factor):
-        return UnaryOp(UnOp.Pos, factor[0])
-
-    def factor_neg(self, factor):
-        return UnaryOp(UnOp.Neg, factor[0])
-
-    def factor_binv(self, factor):
-        return UnaryOp(UnOp.Bnot, factor[0])
-
-    def factor_not(self, factor):
-        return UnaryOp(UnOp.Not, factor[0])
-
-    def factor_ref(self, factor):
-        return UnaryOp(UnOp.Ref, factor[0])
-
-    def factor_deref(self, factor):
-        return UnaryOp(UnOp.Der, factor[0])
+        return BinaryOp(BinOp.MOD, *expr)
 
     def plus_equal(self, assign):
-        return AsOp.AddEq
+        return AsOp.ADDEQ
 
     def minus_equal(self, assign):
-        return AsOp.SubEq
+        return AsOp.SUBEQ
 
     def times_equal(self, assign):
-        return AsOp.MulEq
+        return AsOp.MULEQ
 
     def div_equal(self, assign):
-        return AsOp.DivEq
+        return AsOp.DIVEQ
 
     def mod_equal(self, assign):
-        return AsOp.ModEq
+        return AsOp.MODEQ
 
     def shl_equal(self, assign):
-        return AsOp.ShlEq
+        return AsOp.SHLEQ
 
     def shr_equal(self, assign):
-        return AsOp.ShrEq
+        return AsOp.SHREQ
 
     def bwand_equal(self, assign):
-        return AsOp.AndEq
+        return AsOp.ANDEQ
 
     def bwor_equal(self, assign):
-        return AsOp.OrEq
+        return AsOp.OREQ
 
     def equal(self, assign):
-        return AsOp.Eq
+        return AsOp.EQ
+
+
+class Discovery:
+    pass
 
 
 class Analyzer:
@@ -560,24 +656,67 @@ class Analyzer:
         self.ast = ast
         self.bin_type = bin_type
 
+        self.scope = {}
+        self.local = {}
+        self.main_exists = False
+
         if self.bin_type == ProjectType.BIN:
             self._verify_main()
 
-        self.scope = {}
-        self.local = {}
-
     def _verify_main(self):
-        pass
-
-    def visit_block(self):
-        pass
+        if "main" in self.ast:
+            symbol = self.ast["main"]
+            if isinstance(symbol, FuncDef):
+                self.main_exists = True
 
     def visit_symbol(self, ident: Identifier, item: Item):
         if isinstance(item, FuncDef):
             self.visit_func(item)
 
+    def visit_module(self, module: Module):
+        raise NotImplementedError()
+
+    def visit_global(self, global_: GlobalDef):
+        raise NotImplementedError()
+
+    def visit_enum(self, enum_: EnumDef):
+        raise NotImplementedError()
+
+    def visit_block(self, block: list[Stmt]):
+        raise NotImplementedError()
+
     def visit_func(self, func: FuncDef):
-        pass
+        raise NotImplementedError()
+
+    def visit_assign_stmt(self, stmt: AssignStmt):
+        raise NotImplementedError()
+
+    def visit_let_stmt(self, stmt: LetStmt):
+        raise NotImplementedError()
+
+    def visit_return_stmt(self, stmt: ReturnStmt):
+        raise NotImplementedError()
+
+    def visit_expr_stmt(self, stmt: ExprStmt):
+        raise NotImplementedError()
+
+    def visit_for_stmt(self, stmt: ForStmt):
+        raise NotImplementedError()
+
+    def visit_while_stmt(self, stmt: WhileStmt):
+        raise NotImplementedError()
+
+    def visit_if_stmt(self, stmt: IfStmt):
+        raise NotImplementedError()
+
+    def visit_break_stmt(self, stmt: BreakStmt):
+        raise NotImplementedError()
+
+    def visit_continue_stmt(self, stmt: ContinueStmt):
+        raise NotImplementedError()
+
+    def visit_module_stmt(self, stmt: ModuleStmt):
+        raise NotImplementedError()
 
     def analyze(self) -> dict:
         for ident, symbol in self.ast.items():
@@ -656,27 +795,9 @@ if __name__ == "__main__":
         let y = x + 1;
         print(x);
         x.foo().bar.new();
+        return;
+        return x.new();
     }
     """
 
     pprint(parse(func_def_w_body_ret_type, parser, builder))
-
-    # empty_example = ""
-    # pprint(parse(empty_example, parser, builder))
-    #
-    # struct_def_example = "struct foo{a: qux,}"
-    # ast = parse(struct_def_example, parser, builder)
-    # pprint(ast)
-    #
-    # func_def_example = "fn qux(a: bar, b: baz) {}"
-    # ast = parse(func_def_example, parser, builder)
-    # pprint(ast)
-    #
-    # func_def_w_return_type = "fn qux() -> baz {}"
-    # pprint(parse(func_def_w_return_type, parser, builder))
-    #
-    # multi_symbol_example = struct_def_example + " " + func_def_example
-    # pprint(parse(multi_symbol_example, parser, builder))
-    #
-    # assignment_example = "const y: f32 = 10.0;"
-    # pprint(parse(assignment_example, parser, builder))

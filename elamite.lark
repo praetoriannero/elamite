@@ -4,13 +4,16 @@ module: symbol*
 
 symbol: struct_def
       | func_def
-      | global_stmt
+      | global_def
       | enum_def
       | module_stmt
+      | import_stmt
+
+import_stmt: "import" fq_ident ("," fq_ident)* ";"
 
 struct_def: "struct" ident "{" struct_field* "}"
 
-global_stmt: (CONST | (STATIC mut?)) ident ":" ident "=" expr ";"
+global_def: (CONST | (STATIC mut?)) ident ":" ident "=" expr ";"
 
 enum_def: "enum" ident "{" enum_field* "}"
 
@@ -27,23 +30,28 @@ block: stmt*
      | continue_stmt
      | module_stmt
 
+// namespacing
+module_stmt: "module" ident "{" block "}"
+
+// block statements
 expr_stmt: expr ";"
-break_stmt: "break" ";"
-continue_stmt: "continue" ";"
 assign_stmt: ident assign_op expr ";"
 let_stmt: "let" mut? ident (":" type)? "=" expr ";"
-return_stmt: "return" expr ";"
 for_stmt: "for" ident "in" expr "{" block "}"
+
+// block conditionals
 while_stmt: "while" expr "{" block "}"
-if_stmt: "if" expr "{" block "}" ("else" "if" expr "{" block "}")* ("else" "{" block "}")?
-module_stmt: "module" ident "{" block "}"
+if_stmt: "if" expr "{" block "}" elif_clause* else_clause?
+elif_clause: "else" "if" expr "{" block "}"
+else_clause: "else" "{" block "}"
+
+// control flow
+break_stmt: "break" ";"
+continue_stmt: "continue" ";"
+return_stmt: "return" expr? ";"
 
 arg_list: expr ("," expr)* [","]
 
-// ?atom_expr: expr "." atom_expr -> get_attr
-//           | expr "[" slice "]" -> get_slice
-//           | expr "(" arg_list? ")" -> func_call
-//           | expr
 ?expr: logical_or
 ?logical_or: logical_or "||" logical_and -> or_op
            | logical_and
@@ -68,18 +76,12 @@ arg_list: expr ("," expr)* [","]
 ?add: add "+" mul -> add_op
     | add "-" mul -> sub_op
     | mul
-?mul: mul "*" factor-> mul_op
-    | mul "/" factor-> div_op
-    | mul "%" factor-> mod_op
-    | factor
-?factor: "+" atom_expr -> factor_plus
-       | "-" atom_expr -> factor_neg
-       | "~" atom_expr -> factor_binv
-       | "!" atom_expr -> factor_not
-       | "&" atom_expr -> factor_ref
-       | "*" atom_expr -> factor_deref
-       | atom_expr
-?atom_expr: atom postfix*
+?mul: mul "*" prefix_expr -> mul_op
+    | mul "/" prefix_expr -> div_op
+    | mul "%" prefix_expr -> mod_op
+    | prefix_expr
+?prefix_expr: prefix* postfix_expr
+?postfix_expr: atom postfix*
 ?atom: ident
      | integer
      | float
@@ -91,6 +93,13 @@ arg_list: expr ("," expr)* [","]
 postfix: "." ident -> get_attr
        | "[" (range | expr) "]" -> get_slice
        | "(" arg_list? ")" -> func_call
+
+prefix: "+" -> prefix_plus
+      | "-" -> prefix_neg
+      | "~" -> prefix_binv
+      | "!" -> prefix_not
+      | "&" -> prefix_ref
+      | "*" -> prefix_deref
 
 bool: "true" -> bool_true
     | "false" -> bool_false
@@ -153,6 +162,7 @@ U8: "u8"
 U16: "u16"
 U32: "u32"
 U64: "u64"
+IMPORT_ALL: "*"
 
 %ignore /[\t \f\n]+/  // WS
 
