@@ -6,6 +6,8 @@ from lark import Lark, Transformer, v_args
 from lark.tree import Meta
 from pathlib import Path
 from pprint import pprint
+import sys
+
 
 SEP = "__"
 
@@ -637,6 +639,10 @@ class Builder(Transformer):
         return AsOp.EQ
 
 
+class MainNotFound(Exception):
+    pass
+
+
 class Analyzer:
     """
     Performs the following on the AST:
@@ -664,6 +670,11 @@ class Analyzer:
             symbol = self.ast["main"]
             if isinstance(symbol, FuncDef):
                 self.main_exists = True
+                return
+
+        raise MainNotFound(
+            f"elx missing entry point 'fn main' for project type {self.bin_type}"
+        )
 
     def visit_symbol(self, ident: Identifier, item: Item):
         if isinstance(item, FuncDef):
@@ -721,29 +732,21 @@ class Analyzer:
         return self.ast
 
 
+class CLangTree:
+    pass
+
+
 class Transpiler:
     """
     Convert the IR to C
     """
 
-    pass
+    def __init__(self, ast: dict):
+        self.ast = ast
+        self.scope_depth = 0
 
-    def convert(self):
+    def transpile(self):
         pass
-
-
-ELS_PATTERN = "*.els"
-
-
-class Discovery:
-    def __init__(self, dir_path: Path):
-        self.dir_path = dir_path
-        for file_path in self.dir_path.glob(ELS_PATTERN):
-            print(file_path)
-
-        # find config.toml
-        # discover all imports
-        # find all source files
 
 
 class ProjectType(Enum):
@@ -760,54 +763,96 @@ class OptLevel(Enum):
 @dataclass
 class CompilerOptions:
     input_path: Path
-    level: OptLevel
+    level: OptLevel = OptLevel.DEBUG
 
 
-class Compiler:
+ELS_PATTERN = "*.els"
+
+
+class Elx:
     """
     Compile the code
     """
 
-    def __init__(self, ast: dict, options: CompilerOptions):
-        pass
+    def __init__(self, opts: CompilerOptions):
+        self.opts = opts
+
+        lines = None
+        with open("elamite.lark", "r") as input_handle:
+            lines = input_handle.read()
+
+        self.parser = Lark(lines, propagate_positions=True, parser="lalr")
+        self.builder = Builder()
+        self.src_files: list[Path] = []
+        self.program_ast = {}
+
+    def discover(self) -> Elx:
+        # TODO: find config.toml
+        # TODO: discover all imports
+        # TODO: find all source files
+        self.src_files = [Path(node) for node in self.opts.input_path.glob(ELS_PATTERN)]
+
+        for file_path in self.src_files:
+            print(file_path)
+
+        return self
+
+    def parse(self) -> Elx:
+        for file in self.src_files:
+            with open(file, "r") as src_handle:
+                src = src_handle.read()
+                tree = self.parser.parse(src)
+                ast = self.builder.transform(tree)
+                self.program_ast.update(ast)
+
+        pprint(self.program_ast)
+        return self
+
+    def analyze(self) -> Elx:
+        return self
+
+    def optimize(self) -> Elx:
+        return self
+
+    def transpile(self) -> Elx:
+        return self
 
     def compile(self):
         pass
 
 
+def main():
+    opts = CompilerOptions(
+        Path(sys.argv[1]),
+    )
+    compiler = Elx(opts)
+    compiler.discover().parse().analyze().optimize().transpile().compile()
+
+
 if __name__ == "__main__":
-    lines = None
-    with open("elamite.lark", "r") as input_handle:
-        lines = input_handle.read()
+    main()
 
-    parser = Lark(lines, propagate_positions=True, parser="lalr")
-    builder = Builder()
-
-    def parse(source, parser, builder):
-        tree = parser.parse(source)
-        return builder.transform(tree)
-
-    func_def_w_body_ret_type = """
-    fn qux() -> null {
-        module kez {
-            let m = false;
-            for j in iterator {
-                m = true;
-            }
-        }
-        let mut x = 0;
-        let mut z: u32 = 4;
-        x[..10].base.clear().reverse() * z;
-        x && z;
-        x += 1;
-        let j = false;
-        let y = 0 - -1 + (2 * 3) << (4 / 5);
-        let y = x + 1;
-        print(x);
-        x.foo().bar.new();
-        return;
-        return x.new();
-    }
-    """
-
-    pprint(parse(func_def_w_body_ret_type, parser, builder))
+    # func_def_w_body_ret_type = """
+    # fn qux() -> null {
+    #     module kez {
+    #         let m = false;
+    #         for j in iterator {
+    #             m = true;
+    #         }
+    #     }
+    #     let mut x = 0;
+    #     let mut z: u32 = 4;
+    #     x[..10].base.clear().reverse() * z;
+    #     x && z;
+    #     x += 1;
+    #     let j = false;
+    #     let y = 0 - -1 + (2 * 3) << (4 / 5);
+    #     let y = x + 1;
+    #     print(x);
+    #     x.foo().bar.new();
+    #     return;
+    #     return x.new();
+    # }
+    # """
+    #
+    # pprint(parse(func_def_w_body_ret_type, parser, builder))

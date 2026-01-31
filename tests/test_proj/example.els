@@ -1,0 +1,20 @@
+fn qux() -> null {
+    module kez {
+        let m = false;
+        for j in iterator {
+            m = true;
+        }
+    }
+    let mut x = 0;
+    let mut z: u32 = 4;
+    x[..10].base.clear().reverse() * z;
+    x && z;
+    x += 1;
+    let j = false;
+    let y = 0 - -1 + (2 * 3) << (4 / 5);
+    let y = x + 1;
+    print(x);
+    x.foo().bar.new();
+    return;
+    return x.new();
+}
