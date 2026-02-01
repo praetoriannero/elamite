@@ -6,6 +6,9 @@ import elamite.elx_types as et
 class Builder(Transformer):
     NULL = str
     MUT = str
+    CONST = str
+    STATIC = str
+    STRING = str
 
     def ident(self, ident):
         return et.Identifier(str(ident[0]))
@@ -17,6 +20,9 @@ class Builder(Transformer):
     def float(self, float):
         value = str(float[0])
         return et.Float(value)
+
+    def string_concat(self, string):
+        return et.String(string[0])
 
     def mut(self, mut):
         return "mut"
@@ -30,12 +36,47 @@ class Builder(Transformer):
     def stmt(self, stmt):
         return stmt[0]
 
+    @v_args(meta=True)
+    def enum_def(self, meta, enum_def):
+        raise NotImplementedError("Parsing for enums currently not supported")
+
+    @v_args(meta=True)
+    def import_stmt(self, meta, stmt):
+        raise NotImplementedError(
+            "Parsing for import statements currently not supported"
+        )
+
     # namespacing
     @v_args(meta=True)
     def module_stmt(self, meta, module):
         ident = module[0]
-        block = module[1:]
-        return et.ModuleStmt(meta, ident, block[0])
+        types = {
+            symbol[0].ident.name: symbol[0]
+            for symbol in module[1:]
+            if isinstance(symbol[0], et.StructDef)
+        }
+        funcs = {
+            symbol[0].ident.name: symbol[0]
+            for symbol in module[1:]
+            if isinstance(symbol[0], et.FuncDef)
+        }
+        globals = {
+            symbol[0].ident.name: symbol[0]
+            for symbol in module[1:]
+            if isinstance(symbol[0], et.GlobalDef)
+        }
+        modules = {
+            symbol[0].ident.name: symbol[0]
+            for symbol in module[1:]
+            if isinstance(symbol[0], et.Module)
+        }
+        imports = {
+            symbol[0].ident.name: symbol[0]
+            for symbol in module[1:]
+            if isinstance(symbol[0], et.Import)
+        }
+
+        return et.Module(meta, ident, types, funcs, globals, modules, imports)
 
     # block statements
     @v_args(meta=True)
@@ -122,10 +163,11 @@ class Builder(Transformer):
 
     def module(self, symbols):
         # TODO: handle case where a symbol is defined multiple times
+
         if not symbols:
             return {}
 
-        return {symbol[0].ident: symbol[0] for symbol in symbols}
+        return {symbol[0].ident.name: symbol[0] for symbol in symbols}
 
     def fq_ident(self, ident):
         return et.SEP.join([str(i) for i in ident])
@@ -133,15 +175,23 @@ class Builder(Transformer):
     def type(self, type):
         return et.Type(type[0])
 
-    def struct_def(self, struct_def):
-        ident, fields = struct_def
-        return et.StructDef(ident, fields)
+    @v_args(meta=True)
+    def struct_def(self, meta, struct_def):
+        if len(struct_def) == 1:
+            ident = struct_def[0]
+            fields = []
+        else:
+            ident, fields = struct_def[0], struct_def[1:]
 
-    def struct_field(self, struct_field):
+        return et.StructDef(meta, ident, fields)
+
+    @v_args(meta=True)
+    def struct_field(self, meta, struct_field):
         ident, type = struct_field
         return et.StructField(ident, type)
 
-    def func_def(self, func_def):
+    @v_args(meta=True)
+    def func_def(self, meta, func_def):
         ret_type = None
         param_list = []
         if len(func_def) == 3:
@@ -154,7 +204,7 @@ class Builder(Transformer):
         else:
             ident, body = func_def
 
-        return et.FuncDef(ident, param_list, ret_type, body)
+        return et.FuncDef(meta, ident, param_list, ret_type, body)
 
     def func_param_list(self, params):
         return params
@@ -235,9 +285,20 @@ class Builder(Transformer):
     def block(self, block):
         return block
 
-    def global_def(self, global_def):
-        item_type, ident, type, expr = global_def
-        return et.GlobalDef(ident, item_type, type, expr)
+    @v_args(meta=True)
+    def global_def(self, meta, global_def):
+        mut = False
+        offset = 1
+        if "const" in global_def:
+            kind = et.GlobalKind.CONST
+        else:
+            kind = et.GlobalKind.STATIC
+            if "mut" in global_def:
+                mut = True
+                offset += 1
+
+        ident, type, expr = global_def[offset:]
+        return et.GlobalDef(meta, ident, kind, mut, type, expr)
 
     def and_op(self, expr):
         return et.BinaryOp(et.BinOp.AND, *expr)

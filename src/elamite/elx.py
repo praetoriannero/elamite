@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from lark import Lark
+from lark.tree import Meta
 from pathlib import Path
 from pprint import pprint
 import sys
 
+import elamite.elx_types as et
+from elamite.analyzer import Analyzer
+from elamite.elx_builtins import BUILTINS
 from elamite.transformer import Builder
 from elamite.options import CompilerOptions
-
-
-class CLangTree:
-    pass
 
 
 ELS_PATTERN = "*.els"
@@ -30,6 +30,7 @@ class Elx:
 
         self.parser = Lark(lines, propagate_positions=True, parser="lalr")
         self.builder = Builder()
+        self.analyzer = Analyzer(self.opts.project_type)
         self.src_files: list[Path] = []
         self.program_ast = {}
 
@@ -47,15 +48,46 @@ class Elx:
     def parse(self) -> Elx:
         for file in self.src_files:
             with open(file, "r") as src_handle:
+                mod_name = file.parts[-1].split(".")[0]
                 src = src_handle.read()
                 tree = self.parser.parse(src)
                 ast = self.builder.transform(tree)
-                self.program_ast.update(ast)
+                ident = et.Identifier(mod_name)
+                types = {
+                    symbol.ident.name: symbol
+                    for symbol in ast.values()
+                    if isinstance(symbol, et.StructDef)
+                }
+                funcs = {
+                    symbol.ident.name: symbol
+                    for symbol in ast.values()
+                    if isinstance(symbol, et.FuncDef)
+                }
+                globals = {
+                    symbol.ident.name: symbol
+                    for symbol in ast.values()
+                    if isinstance(symbol, et.GlobalDef)
+                }
+                modules = {
+                    symbol.ident.name: symbol
+                    for symbol in ast.values()
+                    if isinstance(symbol, et.Module)
+                }
+                imports = {
+                    symbol.ident.name: symbol
+                    for symbol in ast.values()
+                    if isinstance(symbol, et.Import)
+                }
+                module = et.Module(
+                    Meta(), ident, types, funcs, globals, modules, imports
+                )
+                self.program_ast.update({mod_name: module})
 
         pprint(self.program_ast)
         return self
 
     def analyze(self) -> Elx:
+        self.analyzer.analyze(self.program_ast)
         return self
 
     def optimize(self) -> Elx:

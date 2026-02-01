@@ -5,7 +5,7 @@ class Transpiler:
 
     def __init__(self, ast: dict):
         self.ast = ast
-        self.scope_depth = 0
+        self.indent_depth = 0
 
     def transpile(self):
         pass

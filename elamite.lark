@@ -9,13 +9,11 @@ symbol: struct_def
       | module_stmt
       | import_stmt
 
-import_stmt: "import" fq_ident ("," fq_ident)* ";"
-
 struct_def: "struct" ident "{" struct_field* "}"
-
-global_def: (CONST | (STATIC mut?)) ident ":" ident "=" expr ";"
-
+func_def: "fn" ident "(" func_param_list? ")" ("->" type)? "{" block "}"
+global_def: (CONST | (STATIC mut?)) ident ":" type "=" expr ";"
 enum_def: "enum" ident "{" enum_field* "}"
+import_stmt: "import" fq_ident ("," fq_ident)* ";"
 
 block: stmt*
 
@@ -31,7 +29,7 @@ block: stmt*
      | module_stmt
 
 // namespacing
-module_stmt: "module" ident "{" block "}"
+module_stmt: "module" ident "{" symbol* "}"
 
 // block statements
 expr_stmt: expr ";"
@@ -104,11 +102,10 @@ prefix: "+" -> prefix_plus
 bool: "true" -> bool_true
     | "false" -> bool_false
 
-struct_field: ident ":" ident ","
+struct_field: ident ":" type ","
 
 enum_field: ident ","
 
-func_def: "fn" ident "(" func_param_list? ")" ("->" type)? "{" block "}"
 func_param_list: func_param ("," func_param)*
 func_param: ident ":" ident
 
@@ -149,7 +146,7 @@ STRING: /([ubf]?r?|r[ubf])("(?!"").*?(?<!\\)(\\\\)*?"|'(?!'').*?(?<!\\)(\\\\)*?'
 
 TRUE: "true"
 FALSE: "false"
-STRTYPE: "string"
+STRTYPE: "str"
 BOOL: "bool"
 F16: "f16"
 F32: "f32"
@@ -162,6 +159,8 @@ U8: "u8"
 U16: "u16"
 U32: "u32"
 U64: "u64"
+CHAR: "char"
+UNIT: "()"
 IMPORT_ALL: "*"
 
 %ignore /[\t \f\n]+/  // WS

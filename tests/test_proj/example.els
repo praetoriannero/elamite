@@ -1,12 +1,17 @@
-fn qux() -> null {
-    module kez {
-        let m = false;
-        for j in iterator {
-            m = true;
-        }
+module kez {
+    struct Derp {
+        y: u16,
     }
-    let mut x = 0;
+    const t: u32 = 42;
+    static u: str = "test";
+    static mut v: f64 = 10.0;
+    const w: Derp = new_derp();
+}
+
+fn main() -> u8 {
+    let mut x = 1;
     let mut z: u32 = 4;
+    let u = &x;
     x[..10].base.clear().reverse() * z;
     x && z;
     x += 1;

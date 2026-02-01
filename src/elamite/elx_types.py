@@ -57,7 +57,25 @@ type Expr = Identifier | Integer | Float | Bool | String | FuncCall | BinaryOp |
 type PostFix = GetAttr | GetSlice | FuncCall
 
 
-type Item = FuncDef | StructDef | GlobalDef | EnumDef | ModuleDef
+type Item = FuncDef | StructDef | GlobalDef | EnumDef | Module | Import
+
+type Node = (
+    StructDef
+    | FuncDef
+    | GlobalDef
+    | EnumDef
+    | Module
+    | Import
+    | AssignStmt
+    | LetStmt
+    | ReturnStmt
+    | ExprStmt
+    | ForStmt
+    | WhileStmt
+    | IfStmt
+    | BreakStmt
+    | ContinueStmt
+)
 
 
 @dataclass(unsafe_hash=True)
@@ -66,12 +84,17 @@ class Symbol:
     Parent class for defining symbols, top level items in a module.
     """
 
-    ident: str
+    meta: Meta
+    ident: Identifier
 
 
 @dataclass(unsafe_hash=True)
 class Module(Symbol):
-    symbols: dict
+    types: dict[str, StructDef | EnumDef]
+    funcs: dict[str, FuncDef]
+    globals: dict[str, GlobalDef]
+    mods: dict[str, Module]
+    imports: dict[str, Import]
 
 
 @dataclass
@@ -91,17 +114,28 @@ class FuncDef(Symbol):
     block: list[Stmt]
 
 
+class GlobalKind(Enum):
+    CONST = "const"
+    STATIC = "static"
+
+
 @dataclass
 class GlobalDef(Symbol):
-    item_type: str
-    type: str
-    expr: str
+    kind: GlobalKind
+    mut: bool
+    type: Type
+    expr: Expr
+
+
+@dataclass
+class Import(Symbol):
+    ident: Identifier
 
 
 @dataclass
 class FuncParam:
-    ident: str
-    type: str
+    ident: Identifier
+    type: Type
 
 
 @dataclass
@@ -126,7 +160,7 @@ class AssignStmt(Stmt):
 class LetStmt(Stmt):
     ident: Identifier
     type: Type | None
-    value: str
+    expr: Expr
     mut: bool
 
 
@@ -183,12 +217,6 @@ class ContinueStmt(Stmt):
 
 
 @dataclass
-class ModuleStmt(Stmt):
-    ident: Identifier
-    block: list[Stmt]
-
-
-@dataclass
 class BinaryOp:
     op: BinOp
     lhs: Expr
@@ -234,20 +262,14 @@ class Bool:
 
 
 @dataclass
-class Unit:
-    pass
+class Unit(Type):
+    ident: Identifier = Identifier("unit")
 
 
 @dataclass
 class Array:
     size: Expr
     type: Type
-
-
-@dataclass
-class ModuleDef:
-    ident: Identifier
-    block: list[Stmt]
 
 
 @dataclass

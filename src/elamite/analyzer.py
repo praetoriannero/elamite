@@ -1,12 +1,9 @@
-from enum import Enum
+from typing import cast
 
 import elamite.elx_types as et
-from elamite.errors import MainNotFound
-
-
-class ProjectType(Enum):
-    BIN = 0
-    LIB = 1
+from elamite.elx_builtins import BUILTINS
+from elamite.errors import TypeError
+from elamite.options import ProjectType
 
 
 class Analyzer:
@@ -20,52 +17,159 @@ class Analyzer:
         - constant folding
     """
 
-    def __init__(self, ast: dict, bin_type: ProjectType) -> None:
-        self.ast = ast
+    def __init__(self, bin_type: ProjectType) -> None:
         self.bin_type = bin_type
 
-        self.scope = {}
-        self.local = {}
+        self.ast = {}
+        self.scope = []
+        self.symbols = {}
+        self.vars = {}
         self.main_exists = False
-
-        if self.bin_type == ProjectType.BIN:
-            self._verify_main()
+        self.dispatch = {
+            et.Module: self.visit_module,
+            et.StructDef: self.visit_struct_def,
+            et.FuncDef: self.visit_func,
+            et.GlobalDef: self.visit_global,
+            et.EnumDef: self.visit_enum,
+            et.Import: self.visit_import,
+            et.AssignStmt: self.visit_assign_stmt,
+            et.LetStmt: self.visit_let_stmt,
+            et.ReturnStmt: self.visit_return_stmt,
+            et.ExprStmt: self.visit_expr_stmt,
+            et.ForStmt: self.visit_for_stmt,
+            et.WhileStmt: self.visit_while_stmt,
+            et.IfStmt: self.visit_if_stmt,
+            et.BreakStmt: self.visit_break_stmt,
+            et.ContinueStmt: self.visit_continue_stmt,
+            et.Module: self.visit_module,
+        }
 
     def _verify_main(self):
-        if "main" in self.ast:
-            symbol = self.ast["main"]
-            if isinstance(symbol, et.FuncDef):
-                self.main_exists = True
-                return
+        pass
+        # if "main" in self.ast:
+        #     symbol = self.ast["main"]
+        #     if isinstance(symbol, et.FuncDef):
+        #         self.main_exists = True
+        #         return
+        #
+        # raise MainNotFound(
+        #     f"elx missing entry point function 'main' for project type {self.bin_type}"
+        # )
 
-        raise MainNotFound(
-            f"elx missing entry point 'fn main' for project type {self.bin_type}"
-        )
+    def _resolve_type(self, type: et.Type | None):
+        if type is None:
+            return False
 
-    def visit_symbol(self, ident: et.Identifier, item: et.Item):
-        if isinstance(item, et.FuncDef):
-            self.visit_func(item)
+        if type.ident in BUILTINS:
+            return True
+
+        mods = self.ast
+        for ns in self.scope:
+            types = mods[ns].types
+            if type.ident.name in types:
+                return True
+
+            mods = mods[ns].mods
+
+        return False
+
+    def _resolve_expr(self, expr) -> et.Type | None:
+        match expr:
+            case et.Integer():
+                return et.Type(et.Identifier("u64"))
+            case et.Float():
+                return et.Type(et.Identifier("f64"))
+            case et.BinaryOp():
+                return None
+
+        return None
 
     def visit_module(self, module: et.Module):
-        raise NotImplementedError()
+        self.scope.append(module.ident.name)
+        self.symbols[tuple(self.scope)] = {}
+
+        for attr in ("types", "funcs", "globals", "mods", "imports"):
+            for name, symbol in getattr(module, attr).items():
+                self.dispatch[type(symbol)](symbol)  # type: ignore
+
+        self.scope.pop()
+
+    def visit_struct_def(self, struct_def: et.StructDef):
+        for field in struct_def.fields:
+            if not self._resolve_type(field.type):
+                raise TypeError(
+                    f"In module '{self.scope[-1]}': "
+                    f"Undefined type '{field.type.ident.name}' found in struct "
+                    f"'{struct_def.ident.name}' on line {struct_def.meta.line}"
+                )
 
     def visit_global(self, global_: et.GlobalDef):
-        raise NotImplementedError()
+        if not self._resolve_type(global_.type):
+            raise TypeError(
+                f"In module '{self.scope[-1]}': "
+                f"Undefined type '{global_.type.ident.name}' found on line {global_.meta.line}"
+            )
+
+    def visit_func(self, func: et.FuncDef):
+        for param in func.params:
+            if not self._resolve_type(param.type):
+                raise TypeError(
+                    f"In module '{self.scope[-1]}': "
+                    f"Undefined type '{param.type.ident.name}' for function "
+                    f"'{func.ident.name}' parameter '{param.ident.name}' on line {func.meta.line}"
+                )
+
+        if func.ret_type is None:
+            func.ret_type = et.Unit()
+
+        if not self._resolve_type(func.ret_type):
+            raise TypeError(
+                f"In module '{self.scope[-1]}': "
+                f"Undefined return type '{func.ret_type.ident.name}' for "
+                f"function '{func.ident.name}' on line {func.meta.line}"
+            )
+
+        self.visit_block(func.block)
 
     def visit_enum(self, enum_: et.EnumDef):
         raise NotImplementedError()
 
-    def visit_block(self, block: list[et.Stmt]):
+    def visit_import(self, import_: et.Import):
         raise NotImplementedError()
 
-    def visit_func(self, func: et.FuncDef):
-        raise NotImplementedError()
+    def visit_block(self, block: list[et.Stmt]):
+        block_vars = {}
+        for stmt in block:
+            if isinstance(stmt, et.LetStmt):
+                block_vars[stmt.ident.name] = stmt
+                self.vars.update(block_vars)
+
+            self.dispatch[type(stmt)](stmt)  # type: ignore
+
+        for var in block_vars.keys():
+            self.vars.pop(var)
 
     def visit_assign_stmt(self, stmt: et.AssignStmt):
         raise NotImplementedError()
 
     def visit_let_stmt(self, stmt: et.LetStmt):
-        raise NotImplementedError()
+        type_ = stmt.type
+        if type_ is None:
+            type_ = self._resolve_expr(stmt.expr)
+
+        if not self._resolve_type(type_):
+            if type_ is None:
+                raise TypeError(
+                    f"In module '{self.scope[-1]}': "
+                    f"Unable to resolve type for variable '{stmt.ident.name}'"
+                    f" on line {stmt.meta.line}"
+                )
+
+            raise TypeError(
+                f"In module '{self.scope[-1]}': "
+                f"Undefined type '{type_.ident.name}' for "
+                f"right-hand expression '{type_.ident.name}' on line {stmt.meta.line}"
+            )
 
     def visit_return_stmt(self, stmt: et.ReturnStmt):
         raise NotImplementedError()
@@ -88,11 +192,11 @@ class Analyzer:
     def visit_continue_stmt(self, stmt: et.ContinueStmt):
         raise NotImplementedError()
 
-    def visit_module_stmt(self, stmt: et.ModuleStmt):
-        raise NotImplementedError()
+    def analyze(self, ast: dict) -> None:
+        self.ast = ast
 
-    def analyze(self) -> dict:
-        for ident, symbol in self.ast.items():
-            self.visit_symbol(ident, symbol)
+        for ident, item in ast.items():
+            self.dispatch[type(item)](item)
 
-        return self.ast
+        if self.bin_type == ProjectType.BIN:
+            self._verify_main()
