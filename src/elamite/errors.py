@@ -1,0 +1,2 @@
+class MainNotFound(Exception):
+    pass
