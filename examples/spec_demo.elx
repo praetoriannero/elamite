@@ -1,0 +1,229 @@
+// The `//` is used to mark a comment
+// Multi-line comments use `//`
+
+/// `///` is used to create a document string
+/// # Doc comments support markdown.
+
+// `import` is used to bring in symbols into the current module.
+import std.io
+
+// `pub` is used to make a symbol public.
+pub mod diagnostics:
+
+    // `import` is allowed in any module.
+    import std.io
+
+    // The return type of functions can be omitted if it returns
+    // the unit type, `()`.
+    pub fn report(message: String):
+        io.println(message)
+
+// Type aliases are possible
+pub type UserId = u64
+
+// Aliases must accept generic arguments if the underlying type
+// also requires a generic argument.
+type NameMap[V] = Map[String, V]
+
+// `Point` derives the `Default` trait
+struct Point(Default):
+    x: f64
+    y: f64
+
+    pub fn new() -> Self {
+        // `default` is added as a method because of its trait derivation.
+        return Self.default()
+    }
+
+    // `Self` refers to the enclosing struct type
+    fn translated(self: Self, dx: f64) -> Self:
+        Point{x: self.x + dx, y: self.y}
+
+// A struct with a reference type, `&T`, cannot implement a default constructor.
+// This is illegal:
+// struct MyType(Default):
+//      my_field: &u32
+//
+// The default value for a reference cannot be known, but pointers can be default, `null`.
+struct MyType(Default):
+    my_field: *u32
+
+// It is recommended to make these `Option` types.
+struct MyBetterType(Default):
+    my_field: Option[u32]
+
+struct Session:
+    active: bool
+    name: String
+
+    pub fn new(name: String) -> Self:
+        return Self{active: true, name: name}
+
+    // Illegal location of struct field.
+    // Fields must be defined before methods for clarity.
+    // other: i32
+
+    // The return type is not needed here, but completely allowed / legal.
+    // `&var` is used to denote a mutable reference. 
+    fn stop(self: &var Self) -> ():
+        self.active = false
+
+    // `*T` types can be created from `&T` types safely.
+    pub fn get_const_self_ptr(self: &Self) -> *Self:
+        return self as *Self
+
+    // `*var T` types can be create from `&var T` types safely, as well.
+    pub fn get_mut_self_ptr(self: &var Self) -> *var Self:
+        return self as *var Self
+
+    // `*T` types cannot safely be converted into reference types, `&T`.
+    // fn get_self_ptr_bad(self: *Self) -> &Self:
+    //      return self as &Self
+
+    // `*T` to `&T` can be done in an unsafe block.
+    // Unsafe functions are marked with `unsafe`.
+    unsafe pub fn get_self_ptr_unsafe(self: *Self) -> &Self:
+        unsafe:
+            return self as &Self
+
+    // The Elamite compiler will perform analysis to understand when
+    // `&T` are constructed inside function bodies to determine when
+    // and where unsafe operations are performed.
+    unsafe pub fn maybe_null() -> &u32:
+        unsafe:
+            let x = 42
+            return &x   // A warning should be issued on this line
+
+    // Tuples are enclosed in `()`, and can be used as anonymous, heterogenous data structures.
+    fn unpack(self: &Self) -> (bool, String):
+        return (self.active, self.name)
+
+    // `str` is an immutable array of UTF-8 encoded characters.
+    fn status(self: &Self) -> str:
+        if self.active:
+            return "inherent active"
+        else:
+            return "inherent inactive"
+
+    // `String` is a standard library implemntation of a mutable vector of UTF-8 characters.
+    fn status_string(self: &Self) -> String:
+        if self.active:
+            return String("active")
+
+        return String("inactive")
+
+struct Packet:
+    id: i32
+    body: str
+
+struct Chain[T]:
+    value: T
+    next: Option[&Chain[T]]
+
+enum State:
+    Count(i32)
+    Disabled
+
+trait Toggle:
+    fn status(self: &Self) -> String
+
+impl Toggle for Session:
+    fn status(self: &Self) -> String:
+        if self.active:
+            return String("trait active")
+        else:
+            return String("trait inactive")
+
+fn chain_length[T](node: &Chain[T]) -> i32:
+    match node.next:
+        Option.Some(next): return 1 + chain_length(next)
+        Option.None:
+            return 1
+
+// `fn` types must specify their input types and the return type.
+fn apply_offset(callback: fn(i32) -> i32, value: i32) -> i32:
+    callback(value)
+
+fn write_report(path: String, contents: String) -> Result[(), IoError]:
+    // The `?` operator propagates errors.
+    let file: File = File.open(path, "w")?
+
+    // `defer` is used to call a function at scope resolution.
+    defer file.close()
+
+    file.write(contents)?
+    return Result.Ok(())
+
+pub fn main() -> Result[(), IoError]:
+    let origin = Point{x: 0.0, y: 0.0}
+    let moved_right = origin.translated(10.0)
+    println("{}, {}", moved_right.x, moved_right.y)
+
+    var ptr: *i32 = null
+    if !ptr:
+        *ptr = 12
+    else:
+        println("{}", *ptr)
+
+    let leaf = Chain{value: 1, next: Option.None}
+    let root = Chain{value: 2, next: Option.Some(leaf)}
+    println("chain length: {}", chain_length(&root))
+
+    unsafe:
+        let m = Session.maybe_null()
+        if m:
+            println("{}", m)
+        else:
+            println("m was null!")
+
+    var packet = Packet{id: 7, body: "first"}
+    let body = packet.body
+    packet.body = "replacement"
+    let repaired_packet = packet
+
+    // `new` creates a heap allocated pointer that is cleaned up by GC.
+    var session: &Session = new Session.new("build")
+    let fn_stop = Session.stop
+    fn_stop(session)
+
+    var stop_callback = fn: session.stop()
+    stop_callback()
+
+    let observer: Session = session
+    let inherent_status = observer.status()
+    let trait_status = Session.Toggle.status(observer)
+    println("{} / {}", inherent_status, trait_status)
+
+    let add_one: fn(i32) -> i32 = fn(value: i32):
+        return value + 1
+    println("closure result: {}", add_one(41))
+
+    var vec = Vector[i32].new([1, 2, 3])
+    var element = &vec[1]
+    var iota = 1
+    let bump = fn(): *element += iota
+    bump()          // element is now 3, vec is now [1, 3, 3]
+    vec.append(4)   // dynamically reallocates, element is pointing to stale reference
+                    // vec here is now [1, 3, 3, 4]
+    iota = 3
+    bump()          // *element is now 4 and iota is 3
+                    // vec is still [1, 3, 3, 4]
+
+    let offset = 1
+    let add_offset = fn(value: i32) -> i32:
+        return value + offset
+
+    println("offset result: {}", apply_offset(add_offset, 41))
+
+    var retries = 0
+    while retries < 2:
+        println("retry {}", retries)
+        retries = retries + 1
+
+    for value in Vec.new(1, 2, 3):
+        println("value {}", value)
+
+    write_report("report.txt", "Elamite indentation experiment")?
+    return Result.Ok(())
+
+// Note: Boehm-GC is used for garbage collection.
