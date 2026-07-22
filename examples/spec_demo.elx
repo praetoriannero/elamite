@@ -1,50 +1,54 @@
 // The `//` is used to mark a comment
 // Multi-line comments use `//`
 
-/// `///` is used to create a document string
-/// # Doc comments support markdown.
-
 // `import` is used to bring in symbols into the current module.
 import std.io
 
 // `pub` is used to make a symbol public.
+/// # Diagnostics
+/// Documentation comments attach to the declaration that follows them.
 pub mod diagnostics:
 
     // `import` is allowed in any module.
     import std.io
+    import super.UserId
 
     // The return type of functions can be omitted if it returns
     // the unit type, `()`.
     pub fn report(message: String):
         io.println(message)
 
+    pub fn default_user_id() -> UserId:
+        return 0
+
 // Type aliases are possible
 pub type UserId = u64
 
-// Aliases must accept generic arguments if the underlying type
-// also requires a generic argument.
-type NameMap[V] = Map[String, V]
+// Public imports re-export an item without changing its identity.
+pub import root.diagnostics.report as report_diagnostic
 
-// `Point` derives the `Default` trait
-struct Point(Default):
+// Aliases expose parameters that remain variable and may specialize others.
+type NameMap[V] = Map[str, V]
+
+// `Point` derives multiple compiler-supported traits.
+struct Point(Default, PartialEq):
     x: f64
     y: f64
 
-    pub fn new() -> Self {
+    pub fn new() -> Self:
         // `default` is added as a method because of its trait derivation.
         return Self.default()
-    }
 
-    // `Self` refers to the enclosing struct type
+    // Inside a struct, `Self` refers to the enclosing struct type.
     fn translated(self: Self, dx: f64) -> Self:
-        Point{x: self.x + dx, y: self.y}
+        return Point{x: self.x + dx, y: self.y}
 
-// A struct with a reference type, `&T`, cannot implement a default constructor.
-// This is illegal:
+// A struct with a direct `&T` field cannot derive `Default`.
+// This derivation is illegal:
 // struct MyType(Default):
 //      my_field: &u32
 //
-// The default value for a reference cannot be known, but pointers can be default, `null`.
+// Safe references have no default, but raw pointers default to `null`.
 struct MyType(Default):
     my_field: *u32
 
@@ -86,144 +90,206 @@ struct Session:
         unsafe:
             return self as &Self
 
-    // The Elamite compiler will perform analysis to understand when
-    // `&T` are constructed inside function bodies to determine when
-    // and where unsafe operations are performed.
-    unsafe pub fn maybe_null() -> &u32:
-        unsafe:
-            let x = 42
-            return &x   // A warning should be issued on this line
-
     // Tuples are enclosed in `()`, and can be used as anonymous, heterogenous data structures.
     fn unpack(self: &Self) -> (bool, String):
         return (self.active, self.name)
 
-    // `str` is an immutable array of UTF-8 encoded characters.
+    // `str` is an immutable sequence of UTF-8 encoded characters.
     fn status(self: &Self) -> str:
         if self.active:
             return "inherent active"
         else:
             return "inherent inactive"
 
-    // `String` is a standard library implemntation of a mutable vector of UTF-8 characters.
+    // `String` is a standard-library mutable UTF-8 sequence.
     fn status_string(self: &Self) -> String:
         if self.active:
-            return String("active")
+            return String.from("active")
 
-        return String("inactive")
+        return String.from("inactive")
 
 struct Packet:
     id: i32
     body: str
 
+struct DemoResourceState:
+    closed: bool
+
+struct DemoResource:
+    // Copies of a closable value share their logical resource state.
+    state: &var DemoResourceState
+
+    fn is_closed(self: &Self) -> bool:
+        return self.state.closed
+
+impl Close for DemoResource:
+    fn close(self: &Self) -> ():
+        // `Close.close` is explicitly callable and must be idempotent.
+        self.state.closed = true
+
+struct IntTransform:
+    apply: fn(i32) -> i32
+
 struct Chain[T]:
     value: T
+    // Recursive containment crosses an explicit reference.
     next: Option[&Chain[T]]
 
 enum State:
     Count(i32)
+    Positioned { x: i32, y: i32 }
     Disabled
 
 trait Toggle:
     fn status(self: &Self) -> String
 
+    // Trait methods may provide default implementations.
+    fn category(self: &Self) -> str:
+        return "toggle"
+
 impl Toggle for Session:
     fn status(self: &Self) -> String:
         if self.active:
-            return String("trait active")
+            return String.from("trait active")
         else:
-            return String("trait inactive")
+            return String.from("trait inactive")
 
 fn chain_length[T](node: &Chain[T]) -> i32:
     match node.next:
-        Option.Some(next): return 1 + chain_length(next)
+        Option.Some(next):
+            return 1 + chain_length(next)
         Option.None:
             return 1
 
+fn horizontal(point: Point) -> f64:
+    match point:
+        Point { x, .. }:
+            return x
+
 // `fn` types must specify their input types and the return type.
 fn apply_offset(callback: fn(i32) -> i32, value: i32) -> i32:
-    callback(value)
+    return callback(value)
 
-fn write_report(path: String, contents: String) -> Result[(), IoError]:
-    // The `?` operator propagates errors.
-    let file: File = File.open(path, "w")?
+fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
+    return *left == *right
 
-    // `defer` is used to call a function at scope resolution.
-    defer file.close()
+fn make_demo_resource() -> DemoResource:
+    var state = DemoResourceState{closed: false}
+    return DemoResource{state: &var state}
 
-    file.write(contents)?
-    return Result.Ok(())
+fn propagate_io(result: Result[i32, IoError]) -> Result[i32, IoError]:
+    // `?` propagates only the exact enclosing error type.
+    let value = result?
+    return Result.Ok(value)
 
 pub fn main() -> Result[(), IoError]:
+    report_diagnostic("starting spec demonstration")
+
+    let resource = make_demo_resource()
+    with resource as active_resource:
+        println(f"resource closed: {active_resource.is_closed()}") // false
+    println(f"resource closed: {resource.is_closed()}") // true through shared state
+
+    let byte_mask: u8 = 0xffu8
+    let widened_mask: i32 = byte_mask as i32
+    println(f"mask: {widened_mask}")
+
+    let precedence_demo = 1 + 2 * 3
+    println(f"precedence: {precedence_demo}") // 7
+
     let origin = Point{x: 0.0, y: 0.0}
     let moved_right = origin.translated(10.0)
-    println("{}, {}", moved_right.x, moved_right.y)
+    println(f"{moved_right.x}, {moved_right.y}")
 
-    var ptr: *i32 = null
-    if !ptr:
-        *ptr = 12
+    // Ordinary copies are recursively independent logical values.
+    var origin_copy = origin
+    origin_copy.x = 5.0
+    println(f"original x: {origin.x}, copied x: {origin_copy.x}")
+
+    let origin_ref = &origin
+    let copy_ref = &origin_copy
+    println(f"same target: {origin_ref == copy_ref}") // false
+    println(f"equal contents: {equivalent(origin_ref, copy_ref)}") // false
+
+    let coordinate_sum = moved_right.x
+        + moved_right.y
+    println(f"coordinate sum: {coordinate_sum}")
+
+    let ptr: *i32 = null
+    if ptr == null:
+        println("ptr was null")
     else:
-        println("{}", *ptr)
+        unsafe:
+            println(f"{*ptr}")
 
     let leaf = Chain{value: 1, next: Option.None}
-    let root = Chain{value: 2, next: Option.Some(leaf)}
-    println("chain length: {}", chain_length(&root))
-
-    unsafe:
-        let m = Session.maybe_null()
-        if m:
-            println("{}", m)
-        else:
-            println("m was null!")
+    let root = Chain{value: 2, next: Option.Some(&leaf)}
+    println(f"chain length: {chain_length(&root)}")
 
     var packet = Packet{id: 7, body: "first"}
     let body = packet.body
+    // Replacing a field is distinct from mutating the immutable `str` contents.
     packet.body = "replacement"
     let repaired_packet = packet
 
-    // `new` creates a heap allocated pointer that is cleaned up by GC.
-    var session: &Session = new Session.new("build")
+    // `new` is an ordinary associated function; this one returns a `Session`.
+    var session: Session = Session.new("build")
     let fn_stop = Session.stop
-    fn_stop(session)
+    fn_stop(&var session)
 
-    var stop_callback = fn: session.stop()
+    var stop_callback = fn():
+        session.stop()
     stop_callback()
 
     let observer: Session = session
     let inherent_status = observer.status()
-    let trait_status = Session.Toggle.status(observer)
-    println("{} / {}", inherent_status, trait_status)
+    let trait_status = Session.Toggle.status(&observer)
+    let toggle_category = observer.category()
+    let dynamic_toggle: &dyn Toggle = &observer
+    let dynamic_status = dynamic_toggle.status()
+    println(
+        f"{inherent_status} / {trait_status} / {toggle_category} / {dynamic_status}"
+    )
 
     let add_one: fn(i32) -> i32 = fn(value: i32):
         return value + 1
-    println("closure result: {}", add_one(41))
+    println(f"closure result: {add_one(41)}")
 
-    var vec = Vector[i32].new([1, 2, 3])
-    var element = &vec[1]
-    var iota = 1
-    let bump = fn(): *element += iota
-    bump()          // element is now 3, vec is now [1, 3, 3]
-    vec.append(4)   // dynamically reallocates, element is pointing to stale reference
-                    // vec here is now [1, 3, 3, 4]
-    iota = 3
-    bump()          // *element is now 4 and iota is 3
-                    // vec is still [1, 3, 3, 4]
+    let transform = IntTransform{apply: add_one}
+    println(f"stored function result: {(transform.apply)(41)}")
+
+    let array = [1, 2, 3]
+    println(f"fixed array first element: {array[0]}")
+
+    var vec = @vec[1, 2, 3]
+    // Reads copy an element; direct indexed assignment updates the collection.
+    var element = vec[1]
+    element += 1
+    println(f"copied element: {element}, vector element: {vec[1]}") // 3, 2
+    vec[1] = element
+    vec.append(4)
 
     let offset = 1
     let add_offset = fn(value: i32) -> i32:
         return value + offset
 
-    println("offset result: {}", apply_offset(add_offset, 41))
+    println(f"offset result: {apply_offset(add_offset, 41)}")
 
     var retries = 0
     while retries < 2:
-        println("retry {}", retries)
+        println(f"retry {retries}")
         retries = retries + 1
 
-    for value in Vec.new(1, 2, 3):
-        println("value {}", value)
+    let names = @map{"first": "Ada", "second": "Grace"}
+    let tags = @set{"compiler", "managed"}
+    println(f"map entries: {names.len()}, set entries: {tags.len()}")
 
-    write_report("report.txt", "Elamite indentation experiment")?
+    // Iteration yields independent values and never interior references.
+    for value in vec:
+        println(f"value {value}")
+
+    let propagated = propagate_io(Result.Ok(42))?
+    println(f"propagated value: {propagated}")
     return Result.Ok(())
 
-// Note: Boehm-GC is used for garbage collection.
+// Boehm GC provides non-moving managed memory; it never invokes user cleanup.
