@@ -128,7 +128,7 @@ impl Close for DemoResource:
         self.state.closed = true
 
 struct IntTransform:
-    apply: fn(i32) -> i32
+    apply: &fn(i32) -> i32
 
 struct Chain[T]:
     value: T
@@ -166,16 +166,52 @@ fn horizontal(point: Point) -> f64:
         Point { x, .. }:
             return x
 
-// `fn` types must specify their input types and the return type.
-fn apply_offset(callback: fn(i32) -> i32, value: i32) -> i32:
+// A function reference `&fn(...) -> ...` holds a named function; input and
+// return types are always explicit.
+fn apply_offset(callback: &fn(i32) -> i32, value: i32) -> i32:
     return callback(value)
+
+// A function reference is produced only by naming a function; Elamite has no
+// closures, anonymous function literals, or captured environments.
+fn increment(value: i32) -> i32:
+    return value + 1
+
+// A callback that must carry data uses a trait object instead, since a function
+// reference carries no captured environment.
+trait Transform:
+    fn apply(self: &Self, value: i32) -> i32
+
+struct AddOffset:
+    offset: i32
+
+impl Transform for AddOffset:
+    fn apply(self: &Self, value: i32) -> i32:
+        return value + self.offset
+
+fn apply_transform(transform: &dyn Transform, value: i32) -> i32:
+    return transform.apply(value)
 
 fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
     return *left == *right
 
+// Mutual recursion uses named functions.
+fn is_even(value: i32) -> bool:
+    if value == 0:
+        return true
+    return is_odd(value - 1)
+
+fn is_odd(value: i32) -> bool:
+    if value == 0:
+        return false
+    return is_even(value - 1)
+
 fn make_demo_resource() -> DemoResource:
     var state = DemoResourceState{closed: false}
     return DemoResource{state: &var state}
+
+fn use_demo_resource(resource: DemoResource):
+    defer resource.close()
+    println(f"resource closed: {resource.is_closed()}") // false
 
 fn propagate_io(result: Result[i32, IoError]) -> Result[i32, IoError]:
     // `?` propagates only the exact enclosing error type.
@@ -186,8 +222,7 @@ pub fn main() -> Result[(), IoError]:
     report_diagnostic("starting spec demonstration")
 
     let resource = make_demo_resource()
-    with resource as active_resource:
-        println(f"resource closed: {active_resource.is_closed()}") // false
+    use_demo_resource(resource)
     println(f"resource closed: {resource.is_closed()}") // true through shared state
 
     let byte_mask: u8 = 0xffu8
@@ -198,6 +233,7 @@ pub fn main() -> Result[(), IoError]:
     println(f"precedence: {precedence_demo}") // 7
 
     let origin = Point{x: 0.0, y: 0.0}
+    // A `self: Self` bound call copies its receiver; `origin` remains valid.
     let moved_right = origin.translated(10.0)
     println(f"{moved_right.x}, {moved_right.y}")
 
@@ -219,6 +255,8 @@ pub fn main() -> Result[(), IoError]:
     if ptr == null:
         println("ptr was null")
     else:
+        // Pointer-validity diagnostics do not propagate `let` or branch facts;
+        // this unreachable branch is legal, and an executed null access traps.
         unsafe:
             println(f"{*ptr}")
 
@@ -234,15 +272,27 @@ pub fn main() -> Result[(), IoError]:
 
     // `new` is an ordinary associated function; this one returns a `Session`.
     var session: Session = Session.new("build")
-    let fn_stop = Session.stop
+    // Selecting a method from a type yields an unbound function reference; the
+    // caller forms the receiver reference explicitly.
+    let fn_stop: &fn(&var Session) -> () = Session.stop
     fn_stop(&var session)
 
-    var stop_callback = fn():
-        session.stop()
-    stop_callback()
-
     let observer: Session = session
+    // A raw-pointer receiver accepts an already matching pointer without
+    // implicitly dereferencing or converting it. The unsafe method call and
+    // the raw-to-reference conversion in its body each remain explicit.
+    let observer_ptr: *Session = observer.get_const_self_ptr()
+    // Selecting the unsafe method unbound preserves its safety qualifier.
+    let recover_observer: &unsafe fn(*Session) -> &Session =
+        Session.get_self_ptr_unsafe
+    unsafe:
+        let recovered_bound = observer_ptr.get_self_ptr_unsafe()
+        let recovered_unbound = recover_observer(observer_ptr)
+        println(f"recovered bound status: {recovered_bound.status()}")
+        println(f"recovered unbound status: {recovered_unbound.status()}")
+
     let inherent_status = observer.status()
+    // Fully qualified trait selection bypasses the same-named inherent method.
     let trait_status = Session.Toggle.status(&observer)
     let toggle_category = observer.category()
     let dynamic_toggle: &dyn Toggle = &observer
@@ -251,12 +301,26 @@ pub fn main() -> Result[(), IoError]:
         f"{inherent_status} / {trait_status} / {toggle_category} / {dynamic_status}"
     )
 
-    let add_one: fn(i32) -> i32 = fn(value: i32):
-        return value + 1
-    println(f"closure result: {add_one(41)}")
+    // Naming a function produces an `&fn` value; there are no anonymous
+    // function literals.
+    let add_one: &fn(i32) -> i32 = increment
+    println(f"function reference result: {add_one(41)}") // 42
 
     let transform = IntTransform{apply: add_one}
-    println(f"stored function result: {(transform.apply)(41)}")
+    // Field selection composes with ordinary call syntax.
+    println(f"stored function reference result: {transform.apply(41)}") // 42
+
+    // Two references naming the same function compare equal by identity.
+    let also_increment: &fn(i32) -> i32 = increment
+    println(f"same function: {add_one == also_increment}") // true
+
+    // A callback that must carry data uses a trait object instead of a function
+    // reference, since a function reference has no captured environment.
+    let adder = AddOffset { offset: 1 }
+    println(f"transform result: {apply_transform(&adder, 41)}") // 42
+
+    // Direct and mutual recursion use named functions.
+    println(f"is_even(4): {is_even(4)}") // true
 
     let array = [1, 2, 3]
     println(f"fixed array first element: {array[0]}")
@@ -269,11 +333,8 @@ pub fn main() -> Result[(), IoError]:
     vec[1] = element
     vec.append(4)
 
-    let offset = 1
-    let add_offset = fn(value: i32) -> i32:
-        return value + offset
-
-    println(f"offset result: {apply_offset(add_offset, 41)}")
+    // A function reference is passed to a higher-order function by naming it.
+    println(f"apply_offset result: {apply_offset(increment, 41)}") // 42
 
     var retries = 0
     while retries < 2:

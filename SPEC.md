@@ -2,7 +2,7 @@
 
 > Status: Draft
 >
-> Version: 0.3.0-draft
+> Version: 0.4.0-draft
 >
 > The current [specification demonstration](examples/spec_demo.elx) is the
 > authoritative surface-language example. This document describes that design;
@@ -18,12 +18,12 @@ indentation-delimited control flow.
 
 Ordinary values are passed and assigned by logical value copy. Each copy is
 observably independent except where the copied type explicitly represents an
-alias or identity, such as a safe or raw reference, a function or closure
-handle, a trait-object reference, or a shared resource handle. Passing
+alias or identity, such as a safe or raw reference, a function reference, a
+trait-object reference, or a shared resource handle. Passing
 `&value` explicitly passes a shared reference; passing `&var value` explicitly
 passes a mutable reference. Elamite has no source lifetime parameters. Managed
-memory uses Boehm GC; programs should not use collection timing for resource
-cleanup.
+memory uses Boehm GC;
+programs should not use collection timing for resource cleanup.
 
 ## 2. Program layout
 
@@ -52,11 +52,11 @@ indentation level. The body ends at the next dedent. Dedentation must return to
 a previously established block indentation level. EOF closes every remaining
 open block.
 
-This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `if`,
-`else`, `match`, `for`, `while`, `with`, `unsafe`, anonymous closures, and
-function declarations with bodies. Brace-delimited and same-line bodies are
-invalid. An empty body is also invalid; `pass` is the explicit no-op statement
-when a body must otherwise be empty.
+This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `extern`,
+`if`, `else`, `match`, `for`, `while`, `unsafe`, and function
+declarations with bodies. Brace-delimited bodies and same-line bodies are
+invalid everywhere. An empty body is also invalid; `pass` is the explicit
+no-op statement when a body must otherwise be empty.
 
 Blank lines and ordinary comment-only lines do not affect indentation.
 Documentation comments use the indentation of the declaration they document
@@ -202,8 +202,8 @@ another copy. An implementation may share immutable or copy-on-write backing
 storage, but such sharing cannot be observed through language operations.
 
 Types that explicitly carry aliasing or identity retain that meaning when
-copied. Safe references, raw pointers, trait-object references, and closure
-handles continue to identify the same target or closure environment. A type
+copied. Safe references, raw pointers, trait-object references, and function
+references continue to identify the same target. A type
 implementing `Close` follows the shared-resource-handle contract in Section 8.
 Copying a containing aggregate preserves these explicit aliases while all of
 its ordinary value fields remain independent.
@@ -309,8 +309,8 @@ println(original_points[0].x) // 0.0
 // let first_ref = &var points[0]
 ~~~
 
-References are valid struct fields, enum payloads, collection elements, closure
-captures, parameter types, and return types. A reference formed through safe
+References are valid struct fields, enum payloads, collection elements,
+parameter types, and return types. A reference formed through safe
 code remains valid while the reference is reachable. If such a reference to a
 local binding or field may escape its scope, the compiler promotes the required
 storage to GC-managed storage. Escape analysis may retain nonescaping storage
@@ -362,7 +362,25 @@ Raw pointer types are `*T` and `*var T`. A raw pointer can be `null`; `&T` and
 pointers nor references have implicit truthiness. Code tests a raw pointer with
 an explicit comparison such as `pointer == null`.
 
+Every non-null raw pointer has provenance for one storage instance and one
+designated `T` subobject within that storage. Converting a safe reference to a
+raw pointer preserves the referenced target's provenance. Copying a raw pointer
+or converting `*var T` to `*T` preserves its provenance; comparing raw pointers
+compares only their addresses and does not expose provenance. `null` has no
+provenance. Reuse of the same address for a later storage instance does not
+give an older pointer provenance for the new instance.
+
+The initial language has no raw-pointer arithmetic or integer-to-pointer or
+pointer-to-integer conversion. An explicit `as` cast may change a raw pointer's
+pointee type only in an `unsafe` context. The cast preserves the address,
+storage provenance, designated byte extent, and mutability permission; it does
+not make the storage contain a valid value of the new pointee type. A `*T`
+therefore cannot be cast to any `*var U`. Foreign code may supply a raw pointer
+with provenance, extent, and access rights established by the foreign contract
+defined in Section 10.
+
 `&T` may convert safely to `*T`; `&var T` may convert safely to `*var T`.
+`&var T` may also convert to `*T`, and `*var T` may be downgraded to `*T`.
 Dereferencing any raw pointer or converting one to a reference requires an
 `unsafe` context. Writing through a raw pointer additionally requires
 `*var T`; a `*T` target is read-only even in unsafe code. Converting a raw
@@ -382,9 +400,44 @@ if pointer != null:
         *recovered = 42
 ~~~
 
-Pointer provenance, the consequence of violating unsafe pointer obligations,
-and the compiler's treatment of unsafe references remain open in
-[I-020](ISSUES.md#i-020-raw-pointer-provenance-and-violations).
+A raw pointer may be dereferenced only while its original storage instance is
+alive, its designated subobject is initialized as the pointee type, and the
+requested access is within that subobject. A write additionally requires
+writable storage. The pointer's provenance and these obligations apply even if
+another storage instance later occupies the same address. For
+language-managed storage, retaining a separate strong language path is part of
+the liveness obligation because a raw pointer is not a root. For foreign or
+manually managed storage, the foreign contract determines its lifetime and
+access rights.
+
+Every executed raw dereference and raw-to-reference conversion checks for null
+and correct alignment before accessing the target and traps if either check
+fails. Such an operation is instead a compile-time error only when its pointer
+operand is an expression-local compile-time constant known to be null or
+misaligned. This required determination may evaluate literals, casts, and
+operators within that operand expression, but it does not propagate facts
+through local bindings, assignments, branch conditions, reachability, or
+function calls. Broader analysis may produce warnings but does not make an
+otherwise accepted operation a compile-time error.
+
+The remaining obligations cannot in general be checked by the implementation.
+Violating provenance, liveness, bounds, initialization, pointee-type, or write
+permission requirements is undefined behavior. In particular, accidental
+retention by the conservative collector and later address reuse cannot make a
+dangling raw pointer valid. An implementation may diagnose or trap additional
+violations, but a program cannot rely on it doing so.
+
+Converting a raw pointer to a safe reference asserts that all of the raw
+pointer obligations will remain satisfied for every use while the resulting
+reference is reachable. Once constructed validly, a reference to
+language-managed storage becomes a strong path as described in Section 9. A
+reference to foreign or manually managed storage does not extend that storage's
+lifetime, so unsafe code that constructs such a reference is responsible for
+preventing it from outliving the foreign storage. Safe code alone cannot create
+undefined behavior through a raw pointer because it cannot dereference one or
+convert one to a reference. If a later safe reference use observes a violated
+foreign lifetime contract, the undefined behavior is attributable to the
+earlier unsafe construction of that reference.
 
 ## 4. Types
 
@@ -527,7 +580,8 @@ copy semantics. `insert` returns whether the value was newly added, and
 
 `struct` declares an aggregate value type. Fields must appear before methods in
 the struct body. A struct's inherent methods are declared in that same body;
-there is no inherent `impl` block.
+there is no inherent `impl` block. Fields and inherent methods share one struct
+member namespace, so a field and an inherent method cannot have the same name.
 
 ~~~elx
 struct Session:
@@ -544,13 +598,43 @@ struct Session:
 Within a struct body, `Self` denotes the enclosing struct type. A plain
 `self: Self` parameter receives a copied receiver. `self: &Self` and
 `self: &var Self` receive shared and mutable references respectively.
+`self: *Self` and `self: *var Self` receive const and mutable raw pointers
+respectively. These five forms are the only permitted types for a parameter
+named `self`; other pointer types and other parameterized types must use an
+ordinary parameter name. The same receiver forms are available to trait
+methods.
 
 A bound call such as `value.method()` adapts only its receiver. If the method
-expects `self: &Self`, an addressable value receiver is automatically borrowed
-as `&value`. If it expects `self: &var Self`, an addressable mutable value is
-automatically borrowed as `&var value`. A receiver that is already a suitable
-reference is used directly. Receiver adaptation never upgrades `&T` to
-`&var T`, and it does not apply to any non-receiver argument.
+expects `self: Self`, the receiver expression is evaluated exactly once and
+copied into `self` using ordinary value semantics. The receiver need not be
+addressable, and its source remains valid after the call. A receiver of type
+`&Self` or `&var Self` is automatically dereferenced and its target is copied,
+consistent with ordinary reference method access.
+
+If the method expects `self: &Self`, an addressable value receiver is
+automatically borrowed as `&value`. If it expects `self: &var Self`, an
+addressable mutable value is automatically borrowed as `&var value`. A receiver
+that is already a suitable reference is used directly. Receiver adaptation
+never upgrades `&T` to `&var T`, and it does not apply to any non-receiver
+argument.
+
+Postfix field selection and calls compose from left to right. In
+`value.name(arguments)`, member lookup first checks for a field named `name`.
+When that field exists, the expression selects its value and applies ordinary
+call syntax to it; the field's type must therefore be callable, and no receiver
+adaptation occurs. If no such field exists, the expression performs bound-method
+lookup. A field takes precedence over a same-named trait method in lexical
+scope; explicit trait qualification selects the trait method instead.
+
+For a method whose receiver is `self: *Self` or `self: *var Self`, a bound call
+requires a receiver that already has that exact raw-pointer type. The pointer is
+passed unchanged: bound-call resolution does not borrow, cast, downgrade,
+dereference, or check it for null or alignment. Calling a method through a raw
+pointer therefore does not by itself access the pointee. Any dereference or
+raw-to-reference conversion in the method body still requires an explicit
+`unsafe:` context, and calling a method declared `unsafe` still requires an
+`unsafe:` context at the call site. A raw-pointer receiver never adapts to a
+method expecting `self: Self`.
 
 Struct literals use `Type { field: expression, ... }`. Fields may appear in any
 order but every field must appear exactly once. `Type { field }` abbreviates
@@ -621,7 +705,7 @@ U+0000 for `char`, `()` for unit, empty values for `str`, `String`, `Vec`,
 fieldwise. `Option[T]` defaults to `Option.None` without requiring `T` to
 implement `Default`.
 
-Safe references and function values do not implement `Default`. A struct with
+Safe references and function references do not implement `Default`. A struct with
 a direct safe-reference field therefore cannot derive it, while a field such as
 `Option[&T]` can default to `Option.None`. Ordinary enums do not derive
 `Default` because no variant is implicitly preferred; an enum may implement the
@@ -690,8 +774,8 @@ Safe references compare target storage identity rather than target contents.
 Trait-object references likewise compare their concrete target identity. Raw
 pointers compare address identity, including comparison with `null`. References,
 trait-object references, and raw pointers have no relational ordering. Function
-values use their generated-function and closure-environment identity as defined
-in Section 5. Content comparison through references is explicit, as in
+references compare their target-function identity as defined in Section 5.
+Content comparison through references is explicit, as in
 `*left == *right`. Because recursive aggregate edges cross explicit reference
 or pointer types and those edges compare by identity, compiler-derived
 structural equality terminates for recursive values.
@@ -702,7 +786,7 @@ or hashing do not qualify initially. `Identity[&T]` and `Identity[&var T]`
 provide `Eq`, `Hash`, and `StableHash` using the referenced target's stable
 managed address, allowing explicit identity-keyed maps and sets.
 
-## 5. Functions and closures
+## 5. Functions and function references
 
 Named function parameters require a name and type. The return type follows the
 parameter list with `->`. It may be omitted for a unit-returning function. A
@@ -721,18 +805,17 @@ resolution.
 
 Function parameters cannot have default values. Every call to a non-variadic
 function must provide exactly its declared number of arguments, so every
-non-variadic `fn(Args) -> Return` value has one fixed arity.
+non-variadic `&fn(Args) -> Return` value has one fixed arity.
 
 A final parameter may use the variadic form `name: ...T`. It accepts zero or
 more trailing arguments, each of type `T`, and binds `name` inside the function
 to the slice type `[T]`. Variadics are homogeneous and may appear only once,
-as the final parameter. A variadic function value preserves the marker in its
-function type, for example `fn(i32, ...String) -> ()`. Elamite lowers this
-form as a slice argument rather than as C's untyped variadic calling
-convention.
+as the final parameter. A variadic function value preserves the marker, for
+example `&fn(i32, ...String) -> ()`. Elamite lowers this form as a slice
+argument rather than as C's untyped variadic calling convention.
 
 ~~~elx
-fn apply_offset(callback: fn(i32) -> i32, value: i32) -> i32:
+fn apply_offset(callback: &fn(i32) -> i32, value: i32) -> i32:
     return callback(value)
 
 fn session_status(session: &Session) -> str:
@@ -749,141 +832,128 @@ variadic(7)
 variadic(7, "one", "two")
 ~~~
 
-Function values use `fn(Parameters) -> Return`. Referencing a named function
-or an unbound method produces a function value. Anonymous closures use `fn`
-with a parameter list and an indented body. Every closure parameter requires a
-name and explicit type. `fn():` is the parameterless form; `fn:` is invalid. The
-closure body begins on the line after the colon. A closure may omit its return
-type when it can be inferred from an expected function type or consistently
-from its explicit `return` paths. Non-unit closure results still require
-`return expression`; closures do not use tail-expression returns.
+A function value is a *function reference*. A safe function reference is written
+`&fn(Parameters) -> Return`; an unsafe function reference is written
+`&unsafe fn(Parameters) -> Return`. The bare forms `fn(Parameters) -> Return`
+and `unsafe fn(Parameters) -> Return` are function types that, like `dyn Trait`,
+are inhabited only behind a reference. Every value or storage location that
+holds an ordinary Elamite function therefore has one of the two reference
+types. There is no `&var fn` form, because a function's code is never mutated.
+Elamite has no closures, anonymous function literals, captured environments, or
+bound-method values. A function reference is produced only by referencing a
+named function or an unbound method, and its safety qualifier matches that
+declaration.
 
-A function value is an ordinary storable value. It may appear in a binding,
+Referencing a named function, as in `let bump = increment`, produces an `&fn`
+value whose target is that function. A function reference is called with ordinary
+call syntax, `bump(args)`, which dereferences it automatically, exactly as
+reference field and method access does (Section 3.2).
+
+~~~elx
+fn increment(value: i32) -> i32:
+    return value + 1
+
+let bump: &fn(i32) -> i32 = increment
+println(f"{bump(41)}") // 42
+~~~
+
+Referencing a function or unbound method declared `unsafe` instead produces an
+`&unsafe fn` value. Taking, storing, copying, passing, returning, or comparing
+that reference is safe because none of those operations invokes its target.
+Calling it requires an `unsafe:` context, exactly like a direct call to the
+declaration.
+
+~~~elx
+let recover: &unsafe fn(*Session) -> &Session = Session.get_self_ptr_unsafe
+
+unsafe:
+    let session = recover(pointer)
+~~~
+
+A function reference is an ordinary storable value. It may appear in a binding,
 field, enum payload, collection element, parameter, or return value. Named
-functions, instantiated generic functions, unbound methods, and closures are
-compatible only when parameter types, return type, arity, and any variadic
-marker match exactly. Function types have no variance or implicit signature
-adaptation, and collections of them are homogeneous by complete function type.
+functions, instantiated generic functions, and unbound methods produce function
+references that are compatible only when parameter types, return type, arity, and
+any variadic marker and safety qualifier match exactly. A safe function
+reference does not convert implicitly to an unsafe function reference, and an
+unsafe function reference never converts to a safe one. Function types have no
+variance or implicit signature adaptation, and collections of them are
+homogeneous by complete function type.
 
-A generic function becomes a function value only after all of its type
+A named function has a stable address for the whole program, so its safe or
+unsafe function reference is always valid and never requires escape promotion.
+A function reference carries no captured environment, so returning or storing
+one carries no enclosing-scope state.
+
+A generic function becomes a function reference only after all of its type
 arguments are determined explicitly or by an expected function type. Elamite
 initially has no erased any-callable type, dynamically erased call-operator,
 runtime signature inspection, or heterogeneous function-value collection.
 Ordinary `dyn Trait` method dispatch is defined separately and does not make a
-trait object directly callable with `object(args)`. Stored capturing closures
-retain their shared GC-managed environment.
+trait object directly callable with `object(args)`.
 
-Selecting a method from a type produces its unbound function value. Selecting a
-method from an instance does not produce a function value; an instance method
-may be called directly, but a bare expression such as `session.stop` is
-invalid. A callback bound to a receiver must use an explicit closure. An
-unbound method retains its declared receiver parameter, so its caller must form
-any required reference explicitly. A trait-qualified method selection is also
+Selecting a method from a type produces its unbound function reference. Selecting
+a method from an instance does not produce a function reference; an instance
+method may be called directly, but a bare expression such as `session.stop` is
+invalid. An unbound method retains its declared receiver parameter, so its caller
+must form any required reference explicitly. Its function reference also retains
+the method's safety qualifier. A trait-qualified method selection is also
 unbound and follows the same rule.
 
 ~~~elx
-let stop: fn(&var Session) -> () = Session.stop // unbound method
-// let callback = session.stop                  // invalid
-let callback = fn():
-    session.stop()                // closure captures `session`
+let stop: &fn(&var Session) -> () = Session.stop // unbound method
+// let handler = session.stop                    // invalid
+stop(&var session)
 ~~~
 
-A closure automatically copies each free local binding that it uses when the
-`fn` expression is evaluated. An ordinary captured value is an independent
-logical value: later mutation or assignment through the outer binding does not
-change the closure's copy. Capturing an `&T` or `&var T` value copies that
-reference, so the closure continues to name the same reference target. The
-closure environment is managed by the garbage collector and may outlive its
-creating scope.
-
-A captured `let` binding is non-rebindable and is not a mutable place. A
-captured `var` binding is a closure-owned mutable copy: mutation changes that
-copy, persists for later calls to the same closure, and never changes the outer
-binding. A captured `&var T` retains its target-mutation capability regardless
-of whether the binding containing that reference was declared with `let`.
-
-Assigning, passing, or returning a capturing closure copies its identity-bearing
-callable handle. All handle copies share the one managed closure environment and
-therefore share its captured mutable state. A named function or an unbound
-method has no captured environment.
-
-Function values support `==` and `!=` as callable-identity comparisons. Two
-function values are equal only when they name the same generated function and
-the same closure environment. Named functions and unbound methods have no
-environment. Function equality does not compare captured values or determine
-whether two functions have equivalent behavior.
-
-Named functions may call themselves and other named functions declared in the
-same lexical scope. A contiguous group of local `let` bindings whose
-initializers are `fn` expressions forms a recursive closure group. Every name
-in that group is visible in every group closure body, including its own body.
-The runtime creates stable managed callable cells for the group and initializes
-them before any closure in the group may be invoked. This permits direct and
-mutual recursive closures without a separate `rec` keyword.
+Because a function reference carries no state, a callback that must carry data
+uses a trait object instead. The data lives in a struct, and a `&dyn Trait`
+reference dispatches to its method (Section 6).
 
 ~~~elx
-let add_one: fn(i32) -> i32 = fn(value: i32) -> i32:
-    return value + 1
+trait Transform:
+    fn apply(self: &Self, value: i32) -> i32
 
-var offset = 1
-let add_offset = fn(value: i32) -> i32:
-    return value + offset
+struct AddOffset:
+    offset: i32
 
-offset = 3
-println(add_offset(41)) // 42: `offset` was captured as 1
+impl Transform for AddOffset:
+    fn apply(self: &Self, value: i32) -> i32:
+        return value + self.offset
 
-var count = 0
-let bump = fn() -> i32:
-    count += 1
-    return count
+fn apply_all(transform: &dyn Transform, value: i32) -> i32:
+    return transform.apply(value)
 
-println(bump()) // 1
-println(bump()) // 2
-println(count)  // 0
+let adder = AddOffset { offset: 1 }
+println(f"{apply_all(&adder, 41)}") // 42
+~~~
 
-var shared_count = 0
-let first = fn() -> i32:
-    shared_count += 1
-    return shared_count
-let second = first
+Named functions may call themselves and other named functions declared in the
+same lexical scope, so direct and mutual recursion use named functions.
 
-println(first())  // 1
-println(second()) // 2
-println(first())  // 3: both handles share one environment
+Function references support `==` and `!=` as the reference-identity comparisons
+defined in Section 4.5: two function references are equal exactly when they name
+the same function. They do not compare behavior, and, like other references, they
+have no relational ordering.
 
-type Counter = fn() -> i32
-
-fn make_counter() -> Counter:
-    var counter = 0
-    return fn() -> i32:
-        counter += 1
-        return counter
-
-let independent = make_counter()
-println(first == second)       // true: same closure environment
-println(first == independent)  // false: different environment
-
-let countdown = fn(value: i32) -> i32:
-    if value == 0:
-        return 0
-    return countdown(value - 1)
-
-let is_even = fn(value: i32) -> bool:
+~~~elx
+fn is_even(value: i32) -> bool:
     if value == 0:
         return true
     return is_odd(value - 1)
 
-let is_odd = fn(value: i32) -> bool:
+fn is_odd(value: i32) -> bool:
     if value == 0:
         return false
     return is_even(value - 1)
 
-println(countdown(3)) // 0
-println(is_even(4))   // true
+let first: &fn(i32) -> bool = is_even
+let second: &fn(i32) -> bool = is_even
+let third: &fn(i32) -> bool = is_odd
 
-var session = Session { active: true, name: "build" }
-var stop_callback = fn():
-    session.stop()
+println(is_even(4))       // true
+println(first == second) // true: same function
+println(first == third)  // false: different function
 ~~~
 
 ## 6. Generics and traits
@@ -944,10 +1014,19 @@ Trait method declarations and implementation methods cannot carry separate
 Bound method lookup considers inherent methods and methods from traits in the
 current lexical scope. An inherent method wins over a same-named trait method.
 If multiple in-scope traits otherwise provide a matching method, the call is
-ambiguous. Explicit `Type.Trait.method(receiver, ...)` qualification selects one
-trait method and bypasses bound-call ambiguity. Trait-qualified methods are
-unbound and retain their declared receiver type, so callers form any required
-reference explicitly.
+ambiguous.
+
+Explicit `Type.Trait.method` qualification directly selects the named member
+from the implementation of `Trait` for `Type`. It bypasses field selection,
+inherent-method lookup, and bound trait-method lookup unconditionally, so it may
+be used to reach a trait method shadowed by a field or inherent method, resolve
+multi-trait ambiguity, or state the intended implementation explicitly. The
+qualification is valid only when the names are accessible and the selected
+trait is implemented for the type. A trait-qualified method is unbound and
+retains its declared receiver parameter, so a call forms any required receiver
+reference explicitly. Selecting it without calling produces its unbound
+function reference. The same qualification selects receiverless trait
+functions, with `Type` identifying the implementation.
 
 An implementation may be declared only in the package that defines either the
 trait or the outermost nominal target type. A program may contain only one
@@ -1008,12 +1087,11 @@ Every match is exhaustive. Patterns over an infinite domain require a catch-all
 binding or `_`. Arms are tested in source order and never fall through. A
 statically unreachable arm is a compile-time error.
 
-Control-flow constructs, `with` and `unsafe` blocks, and indented bodies are
-statements, not value-producing expressions. They complete with unit but cannot
-appear in a context that requires a value. Assignment and compound assignment
-are also statements and cannot be nested inside expressions. Elamite has no
-`++` or `--` operators. Compound assignment evaluates its destination place
-exactly once.
+Control-flow constructs, `unsafe` blocks, and indented bodies are statements,
+not value-producing expressions. They complete with unit but cannot appear in
+a context that requires a value. Assignment and compound assignment are also
+statements and cannot be nested inside expressions. Elamite has no `++` or `--`
+operators. Compound assignment evaluates its destination place exactly once.
 
 Expression evaluation is left-to-right. A call evaluates its callee or receiver
 first and then each argument in source order. `&&` and `||` require `bool` and
@@ -1115,9 +1193,9 @@ fn increment_result[E](result: Result[i32, E]) -> Result[i32, E]:
     return Result.Ok(value + 1)
 ~~~
 
-Elamite has no `defer` statement and no implicit destruction protocol. Garbage
-collection manages memory only. Deterministic external-resource cleanup uses
-the compiler-known prelude trait `Close` and a lexical `with` statement.
+Elamite has no implicit destruction protocol. Garbage collection manages memory
+only. Deterministic external-resource cleanup uses the compiler-known prelude
+trait `Close` together with a lexical `defer` statement.
 
 `Close` is an ordinary implementable trait with this method:
 
@@ -1140,29 +1218,47 @@ an open standard resource return an appropriate error after it is closed. Manual
 `Close` implementations are responsible for obeying these laws, just as manual
 comparison implementations are responsible for their trait laws.
 
-`with expression as name:` evaluates `expression` exactly once and stores its
-value in a hidden binding whose type must implement `Close`. The optional
-`as name` clause gives that non-rebindable binding a name within the body; when
-omitted, only the compiler can access the hidden binding. There is no separate
-entry hook. An error propagated while evaluating the expression prevents entry
-into the body and creates no cleanup obligation.
+`defer call` registers one safe function or method call to execute when control
+leaves the current lexical block. The call must return unit. A `defer`
+statement is permitted only in an executable body, and registration occurs only
+when control reaches it. It is not a function value or closure, creates no
+captured environment, and cannot escape its block.
 
-The compiler calls `close()` when control exits a `with` body by falling
-through, explicit `return`, or `?` propagation. Nested `with` bodies therefore
-close from innermost to outermost. Calling `close()` explicitly inside the body
-is valid because the automatic call is idempotent. An unrecoverable trap,
-including a trap during `close`, and out-of-memory termination do not guarantee
-further cleanup.
+The deferred call is evaluated when the block exits, using the values its
+callee, receiver, and argument expressions have at that time. The bindings
+referenced by those expressions remain alive until the call finishes. Reassigning
+a `var` after registration therefore affects the later call; a `let` is the
+usual choice when deferring cleanup of one particular resource.
+
+Deferred calls execute when their block falls through or is exited by
+`return`, `?` propagation, `break`, or `continue`. Calls registered in one block
+execute in reverse registration order, and an inner block's calls execute before
+those of an enclosing block. A return expression or propagated error is
+evaluated and its result copied before deferred calls begin. Consequently,
+unconditionally deferring `close()` on a resource that is returned from the
+same block closes the returned handle as well; conditional error-only deferral
+is not part of the initial language.
+
+The initial language permits only the single-call form and has no `errdefer` or
+multiline `defer:` body. A direct unsafe or foreign call cannot be deferred;
+native cleanup is wrapped in a safe unit-returning method. The deferred call
+expression cannot contain postfix `?`. An unrecoverable trap, including a trap
+during a deferred call, and out-of-memory termination do not guarantee that
+that block's remaining deferred calls will run.
 
 ~~~elx
-with File.open("report.txt", "w")? as file:
-    file.write("Elamite report")?
+let file = File.open("report.txt", "w")?
+defer file.close()
+
+file.write("Elamite report")?
 ~~~
 
-Ordinary scope exit and garbage collection never call `close()`. A resource
-that is neither explicitly closed nor placed in a `with` body may therefore
-leak its external resource. An implementation may warn about leaks it can
-prove locally, but such diagnostics are not required to be complete.
+Leaving a scope does not implicitly call `close()` merely because a reachable
+value implements `Close`; only an explicitly registered deferred call runs.
+Garbage collection likewise never calls `close()`. A resource that is neither
+explicitly closed nor registered with `defer` may therefore leak its external
+resource. An implementation may warn about leaks it can prove locally, but such
+diagnostics are not required to be complete.
 
 ## 9. Garbage collection
 
@@ -1175,7 +1271,7 @@ Managed storage remains alive while it is reachable through a strong language
 path. Strong roots include every local binding until its lexical scope ends,
 function parameters for the complete call, temporaries until their full
 expression finishes, module-level values, safe references, and managed handles
-stored inside structs, enums, collections, closures, and hidden loop state.
+stored inside structs, enums, collections, and hidden loop state.
 Assigning a new value to a `var` removes the binding's strong path to its
 previous value. Any other strong path to the previous value remains effective.
 
@@ -1204,8 +1300,8 @@ collection callbacks. Garbage collection never invokes `Close`. The runtime
 may perform internal reclamation work only when it invokes no user code and
 creates no observable external-resource cleanup behavior.
 
-Managed allocation failure is unrecoverable because ordinary copying, closure
-creation, copy-on-write mutation, and escape promotion may allocate implicitly.
+Managed allocation failure is unrecoverable because ordinary copying,
+copy-on-write mutation, and escape promotion may allocate implicitly.
 Before reporting out-of-memory, the runtime must attempt a full collection. If
 allocation still fails, it terminates the process with an out-of-memory
 diagnostic. OOM is not represented by `Result`, cannot be caught, and does not
@@ -1219,9 +1315,30 @@ reclamation guarantees or change language-visible values.
 
 ## 10. Unsafe operations and C interoperability
 
-Unsafe functions are declared with `unsafe`. An `unsafe:` block permits
-operations that require the unsafe boundary, including raw-pointer conversion to
-references.
+An unsafe function is declared with `unsafe`. Its declaration means that every
+caller must satisfy the function's documented safety preconditions, so calling
+it requires an `unsafe:` block. The function body does not implicitly become an
+unsafe context: every unsafe-only operation in the body must still appear in an
+explicit nested `unsafe:` block. This keeps the implementation's individual
+unsafe assumptions locally visible. Referencing an unsafe function or unbound
+unsafe method does not call it and is therefore safe; the resulting
+`&unsafe fn` reference preserves the call-site requirement defined in Section
+5.
+
+Whether a function is declared `unsafe` depends only on its caller contract,
+not on whether its body contains an `unsafe:` block or where a `return`
+statement appears. A safe function may use unsafe-only operations internally
+when it establishes every required obligation without relying on its caller.
+Conversely, a function must be declared `unsafe` whenever sound use requires
+the caller to establish an obligation that its parameter and return types do
+not express, even if the function performs no unsafe-only operation itself or
+returns outside an `unsafe:` block.
+
+An `unsafe:` block permits unsafe-only operations, including raw-pointer
+dereference, raw-pointer conversion to a reference, and calls to unsafe or
+foreign functions. It does not disable type checking or prove an operation
+valid. The author of the block asserts that every operation's documented
+preconditions and the raw-pointer obligations in Section 3.3 hold.
 
 ~~~elx
 unsafe pub fn from_pointer(pointer: *Session) -> &Session:
@@ -1229,14 +1346,151 @@ unsafe pub fn from_pointer(pointer: *Session) -> &Session:
         return pointer as &Session
 ~~~
 
-The compiler should diagnose provably invalid unsafe reference construction and
-may warn when a raw pointer's validity cannot be established. This diagnostic
-does not apply merely because a safely formed reference to a local binding
-escapes; such storage is promoted. Exact diagnostics, FFI marshalling,
-promotion and root registration, callback retention, pointer ownership, and
-foreign exceptions are open in
-[I-016](ISSUES.md#i-016-foreign-function-interface-and-unsafe-code) and
-[I-020](ISSUES.md#i-020-raw-pointer-provenance-and-violations).
+Using an unsafe-only operation outside the unsafe context required by Section
+3.3 is a compile-time error. The expression-local constant rule in Section 3.3
+is the only mandatory value analysis for raw-pointer access. A compiler may
+warn when broader analysis indicates a violation of provenance, liveness,
+bounds, initialization, pointee-type, or write-permission obligations, but
+inability to prove valid foreign input is not itself an error. These diagnostics
+do not apply merely because a safely formed reference to a local binding
+escapes; such storage is promoted.
+
+The consequences of violations not established statically, including the
+required null and alignment traps and otherwise undefined behavior, are
+specified in Section 3.3.
+
+### 10.1 Foreign declarations and ABI types
+
+The initial foreign-function interface supports the C ABI only. A module-level
+`extern "C":` block contains bodyless imported function declarations, opaque
+foreign types, and foreign struct declarations. Imported function identifiers
+name the exact unmangled C symbols. Native libraries and link options are
+declared in `elamite.toml`; executing an import has no runtime effect.
+
+~~~elx
+extern "C":
+    type FileHandle
+
+    struct CPoint:
+        x: f64
+        y: f64
+
+    fn open_file(path: *u8, mode: *u8) -> *var FileHandle
+    fn close_file(file: *var FileHandle) -> i32
+~~~
+
+An opaque foreign type has unknown size and alignment and may be used only
+behind a raw pointer. A foreign struct has the field order, alignment, padding,
+and by-value calling convention of the corresponding C struct for the selected
+target. It is an ordinary copyable Elamite value, but its fields must themselves
+be ABI-safe and it cannot be generic, derive traits, contain methods, or contain
+an incomplete opaque type directly. The declaration author is responsible for
+matching the C header exactly. A mismatched foreign declaration is an unsafe
+contract violation and causes undefined behavior when used across the boundary.
+
+The ABI-safe scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`,
+`u64`, `isize`, `usize`, `f32`, and `f64`. Raw pointers, foreign structs made
+recursively from ABI-safe fields, and `extern "C" fn` pointers with ABI-safe
+signatures are also ABI-safe. Unit `()` is permitted only as a function return
+and is lowered to C `void`. The fixed-width integer types use the corresponding
+`stdint.h` ABI types; `isize` and `usize` use `intptr_t` and `uintptr_t`.
+The compiler-known opaque type `std.ffi.CVoid` may be used only behind a raw
+pointer and corresponds to C `void`; unsafe raw-pointer casts to and from
+`*CVoid` or `*var CVoid` preserve provenance under Section 3.3.
+
+`bool`, `char`, `str`, `String`, safe references, function references, tuples,
+arrays, ordinary structs and enums, trait objects, and standard collections are
+not ABI-safe. Neither are `i128` and `u128`, whose C ABI is not portable. There is
+no implicit string, collection, nullable-value, or aggregate marshalling.
+Wrappers must explicitly encode text into a documented byte representation,
+add any required terminator, pass a raw pointer and length, and keep or register
+the backing storage for as long as foreign code may access it.
+
+Every imported foreign function is unsafe to call, including one whose
+signature contains only scalars. Its declaration has no body, cannot use
+Elamite's homogeneous variadic parameter syntax, and has an
+`unsafe extern "C" fn` function type. C variadic functions are not supported in
+the initial interface. Each raw-pointer parameter and result must have a
+documented foreign contract covering nullability, readable or writable extent,
+alignment, pointee initialization and type, whether the pointer is retained,
+and what event ends its validity. The compiler does not infer those facts from
+a C header.
+
+### 10.2 Ownership, retention, and managed roots
+
+A raw pointer never owns its target. Receiving an owning native handle through
+a raw pointer does not schedule cleanup, and passing a raw pointer never
+transfers ownership by itself. An owning C API is wrapped in an ordinary
+Elamite handle type whose methods enforce the API's state rules and whose
+idempotent `Close.close` implementation invokes the native release operation.
+Copies of that wrapper share one resource state under Section 8. Borrowed
+foreign pointers remain valid only for the duration promised by their foreign
+contract.
+
+Safe references are not ABI-safe and cannot cross the C boundary directly.
+Code explicitly converts one to a raw pointer. When a foreign call does not
+retain that pointer, the source binding or reference remains a strong root for
+the complete call. If foreign code may retain a pointer to language-managed
+storage after the call returns, the storage must first be registered with the
+runtime through `std.ffi.ForeignRoot[T]` or
+`std.ffi.ForeignRootMut[T]`.
+
+`ForeignRoot.retain(&value)` and `ForeignRootMut.retain(&var value)` promote the
+target when necessary and create a runtime root registration. Their `pointer`
+methods return `*T` and `*var T`, respectively. Copies of a foreign-root handle
+share one registration, and the handle implements the shared resource and
+idempotent `Close` contract from Section 8. Closing any copy unregisters the
+root. Calling `pointer` on a closed handle returns an appropriate closed-handle
+error. If every handle becomes unreachable without being closed, the
+registration and target may leak; garbage collection never unregisters it.
+
+Closing a registration is valid only after the foreign contract says that no
+later access will occur. Once it is closed, some other strong path may happen
+to keep the target alive, but foreign code cannot rely on that fact. A later
+foreign access through the retained pointer violates the earlier unsafe call's
+contract and has the consequences specified in Section 3.3. A raw pointer
+returned by foreign code does not root foreign storage, and converting it to a
+safe reference does not extend a foreign lifetime.
+
+### 10.3 Callbacks and foreign control flow
+
+A module-level function definition may use `extern "C" fn` to emit an unmangled
+C-callable function with an ABI-safe signature. It has a stable address for the
+process lifetime. A function that requires its foreign caller to uphold
+additional preconditions is declared `unsafe extern "C" fn`; its body still
+requires explicit `unsafe:` blocks for unsafe-only operations. Ordinary Elamite
+functions and function references cannot convert to C function pointers.
+
+~~~elx
+unsafe extern "C" fn visit_value(context: *var i32) -> i32:
+    unsafe:
+        let value: &var i32 = context as &var i32
+        *value = *value + 1
+        return *value
+~~~
+
+Foreign code may retain such a function pointer indefinitely. Retained managed
+callback state is passed separately through a raw context pointer backed by an
+open foreign-root registration. The callback function is responsible for
+recovering a reference only within an `unsafe:` block, and the registration
+must remain open until both the callback and context pointer have been released
+under the foreign API's contract.
+
+Until concurrency is specified, C may invoke an Elamite callback only on an OS
+thread that is already executing Elamite code, normally as a direct or nested
+callback during an Elamite-to-C call. Reentrant callbacks on that thread are
+allowed. Invocation on a foreign-created thread or concurrently with Elamite
+execution is undefined behavior. Broader callback threading follows
+[I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution).
+
+Recoverable Elamite errors do not cross the ABI automatically; a wrapper must
+translate them to an ABI-safe result such as a status code and out-parameters.
+Likewise, `errno` and other foreign error channels are observed only through
+explicit wrapper operations. A trap reached while executing foreign code or an
+Elamite callback terminates the process and never unwinds through C frames.
+C++ exceptions, `longjmp`, or any other foreign unwinding across an Elamite
+frame are forbidden and cause undefined behavior. Foreign code must catch or
+contain them and translate them before returning through the C boundary.
 
 ## 11. Conformance example
 
