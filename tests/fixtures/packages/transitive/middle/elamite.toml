@@ -1,0 +1,7 @@
+[package]
+name = "middle"
+version = "0.1.0"
+target_kind = "library"
+
+[dependencies.leaf]
+path = "../leaf"

@@ -1,0 +1,35 @@
+---
+source: tests/lexer.rs
+expression: render(&output.tokens)
+---
+Keyword(Let) @ 0..3
+Identifier("mask") @ 4..8
+Assign @ 9..10
+IntegerLiteral { raw: "0xffu8", radix: 16, suffix: Some(U8) } @ 11..17
+Newline @ 17..18
+Keyword(Let) @ 18..21
+Identifier("count") @ 22..27
+Assign @ 28..29
+IntegerLiteral { raw: "1_024i32", radix: 10, suffix: Some(I32) } @ 30..38
+Newline @ 38..39
+Keyword(Let) @ 39..42
+Identifier("ratio") @ 43..48
+Assign @ 49..50
+FloatLiteral { raw: "1.25e+2f64", suffix: Some(F64) } @ 51..61
+Newline @ 61..62
+Keyword(Let) @ 62..65
+Identifier("text") @ 66..70
+Assign @ 71..72
+StringLiteral("line\nemoji: 🙂") @ 73..97
+Newline @ 97..98
+Keyword(Let) @ 98..101
+Identifier("scalar") @ 102..108
+Assign @ 109..110
+CharacterLiteral("λ") @ 111..120
+Newline @ 120..121
+Keyword(Let) @ 121..124
+Identifier("formatted") @ 125..134
+Assign @ 135..136
+FormattedString([FormattedSegment { kind: Text("{value} = "), span: Span { file: FileId(0), start: 139, end: 151 } }, FormattedSegment { kind: Expression { source: "count + 1", tokens: [Token { kind: Identifier("count"), span: Span { file: FileId(0), start: 152, end: 157 } }, Token { kind: Plus, span: Span { file: FileId(0), start: 158, end: 159 } }, Token { kind: IntegerLiteral { raw: "1", radix: 10, suffix: None }, span: Span { file: FileId(0), start: 160, end: 161 } }] }, span: Span { file: FileId(0), start: 152, end: 161 } }]) @ 137..163
+Newline @ 163..164
+Eof @ 164..164

@@ -1,0 +1,52 @@
+---
+source: tests/lexer.rs
+expression: render(&output.tokens)
+---
+LParen @ 0..1
+RParen @ 2..3
+LBracket @ 4..5
+RBracket @ 6..7
+LBrace @ 8..9
+RBrace @ 10..11
+Comma @ 12..13
+Semicolon @ 14..15
+Colon @ 16..17
+Dot @ 18..19
+DotDot @ 20..22
+Ellipsis @ 23..26
+At @ 27..28
+Question @ 29..30
+Arrow @ 31..33
+Assign @ 34..35
+Plus @ 36..37
+Minus @ 38..39
+Star @ 40..41
+Slash @ 42..43
+Percent @ 44..45
+Amp @ 46..47
+Pipe @ 48..49
+Caret @ 50..51
+Tilde @ 52..53
+Bang @ 54..55
+Shl @ 56..58
+Shr @ 59..61
+EqEq @ 62..64
+NotEq @ 65..67
+LessEq @ 68..70
+GreaterEq @ 71..73
+Less @ 74..75
+Greater @ 76..77
+AndAnd @ 78..80
+OrOr @ 81..83
+PlusAssign @ 84..86
+MinusAssign @ 87..89
+StarAssign @ 90..92
+SlashAssign @ 93..95
+PercentAssign @ 96..98
+AmpAssign @ 99..101
+PipeAssign @ 102..104
+CaretAssign @ 105..107
+ShlAssign @ 108..111
+ShrAssign @ 112..115
+Newline @ 115..116
+Eof @ 116..116

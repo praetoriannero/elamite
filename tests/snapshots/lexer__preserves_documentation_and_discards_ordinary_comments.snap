@@ -1,0 +1,15 @@
+---
+source: tests/lexer.rs
+expression: render(&output.tokens)
+---
+DocComment("Documentation") @ 12..29
+Newline @ 29..30
+Keyword(Struct) @ 30..36
+Identifier("Example") @ 37..44
+Colon @ 44..45
+Newline @ 45..46
+Indent @ 66..70
+Keyword(Pass) @ 70..74
+Newline @ 74..75
+Dedent @ 75..75
+Eof @ 75..75

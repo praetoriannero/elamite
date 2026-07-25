@@ -167,38 +167,49 @@ Exit criteria:
 
 ### Milestone 1: compiler driver and package graph
 
+> Status: Complete for the initial local-path resolver.
+
 **Goal:** Reliably identify the complete compilation unit before parsing
 declaration bodies.
 
 Implementation work:
 
 - Load `elamite.toml` and validate package name, version, target kind,
-  dependencies, selected root source file, native libraries, and link options.
-- Represent the package instance identity supplied by the manifest and
-  lockfile. Different resolved versions or sources must remain distinct even
-  when their displayed names match.
+  local path dependencies, selected root source file, native libraries, and
+  link options.
+- Resolve dependency paths relative to the depending manifest and use each
+  canonical manifest-directory path as the initial package identity. Paths to
+  the same canonical directory identify one instance; different directories
+  remain distinct even when their displayed names and versions match.
 - Discover `.elx` files beneath the package source directory in deterministic
   order. Convert relative file paths into `root`-based module paths and reject
   invalid path components.
-- Detect duplicate inline/file-backed module paths and cycles in the package
-  dependency graph. Do not reject legal import cycles within one package.
+- Detect cycles in the package dependency graph. Do not reject legal import
+  cycles within one package.
+- Preserve every resolved dependency edge from its manifest alias to the
+  dependency's package identity.
 - Introduce a source manager that owns decoded source text, file IDs, line
   indexes, and span-to-line/column conversion.
 - Separate dependency resolution from compilation. The compiler pipeline
-  should consume a resolved package graph so that a future resolver can be
-  replaced without changing semantic analysis.
+  consumes a resolved package graph; a future registry, Git, or lockfile-aware
+  resolver can replace local-path resolution without changing semantic
+  analysis.
 
 Validation:
 
 - Single-file executable and library packages.
 - Nested file-backed modules.
 - Custom root paths.
-- Duplicate module paths, missing roots, malformed manifests, invalid module
-  components, and cyclic package dependencies.
+- Missing roots, malformed manifests, invalid module components, and cyclic
+  package dependencies.
+- Native-library and link-option manifest data.
+- Resolved dependency aliases and transitive package edges.
 - Two dependency instances with the same displayed package name but different
   identities.
 
 ### Milestone 2: lexer and indentation engine
+
+> Status: Complete.
 
 **Goal:** Convert source text into an exact, span-preserving token stream.
 
@@ -230,6 +241,8 @@ Validation:
 - Property tests that indent/dedent streams are balanced for accepted files.
 
 ### Milestone 3: complete surface parser
+
+> Status: Complete.
 
 **Goal:** Parse the full initial surface language before implementing all of its
 semantics.
@@ -270,6 +283,8 @@ Validation:
 
 ### Milestone 4: declaration collection, imports, and visibility
 
+> Status: Complete.
+
 **Goal:** Resolve every name to a stable identity without depending on source
 order.
 
@@ -277,6 +292,10 @@ Implementation work:
 
 - Collect module-level declarations for all files and inline modules before
   resolving imports or bodies.
+- Reject an inline module whose complete path is already defined by a
+  file-backed module. This check occurs here because file-backed paths are
+  discovered in Milestone 1 while inline paths do not exist until parsing and
+  declaration collection.
 - Maintain the shared module-item namespace and reject duplicate declarations
   or imports even if duplicate imports identify the same target.
 - Resolve absolute package/dependency paths and `root`, `self`, `super`, and
@@ -296,11 +315,14 @@ Validation:
 - Circular imports within one package.
 - Re-export chains and inaccessible public declarations hidden behind an
   unre-exported module.
-- Duplicate namespace entries, illegal `super`, private access across packages,
-  and private types in public signatures.
+- Inline/file-backed module collisions, duplicate namespace entries, illegal
+  `super`, private access across packages, and private types in public
+  signatures.
 - Direct and mutual function recursion independent of declaration order.
 
 ### Milestone 5: canonical type system and inference core
+
+> Status: Complete.
 
 **Goal:** Give later passes one exact representation of every type and generic
 substitution.
@@ -333,6 +355,14 @@ Validation:
 - Rejection of accidental variance or implicit concrete numeric conversion.
 
 ### Milestone 6: core expression and function checking
+
+> Status: Complete for plain (non-generic, non-method, non-trait) module-level
+> named functions. Bound-method and receiver checking is Milestone 11,
+> generic instantiation is Milestone 12, and trait-bound dispatch (including
+> `&dyn Trait` coercion and `PartialEq`/`PartialOrd`/`Display` obligations) is
+> Milestone 13; expressions in those areas are still walked for nested
+> diagnostics but are not misdiagnosed. Pattern and `for`-binding typing and
+> reachable-path return analysis remain Milestone 7.
 
 **Goal:** Type-check a useful non-generic, non-trait subset containing named
 functions and ordinary value operations.
@@ -370,12 +400,34 @@ Validation:
 
 ### Milestone 7: control flow, patterns, and flow analysis
 
+> Status: Complete for the same scope as Milestone 6 (plain module-level
+> named functions; see its status note), and implemented together with it in
+> `src/check.rs` in one pass rather than as a second tree-walk — see that
+> module's doc comment for why. Reachable-path return analysis does not
+> specially recognize `while true:`/`for` as always executing, so a loop
+> body alone never satisfies a non-unit function's return requirement. Match
+> exhaustiveness and redundancy are reasoned about precisely for `bool` and
+> `enum` scrutinees and for any unconditionally irrefutable pattern
+> (`_`/a binding, or a tuple/struct built entirely from those); every other
+> shape (a tuple/struct with a refutable field, or a literal of an unbounded
+> domain) conservatively requires an explicit catch-all arm rather than
+> risking a false "exhaustive" claim. Nested field-value refutability inside
+> an already-matched enum variant is not tracked. A bare, unqualified
+> identifier pattern is always treated as a binding, never as an
+> unqualified unit-variant reference, matching every pattern example in
+> `SPEC.md` and `examples/spec_demo.elx`, which always qualify variant
+> patterns as `Enum.Variant`. Explicit `*pattern` dereference is checked for
+> safe-reference scrutinees and participates in usefulness/exhaustiveness
+> analysis over the referenced value.
+
 **Goal:** Make all safe control flow statically well-formed before lowering it.
 
 Implementation work:
 
-- Build a control-flow graph for `if`, `else`, `while`, `for`, `match`,
-  `return`, `break`, `continue`, short-circuit operators, and postfix `?`.
+- Check the structured control-flow semantics of `if`, `else`, `while`, `for`,
+  `match`, `return`, `break`, `continue`, and short-circuit operators.
+  Record selected binding types and copy requirements for consumption by
+  lowering, while checking expressions in source order.
   Postfix `?` may remain semantically disabled until Milestone 15.
 - Enforce valid placement of `break` and `continue`, boolean conditions, and
   explicit return values on every reachable path of a non-unit function.
@@ -383,10 +435,8 @@ Implementation work:
 - Implement pattern usefulness, source-order reachability, and exhaustiveness.
   Guarded arms do not contribute to exhaustiveness.
 - Enforce identical binding names and types across alternative patterns.
-- Record left-to-right evaluation order explicitly. Do not rely on the target C
-  implementation's expression evaluation order.
-- Specify the lifetime of temporaries through their full expression so later GC
-  and cleanup lowering can preserve roots correctly.
+- Preserve the type, place, copy, and source-span metadata needed for
+  Milestone 8 to record left-to-right evaluation explicitly.
 
 Validation:
 
@@ -401,6 +451,19 @@ Validation:
 
 ### Milestone 8: typed IR, control-flow IR, and C backend skeleton
 
+> Status: Complete for the plain, non-generic module-level function scope
+> established by Milestones 6 and 7. `src/ir.rs` owns the typed high-level and
+> control-flow representations, `src/backend.rs` emits deterministic C99, and
+> `src/driver.rs` owns C compiler invocation and artifacts. The backend
+> deliberately diagnoses constructs outside this executable skeleton—managed
+> references and collections, methods and traits, generics, `for`, `match`,
+> postfix `?`, and `defer`—instead of silently miscompiling them. `match`
+> execution is completed with pattern-copy lowering in Milestone 9, while
+> collection-backed `for` execution remains Milestone 14. The generated runtime
+> support is isolated from language lowering so Milestones 10 and 17 can
+> introduce the previously selected Boehm collector behind a collector-neutral
+> managed-memory interface.
+
 **Goal:** Compile and run a small, safe, non-generic Elamite program end to end.
 
 Implementation work:
@@ -409,6 +472,8 @@ Implementation work:
   types, places, copies, casts, and evaluation order made explicit.
 - Lower typed bodies into control-flow IR made of basic blocks, explicit
   temporaries, branches, calls, returns, and trap operations.
+- Keep temporaries live through their full expression so later GC and cleanup
+  lowering can preserve roots correctly.
 - Define an internal calling convention for generated Elamite functions. It is
   separate from the public C ABI and may evolve until explicitly stabilized.
 - Define deterministic symbol mangling that includes package and declaration
@@ -451,6 +516,8 @@ Implementation work:
 - Apply copy operations consistently to assignment, argument passing, return,
   pattern binding, collection reads, aggregate reads, hidden loop state, and
   `Result`/`Option` payload extraction.
+- Complete `match` control-flow lowering together with its source-ordered
+  pattern tests and independently copied payload bindings.
 - Ensure a compound assignment mutates only its selected destination and that a
   copied aggregate cannot observe ordinary nested mutation in another copy.
 - Define equality separately from copying. Reference-like values compare
@@ -488,6 +555,11 @@ Implementation work:
 - Promote escaping binding cells and selected subvalues to managed storage.
   A correct first implementation may conservatively promote every local whose
   address is taken; precise escape analysis is a later optimization.
+- Route initialization, allocation classes, explicit collection, root
+  registration, keep-alive barriers, and native link inputs through the
+  collector-neutral `ManagedMemoryStrategy` backend interface introduced in
+  Milestone 8. Boehm is the default strategy; alternatives must preserve the
+  same non-moving, cycle-reclaiming language semantics.
 - Integrate non-moving Boehm-managed allocation and preserve strong roots for
   bindings, parameters, temporaries, safe references, managed handles, and
   hidden loop state for their specified lifetimes.

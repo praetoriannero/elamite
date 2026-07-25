@@ -1,0 +1,7 @@
+[package]
+name = "cyclic_b"
+version = "0.1.0"
+target_kind = "executable"
+
+[dependencies.a]
+path = "../a"

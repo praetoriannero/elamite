@@ -1,0 +1,305 @@
+---
+source: tests/parser.rs
+expression: render(&output.tree)
+---
+File @ 0..652
+  Function @ 0..652
+    Keyword(Fn)
+    Identifier("exercise")
+    Parameters @ 11..47
+      LParen
+      Parameter @ 12..32
+        Identifier("value")
+        Colon
+        Type @ 19..32
+          Identifier("Option")
+          TypeArguments @ 25..32
+            LBracket
+            Type @ 26..31
+              Identifier("Point")
+            RBracket
+      Comma
+      Parameter @ 34..46
+        Identifier("items")
+        Colon
+        Type @ 41..46
+          LBracket
+          Type @ 42..45
+            Identifier("i32")
+          RBracket
+      RParen
+    Block @ 47..652
+      Colon
+      LetStatement @ 53..72
+        Keyword(Let)
+        Identifier("tuple")
+        Assign
+        TupleExpression @ 65..71
+          LParen
+          LiteralExpression @ 66..67
+            IntegerLiteral { raw: "1", radix: 10, suffix: None }
+          Comma
+          LiteralExpression @ 69..70
+            IntegerLiteral { raw: "2", radix: 10, suffix: None }
+          RParen
+      LetStatement @ 76..103
+        Keyword(Var)
+        Identifier("values")
+        Assign
+        MacroExpression @ 89..102
+          At
+          Identifier("vec")
+          LBracket
+          LiteralExpression @ 94..95
+            IntegerLiteral { raw: "1", radix: 10, suffix: None }
+          Comma
+          LiteralExpression @ 97..98
+            IntegerLiteral { raw: "2", radix: 10, suffix: None }
+          Comma
+          LiteralExpression @ 100..101
+            IntegerLiteral { raw: "3", radix: 10, suffix: None }
+          RBracket
+      AssignmentStatement @ 107..131
+        BracketExpression @ 107..116
+          NameExpression @ 107..113
+            Identifier("values")
+          LBracket
+          LiteralExpression @ 114..115
+            IntegerLiteral { raw: "0", radix: 10, suffix: None }
+          RBracket
+        PlusAssign
+        BinaryExpression @ 120..130
+          UnaryExpression @ 120..122
+            Minus
+            LiteralExpression @ 121..122
+              IntegerLiteral { raw: "1", radix: 10, suffix: None }
+          Plus
+          BinaryExpression @ 125..130
+            LiteralExpression @ 125..126
+              IntegerLiteral { raw: "2", radix: 10, suffix: None }
+            Star
+            LiteralExpression @ 129..130
+              IntegerLiteral { raw: "3", radix: 10, suffix: None }
+      DeferStatement @ 135..156
+        Keyword(Defer)
+        CallExpression @ 141..155
+          MemberExpression @ 141..153
+            NameExpression @ 141..147
+              Identifier("values")
+            Dot
+            Identifier("clear")
+          LParen
+          RParen
+      IfStatement @ 160..276
+        Keyword(If)
+        BinaryExpression @ 163..193
+          BinaryExpression @ 163..176
+            NameExpression @ 163..168
+              Identifier("value")
+            NotEq
+            LiteralExpression @ 172..176
+              Keyword(Null)
+          AndAnd
+          BinaryExpression @ 180..193
+            BracketExpression @ 180..189
+              NameExpression @ 180..186
+                Identifier("values")
+              LBracket
+              LiteralExpression @ 187..188
+                IntegerLiteral { raw: "0", radix: 10, suffix: None }
+              RBracket
+            Greater
+            LiteralExpression @ 192..193
+              IntegerLiteral { raw: "0", radix: 10, suffix: None }
+        Block @ 193..212
+          Colon
+          PassStatement @ 203..208
+            Keyword(Pass)
+        ElseClause @ 212..276
+          Keyword(Else)
+          Block @ 216..276
+            Colon
+            UnsafeBlock @ 226..276
+              Keyword(Unsafe)
+              Block @ 232..276
+                Colon
+                AssignmentStatement @ 246..272
+                  BracketExpression @ 246..255
+                    NameExpression @ 246..252
+                      Identifier("values")
+                    LBracket
+                    LiteralExpression @ 253..254
+                      IntegerLiteral { raw: "0", radix: 10, suffix: None }
+                    RBracket
+                  Assign
+                  UnaryExpression @ 258..271
+                    Star
+                    ParenthesizedExpression @ 259..271
+                      LParen
+                      UnaryExpression @ 260..270
+                        Amp
+                        BracketExpression @ 261..270
+                          NameExpression @ 261..267
+                            Identifier("values")
+                          LBracket
+                          LiteralExpression @ 268..269
+                            IntegerLiteral { raw: "0", radix: 10, suffix: None }
+                          RBracket
+                      RParen
+      MatchStatement @ 276..457
+        Keyword(Match)
+        NameExpression @ 282..287
+          Identifier("value")
+        Block @ 287..457
+          Colon
+          MatchArm @ 297..383
+            Pattern @ 297..331
+              VariantPattern @ 297..331
+                Identifier("Option")
+                Dot
+                Identifier("Some")
+                LParen
+                Pattern @ 309..330
+                  RecordPattern @ 309..330
+                    Identifier("Point")
+                    LBrace
+                    PatternField @ 317..318
+                      Identifier("x")
+                    Comma
+                    PatternField @ 320..324
+                      Identifier("y")
+                      Colon
+                      Pattern @ 323..324
+                        Pattern @ 323..324
+                          IntegerLiteral { raw: "0", radix: 10, suffix: None }
+                    Comma
+                    PatternField @ 326..328
+                      DotDot
+                    RBrace
+                RParen
+            Guard @ 332..340
+              Keyword(If)
+              BinaryExpression @ 335..340
+                NameExpression @ 335..336
+                  Identifier("x")
+                Greater
+                LiteralExpression @ 339..340
+                  IntegerLiteral { raw: "0", radix: 10, suffix: None }
+            Block @ 340..383
+              Colon
+              ReturnStatement @ 354..375
+                Keyword(Return)
+                TryExpression @ 361..374
+                  CallExpression @ 361..373
+                    MemberExpression @ 361..370
+                      NameExpression @ 361..367
+                        Identifier("Result")
+                      Dot
+                      Identifier("Ok")
+                    LParen
+                    NameExpression @ 371..372
+                      Identifier("x")
+                    RParen
+                  Question
+          MatchArm @ 383..432
+            AlternativePattern @ 383..401
+              Pattern @ 383..394
+                Identifier("Option")
+                Dot
+                Identifier("None")
+              Pipe
+              Pattern @ 397..401
+                Keyword(Null)
+            Block @ 401..432
+              Colon
+              ContinueStatement @ 415..424
+                Keyword(Continue)
+          MatchArm @ 432..457
+            Pattern @ 432..433
+              Pattern @ 432..433
+                Identifier("_")
+            Block @ 433..457
+              Colon
+              BreakStatement @ 447..453
+                Keyword(Break)
+      ForStatement @ 457..515
+        Keyword(For)
+        Identifier("item")
+        Keyword(In)
+        NameExpression @ 469..474
+          Identifier("items")
+        Block @ 474..515
+          Colon
+          ExpressionStatement @ 484..511
+            CallExpression @ 484..510
+              MemberExpression @ 484..497
+                NameExpression @ 484..490
+                  Identifier("values")
+                Dot
+                Identifier("append")
+              LParen
+              CastExpression @ 498..509
+                NameExpression @ 498..502
+                  Identifier("item")
+                Keyword(As)
+                Type @ 506..509
+                  Identifier("i64")
+              RParen
+      WhileStatement @ 515..545
+        Keyword(While)
+        LiteralExpression @ 521..526
+          Keyword(False)
+        Block @ 526..545
+          Colon
+          PassStatement @ 536..541
+            Keyword(Pass)
+      LetStatement @ 545..567
+        Keyword(Let)
+        Identifier("array")
+        Assign
+        ArrayExpression @ 557..566
+          LBracket
+          LiteralExpression @ 558..559
+            IntegerLiteral { raw: "1", radix: 10, suffix: None }
+          Comma
+          LiteralExpression @ 561..562
+            IntegerLiteral { raw: "2", radix: 10, suffix: None }
+          Comma
+          LiteralExpression @ 564..565
+            IntegerLiteral { raw: "3", radix: 10, suffix: None }
+          RBracket
+      LetStatement @ 571..596
+        Keyword(Let)
+        Identifier("map")
+        Assign
+        MacroExpression @ 581..595
+          At
+          Identifier("map")
+          LBrace
+          LiteralExpression @ 586..591
+            StringLiteral("one")
+          Colon
+          LiteralExpression @ 593..594
+            IntegerLiteral { raw: "1", radix: 10, suffix: None }
+          RBrace
+      LetStatement @ 600..622
+        Keyword(Let)
+        Identifier("set")
+        Assign
+        MacroExpression @ 610..621
+          At
+          Identifier("set")
+          LBrace
+          LiteralExpression @ 615..620
+            StringLiteral("one")
+          RBrace
+      ExpressionStatement @ 626..652
+        CallExpression @ 626..651
+          NameExpression @ 626..633
+            Identifier("println")
+          LParen
+          FormattedStringExpression @ 634..648
+            FormattedString([FormattedSegment { kind: Text("value "), span: Span { file: FileId(0), start: 636, end: 642 } }, FormattedSegment { kind: Expression { source: "tuple", tokens: [Token { kind: Identifier("tuple"), span: Span { file: FileId(0), start: 643, end: 648 } }] }, span: Span { file: FileId(0), start: 643, end: 648 } }])
+            NameExpression @ 643..648
+              Identifier("tuple")
+          RParen

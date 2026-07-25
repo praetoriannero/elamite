@@ -1,0 +1,20 @@
+---
+source: tests/lexer.rs
+expression: render(&output.tokens)
+---
+Keyword(Let) @ 0..3
+Identifier("values") @ 4..10
+Assign @ 11..12
+LBracket @ 13..14
+IntegerLiteral { raw: "1", radix: 10, suffix: None } @ 23..24
+Comma @ 24..25
+IntegerLiteral { raw: "2", radix: 10, suffix: None } @ 28..29
+Comma @ 29..30
+RBracket @ 31..32
+Newline @ 32..33
+Keyword(Let) @ 33..36
+Identifier("done") @ 37..41
+Assign @ 42..43
+Keyword(True) @ 44..48
+Newline @ 48..49
+Eof @ 49..49

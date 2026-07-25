@@ -27,6 +27,16 @@ programs should not use collection timing for resource cleanup.
 
 ## 2. Program layout
 
+Elamite source files are UTF-8 text. An identifier begins with an ASCII letter
+or `_` and continues with ASCII letters, decimal digits, or `_`; equivalently,
+it matches `[A-Za-z_][A-Za-z0-9_]*`. Keywords are reserved and cannot be used
+as identifiers. The reserved keywords are `as`, `break`, `continue`, `defer`,
+`dyn`, `else`, `enum`, `extern`, `false`, `fn`, `for`, `if`, `impl`, `import`,
+`in`, `let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`,
+`Self`, `std`, `struct`, `super`, `trait`, `true`, `type`, `unsafe`, `var`, and
+`while`. Unicode text remains valid in comments, documentation, and string or
+character contents as permitted by their literal syntax.
+
 ### 2.1 Comments and documentation
 
 `//` introduces a line comment. A multiline comment is written as consecutive
@@ -98,6 +108,27 @@ either `library` or `executable`. `src/lib.elx` and `src/main.elx` are the
 respective default roots; the manifest may select a different `.elx` file. The
 directory containing the selected root file is the package's source directory.
 
+The initial resolver supports local path dependencies only. A dependency entry
+uses its manifest key as the import alias and supplies a `path` to a directory
+containing another `elamite.toml`. The path is resolved relative to the
+depending package's manifest directory.
+
+~~~toml
+[package]
+name = "app"
+version = "0.1.0"
+target_kind = "executable"
+
+[dependencies.codec]
+path = "../codec"
+~~~
+
+Dependency resolution follows these entries transitively. The initial resolver
+does not fetch registry or Git dependencies, select among version constraints,
+or read or write a package lockfile. Those facilities may be added by a future
+resolver without changing how the compiler consumes the resolved package
+graph.
+
 The selected file defines the package's `root` module. Every other `.elx` file
 beneath the source directory defines a file-backed module from its relative
 path: `models.elx` defines `root.models`, and `codec/json.elx` defines
@@ -156,12 +187,14 @@ collects module declarations before resolving imports and bodies. Imports
 execute no code and establish no runtime initialization order. The package
 dependency graph must be acyclic.
 
-A package has an opaque identity determined by the dependency instance resolved
-from its manifest and lockfile, not merely by its displayed name. Packages from
-different versions or sources have distinct identities and therefore distinct
-nominal types and traits. A dependency alias does not change that identity.
-The package identity used by these rules is the package identity used by trait
-coherence and the orphan rule in Section 6.
+Under the initial local-path resolver, a package has an opaque identity
+determined by its canonical manifest-directory path, not by its displayed name
+or version. Two dependency paths that resolve to the same canonical directory
+identify one package instance. Different canonical directories identify
+different package instances, even when their manifests contain the same name
+and version. A dependency alias does not change that identity. The package
+identity used by these rules is the package identity used by nominal types,
+trait coherence, and the orphan rule in Section 6.
 
 ~~~elx
 import std.io
@@ -455,13 +488,15 @@ types, `f32`, and `f64`.
 
 Integer literals support decimal notation and `0b`, `0o`, and `0x` prefixes.
 Integer and floating literals may contain `_` separators and may carry a numeric
-type suffix. An unsuffixed integer literal materializes as an expected integer
-or floating type when representable and otherwise defaults to `i32`. A floating
-literal contains a decimal point or exponent, accepts an `f32` or `f64` suffix,
-uses an expected floating type when present, and otherwise defaults to `f64`.
-Unary `-` is an operator rather than part of a literal token, but literal range
-checking includes an immediately applied minus so each signed type's minimum
-value is expressible.
+type suffix. A separator must occur between two digits of the same digit run;
+it cannot begin or end the run or appear twice consecutively. An unsuffixed
+integer literal materializes as an expected integer or floating type when
+representable and otherwise defaults to `i32`. A floating literal contains a
+decimal point or exponent, accepts an `f32` or `f64` suffix, uses an expected
+floating type when present, and otherwise defaults to `f64`. Unary `-` is an
+operator rather than part of a literal token, but literal range checking
+includes an immediately applied minus so each signed type's minimum value is
+expressible.
 
 Concrete numeric types never convert implicitly, and arithmetic operands must
 have compatible concrete types after literal materialization. `value as Type`
@@ -500,6 +535,16 @@ an explicit operation such as `String.from(text)` to produce a `String`.
 Replacing a `str`-typed field through a mutable aggregate path is valid, but the
 contents of an existing `str` value cannot be mutated. Formatting is defined in
 Section 7.
+
+Ordinary string literals use double quotes, and character literals use single
+quotes. They may contain Unicode scalar values directly. The supported escapes
+are `\\`, `\"`, `\'`, `\n`, `\r`, `\t`, `\0`, and `\u{HEX}`, where `HEX`
+contains one through six hexadecimal digits and denotes a valid Unicode scalar
+value. `\"` is primarily useful in strings and `\'` in characters, but both
+are accepted in either literal. A character literal must decode to exactly one
+Unicode scalar value. A physical newline cannot occur inside either literal.
+Other escapes, invalid Unicode scalar values, and unterminated literals are
+compile-time errors.
 
 A fixed array type is `[T; N]`, where `N` is a compile-time nonnegative `usize`
 value. `[first, second]` constructs an array. The compiler-handled built-in
@@ -1262,10 +1307,14 @@ diagnostics are not required to be complete.
 
 ## 9. Garbage collection
 
-Elamite uses the non-moving Boehm garbage collector for managed memory. Stack
-versus managed-heap placement is unobservable in safe code. Escape promotion
-preserves safe-reference behavior and `Identity` identity. Once created, a
-managed allocation does not move during its lifetime.
+Elamite's initial runtime uses the non-moving Boehm garbage collector for
+managed memory. The compiler accesses it through a collector-neutral runtime
+interface so a future implementation may select another strategy, including
+reference counting with cycle detection, provided every semantic guarantee in
+this section remains unchanged. Stack versus managed-heap placement is
+unobservable in safe code. Escape promotion preserves safe-reference behavior
+and `Identity` identity. Once created, a managed allocation does not move
+during its lifetime.
 
 Managed storage remains alive while it is reachable through a strong language
 path. Strong roots include every local binding until its lexical scope ends,

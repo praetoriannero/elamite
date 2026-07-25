@@ -1,0 +1,17 @@
+---
+source: tests/lexer.rs
+expression: render(&output.tokens)
+---
+Keyword(Let) @ 0..3
+Identifier("total") @ 4..9
+Assign @ 10..11
+IntegerLiteral { raw: "1", radix: 10, suffix: None } @ 12..13
+Plus @ 18..19
+IntegerLiteral { raw: "2", radix: 10, suffix: None } @ 20..21
+Newline @ 21..22
+Keyword(Let) @ 22..25
+Identifier("next") @ 26..30
+Assign @ 31..32
+IntegerLiteral { raw: "3", radix: 10, suffix: None } @ 33..34
+Newline @ 34..35
+Eof @ 35..35

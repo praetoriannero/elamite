@@ -7,15 +7,21 @@
 ## Issues to resolve before initial implementation begins
 
 These issues determine the initial parser, type checker, and core runtime
-model.
+model. None are currently open: `I-017` is resolved (below). Two
+implementation/tooling decisions surfaced while resolving it — the minimum C
+compiler requirement and the supported OS/architecture matrix — are not
+language-design questions and are tracked in [`LEDGER.md`](LEDGER.md#13-target-assumptions)
+instead of here.
 
 ## I-017: Specification migration and consistency
 
-`SPEC.md` and the authoritative demonstration define the managed,
-independent-value-copy direction, but the existing lexer, parser, analyzer, and
-older fixtures still encode earlier grammar and semantic assumptions.
-Implementation work must reconcile those components after the remaining
-blocking design issues are resolved and the specification is considered stable.
+**Resolved.** `SPEC.md` and the authoritative demonstration define the managed,
+independent-value-copy direction. The prior lexer, parser, analyzer, and
+fixtures that encoded earlier grammar and semantic assumptions have been
+removed entirely rather than reconciled; there is no legacy implementation
+left to migrate. [`LEDGER.md`](LEDGER.md) maps every normative rule in
+`SPEC.md` to an implementation milestone, closing this issue per `IMPL.md`
+Milestone 0's exit criteria.
 
 ## Issues to refine after initial implementation begins
 

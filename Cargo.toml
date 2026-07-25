@@ -7,3 +7,11 @@ description = "The Elamite programming language compiler"
 publish = false
 
 [dependencies]
+codespan-reporting = "0.13"
+lasso = "0.7"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+insta = "1"
+proptest = "1"

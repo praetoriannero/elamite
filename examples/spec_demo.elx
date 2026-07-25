@@ -213,12 +213,12 @@ fn use_demo_resource(resource: DemoResource):
     defer resource.close()
     println(f"resource closed: {resource.is_closed()}") // false
 
-fn propagate_io(result: Result[i32, IoError]) -> Result[i32, IoError]:
+fn propagate_io(result: Result[i32, io.IoError]) -> Result[i32, io.IoError]:
     // `?` propagates only the exact enclosing error type.
     let value = result?
     return Result.Ok(value)
 
-pub fn main() -> Result[(), IoError]:
+pub fn main() -> Result[(), io.IoError]:
     report_diagnostic("starting spec demonstration")
 
     let resource = make_demo_resource()
@@ -261,8 +261,8 @@ pub fn main() -> Result[(), IoError]:
             println(f"{*ptr}")
 
     let leaf = Chain{value: 1, next: Option.None}
-    let root = Chain{value: 2, next: Option.Some(&leaf)}
-    println(f"chain length: {chain_length(&root)}")
+    let chain_root = Chain{value: 2, next: Option.Some(&leaf)}
+    println(f"chain length: {chain_length(&chain_root)}")
 
     var packet = Packet{id: 7, body: "first"}
     let body = packet.body

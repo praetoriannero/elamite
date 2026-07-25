@@ -1,0 +1,10 @@
+[package]
+name = "distinct_identity_root"
+version = "0.1.0"
+target_kind = "executable"
+
+[dependencies.x]
+path = "../dep_x"
+
+[dependencies.y]
+path = "../dep_y"

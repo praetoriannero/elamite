@@ -1,2 +1,5 @@
 # Rust build output
 /target/
+
+# Generated example artifacts
+/examples/*/build/

@@ -1,0 +1,23 @@
+---
+source: tests/lexer.rs
+expression: render(&output.tokens)
+---
+Keyword(If) @ 0..2
+Keyword(True) @ 3..7
+Colon @ 7..8
+Newline @ 8..9
+Indent @ 9..13
+Identifier("println") @ 13..20
+LParen @ 20..21
+StringLiteral("yes") @ 21..26
+RParen @ 26..27
+Newline @ 27..28
+Dedent @ 28..28
+Keyword(Else) @ 28..32
+Colon @ 32..33
+Newline @ 33..34
+Indent @ 34..38
+Keyword(Pass) @ 38..42
+Newline @ 42..43
+Dedent @ 43..43
+Eof @ 43..43

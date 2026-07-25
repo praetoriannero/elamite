@@ -1,0 +1,4 @@
+[package]
+name = "single_file_library"
+version = "0.1.0"
+target_kind = "library"

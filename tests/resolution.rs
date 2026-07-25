@@ -1,0 +1,584 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use elamite::diagnostics::{Category, Diagnostic};
+use elamite::package::PackageGraph;
+use elamite::resolution::{NameTarget, Visibility, resolve};
+use elamite::source::SourceManager;
+
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+struct TestTree {
+    root: PathBuf,
+}
+
+impl TestTree {
+    fn new(name: &str) -> Self {
+        let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "elamite-resolution-{}-{name}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create test tree");
+        Self { root }
+    }
+
+    fn package(
+        &self,
+        relative: &str,
+        target_kind: &str,
+        dependencies: &[(&str, &str)],
+        files: &[(&str, &str)],
+    ) -> PathBuf {
+        let directory = self.root.join(relative);
+        fs::create_dir_all(directory.join("src")).expect("create package source directory");
+        let mut manifest = format!(
+            "[package]\nname = \"{relative}\"\nversion = \"0.1.0\"\ntarget_kind = \"{target_kind}\"\n"
+        );
+        for (alias, path) in dependencies {
+            manifest.push_str(&format!("\n[dependencies.{alias}]\npath = \"{path}\"\n"));
+        }
+        fs::write(directory.join("elamite.toml"), manifest).expect("write manifest");
+        for (path, source) in files {
+            let path = directory.join(path);
+            fs::create_dir_all(path.parent().expect("source file has parent"))
+                .expect("create source parent");
+            fs::write(path, source).expect("write source");
+        }
+        directory
+    }
+}
+
+impl Drop for TestTree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn resolve_package(package: &Path) -> (SourceManager, elamite::resolution::ResolutionOutput) {
+    let mut sources = SourceManager::new();
+    let graph = PackageGraph::resolve(&package.join("elamite.toml"), &mut sources)
+        .expect("package graph should resolve");
+    let output = resolve(&graph, &mut sources);
+    (sources, output)
+}
+
+fn diagnostic_text(sources: &SourceManager, diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let position = diagnostic.primary.map_or_else(
+                || "<no span>".to_string(),
+                |span| {
+                    let position = sources.line_col(span.file, span.start);
+                    format!(
+                        "{}:{}:{}",
+                        sources.path(span.file).display(),
+                        position.line,
+                        position.column
+                    )
+                },
+            );
+            format!(
+                "{position}: {:?}: {}",
+                diagnostic.category, diagnostic.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn predeclares_functions_and_allows_local_shadowing() {
+    let tree = TestTree::new("predeclare");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn first() -> i32:\n\
+                 \x20\x20\x20\x20return second()\n\
+             fn second() -> i32:\n\
+                 \x20\x20\x20\x20return first()\n\
+             fn shadow() -> i32:\n\
+                 \x20\x20\x20\x20let first = 1\n\
+                 \x20\x20\x20\x20return first\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    assert_eq!(
+        output
+            .program
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.parent_declaration.is_none())
+            .count(),
+        3
+    );
+    assert_eq!(output.program.local_bindings.len(), 1);
+    assert!(
+        output
+            .program
+            .references
+            .iter()
+            .any(|reference| matches!(reference.target, NameTarget::Local(_)))
+    );
+    let (_, repeated) = resolve_package(&package);
+    assert_eq!(output.program.dump(), repeated.program.dump());
+}
+
+#[test]
+fn resolves_the_authoritative_demonstration() {
+    let tree = TestTree::new("spec-demo");
+    let package = tree.package(
+        "demo",
+        "executable",
+        &[],
+        &[("src/main.elx", include_str!("../examples/spec_demo.elx"))],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    assert!(output.program.declarations.len() >= 30);
+    assert!(output.program.local_bindings.len() >= 50);
+    assert!(output.program.references.len() >= 100);
+}
+
+#[test]
+fn resolves_circular_imports_after_collecting_declarations() {
+    let tree = TestTree::new("import-cycle");
+    let package = tree.package(
+        "library",
+        "library",
+        &[],
+        &[(
+            "src/lib.elx",
+            "pub mod left:\n\
+                 \x20\x20\x20\x20import super.right.Right\n\
+                 \x20\x20\x20\x20pub struct Left:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+             pub mod right:\n\
+                 \x20\x20\x20\x20import super.left.Left\n\
+                 \x20\x20\x20\x20pub struct Right:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.program.imports.len(), 2);
+    assert!(
+        output
+            .program
+            .imports
+            .iter()
+            .all(|import| import.target.is_some())
+    );
+}
+
+#[test]
+fn duplicate_imports_conflict_even_when_their_targets_are_identical() {
+    let tree = TestTree::new("duplicate-import");
+    let package = tree.package(
+        "library",
+        "library",
+        &[],
+        &[(
+            "src/lib.elx",
+            "pub struct Value:\n\
+                 \x20\x20\x20\x20pass\n\
+             import self.Value as Alias\n\
+             import self.Value as Alias\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(
+                |diagnostic| diagnostic.category == Category::DeclarationConflict
+                    && !diagnostic.related.is_empty()
+            ),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    assert_eq!(
+        output.program.imports[0].target,
+        output.program.imports[1].target
+    );
+}
+
+#[test]
+fn resolves_parameters_locals_patterns_loops_and_record_shorthand() {
+    let tree = TestTree::new("lexical-scopes");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "struct Point:\n\
+                 \x20\x20\x20\x20x: i32\n\
+             fn scopes(point: Point, values: [i32]) -> i32:\n\
+                 \x20\x20\x20\x20let x = 1\n\
+                 \x20\x20\x20\x20let built = Point{x}\n\
+                 \x20\x20\x20\x20match point:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Point { x } if x > 0:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20return x\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20_:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20for item in values:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20let Point = item\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20println(Point)\n\
+                 \x20\x20\x20\x20return x\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    assert!(output.program.local_bindings.len() >= 7);
+    assert!(
+        output
+            .program
+            .references
+            .iter()
+            .filter(|reference| matches!(reference.target, NameTarget::Local(_)))
+            .count()
+            >= 8
+    );
+}
+
+#[test]
+fn lookup_does_not_search_other_modules_or_inherit_imports() {
+    let tree = TestTree::new("lexical-boundaries");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[
+            (
+                "src/main.elx",
+                "import root.other.Hidden\n\
+                 mod nested:\n\
+                 \x20\x20\x20\x20fn bad(value: Hidden):\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n",
+            ),
+            ("src/other.elx", "pub struct Hidden:\n    pass\n"),
+        ],
+    );
+    let (sources, output) = resolve_package(&package);
+    let rendered = diagnostic_text(&sources, &output.diagnostics);
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.category == Category::NameResolution
+                && diagnostic.message.contains("Hidden")),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn public_reexport_chain_preserves_the_original_identity() {
+    let tree = TestTree::new("reexport");
+    tree.package(
+        "dep",
+        "library",
+        &[],
+        &[
+            (
+                "src/lib.elx",
+                "pub import root.hidden.Visible as Exported\n",
+            ),
+            (
+                "src/hidden.elx",
+                "pub struct Visible:\n    pass\nstruct Secret:\n    pass\n",
+            ),
+        ],
+    );
+    let app = tree.package(
+        "app",
+        "executable",
+        &[("dep", "../dep")],
+        &[(
+            "src/main.elx",
+            "import dep.Exported\nfn consume(value: Exported):\n    pass\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&app);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    let imports = &output.program.imports;
+    assert_eq!(imports.len(), 2);
+    assert_eq!(imports[0].target, imports[1].target);
+    assert!(
+        imports
+            .iter()
+            .any(|import| import.visibility == Visibility::Public)
+    );
+    assert!(
+        output
+            .program
+            .references
+            .iter()
+            .any(|reference| !reference.provenance.is_empty())
+    );
+}
+
+#[test]
+fn public_api_checks_only_externally_visible_members() {
+    let tree = TestTree::new("public-api");
+    let package = tree.package(
+        "library",
+        "library",
+        &[],
+        &[(
+            "src/lib.elx",
+            "struct Hidden:\n\
+                 \x20\x20\x20\x20pass\n\
+             pub struct Allowed:\n\
+                 \x20\x20\x20\x20private_value: Hidden\n\
+             pub struct Rejected:\n\
+                 \x20\x20\x20\x20pub exposed: Hidden\n\
+             pub enum AlsoRejected:\n\
+                 \x20\x20\x20\x20Value(Hidden)\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    let rendered = diagnostic_text(&sources, &output.diagnostics);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Visibility)
+            .count(),
+        2,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn retains_member_namespaces_and_reports_member_conflicts() {
+    let tree = TestTree::new("members");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "struct Broken:\n\
+                 \x20\x20\x20\x20value: i32\n\
+                 \x20\x20\x20\x20fn value():\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+                 \x20\x20\x20\x20late: i32\n\
+             enum Choice:\n\
+                 \x20\x20\x20\x20One(i32)\n\
+                 \x20\x20\x20\x20Two { value: i32 }\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    let rendered = diagnostic_text(&sources, &output.diagnostics);
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::DeclarationConflict)
+            .count()
+            >= 2,
+        "{rendered}"
+    );
+    assert!(
+        output
+            .program
+            .declaration_members
+            .values()
+            .any(|members| members.len() >= 2)
+    );
+    assert_eq!(output.program.variants.len(), 2);
+    assert_eq!(
+        output
+            .program
+            .variants
+            .iter()
+            .map(|variant| variant.fields.len())
+            .sum::<usize>(),
+        2
+    );
+}
+
+#[test]
+fn self_type_is_scoped_to_structs_traits_and_trait_impls() {
+    let tree = TestTree::new("self-type");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "struct Valid:\n\
+                 \x20\x20\x20\x20fn copy(self: &Self) -> Self:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20return *self\n\
+             trait Make:\n\
+                 \x20\x20\x20\x20fn make() -> Self\n\
+             impl Make for Valid:\n\
+                 \x20\x20\x20\x20fn make() -> Self:\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20return Valid{}\n\
+             enum Invalid:\n\
+                 \x20\x20\x20\x20Value(Self)\n\
+             fn invalid() -> Self:\n\
+                 \x20\x20\x20\x20pass\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    let rendered = diagnostic_text(&sources, &output.diagnostics);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.category == Category::NameResolution
+                    && diagnostic.message.contains("`Self`")
+            })
+            .count(),
+        2,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
+    let tree = TestTree::new("module-reexport");
+    tree.package(
+        "dep",
+        "library",
+        &[],
+        &[
+            ("src/lib.elx", "pub import root.hidden as hidden\n"),
+            (
+                "src/hidden.elx",
+                "pub struct Exposed:\n    pass\nstruct Private:\n    pass\n",
+            ),
+        ],
+    );
+    let app = tree.package(
+        "app",
+        "executable",
+        &[("dep", "../dep")],
+        &[(
+            "src/main.elx",
+            "import dep.hidden.Exposed\nfn consume(value: Exposed):\n    pass\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&app);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+
+    let bad_app = tree.package(
+        "bad_app",
+        "executable",
+        &[("dep", "../dep")],
+        &[("src/main.elx", "import dep.hidden.Private\n")],
+    );
+    let (bad_sources, bad_output) = resolve_package(&bad_app);
+    assert!(
+        bad_output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.category == Category::Visibility),
+        "{}",
+        diagnostic_text(&bad_sources, &bad_output.diagnostics)
+    );
+}
+
+#[test]
+fn reports_milestone_four_visibility_and_namespace_failures() {
+    let tree = TestTree::new("failures");
+    tree.package(
+        "dep",
+        "library",
+        &[],
+        &[
+            ("src/lib.elx", ""),
+            (
+                "src/hidden.elx",
+                "pub struct PublicButHidden:\n    pass\nstruct Private:\n    pass\n",
+            ),
+        ],
+    );
+    let app = tree.package(
+        "app",
+        "executable",
+        &[("dep", "../dep")],
+        &[
+            (
+                "src/main.elx",
+                "mod collision:\n\
+                     \x20\x20\x20\x20pass\n\
+                 struct Duplicate:\n\
+                     \x20\x20\x20\x20pass\n\
+                 struct Duplicate:\n\
+                     \x20\x20\x20\x20pass\n\
+                 import dep.hidden.PublicButHidden\n\
+                 import super.nope\n\
+                 pub fn expose(value: root.private_api.Hidden):\n\
+                     \x20\x20\x20\x20pass\n",
+            ),
+            ("src/collision.elx", ""),
+            ("src/private_api.elx", "pub struct Hidden:\n    pass\n"),
+        ],
+    );
+    let (sources, output) = resolve_package(&app);
+    let rendered = diagnostic_text(&sources, &output.diagnostics);
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.category == Category::DeclarationConflict),
+        "{rendered}"
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.category == Category::NameResolution),
+        "{rendered}"
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Visibility)
+            .count()
+            >= 2,
+        "{rendered}"
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.primary)
+            .all(|span| span.start <= span.end)
+    );
+}
