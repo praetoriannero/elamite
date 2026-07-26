@@ -180,6 +180,233 @@ fn main() -> ():
 }
 
 #[test]
+fn lowers_source_ordered_matches_and_copied_payload_bindings() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+enum State:
+    Count(i32)
+    Positioned { x: i32, y: i32 }
+    Disabled
+
+fn describe(state: State) -> i32:
+    match state:
+        State.Count(value) if value > 10:
+            return value + 100
+        State.Count(value):
+            return value
+        State.Positioned { x, y }:
+            return x + y
+        State.Disabled:
+            return 0
+
+fn bool_value(value: bool) -> i32:
+    match value:
+        true:
+            return 1
+        false:
+            return 0
+
+fn main() -> ():
+    println(describe(State.Count(4)))
+    println(describe(State.Count(12)))
+    println(describe(State.Positioned { x: 2, y: 3 }))
+    println(describe(State.Disabled))
+    println(bool_value(true))
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "4\n112\n5\n0\n1\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn enum_representation_uses_an_explicit_c99_discriminant_and_named_payload() {
+    let tree = TestTree::new("enum-c99");
+    tree.executable(
+        "enum Value:\n    Integer(i32)\n    Empty\n\nfn main() -> ():\n    let value = Value.Integer(1)\n    match value:\n        Value.Integer(inner):\n            println(inner)\n        Value.Empty:\n            pass\n",
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(compilation.generated_c.contains("uint32_t tag;"));
+    assert!(compilation.generated_c.contains("} payload;"));
+    assert!(!compilation.generated_c.contains("_Static_assert"));
+}
+
+#[test]
+fn logical_copies_are_independent_across_assignment_arguments_and_returns() {
+    let source = r#"
+struct Inner:
+    values: [i32; 2]
+
+struct Outer:
+    inner: Inner
+
+fn changed(input: Outer) -> Outer:
+    var result = input
+    result.inner.values[0] = 9
+    return result
+
+fn main() -> ():
+    var original = Outer { inner: Inner { values: [1, 2] } }
+    var assigned = original
+    assigned.inner.values[1] = 8
+    let returned = changed(original)
+    println(f"{original.inner.values[0]},{original.inner.values[1]}")
+    println(f"{assigned.inner.values[0]},{assigned.inner.values[1]}")
+    println(f"{returned.inner.values[0]},{returned.inner.values[1]}")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "1,2\n1,8\n9,2\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
+fn recursive_copy_helpers_include_owned_strings() {
+    let source = r#"
+struct Label:
+    text: String
+
+fn echo(value: Label) -> Label:
+    return value
+
+fn main() -> ():
+    let original = Label { text: "copied" }
+    let result = echo(original)
+    println(result.text)
+"#;
+    let tree = TestTree::new("string-copy");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(
+        compilation
+            .generated_c
+            .contains("return el_copy_string(value);")
+    );
+    assert!(compilation.generated_c.contains("result.f0 = el_copy_t"));
+
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
+    assert_eq!(stdout, "copied\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn lowers_alternative_tuple_struct_and_string_patterns() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+enum Number:
+    Left(i32)
+    Right(i32)
+    Missing
+
+struct Point:
+    x: i32
+    y: i32
+
+fn number(value: Number) -> i32:
+    match value:
+        Number.Left(inner) | Number.Right(inner):
+            return inner
+        Number.Missing:
+            return 0
+
+fn pair(value: (i32, bool)) -> i32:
+    match value:
+        (0, false):
+            return 1
+        _:
+            return 2
+
+fn point(value: Point) -> i32:
+    match value:
+        Point { x: 1, y }:
+            return y
+        _:
+            return 0
+
+fn text(value: str) -> i32:
+    match value:
+        "yes":
+            return 1
+        _:
+            return 0
+
+fn main() -> ():
+    println(number(Number.Left(3)))
+    println(number(Number.Right(4)))
+    println(pair((0, false)))
+    println(pair((1, false)))
+    println(point(Point { x: 1, y: 7 }))
+    println(text("yes"))
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "3\n4\n1\n2\n7\n1\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn copied_match_payload_does_not_mutate_the_scrutinee() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Pair:
+    left: i32
+    right: i32
+
+enum Boxed:
+    Value(Pair)
+
+fn main() -> ():
+    let boxed = Boxed.Value(Pair { left: 1, right: 2 })
+    match boxed:
+        Boxed.Value(pair):
+            var changed = pair
+            changed.left = 9
+            println(changed.left)
+    match boxed:
+        Boxed.Value(pair):
+            println(pair.left)
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "9\n1\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn aggregate_reads_produce_independent_values() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Pair:
+    left: i32
+    right: i32
+
+fn main() -> ():
+    var values = [Pair { left: 1, right: 2 }]
+    var selected = values[0]
+    selected.left = 9
+    println(selected.left)
+    println(values[0].left)
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "9\n1\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
 fn short_circuit_operators_do_not_evaluate_the_skipped_operand() {
     let (stdout, stderr, status) = build_and_run(
         r#"
@@ -385,35 +612,23 @@ fn main() -> ():
 }
 
 #[test]
-fn executable_subset_rejects_match_and_for_at_the_lowering_boundary() {
-    let cases = [
-        (
-            "fn main() -> ():\n    match true:\n        true:\n            pass\n        false:\n            pass\n",
-            "`match` lowering",
-        ),
-        (
-            "fn main() -> ():\n    for value in [1, 2]:\n        println(value)\n",
-            "`for` lowering",
-        ),
-    ];
-    for (source, expected) in cases {
-        let tree = TestTree::new("unsupported-lowering");
-        tree.executable(source);
-        let mut sources = SourceManager::new();
-        let graph = tree.graph(&mut sources);
-        let diagnostics = compile(&graph, &mut sources, Target::X86_64)
-            .err()
-            .expect("construct must remain outside the Milestone 8 executable subset");
-        assert!(
-            diagnostics.iter().any(|diagnostic| {
-                diagnostic.category == Category::Lowering
-                    && diagnostic.message.contains(expected)
-                    && diagnostic.primary.is_some()
-            }),
-            "{}",
-            render(&sources, &diagnostics)
-        );
-    }
+fn executable_subset_rejects_for_at_the_lowering_boundary() {
+    let tree = TestTree::new("unsupported-lowering");
+    tree.executable("fn main() -> ():\n    for value in [1, 2]:\n        println(value)\n");
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let diagnostics = compile(&graph, &mut sources, Target::X86_64)
+        .err()
+        .expect("`for` must remain outside the executable subset until Milestone 14");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::Lowering
+                && diagnostic.message.contains("`for` lowering")
+                && diagnostic.primary.is_some()
+        }),
+        "{}",
+        render(&sources, &diagnostics)
+    );
 }
 
 #[test]

@@ -300,6 +300,16 @@ impl TypeContext {
         self.intern(TypeKind::Primitive(primitive))
     }
 
+    /// Returns the canonical identity of a primitive installed when the type
+    /// context was created, without requiring mutable access during lowering.
+    #[must_use]
+    pub fn primitive_id(&self, primitive: PrimitiveType) -> TypeId {
+        *self
+            .interned
+            .get(&TypeKind::Primitive(primitive))
+            .expect("every primitive type is pre-interned")
+    }
+
     pub fn fresh_inference_variable(&mut self) -> TypeId {
         let variable = InferenceVariableId(
             u32::try_from(self.inference_bindings.len()).expect("too many inference variables"),
@@ -868,7 +878,12 @@ impl<'a> TypeBuilder<'a> {
 
         for field in &self.resolved.fields {
             let self_type = self.self_type_for_declaration(field.parent_declaration);
-            if let Some(node) = direct_child(&field.syntax, SyntaxKind::Type) {
+            let type_node = if field.syntax.kind == SyntaxKind::Type {
+                Some(&field.syntax)
+            } else {
+                direct_child(&field.syntax, SyntaxKind::Type)
+            };
+            if let Some(node) = type_node {
                 let ty = self.lower_type(node, self_type);
                 self.field_types.insert(field.id, ty);
                 self.nominal_fields

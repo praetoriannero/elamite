@@ -1,8 +1,9 @@
 //! Deterministic C99 emission and native-toolchain invocation support.
 //!
-//! This is the first executable backend (`IMPL.md` Milestone 8). It consumes
+//! This is the first executable backend (`IMPL.md` Milestones 8-9). It consumes
 //! explicit control-flow IR, uses an internal (unstable) calling convention,
-//! and emits one strictly sequenced C statement per IR instruction.
+//! emits one strictly sequenced C statement per IR instruction, and routes
+//! every supported value copy through a generated per-type helper.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -10,9 +11,10 @@ use std::fmt::Write as _;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{
     AggregateValue, BinaryOperator, ControlFlowFunction, ControlFlowPlace, ControlFlowProgram,
-    Instruction, Rvalue, TemporaryId, Terminator, UnaryOperator,
+    Instruction, LogicalCopyStrategy, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator,
+    logical_copy_strategy,
 };
-use crate::resolution::{DeclarationId, ResolvedProgram};
+use crate::resolution::{DeclarationId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};
 use crate::types::{PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram};
 
@@ -120,6 +122,9 @@ struct CEmitter<'a> {
     emitted_types: BTreeSet<TypeId>,
     emitting_types: BTreeSet<TypeId>,
     structs: BTreeMap<DeclarationId, &'a crate::ir::TypedStruct>,
+    enums: BTreeMap<DeclarationId, &'a TypedEnum>,
+    emitted_copy_helpers: BTreeSet<TypeId>,
+    emitting_copy_helpers: BTreeSet<TypeId>,
 }
 
 impl<'a> CEmitter<'a> {
@@ -145,6 +150,13 @@ impl<'a> CEmitter<'a> {
                 .iter()
                 .map(|structure| (structure.declaration, structure))
                 .collect(),
+            enums: program
+                .enums
+                .iter()
+                .map(|enumeration| (enumeration.declaration, enumeration))
+                .collect(),
+            emitted_copy_helpers: BTreeSet::new(),
+            emitting_copy_helpers: BTreeSet::new(),
         }
     }
 
@@ -152,8 +164,11 @@ impl<'a> CEmitter<'a> {
         self.emit_prelude();
         self.emit_forward_structs();
         let used_types = self.used_types();
+        for ty in &used_types {
+            self.emit_type_definition(*ty, None);
+        }
         for ty in used_types {
-            self.emit_type_definition(ty, None);
+            self.emit_copy_helper(ty, None);
         }
         self.emit_prototypes();
         for function in &self.program.functions {
@@ -178,6 +193,7 @@ impl<'a> CEmitter<'a> {
              #include <math.h>\n\
              #include <stdio.h>\n\
              #include <stdlib.h>\n\n\
+             #include <string.h>\n\n\
              typedef struct { uint8_t _value; } el_unit;\n\
              typedef struct { uint64_t lo; int64_t hi; } el_i128;\n\
              typedef struct { uint64_t lo; uint64_t hi; } el_u128;\n\n\
@@ -185,6 +201,16 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20fprintf(stderr, \"elamite trap [%s] at %s:%\" PRIu32 \":%\" PRIu32 \"\\n\", code, path, line, column);\n\
              \x20\x20\x20\x20fflush(stderr);\n\
              \x20\x20\x20\x20exit(101);\n\
+             }\n\n\
+             char *el_copy_string(const char *value) {\n\
+             \x20\x20\x20\x20size_t length;\n\
+             \x20\x20\x20\x20char *copy;\n\
+             \x20\x20\x20\x20if (value == NULL) return NULL;\n\
+             \x20\x20\x20\x20length = strlen(value) + 1U;\n\
+             \x20\x20\x20\x20copy = (char *)malloc(length);\n\
+             \x20\x20\x20\x20if (copy == NULL) exit(101);\n\
+             \x20\x20\x20\x20memcpy(copy, value, length);\n\
+             \x20\x20\x20\x20return copy;\n\
              }\n\n\
              void el_print_char(uint32_t value) {\n\
              \x20\x20\x20\x20if (value <= 0x7fU) { fputc((int)value, stdout); return; }\n\
@@ -253,7 +279,11 @@ impl<'a> CEmitter<'a> {
             let name = struct_name(structure.declaration);
             let _ = writeln!(self.output, "typedef struct {name} {name};");
         }
-        if !self.program.structs.is_empty() {
+        for enumeration in &self.program.enums {
+            let name = enum_name(enumeration.declaration);
+            let _ = writeln!(self.output, "typedef struct {name} {name};");
+        }
+        if !self.program.structs.is_empty() || !self.program.enums.is_empty() {
             self.output.push('\n');
         }
     }
@@ -263,6 +293,13 @@ impl<'a> CEmitter<'a> {
         for structure in &self.program.structs {
             for (_, _, ty) in &structure.fields {
                 types.insert(*ty);
+            }
+        }
+        for enumeration in &self.program.enums {
+            for variant in &enumeration.variants {
+                for (_, _, ty) in &variant.fields {
+                    types.insert(*ty);
+                }
             }
         }
         for function in &self.program.functions {
@@ -325,11 +362,46 @@ impl<'a> CEmitter<'a> {
                         }
                     }
                     self.output.push_str("};\n\n");
+                } else if let Some(enumeration) = self.enums.get(&identity.declaration).copied() {
+                    for variant in &enumeration.variants {
+                        for (_, _, field_type) in &variant.fields {
+                            self.emit_type_definition(*field_type, span);
+                        }
+                    }
+                    let name = enum_name(identity.declaration);
+                    let _ = writeln!(self.output, "struct {name} {{");
+                    self.output.push_str("    uint32_t tag;\n    union {\n");
+                    let mut has_payload = false;
+                    for variant in &enumeration.variants {
+                        if variant.fields.is_empty() {
+                            continue;
+                        }
+                        has_payload = true;
+                        self.output.push_str("        struct {\n");
+                        for (field, _, field_type) in &variant.fields {
+                            if let Some(c_type) = self.c_type(*field_type, span) {
+                                let _ = writeln!(
+                                    self.output,
+                                    "            {c_type} {};",
+                                    field_name(*field)
+                                );
+                            }
+                        }
+                        let _ = writeln!(
+                            self.output,
+                            "        }} {};",
+                            variant_member_name(variant.id)
+                        );
+                    }
+                    if !has_payload {
+                        self.output.push_str("        uint8_t _empty;\n");
+                    }
+                    self.output.push_str("    } payload;\n};\n\n");
                 } else {
                     self.type_error(
                         ty,
                         span,
-                        "only non-generic structs have a Milestone 8 C representation",
+                        "only non-generic structs and enums have a C representation",
                     );
                 }
             }
@@ -337,6 +409,128 @@ impl<'a> CEmitter<'a> {
         }
         self.emitting_types.remove(&ty);
         self.emitted_types.insert(ty);
+    }
+
+    fn emit_copy_helper(&mut self, ty: TypeId, span: Option<Span>) {
+        let ty = self.resolve_alias(ty);
+        if self.emitted_copy_helpers.contains(&ty) || !self.emitting_copy_helpers.insert(ty) {
+            return;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        let strategy = logical_copy_strategy(&self.typed.types, ty);
+        match &kind {
+            TypeKind::Tuple(elements) => {
+                for element in elements {
+                    self.emit_copy_helper(*element, span);
+                }
+            }
+            TypeKind::Array { element, .. } => self.emit_copy_helper(*element, span),
+            TypeKind::Nominal { identity, .. } => {
+                if let Some(structure) = self.structs.get(&identity.declaration).copied() {
+                    for (_, _, field_type) in &structure.fields {
+                        self.emit_copy_helper(*field_type, span);
+                    }
+                } else if let Some(enumeration) = self.enums.get(&identity.declaration).copied() {
+                    for variant in &enumeration.variants {
+                        for (_, _, field_type) in &variant.fields {
+                            self.emit_copy_helper(*field_type, span);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let Some(c_type) = self.c_type(ty, span) else {
+            self.emitting_copy_helpers.remove(&ty);
+            return;
+        };
+        let name = copy_helper_name(ty);
+        let _ = writeln!(self.output, "{c_type} {name}({c_type} value) {{");
+        match kind {
+            TypeKind::Primitive(PrimitiveType::String) => {
+                self.output.push_str("    return el_copy_string(value);\n");
+            }
+            TypeKind::Tuple(elements) => {
+                let _ = writeln!(self.output, "    {c_type} result = {{0}};");
+                for (index, element) in elements.iter().enumerate() {
+                    let helper = copy_helper_name(self.resolve_alias(*element));
+                    let _ = writeln!(
+                        self.output,
+                        "    result.v{index} = {helper}(value.v{index});"
+                    );
+                }
+                self.output.push_str("    return result;\n");
+            }
+            TypeKind::Array { element, length } => {
+                let helper = copy_helper_name(self.resolve_alias(element));
+                let _ = writeln!(
+                    self.output,
+                    "    {c_type} result = {{0}};\n    size_t index;"
+                );
+                let _ = writeln!(
+                    self.output,
+                    "    for (index = 0U; index < {length}U; ++index) {{"
+                );
+                let _ = writeln!(
+                    self.output,
+                    "        result.values[index] = {helper}(value.values[index]);"
+                );
+                self.output.push_str("    }\n    return result;\n");
+            }
+            TypeKind::Nominal { identity, .. } => {
+                if let Some(structure) = self.structs.get(&identity.declaration).copied() {
+                    let _ = writeln!(self.output, "    {c_type} result = {{0}};");
+                    for (field, _, field_type) in &structure.fields {
+                        let helper = copy_helper_name(self.resolve_alias(*field_type));
+                        let field = field_name(*field);
+                        let _ =
+                            writeln!(self.output, "    result.{field} = {helper}(value.{field});");
+                    }
+                    self.output.push_str("    return result;\n");
+                } else if let Some(enumeration) = self.enums.get(&identity.declaration).copied() {
+                    let _ = writeln!(
+                        self.output,
+                        "    {c_type} result = {{0}};\n    result.tag = value.tag;\n    switch (value.tag) {{"
+                    );
+                    for variant in &enumeration.variants {
+                        let _ = writeln!(self.output, "    case UINT32_C({}):", variant.id.index());
+                        for (field, _, field_type) in &variant.fields {
+                            let helper = copy_helper_name(self.resolve_alias(*field_type));
+                            let member = variant_member_name(variant.id);
+                            let field = field_name(*field);
+                            let _ = writeln!(
+                                self.output,
+                                "        result.payload.{member}.{field} = \
+                                 {helper}(value.payload.{member}.{field});"
+                            );
+                        }
+                        self.output.push_str("        break;\n");
+                    }
+                    self.output
+                        .push_str("    default: abort();\n    }\n    return result;\n");
+                } else {
+                    self.output.push_str("    return value;\n");
+                }
+            }
+            _ if matches!(
+                strategy,
+                LogicalCopyStrategy::Trivial | LogicalCopyStrategy::PreserveIdentity
+            ) =>
+            {
+                self.output.push_str("    return value;\n")
+            }
+            _ => {
+                self.type_error(
+                    ty,
+                    span,
+                    "this runtime representation has no logical-copy operation",
+                );
+                self.output.push_str("    abort();\n");
+            }
+        }
+        self.output.push_str("}\n\n");
+        self.emitting_copy_helpers.remove(&ty);
+        self.emitted_copy_helpers.insert(ty);
     }
 
     fn emit_prototypes(&mut self) {
@@ -398,7 +592,27 @@ impl<'a> CEmitter<'a> {
             }
         }
         let _ = writeln!(self.output, "    goto b{};", function.entry.index());
+        let mut referenced_blocks = BTreeSet::from([function.entry]);
         for block in &function.blocks {
+            match block.terminator {
+                Terminator::Goto(target) => {
+                    referenced_blocks.insert(target);
+                }
+                Terminator::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    referenced_blocks.insert(then_block);
+                    referenced_blocks.insert(else_block);
+                }
+                Terminator::Return(_) | Terminator::Trap { .. } | Terminator::Unreachable => {}
+            }
+        }
+        for block in &function.blocks {
+            if !referenced_blocks.contains(&block.id) {
+                continue;
+            }
             let _ = writeln!(self.output, "b{}:", block.id.index());
             for instruction in &block.instructions {
                 self.emit_instruction(function, instruction);
@@ -473,7 +687,28 @@ impl<'a> CEmitter<'a> {
                 self.constant_expression(constant, destination_type, span)?
             }
             Rvalue::Load(place) => Self::place_expression(place),
-            Rvalue::Copy(source) => temporary_name(*source),
+            Rvalue::Copy(source) => format!(
+                "{}({})",
+                copy_helper_name(self.resolve_alias(destination_type)),
+                temporary_name(*source)
+            ),
+            Rvalue::Discriminant(source) => format!("{}.tag", temporary_name(*source)),
+            Rvalue::CompareEqual {
+                left,
+                right,
+                operand_type,
+            } => {
+                let left = temporary_name(*left);
+                let right = temporary_name(*right);
+                if matches!(
+                    self.typed.types.expanded_primitive(*operand_type),
+                    Some(PrimitiveType::Str | PrimitiveType::String)
+                ) {
+                    format!("(strcmp({left}, {right}) == 0)")
+                } else {
+                    format!("({left} == {right})")
+                }
+            }
             Rvalue::Unary {
                 operator, operand, ..
             } => self.unary_expression(*operator, *operand, destination_type, span)?,
@@ -676,6 +911,46 @@ impl<'a> CEmitter<'a> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            AggregateValue::Enum {
+                declaration,
+                variant,
+                fields,
+            } => {
+                let member = variant_member_name(*variant);
+                if fields.is_empty() {
+                    let payload = self
+                        .enums
+                        .get(declaration)
+                        .and_then(|enumeration| {
+                            enumeration
+                                .variants
+                                .iter()
+                                .find(|variant| !variant.fields.is_empty())
+                        })
+                        .map_or_else(
+                            || ".payload._empty = 0".to_string(),
+                            |variant| {
+                                format!(".payload.{} = {{0}}", variant_member_name(variant.id))
+                            },
+                        );
+                    format!(
+                        "({c_type}){{ .tag = UINT32_C({}), {payload} }}",
+                        variant.index(),
+                    )
+                } else {
+                    format!(
+                        "({c_type}){{ .tag = UINT32_C({}), .payload.{member} = {{ {} }} }}",
+                        variant.index(),
+                        fields
+                            .iter()
+                            .map(|(field, value)| {
+                                format!(".{} = {}", field_name(*field), temporary_name(*value))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
         })
     }
 
@@ -684,7 +959,12 @@ impl<'a> CEmitter<'a> {
         match place {
             ControlFlowPlace::Local(_) => {}
             ControlFlowPlace::Temporary(_) => {}
-            ControlFlowPlace::Field { base, .. } => self.emit_place_checks(Some(base), span),
+            ControlFlowPlace::Field { base, .. }
+            | ControlFlowPlace::TupleField { base, .. }
+            | ControlFlowPlace::VariantField { base, .. }
+            | ControlFlowPlace::Dereference { base } => {
+                self.emit_place_checks(Some(base), span);
+            }
             ControlFlowPlace::Index {
                 base,
                 index,
@@ -709,6 +989,22 @@ impl<'a> CEmitter<'a> {
             ControlFlowPlace::Temporary(temporary) => temporary_name(*temporary),
             ControlFlowPlace::Field { base, field } => {
                 format!("{}.{}", Self::place_expression(base), field_name(*field))
+            }
+            ControlFlowPlace::TupleField { base, index } => {
+                format!("{}.v{index}", Self::place_expression(base))
+            }
+            ControlFlowPlace::VariantField {
+                base,
+                variant,
+                field,
+            } => format!(
+                "{}.payload.{}.{}",
+                Self::place_expression(base),
+                variant_member_name(*variant),
+                field_name(*field)
+            ),
+            ControlFlowPlace::Dereference { base } => {
+                format!("(*{})", Self::place_expression(base))
             }
             ControlFlowPlace::Index { base, index, .. } => format!(
                 "{}.values[{}]",
@@ -889,6 +1185,11 @@ impl<'a> CEmitter<'a> {
             {
                 struct_name(identity.declaration)
             }
+            TypeKind::Nominal { identity, .. }
+                if self.enums.contains_key(&identity.declaration) =>
+            {
+                enum_name(identity.declaration)
+            }
             TypeKind::RawPointer { target, .. } => {
                 format!("{} *", self.c_type(*target, span)?)
             }
@@ -964,6 +1265,14 @@ fn struct_name(declaration: DeclarationId) -> String {
     format!("el_struct_d{}", declaration.index())
 }
 
+fn enum_name(declaration: DeclarationId) -> String {
+    format!("el_enum_d{}", declaration.index())
+}
+
+fn variant_member_name(variant: VariantId) -> String {
+    format!("v{}", variant.index())
+}
+
 fn tuple_name(ty: TypeId) -> String {
     format!("el_tuple_t{}", ty.index())
 }
@@ -974,6 +1283,10 @@ fn array_name(ty: TypeId) -> String {
 
 fn field_name(field: crate::resolution::FieldId) -> String {
     format!("f{}", field.index())
+}
+
+fn copy_helper_name(ty: TypeId) -> String {
+    format!("el_copy_t{}", ty.index())
 }
 
 fn local_name(binding: crate::resolution::LocalBindingId) -> String {

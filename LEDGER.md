@@ -47,7 +47,7 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 8 are complete (Milestones 6 through 8 for their
+tracker. Milestones 0 through 9 are complete (Milestones 6 through 9 for their
 stated non-generic, non-method, non-trait scope, implemented together in one
 frontend pass where applicable; see `IMPL.md`); later rows remain planned until
 their milestone status changes in `IMPL.md`.
@@ -709,6 +709,30 @@ copy recording begin in Milestone 6.
   selections through the native driver, exercise the command-line driver, and
   bring the complete suite to 125 passing tests
   under formatting, checking, and warning-denied Clippy validation.
+
+### 17.9 Milestone 9 exit criteria
+
+- [x] Every C-representable canonical type is routed through one explicit
+  logical-copy strategy and a deterministic generated copy helper.
+- [x] Tuples, fixed arrays, nested structs, and explicit-discriminant enums
+  recursively copy ordinary payloads; mutable `String` buffers are eagerly
+  duplicated; scalar values and explicit aliases retain their required direct
+  or identity-preserving behavior.
+- [x] Assignment, argument, return, aggregate read, aggregate construction,
+  and pattern binding sites consume explicit copy operations in control-flow
+  IR.
+- [x] Source-ordered `match` control flow lowers literals, alternatives,
+  guards, tuple/struct patterns, and unit/tuple/record enum variants. Payload
+  bindings are immutable independent copies.
+- [x] Run-pass tests cover nested assignment/argument/return independence,
+  aggregate-read independence, copied match payloads, eager string copy
+  helpers, source order, guards, alternatives, structural patterns, enum
+  representation, and both debug/release optimization.
+- [x] Runtime representations not yet present cannot silently receive a
+  shallow copy: safe-reference execution remains M10 and collection
+  representations/copy hooks remain M14.
+- [x] The complete suite contains 133 passing tests under formatting,
+  checking, and warning-denied Clippy validation.
 
 ## 18. Third-party crate decisions
 

@@ -501,6 +501,19 @@ Exit criteria:
 
 ### Milestone 9: complete logical value-copy lowering
 
+> Status: Complete for every representation available through Milestone 9.
+> `src/ir.rs` classifies canonical types behind one logical-copy contract, and
+> the C backend emits one deterministic copy helper per used canonical type.
+> Tuples, fixed arrays, structs, and explicit-discriminant enums copy
+> recursively; mutable `String` buffers copy eagerly; scalar values copy
+> directly; and explicit reference-like types are classified to preserve
+> identity when their executable representations arrive. Source-ordered
+> `match` lowering covers literals, alternatives, guards, tuples, structs, and
+> unit/tuple/record enum variants with independently copied bindings.
+> Safe-reference dereference execution remains Milestone 10, while `Vec`,
+> `Map`, and `Set` acquire runtime representations and copy hooks in Milestone
+> 14 rather than being partially represented here.
+
 **Goal:** Make independent value copying a backend invariant rather than a
 front-end assumption.
 

@@ -75,6 +75,8 @@ pub struct CheckedProgram {
     /// as immutable `let` bindings. Match lowering consumes these stable
     /// binding identities when it materializes payload extraction.
     pub copied_pattern_bindings: BTreeSet<LocalBindingId>,
+    /// Canonical payload type selected for each copied pattern binding.
+    pub pattern_binding_types: BTreeMap<LocalBindingId, TypeId>,
 }
 
 pub struct CheckOutput {
@@ -1184,6 +1186,7 @@ impl<'a> Checker<'a> {
             self.local_types.insert(id, ty);
             self.local_rebindable.insert(id, Rebindable::Let);
             self.program.copied_pattern_bindings.insert(id);
+            self.program.pattern_binding_types.insert(id, ty);
         }
     }
 
