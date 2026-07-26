@@ -23,14 +23,15 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
-Milestones 1 through 9 are complete (Milestones 6 through 9 for their stated
+Milestones 1 through 10 are complete (Milestones 6 through 10 for their stated
 non-generic, non-method, non-trait scope; see `IMPL.md`). The compiler library
 includes the package resolver, source manager, diagnostics, span-preserving
 lexer, hand-written surface parser, stable-identity name resolver, canonical
 type/inference core, core expression/function/control-flow checker, typed
 high-level IR, explicit control-flow IR, logical value-copy lowering,
-source-ordered match lowering, deterministic C99 emitter, and native build
-driver.
+source-ordered match lowering, storage-promotion analysis, safe-reference
+lowering over Boehm-managed storage, deterministic C99 emitter, and native
+build driver.
 
 Check, build, or run a package with:
 
@@ -48,10 +49,14 @@ object. The Milestone 8 executable subset includes primitive calculations,
 locals, direct function calls, `if`, `while`, short-circuit operators, tuples,
 fixed arrays, initial non-recursive structs, and output. Milestone 9 adds
 recursive logical copies, non-generic enums, and `match` over the currently
-representable value types. Constructs outside that subset receive lowering
-diagnostics rather than partial code generation.
+representable value types. Milestone 10 adds safe references: `&T` and
+`&var T` lower to `T *`, every local whose address is taken is promoted to
+managed storage, and referenced composite literals allocate their own cell.
+Constructs outside that subset receive lowering diagnostics rather than partial
+code generation.
 
-Managed allocation begins in Milestone 10. Its backend boundary is already
-defined by `ManagedMemoryStrategy`: Boehm is the default, while future
-non-moving, cycle-reclaiming strategies can implement the same contract
-without changing language lowering.
+Managed allocation runs behind `ManagedMemoryStrategy`: Boehm is the default,
+while future non-moving, cycle-reclaiming strategies can implement the same
+contract without changing language lowering. A program that needs no managed
+storage links no collector at all. Building one that does requires a Boehm
+development package (`libgc-dev` on Debian- and Ubuntu-family systems).

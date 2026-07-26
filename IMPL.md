@@ -1,14 +1,20 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Planning draft
+> Status: Active — Milestones 0 through 10 complete, Milestone 11 next
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
 
 This document breaks the initial Elamite compiler into implementation
-milestones. It deliberately does not choose the language in which the compiler
-is written, a parser technology, or a build system. Elamite still compiles to C,
-as required by the specification.
+milestones. Each milestone carries its own status note; the header above
+records how far the sequence has advanced. Elamite compiles to C, as required
+by the specification.
+
+The plan was originally written without choosing the language in which the
+compiler is written, a parser technology, or a build system. Those are now
+settled: the compiler is an edition-2024 Rust package built with Cargo, and its
+lexer and parser are hand-written. See `AGENTS.md` for the rules those choices
+imply and `LEDGER.md` §18 for the third-party crate decisions behind them.
 
 `SPEC.md` and the authoritative demonstration define the language. This
 document defines an implementation order, not new language semantics. When it
@@ -359,7 +365,7 @@ Validation:
 > Status: Complete for plain (non-generic, non-method, non-trait) module-level
 > named functions. Bound-method and receiver checking is Milestone 11,
 > generic instantiation is Milestone 12, and trait-bound dispatch (including
-> `&dyn Trait` coercion and `PartialEq`/`PartialOrd`/`Display` obligations) is
+> trait-object conversion and `PartialEq`/`PartialOrd`/`Display` obligations) is
 > Milestone 13; expressions in those areas are still walked for nested
 > diagnostics but are not misdiagnosed. Pattern and `for`-binding typing and
 > reachable-path return analysis remain Milestone 7.
@@ -550,16 +556,31 @@ Validation:
 
 ### Milestone 10: safe references, storage promotion, and Boehm GC
 
+> Status: Complete for the non-generic, non-method, non-trait scope this stage
+> covers. `&T` and `&var T` lower to `T *` with flat struct layouts;
+> `src/promotion.rs` promotes every address-taken local to a managed cell;
+> referenced composite literals allocate their own cell; dereference is an
+> assignable place; and field access through a reference dereferences
+> automatically. Boehm is engaged only when a program actually needs managed
+> storage, with `GC_set_all_interior_pointers(1)` requested before `GC_INIT`
+> so a reference into an aggregate keeps its container reachable. Root
+> retention relies on Boehm's conservative stack and register scan rather than
+> explicit registration; see `LEDGER.md` §19.3 for why no keep-alive barriers
+> are emitted yet. Cycle collection is untested pending recursive `Option`
+> payloads, and precise escape analysis stays a Milestone 20 optimization.
+
 **Goal:** Implement non-null safe references and managed reachability without
 source lifetime parameters.
 
 Implementation work:
 
-- Model a direct reference to a binding as a reference to that binding's storage
-  cell, so later assignment to the binding is observable through the reference.
-- Model a reference into an aggregate as a reference to the selected subvalue,
-  so later replacement of the containing aggregate does not retarget the
-  reference.
+- Model a reference as naming storage, so every assignment that overwrites that
+  storage is observable through the reference. This covers a reference formed
+  from a binding and a reference formed through a path into an aggregate
+  alike; replacing a container is observable through a reference into it, and
+  mutation through such a reference is visible in the container.
+- Keep `&T` and `&var T` in one C representation (`T *`) with flat struct
+  layouts, and trace interior pointers in the collector. See `LEDGER.md` §19.
 - Allow references only to addressable places, with referenced composite
   literals as the explicit exception. Reject references to calls, computed
   expressions, and every collection interior.
@@ -586,8 +607,10 @@ Implementation work:
 Validation:
 
 - References returned from functions and references to composite literals.
-- A binding reference observes reassignment; a nested-field reference survives
-  replacement of its former container.
+- A binding reference observes reassignment; a nested-field reference observes
+  replacement of its container, and mutation through it is visible in that
+  container.
+- A reference into an aggregate keeps its whole container reachable.
 - Mutably aliased sequential writes have the specified last-write behavior.
 - Collection interiors cannot form safe references.
 - Cyclic managed structures are collectible in best-effort runtime tests
@@ -681,7 +704,7 @@ Implementation work:
   impl member, bypassing fields, inherent methods, and bound trait lookup.
 - Support static dispatch for concrete calls and generic bounds.
 - Validate object safety, construct vtables for concrete implementations, and
-  represent `&dyn Trait` and `&var dyn Trait` as a managed target reference plus
+  represent `&Trait` and `&var Trait` as a managed target reference plus
   vtable identity.
 - Permit mutability-preserving coercion from a concrete safe reference to a
   matching trait-object reference. Do not support bare objects, raw object
@@ -697,7 +720,7 @@ Validation:
   failures, and overlapping generic impls.
 - Inherent/trait ambiguity, field shadowing, and fully qualified selection.
 - Static versus vtable dispatch with several concrete types in one
-  `Vec[&dyn Trait]`.
+  `Vec[&Trait]`.
 - Every object-safety restriction.
 - Structural derivation and conditional generic obligations.
 

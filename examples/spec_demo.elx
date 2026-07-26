@@ -112,6 +112,13 @@ struct Packet:
     id: i32
     body: str
 
+struct Address:
+    city: String
+
+struct Account:
+    name: String
+    address: Address
+
 struct DemoResourceState:
     closed: bool
 
@@ -188,7 +195,7 @@ impl Transform for AddOffset:
     fn apply(self: &Self, value: i32) -> i32:
         return value + self.offset
 
-fn apply_transform(transform: &dyn Transform, value: i32) -> i32:
+fn apply_transform(transform: &Transform, value: i32) -> i32:
     return transform.apply(value)
 
 fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
@@ -211,6 +218,17 @@ fn make_demo_resource() -> DemoResource:
 
 fn use_demo_resource(resource: DemoResource):
     defer resource.close()
+    println(f"resource closed: {resource.is_closed()}") // false
+
+fn use_demo_resource_block(resource: DemoResource):
+    // `defer:` defers several statements as one registration. A deferred block
+    // is an ordinary lexical scope and cannot redirect control, so `return`,
+    // `break`, `continue`, `?`, a nested `defer`, and `unsafe` are invalid
+    // inside it.
+    defer:
+        let closing = "closing demo resource"
+        println(closing)
+        resource.close()
     println(f"resource closed: {resource.is_closed()}") // false
 
 fn propagate_io(result: Result[i32, io.IoError]) -> Result[i32, io.IoError]:
@@ -246,6 +264,28 @@ pub fn main() -> Result[(), io.IoError]:
     let copy_ref = &origin_copy
     println(f"same target: {origin_ref == copy_ref}") // false
     println(f"equal contents: {equivalent(origin_ref, copy_ref)}") // false
+
+    // A reference names storage. A reference into an aggregate points at that
+    // subvalue within its container, so replacing the container is observable
+    // through the reference, exactly as in C and Go.
+    var account = Account{
+        name: "Ari",
+        address: Address{city: "Aster"},
+    }
+    let city = &account.address.city
+    println(f"city: {city}") // "Aster"
+
+    account = Account{
+        name: "Bea",
+        address: Address{city: "Beacon"},
+    }
+    println(f"city after replacement: {city}") // "Beacon"
+
+    // Mutation through such a reference is visible in the container, because
+    // both name the same storage.
+    let relocate = &var account.address.city
+    *relocate = "Cove"
+    println(f"city after mutation: {account.address.city}") // "Cove"
 
     let coordinate_sum = moved_right.x
         + moved_right.y
@@ -295,7 +335,10 @@ pub fn main() -> Result[(), io.IoError]:
     // Fully qualified trait selection bypasses the same-named inherent method.
     let trait_status = Session.Toggle.status(&observer)
     let toggle_category = observer.category()
-    let dynamic_toggle: &dyn Toggle = &observer
+    // A trait object is formed by an explicit conversion; a concrete
+    // reference never becomes a trait-object reference implicitly.
+    let observer_ref = &observer
+    let dynamic_toggle: &Toggle = observer_ref as &Toggle
     let dynamic_status = dynamic_toggle.status()
     println(
         f"{inherent_status} / {trait_status} / {toggle_category} / {dynamic_status}"
@@ -317,7 +360,10 @@ pub fn main() -> Result[(), io.IoError]:
     // A callback that must carry data uses a trait object instead of a function
     // reference, since a function reference has no captured environment.
     let adder = AddOffset { offset: 1 }
-    println(f"transform result: {apply_transform(&adder, 41)}") // 42
+    let adder_ref = &adder
+    println(
+        f"transform result: {apply_transform(adder_ref as &Transform, 41)}"
+    ) // 42
 
     // Direct and mutual recursion use named functions.
     println(f"is_even(4): {is_even(4)}") // true

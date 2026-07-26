@@ -115,14 +115,14 @@ fn recognizes_and_decodes_literals() {
 
 #[test]
 fn recognizes_every_reserved_keyword() {
-    let source = "as break continue defer dyn else enum extern false fn for if impl import in \
-                  let match mod null pass pub return root self Self std struct super trait true \
+    let source = "as break continue defer else enum extern false fn for if impl import in \
+                  let match mod null pass pub return root self Self struct super trait true \
                   type unsafe var while\n";
     let output = lex_text(source);
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     assert_eq!(
         count(&output.tokens, |kind| matches!(kind, TokenKind::Keyword(_))),
-        34
+        32
     );
     assert_eq!(
         count(&output.tokens, |kind| matches!(
@@ -130,6 +130,25 @@ fn recognizes_every_reserved_keyword() {
             TokenKind::Identifier(_)
         )),
         0
+    );
+}
+
+#[test]
+fn dyn_and_std_are_ordinary_identifiers() {
+    // `dyn` was removed with the trait-object syntax change, and `std` names
+    // the standard-library package as an ordinary name rather than a keyword.
+    let output = lex_text("dyn std\n");
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(
+        count(&output.tokens, |kind| matches!(kind, TokenKind::Keyword(_))),
+        0
+    );
+    assert_eq!(
+        count(&output.tokens, |kind| matches!(
+            kind,
+            TokenKind::Identifier(_)
+        )),
+        2
     );
 }
 

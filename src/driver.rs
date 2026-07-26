@@ -57,6 +57,9 @@ pub struct Compilation {
     pub control_flow_ir: ControlFlowProgram,
     pub generated_c: String,
     pub entry: Option<DeclarationId>,
+    /// Native libraries the generated unit requires, contributed by the
+    /// managed-memory strategy. Empty unless lowering produced managed storage.
+    pub native_libraries: Vec<String>,
 }
 
 pub struct BuildArtifact {
@@ -118,6 +121,7 @@ pub fn compile(
         control_flow_ir: control_flow,
         generated_c: c_output.source,
         entry,
+        native_libraries: c_output.native_libraries,
     })
 }
 
@@ -177,6 +181,11 @@ pub fn build(
             }
             command.args(&package.manifest.link_options);
         }
+        // Runtime libraries follow the manifest's own link inputs so a
+        // dependency that references the collector still resolves.
+        for library in &compilation.native_libraries {
+            command.arg(format!("-l{library}"));
+        }
     }
     let output = command.output().map_err(|error| {
         vec![Diagnostic::new(
@@ -189,7 +198,12 @@ pub fn build(
         )]
     })?;
     if !output.status.success() {
-        return Err(vec![tool_failure("C compiler or linker", &output, &c_path)]);
+        return Err(vec![tool_failure(
+            "C compiler or linker",
+            &output,
+            &c_path,
+            &compilation.native_libraries,
+        )]);
     }
     if !artifact_path.is_file() {
         return Err(vec![Diagnostic::new(
@@ -275,7 +289,12 @@ fn sanitize_file_name(name: &str) -> String {
     }
 }
 
-fn tool_failure(tool: &str, output: &Output, c_path: &Path) -> Diagnostic {
+fn tool_failure(
+    tool: &str,
+    output: &Output,
+    c_path: &Path,
+    native_libraries: &[String],
+) -> Diagnostic {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let details = if stderr.trim().is_empty() {
@@ -283,10 +302,26 @@ fn tool_failure(tool: &str, output: &Output, c_path: &Path) -> Diagnostic {
     } else {
         stderr.trim()
     };
+    // A missing collector development package is the likeliest cause once a
+    // program needs managed storage, and the raw C error for it is opaque.
+    let hint = if native_libraries.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nthis program needs managed storage and links {}; \
+             ensure the development package providing its headers and link \
+             archive is installed",
+            native_libraries
+                .iter()
+                .map(|library| format!("-l{library}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
     Diagnostic::new(
         Category::Toolchain,
         format!(
-            "{tool} failed with status {}; generated C retained at {}{}",
+            "{tool} failed with status {}; generated C retained at {}{}{hint}",
             output.status,
             c_path.display(),
             if details.is_empty() {

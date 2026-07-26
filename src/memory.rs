@@ -81,7 +81,17 @@ impl ManagedMemoryStrategy for BoehmGarbageCollector {
         output: &mut dyn Write,
     ) -> fmt::Result {
         match operation {
-            ManagedMemoryOperation::Initialize => output.write_str("GC_INIT();\n"),
+            ManagedMemoryOperation::Initialize => {
+                // Interior pointers must be traced: a safe reference into an
+                // aggregate points inside a managed allocation rather than at
+                // its base (`LEDGER.md` 19). This is Boehm's default in most
+                // builds, but the language requires it, so it is requested
+                // explicitly and before `GC_INIT`.
+                output.write_str(
+                    "GC_set_all_interior_pointers(1);\n\
+                     \x20\x20\x20\x20GC_INIT();\n",
+                )
+            }
             ManagedMemoryOperation::Allocate {
                 destination,
                 byte_count,

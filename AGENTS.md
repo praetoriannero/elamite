@@ -10,6 +10,9 @@
 - `src/resolution.rs` owns stable module, declaration, member, generic, impl,
   import, and lexical-binding identities. Keep type-dependent member selection
   in later semantic passes rather than folding it into name lookup.
+- `src/promotion.rs` decides which locals need managed storage. It answers only
+  "is this local's address taken", deliberately conservatively; precise escape
+  analysis is Milestone 20 work and belongs there, not here.
 - `examples/` holds Elamite source examples. `SPEC.md` is the language design;
   `IMPL.md` is the compiler roadmap; `LEDGER.md` maps every normative `SPEC.md`
   rule to an implementation milestone; and `ISSUES.md` records unresolved
@@ -26,12 +29,19 @@ cargo fmt --check
 cargo check --all-targets
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
-cargo run
 ```
 
-`cargo run -- path/to/package` currently resolves and summarizes the package
-graph; expand its interface as later driver milestones in `IMPL.md` are
-implemented.
+Check, build, or run a package with:
+
+```sh
+cargo run -- check path/to/package
+cargo run -- build path/to/package
+cargo run -- run path/to/package
+```
+
+All three commands accept `--target=x86` or `--target=x86_64`. `build` and
+`run` also accept `--release`, `--out-dir=PATH`, `--cc=PATH`, and `--keep-c`.
+Expand this interface as later driver milestones in `IMPL.md` are implemented.
 
 ## Coding Style & Naming Conventions
 
@@ -69,16 +79,24 @@ active.
 The language uses a **minimal function model**: function values are safe or
 unsafe function references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), with no
 closures, no anonymous `fn` literals, no capture, and no `move`. Callbacks that
-carry data use `&dyn Trait`, and recursion uses named functions. Keep `SPEC.md`,
+carry data use `&Trait`, formed by an explicit `reference as &Trait`
+conversion, and recursion uses named functions. Keep `SPEC.md`,
 `examples/spec_demo.elx`, and `ISSUES.md` consistent with this direction, and
 do not reintroduce closures, capture, anonymous function literals, or `move`
 unless the design decision is explicitly reopened. When this direction
 changes, update this rule.
 
-Deterministic cleanup uses a lexical, block-scoped `defer` statement containing
-one safe unit-returning call. The language has no `with`, `errdefer`, or
-multiline `defer:` form. Deferred calls are evaluated at scope exit and are not
-closures or first-class values.
+Deterministic cleanup uses a lexical, block-scoped `defer` statement in two
+forms: `defer call` defers one safe unit-returning call, and `defer:` defers an
+indented block of statements as a single registration. The language has no
+`with` and no `errdefer`. Deferred code is evaluated at scope exit and is not a
+closure or first-class value.
+
+Because a deferred block runs while its scope is already exiting, it cannot
+redirect control: `return`, `break`, `continue`, postfix `?`, and a nested
+`defer` are all invalid inside it. A `defer` statement is invalid inside an
+`unsafe` block, and an `unsafe` block is invalid inside a `defer:` block. When
+this direction changes, update this rule.
 
 The C backend targets **C99**. Generated C and foreign declarations must not
 rely on C11-only features (`_Static_assert`, `_Generic`, anonymous

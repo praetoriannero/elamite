@@ -570,11 +570,6 @@ impl<'a> Parser<'a> {
             self.parse_function_type_tail(&mut children);
             return SyntaxNode::new(SyntaxKind::Type, children, fallback);
         }
-        if self.at_keyword(Keyword::Dyn) {
-            children.push(self.bump());
-            self.parse_path_tokens(&mut children);
-            return SyntaxNode::new(SyntaxKind::Type, children, fallback);
-        }
         if self.at_simple(&TokenKind::LBracket) {
             children.push(self.bump());
             children.push(node(self.parse_type()));
@@ -879,12 +874,18 @@ impl<'a> Parser<'a> {
     fn parse_defer(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let keyword = self.bump();
+        // `defer:` defers a block of statements; `defer call` defers one call.
+        if self.at_simple(&TokenKind::Colon) {
+            let mut children = vec![keyword];
+            self.parse_statement_block(&mut children);
+            return SyntaxNode::new(SyntaxKind::DeferStatement, children, fallback);
+        }
         let call = self.parse_expression();
         if call.kind != SyntaxKind::CallExpression {
             self.diagnostics.push(
                 Diagnostic::new(
                     Category::Syntax,
-                    "`defer` requires a single function or method call",
+                    "`defer` requires a single function or method call, or a `defer:` block",
                 )
                 .with_primary(call.span),
             );
@@ -1553,11 +1554,7 @@ impl<'a> Parser<'a> {
             Some(
                 TokenKind::Identifier(_)
                     | TokenKind::Keyword(
-                        Keyword::Root
-                            | Keyword::SelfValue
-                            | Keyword::SelfType
-                            | Keyword::Super
-                            | Keyword::Std
+                        Keyword::Root | Keyword::SelfValue | Keyword::SelfType | Keyword::Super
                     )
             )
         )

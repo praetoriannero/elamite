@@ -31,11 +31,11 @@ Elamite source files are UTF-8 text. An identifier begins with an ASCII letter
 or `_` and continues with ASCII letters, decimal digits, or `_`; equivalently,
 it matches `[A-Za-z_][A-Za-z0-9_]*`. Keywords are reserved and cannot be used
 as identifiers. The reserved keywords are `as`, `break`, `continue`, `defer`,
-`dyn`, `else`, `enum`, `extern`, `false`, `fn`, `for`, `if`, `impl`, `import`,
-`in`, `let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`,
-`Self`, `std`, `struct`, `super`, `trait`, `true`, `type`, `unsafe`, `var`, and
-`while`. Unicode text remains valid in comments, documentation, and string or
-character contents as permitted by their literal syntax.
+`else`, `enum`, `extern`, `false`, `fn`, `for`, `if`, `impl`, `import`, `in`,
+`let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`, `Self`,
+`struct`, `super`, `trait`, `true`, `type`, `unsafe`, `var`, and `while`.
+Unicode text remains valid in comments, documentation, and string or character
+contents as permitted by their literal syntax.
 
 ### 2.1 Comments and documentation
 
@@ -144,10 +144,16 @@ declaration.
 
 Paths use periods. `root` begins at the current package root, `self` begins at
 the current module, and `super` begins at its parent; using `super` in the root
-module is an error. `std` names the standard-library package. Each dependency's
-manifest alias begins a path into that dependency. An unqualified name is found
-only among lexical bindings, declarations and imports in the current module,
-and prelude names; lookup never searches unrelated modules.
+module is an error. These three are keywords because they name a position
+relative to the current module rather than a declaration.
+
+`std` names the standard-library package. It is an ordinary name, not a
+keyword: it begins a path in the same way a dependency's manifest alias does,
+and a module that declares or imports its own `std` shadows the
+standard-library package within that module. Each dependency's manifest alias
+likewise begins a path into that dependency. An unqualified name is found only
+among lexical bindings, declarations and imports in the current module, and
+prelude names; lookup never searches unrelated modules.
 
 `import path` is permitted at module level, including within an inline module,
 and binds the final path component in that module. `import path as name` uses an
@@ -369,9 +375,11 @@ fn answer() -> &i32:
     return &value // valid: `value` is promoted because the reference escapes
 ~~~
 
-A reference path that enters a nested aggregate targets that selected
-subvalue rather than rebasing through a later replacement of its containing
-value.
+A reference path that enters a nested aggregate points to the storage of that
+subvalue within its container. Replacing the container writes through that
+storage, so the reference observes the new value. This is the same single rule
+as a binding reference: a reference names storage, and every assignment that
+overwrites that storage is observable through it.
 
 ~~~elx
 var user = User {
@@ -379,13 +387,31 @@ var user = User {
     address: Address { city: "Aster" },
 }
 let city: &String = &user.address.city
+println(city) // "Aster"
 
 user = User {
     name: "Bea",
     address: Address { city: "Beacon" },
 }
-println(city) // "Aster"
+println(city) // "Beacon"
 ~~~
+
+Mutation through a reference into an aggregate is likewise visible in the
+container, because both name the same storage.
+
+~~~elx
+var located = User {
+    name: "Cyd",
+    address: Address { city: "Calder" },
+}
+let relocate: &var String = &var located.address.city
+
+*relocate = "Cove"
+println(located.address.city) // "Cove"
+~~~
+
+A reference into an aggregate keeps its whole container reachable, not only
+the selected subvalue.
 
 ### 3.3 Raw pointers and null
 
@@ -880,7 +906,7 @@ variadic(7, "one", "two")
 A function value is a *function reference*. A safe function reference is written
 `&fn(Parameters) -> Return`; an unsafe function reference is written
 `&unsafe fn(Parameters) -> Return`. The bare forms `fn(Parameters) -> Return`
-and `unsafe fn(Parameters) -> Return` are function types that, like `dyn Trait`,
+and `unsafe fn(Parameters) -> Return` are function types that, like a trait,
 are inhabited only behind a reference. Every value or storage location that
 holds an ordinary Elamite function therefore has one of the two reference
 types. There is no `&var fn` form, because a function's code is never mutated.
@@ -934,7 +960,7 @@ A generic function becomes a function reference only after all of its type
 arguments are determined explicitly or by an expected function type. Elamite
 initially has no erased any-callable type, dynamically erased call-operator,
 runtime signature inspection, or heterogeneous function-value collection.
-Ordinary `dyn Trait` method dispatch is defined separately and does not make a
+Ordinary trait-object method dispatch is defined separately and does not make a
 trait object directly callable with `object(args)`.
 
 Selecting a method from a type produces its unbound function reference. Selecting
@@ -952,7 +978,7 @@ stop(&var session)
 ~~~
 
 Because a function reference carries no state, a callback that must carry data
-uses a trait object instead. The data lives in a struct, and a `&dyn Trait`
+uses a trait object instead. The data lives in a struct, and a `&Trait`
 reference dispatches to its method (Section 6).
 
 ~~~elx
@@ -966,11 +992,12 @@ impl Transform for AddOffset:
     fn apply(self: &Self, value: i32) -> i32:
         return value + self.offset
 
-fn apply_all(transform: &dyn Transform, value: i32) -> i32:
+fn apply_all(transform: &Transform, value: i32) -> i32:
     return transform.apply(value)
 
 let adder = AddOffset { offset: 1 }
-println(f"{apply_all(&adder, 41)}") // 42
+let adder_ref = &adder
+println(f"{apply_all(adder_ref as &Transform, 41)}") // 42
 ~~~
 
 Named functions may call themselves and other named functions declared in the
@@ -1032,22 +1059,52 @@ methods absent from the trait. Traits initially contain methods only, with no
 associated types or constants.
 
 Calls through concrete types and monomorphized generics use static dispatch.
-Explicit trait objects provide dynamic dispatch. `dyn Trait` denotes a trait
-object and initially appears only behind a safe reference as `&dyn Trait` or
-`&var dyn Trait`; bare trait-object values and raw pointers to trait objects are
-invalid. A concrete reference may safely coerce to a trait-object reference of
-matching mutability when its target type implements the trait. The object is a
-fat reference containing the managed target reference and a static vtable.
+Explicit trait objects provide dynamic dispatch. A trait object is written as a
+safe reference to the trait itself, `&Trait` or `&var Trait`, and initially
+appears only in that form. The object is a fat reference containing the managed
+target reference and a static vtable.
+
+A trait has no value representation, so a trait name denotes a type only as the
+target of a safe reference, as a generic or implementation bound, or as the
+trait of an `impl Trait for Type`. A bare trait name in any other type
+position — a field, parameter, return, local annotation, type alias, or generic
+argument — is an error, as is a raw pointer to a trait object.
+
+~~~elx
+fn dispatch(toggle: &Toggle) -> String: // valid
+    return toggle.status()
+
+// Invalid: a trait has no value representation.
+// fn by_value(toggle: Toggle) -> String
+// struct Invalid:
+//     toggle: Toggle
+// fn by_pointer(toggle: *Toggle) -> ()
+~~~
+
+A concrete reference does not implicitly become a trait-object reference.
+Forming the object is an explicit conversion, `reference as &Trait` or
+`reference as &var Trait`, valid when the source reference's target type
+implements the trait and the mutability matches. This keeps the language free
+of subtype and variance conversions on references, and makes every point where
+a fat reference is constructed visible in the source.
+
+~~~elx
+let session = Session.new("demo")
+let session_ref = &session
+let toggle: &Toggle = session_ref as &Toggle
+println(toggle.status()) // dynamically dispatched
+~~~
 
 A trait is object-safe when every method available through the object has an
 `&Self` or `&var Self` receiver, has no method-level generic parameters, and
 does not otherwise mention `Self` in its parameter or return types. A trait that
-fails these rules remains usable with static dispatch but cannot form
-`dyn Trait`. A generic trait can form an object only after all of its trait type
-arguments are concrete. Default methods participate in the vtable.
+fails these rules remains usable with static dispatch but cannot form a
+trait-object reference. A generic trait can form an object only after all of its
+trait type arguments are concrete. Default methods participate in the vtable.
 
 Trait-object calls dispatch through the vtable, and different concrete target
-types may coexist in a homogeneous collection such as `Vec[&dyn Trait]`.
+types may coexist in a homogeneous collection such as `Vec[&Trait]`, whose
+elements are each formed by an explicit conversion.
 Trait objects initially provide no downcasting, runtime concrete-type
 inspection, or multi-trait object composition. Safe-reference reachability and
 escape promotion apply to their concrete targets.
@@ -1103,7 +1160,8 @@ impl Toggle for Session:
         else:
             return String.from("trait inactive")
 
-let dynamic_toggle: &dyn Toggle = &session
+let session_ref = &session
+let dynamic_toggle: &Toggle = session_ref as &Toggle
 println(dynamic_toggle.status()) // dynamically dispatched
 ~~~
 
@@ -1267,7 +1325,8 @@ comparison implementations are responsible for their trait laws.
 leaves the current lexical block. The call must return unit. A `defer`
 statement is permitted only in an executable body, and registration occurs only
 when control reaches it. It is not a function value or closure, creates no
-captured environment, and cannot escape its block.
+captured environment, and cannot escape its block. The `defer:` block form
+below defers several statements under the same rules.
 
 The deferred call is evaluated when the block exits, using the values its
 callee, receiver, and argument expressions have at that time. The bindings
@@ -1284,19 +1343,41 @@ unconditionally deferring `close()` on a resource that is returned from the
 same block closes the returned handle as well; conditional error-only deferral
 is not part of the initial language.
 
-The initial language permits only the single-call form and has no `errdefer` or
-multiline `defer:` body. A direct unsafe or foreign call cannot be deferred;
-native cleanup is wrapped in a safe unit-returning method. The deferred call
-expression cannot contain postfix `?`. An unrecoverable trap, including a trap
-during a deferred call, and out-of-memory termination do not guarantee that
-that block's remaining deferred calls will run.
+A `defer` statement has two forms. `defer call` registers a single call, as
+above. `defer:` introduces an indented block whose statements are all deferred
+together, for cleanup that needs more than one call.
 
 ~~~elx
 let file = File.open("report.txt", "w")?
 defer file.close()
 
+let left = Buffer.new()
+let right = Buffer.new()
+defer:
+    left.release()
+    right.release()
+
 file.write("Elamite report")?
 ~~~
+
+A `defer:` block is one registration, not one per statement. It registers when
+control reaches it and executes as a unit at scope exit, in reverse
+registration order with respect to other `defer` statements in the same block.
+Its body is an ordinary lexical scope: a binding declared inside it is local to
+the deferred block.
+
+Because a deferred block runs while its enclosing scope is already exiting, it
+cannot itself change where control goes. `return`, `break`, `continue`, and
+postfix `?` are invalid inside a `defer:` block, as is a nested `defer`
+statement. A `defer` statement is also invalid inside an `unsafe` block, and an
+`unsafe` block is invalid inside a `defer:` block: deferred cleanup is safe
+code, and unsafe scopes stay straight-line.
+
+The initial language has no `errdefer` and no conditional error-only deferral. A
+direct unsafe or foreign call cannot be deferred; native cleanup is wrapped in
+a safe unit-returning method. An unrecoverable trap, including a trap during
+deferred execution, and out-of-memory termination do not guarantee that that
+block's remaining deferred statements will run.
 
 Leaving a scope does not implicitly call `close()` merely because a reachable
 value implements `Close`; only an explicitly registered deferred call runs.

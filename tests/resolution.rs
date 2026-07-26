@@ -582,3 +582,67 @@ fn reports_milestone_four_visibility_and_namespace_failures() {
             .all(|span| span.start <= span.end)
     );
 }
+
+#[test]
+fn std_resolves_as_an_ordinary_name_and_can_be_shadowed() {
+    // `std` is not a keyword: it names the standard-library package through
+    // ordinary lookup, so a module declaring its own `std` shadows it.
+    let tree = TestTree::new("std-name");
+    let package = tree.package(
+        "demo",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "import std.io\n\nfn main() -> ():\n    io.println(\"ok\")\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+
+    // `std` is also usable as an ordinary identifier, which a keyword could
+    // never be.
+    let shadow = tree.package(
+        "shadow",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn main() -> ():\n    let std = 1\n    println(f\"{std}\")\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&shadow);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+}
+
+#[test]
+fn a_deferred_block_binding_is_local_to_that_block() {
+    // SPEC 8: a `defer:` body is an ordinary lexical scope.
+    let tree = TestTree::new("defer-scope");
+    let package = tree.package(
+        "demo",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn log(value: i32) -> ():\n\
+             \x20\x20\x20\x20pass\n\
+             fn main() -> ():\n\
+             \x20\x20\x20\x20defer:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let inner = 1\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20log(inner)\n\
+             \x20\x20\x20\x20log(inner)\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    let text = diagnostic_text(&sources, &output.diagnostics);
+    assert!(text.contains("cannot resolve `inner`"), "{text}");
+}

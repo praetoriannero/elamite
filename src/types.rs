@@ -623,6 +623,18 @@ pub struct FunctionSignature {
     pub return_type: TypeId,
 }
 
+/// Whether a syntactic type position may name a trait.
+///
+/// A trait has no value representation, so it names a type only as the target
+/// of a safe reference (`&Trait`), as a generic or impl bound, or as the trait
+/// of an `impl Trait for Type` (`SPEC.md` 6). Every other position is a value
+/// position where a bare trait name is an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypePosition {
+    Value,
+    TraitAllowed,
+}
+
 /// One declared generic capability requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraitObligation {
@@ -1064,7 +1076,23 @@ impl<'a> TypeBuilder<'a> {
         })
     }
 
+    /// Lowers a type in ordinary value position, where a trait name is invalid.
     fn lower_type(&mut self, node: &SyntaxNode, self_type: Option<TypeId>) -> TypeId {
+        self.lower_type_in(node, self_type, TypePosition::Value)
+    }
+
+    /// Lowers a type in a position that names a trait: a generic or impl
+    /// bound, or the trait of an `impl Trait for Type`.
+    fn lower_trait_type(&mut self, node: &SyntaxNode, self_type: Option<TypeId>) -> TypeId {
+        self.lower_type_in(node, self_type, TypePosition::TraitAllowed)
+    }
+
+    fn lower_type_in(
+        &mut self,
+        node: &SyntaxNode,
+        self_type: Option<TypeId>,
+        position: TypePosition,
+    ) -> TypeId {
         let tokens = direct_tokens(node);
         let first = tokens.first().map(|token| &token.kind);
         if matches!(first, Some(TokenKind::Amp | TokenKind::Star)) {
@@ -1072,11 +1100,29 @@ impl<'a> TypeBuilder<'a> {
             let mutable = tokens
                 .iter()
                 .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Var)));
-            let target = if let Some(child) = direct_child(node, SyntaxKind::Type) {
-                self.lower_type(child, self_type)
+            let mut target = if let Some(child) = direct_child(node, SyntaxKind::Type) {
+                self.lower_type_in(child, self_type, TypePosition::TraitAllowed)
             } else {
                 self.types.error()
             };
+            // A trait names a type only behind a safe reference, where `&Trait`
+            // and `&var Trait` denote a trait object (SPEC 6). Trait names in
+            // bound position keep their nominal trait type because bounds do
+            // not pass through this form.
+            if !raw && self.is_trait_type(target) {
+                target = self
+                    .types
+                    .intern(TypeKind::TraitObject { trait_type: target });
+            } else if raw && self.is_trait_type(target) {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "a raw pointer cannot address a trait object",
+                    )
+                    .with_primary(node.span),
+                );
+                target = self.types.error();
+            }
             if !raw && mutable && matches!(self.types.kind(target), TypeKind::Function { .. }) {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -1106,19 +1152,6 @@ impl<'a> TypeBuilder<'a> {
             ))
         ) {
             return self.lower_function_type(node);
-        }
-        if matches!(first, Some(TokenKind::Keyword(Keyword::Dyn))) {
-            let trait_type = self.lower_path_type(node, self_type);
-            if !self.is_trait_type(trait_type) && trait_type != self.types.error() {
-                self.diagnostics.push(
-                    Diagnostic::new(
-                        Category::TypeSystem,
-                        "`dyn` requires a trait, not a concrete type",
-                    )
-                    .with_primary(node.span),
-                );
-            }
-            return self.types.intern(TypeKind::TraitObject { trait_type });
         }
         if matches!(first, Some(TokenKind::LBracket)) {
             let element = if let Some(child) = direct_child(node, SyntaxKind::Type) {
@@ -1162,10 +1195,15 @@ impl<'a> TypeBuilder<'a> {
             }
             return self.types.intern(TypeKind::Tuple(elements));
         }
-        self.lower_path_type(node, self_type)
+        self.lower_path_type(node, self_type, position)
     }
 
-    fn lower_path_type(&mut self, node: &SyntaxNode, self_type: Option<TypeId>) -> TypeId {
+    fn lower_path_type(
+        &mut self,
+        node: &SyntaxNode,
+        self_type: Option<TypeId>,
+        position: TypePosition,
+    ) -> TypeId {
         let Some(span) = direct_path_span(node) else {
             return self.types.error();
         };
@@ -1180,7 +1218,7 @@ impl<'a> TypeBuilder<'a> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        match reference.target {
+        let lowered = match reference.target {
             NameTarget::GenericParameter(parameter) => {
                 if !arguments.is_empty() {
                     self.diagnostics.push(
@@ -1210,7 +1248,23 @@ impl<'a> TypeBuilder<'a> {
                 );
                 self.types.error()
             }
+        };
+        // A trait has no value representation, so a bare trait name is a type
+        // only where a trait is expected (SPEC 6). Rejecting it here keeps an
+        // unsized type out of fields, parameters, returns, locals, aliases,
+        // and generic arguments rather than deferring the failure to lowering.
+        if position == TypePosition::Value && self.is_trait_type(lowered) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "a trait names a type only behind a safe reference; \
+                     write `&Trait` or `&var Trait`",
+                )
+                .with_primary(node.span),
+            );
+            return self.types.error();
         }
+        lowered
     }
 
     fn builtin_application(
@@ -1379,7 +1433,7 @@ impl<'a> TypeBuilder<'a> {
         {
             for bound in direct_children(node, SyntaxKind::Type) {
                 let self_type = self.self_type_for_declaration(declaration);
-                let trait_type = self.lower_type(bound, self_type);
+                let trait_type = self.lower_trait_type(bound, self_type);
                 if !self.is_trait_type(trait_type) && trait_type != self.types.error() {
                     self.diagnostics.push(
                         Diagnostic::new(Category::TypeSystem, "generic bounds must name traits")
@@ -1398,7 +1452,7 @@ impl<'a> TypeBuilder<'a> {
         let data = &self.resolved.impls[implementation.index()];
         let types = direct_children(&data.syntax, SyntaxKind::Type);
         if let Some(trait_node) = types.first() {
-            let trait_type = self.lower_type(trait_node, None);
+            let trait_type = self.lower_trait_type(trait_node, None);
             self.impl_trait_types.insert(implementation, trait_type);
         }
         if let Some(target_node) = types.get(1) {
@@ -1417,7 +1471,7 @@ impl<'a> TypeBuilder<'a> {
             .zip(&data.generic_parameters)
         {
             for bound in direct_children(node, SyntaxKind::Type) {
-                let trait_type = self.lower_type(bound, None);
+                let trait_type = self.lower_trait_type(bound, None);
                 if !self.is_trait_type(trait_type) && trait_type != self.types.error() {
                     self.diagnostics.push(
                         Diagnostic::new(Category::TypeSystem, "generic bounds must name traits")
@@ -1810,11 +1864,7 @@ pub(crate) fn direct_path_span(node: &SyntaxNode) -> Option<Span> {
                 token.kind,
                 TokenKind::Identifier(_)
                     | TokenKind::Keyword(
-                        Keyword::Root
-                            | Keyword::SelfValue
-                            | Keyword::SelfType
-                            | Keyword::Super
-                            | Keyword::Std
+                        Keyword::Root | Keyword::SelfValue | Keyword::SelfType | Keyword::Super
                     )
             )
         })

@@ -14,6 +14,9 @@ use crate::ir::{
     Instruction, LogicalCopyStrategy, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator,
     logical_copy_strategy,
 };
+use crate::memory::{
+    AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
+};
 use crate::resolution::{DeclarationId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};
 use crate::types::{PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram};
@@ -70,6 +73,10 @@ impl Default for COptions {
 pub struct COutput {
     pub source: String,
     pub diagnostics: Vec<Diagnostic>,
+    /// Native libraries the generated unit requires, contributed by the
+    /// managed-memory strategy. Empty when the program needs no collector, so
+    /// the backend rather than the driver decides when the runtime is linked.
+    pub native_libraries: Vec<String>,
 }
 
 /// Deterministically mangles an Elamite declaration. The package-instance
@@ -125,6 +132,11 @@ struct CEmitter<'a> {
     enums: BTreeMap<DeclarationId, &'a TypedEnum>,
     emitted_copy_helpers: BTreeSet<TypeId>,
     emitting_copy_helpers: BTreeSet<TypeId>,
+    strategy: &'static dyn ManagedMemoryStrategy,
+    /// Promoted locals of the function currently being emitted. A promoted
+    /// local lives in a managed cell, so every place naming it dereferences
+    /// that cell.
+    promoted: BTreeSet<crate::resolution::LocalBindingId>,
 }
 
 impl<'a> CEmitter<'a> {
@@ -157,11 +169,14 @@ impl<'a> CEmitter<'a> {
                 .collect(),
             emitted_copy_helpers: BTreeSet::new(),
             emitting_copy_helpers: BTreeSet::new(),
+            strategy: default_managed_memory_strategy(),
+            promoted: BTreeSet::new(),
         }
     }
 
     fn run(mut self) -> COutput {
         self.emit_prelude();
+        self.emit_managed_memory_prelude();
         self.emit_forward_structs();
         let used_types = self.used_types();
         for ty in &used_types {
@@ -175,9 +190,68 @@ impl<'a> CEmitter<'a> {
             self.emit_function(function);
         }
         self.emit_entry();
+        let native_libraries = if self.program.requires_managed_memory {
+            self.strategy
+                .native_libraries()
+                .iter()
+                .map(|library| (*library).to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
         COutput {
             source: self.output,
             diagnostics: self.diagnostics,
+            native_libraries,
+        }
+    }
+
+    /// Emits the collector's declarations behind the `ManagedMemoryStrategy`
+    /// boundary. A program with no managed storage emits nothing, keeping the
+    /// translation unit free of any collector dependency.
+    fn emit_managed_memory_prelude(&mut self) {
+        if !self.program.requires_managed_memory {
+            return;
+        }
+        let strategy = self.strategy;
+        if strategy.emit_c_prelude(&mut self.output).is_err() {
+            self.diagnostics.push(Diagnostic::new(
+                Category::CodeGeneration,
+                format!(
+                    "failed to emit the `{}` managed-memory prelude",
+                    strategy.name()
+                ),
+            ));
+            return;
+        }
+        // Allocation failure attempts a full collection and then terminates
+        // without running deferred cleanup (`SPEC.md` 9).
+        self.output.push_str("\nvoid el_out_of_memory(void) {\n");
+        self.emit_managed_operation(ManagedMemoryOperation::Collect);
+        self.output.push_str(
+            "\x20\x20\x20\x20fputs(\"elamite: out of memory\\n\", stderr);\n\
+             \x20\x20\x20\x20fflush(stderr);\n\
+             \x20\x20\x20\x20exit(101);\n\
+             }\n\n",
+        );
+    }
+
+    /// Emits one managed-memory operation behind the strategy boundary,
+    /// indented as a statement inside the current function body.
+    fn emit_managed_operation(&mut self, operation: ManagedMemoryOperation<'_>) {
+        let strategy = self.strategy;
+        self.output.push_str("    ");
+        if strategy
+            .emit_c_operation(operation, &mut self.output)
+            .is_err()
+        {
+            self.diagnostics.push(Diagnostic::new(
+                Category::CodeGeneration,
+                format!(
+                    "failed to emit a `{}` managed-memory operation",
+                    strategy.name()
+                ),
+            ));
         }
     }
 
@@ -546,7 +620,9 @@ impl<'a> CEmitter<'a> {
     }
 
     fn emit_function(&mut self, function: &ControlFlowFunction) {
+        self.promoted = function.promoted_locals.clone();
         let Some(return_type) = self.c_type(function.return_type, Some(function.span)) else {
+            self.promoted.clear();
             return;
         };
         let symbol = mangle_declaration(self.resolved, function.declaration);
@@ -567,7 +643,7 @@ impl<'a> CEmitter<'a> {
             .map(|parameter| parameter.binding)
             .collect::<BTreeSet<_>>();
         for (binding, ty) in &function.local_types {
-            if parameter_bindings.contains(binding) {
+            if parameter_bindings.contains(binding) || self.promoted.contains(binding) {
                 continue;
             }
             if let Some(c_type) = self.c_type(*ty, Some(function.span)) {
@@ -581,6 +657,46 @@ impl<'a> CEmitter<'a> {
         }
         for parameter in &function.parameters {
             let _ = writeln!(self.output, "    (void){};", local_name(parameter.binding));
+        }
+        // A promoted local lives in a managed cell so a reference to it stays
+        // valid after the frame ends. The cell pointer itself is an ordinary
+        // stack variable, which Boehm's conservative stack scan treats as a
+        // root for as long as the frame is live.
+        let promoted = self.promoted.clone();
+        for binding in &promoted {
+            let Some(ty) = function.local_types.get(binding).copied() else {
+                continue;
+            };
+            let Some(c_type) = self.c_type(ty, Some(function.span)) else {
+                continue;
+            };
+            let cell = cell_name(*binding);
+            let class = if self.scanned_allocation(ty) {
+                AllocationClass::Scanned
+            } else {
+                AllocationClass::PointerFree
+            };
+            let _ = writeln!(self.output, "    {c_type} *{cell} = NULL;");
+            let byte_count = format!("sizeof({c_type})");
+            self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                destination: &cell,
+                byte_count: &byte_count,
+                class,
+            });
+            let _ = writeln!(self.output, "    if ({cell} == NULL) el_out_of_memory();");
+            let initial = if parameter_bindings.contains(binding) {
+                local_name(*binding)
+            } else {
+                // A braced zero initializer is only valid in a declaration, so
+                // an assignment into the cell needs a C99 compound literal.
+                let zero = zero_value(ty, &self.typed.types);
+                if zero.starts_with('{') {
+                    format!("({c_type}){zero}")
+                } else {
+                    zero
+                }
+            };
+            let _ = writeln!(self.output, "    *{cell} = {initial};");
         }
         for (index, ty) in function.temporary_types.iter().enumerate() {
             if let Some(c_type) = self.c_type(*ty, Some(function.span)) {
@@ -620,6 +736,7 @@ impl<'a> CEmitter<'a> {
             self.emit_terminator(function, &block.terminator);
         }
         self.output.push_str("}\n\n");
+        self.promoted.clear();
     }
 
     fn parameter_list(&mut self, function: &ControlFlowFunction) -> String {
@@ -655,7 +772,7 @@ impl<'a> CEmitter<'a> {
             }
             Instruction::Store { place, value, span } => {
                 self.emit_place_checks(Some(place), *span);
-                let expression = Self::place_expression(place);
+                let expression = self.place_expression(place);
                 let _ = writeln!(
                     self.output,
                     "    {expression} = {};\n    (void){expression};",
@@ -686,7 +803,36 @@ impl<'a> CEmitter<'a> {
             Rvalue::Constant(constant) => {
                 self.constant_expression(constant, destination_type, span)?
             }
-            Rvalue::Load(place) => Self::place_expression(place),
+            Rvalue::Load(place) => self.place_expression(place),
+            Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
+            Rvalue::AllocateManaged { value, value_type } => {
+                // A referenced composite literal needs its own managed cell.
+                // Allocation is a statement, so it is emitted before the
+                // assignment that consumes the resulting address.
+                let cell_type = self.c_type(*value_type, Some(span))?;
+                let destination_name = temporary_name(destination);
+                let class = if self.scanned_allocation(*value_type) {
+                    AllocationClass::Scanned
+                } else {
+                    AllocationClass::PointerFree
+                };
+                let byte_count = format!("sizeof({cell_type})");
+                self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                    destination: &destination_name,
+                    byte_count: &byte_count,
+                    class,
+                });
+                let _ = writeln!(
+                    self.output,
+                    "    if ({destination_name} == NULL) el_out_of_memory();"
+                );
+                let _ = writeln!(
+                    self.output,
+                    "    *{destination_name} = {};",
+                    temporary_name(*value)
+                );
+                destination_name
+            }
             Rvalue::Copy(source) => format!(
                 "{}({})",
                 copy_helper_name(self.resolve_alias(destination_type)),
@@ -983,15 +1129,21 @@ impl<'a> CEmitter<'a> {
         }
     }
 
-    fn place_expression(place: &ControlFlowPlace) -> String {
+    fn place_expression(&self, place: &ControlFlowPlace) -> String {
         match place {
-            ControlFlowPlace::Local(binding) => local_name(*binding),
+            ControlFlowPlace::Local(binding) => {
+                if self.promoted.contains(binding) {
+                    format!("(*{})", cell_name(*binding))
+                } else {
+                    local_name(*binding)
+                }
+            }
             ControlFlowPlace::Temporary(temporary) => temporary_name(*temporary),
             ControlFlowPlace::Field { base, field } => {
-                format!("{}.{}", Self::place_expression(base), field_name(*field))
+                format!("{}.{}", self.place_expression(base), field_name(*field))
             }
             ControlFlowPlace::TupleField { base, index } => {
-                format!("{}.v{index}", Self::place_expression(base))
+                format!("{}.v{index}", self.place_expression(base))
             }
             ControlFlowPlace::VariantField {
                 base,
@@ -999,16 +1151,16 @@ impl<'a> CEmitter<'a> {
                 field,
             } => format!(
                 "{}.payload.{}.{}",
-                Self::place_expression(base),
+                self.place_expression(base),
                 variant_member_name(*variant),
                 field_name(*field)
             ),
             ControlFlowPlace::Dereference { base } => {
-                format!("(*{})", Self::place_expression(base))
+                format!("(*{})", self.place_expression(base))
             }
             ControlFlowPlace::Index { base, index, .. } => format!(
                 "{}.values[{}]",
-                Self::place_expression(base),
+                self.place_expression(base),
                 temporary_name(*index)
             ),
         }
@@ -1147,10 +1299,50 @@ impl<'a> CEmitter<'a> {
             return;
         }
         let symbol = mangle_declaration(self.resolved, entry);
-        let _ = writeln!(
-            self.output,
-            "int main(void) {{\n    (void){symbol}();\n    return 0;\n}}"
-        );
+        // The collector is initialized before any Elamite code runs. A library
+        // package emits no shim, so initialization is the linking
+        // executable's responsibility.
+        self.output.push_str("int main(void) {\n");
+        if self.program.requires_managed_memory {
+            self.emit_managed_operation(ManagedMemoryOperation::Initialize);
+        }
+        let _ = writeln!(self.output, "    (void){symbol}();\n    return 0;\n}}");
+    }
+
+    /// Whether an allocation of `ty` may contain managed pointers and must
+    /// therefore be scanned by the collector. Conservative: only types proven
+    /// free of references, pointers, and owned buffers are left unscanned.
+    fn scanned_allocation(&self, ty: TypeId) -> bool {
+        fn walk(types: &TypeContext, ty: TypeId, depth: u32) -> bool {
+            if depth == 0 {
+                return true;
+            }
+            match types.kind(types.resolve_inference(ty)) {
+                TypeKind::Primitive(primitive) => {
+                    // A `String` owns a heap buffer; every other primitive is
+                    // a plain scalar.
+                    matches!(primitive, PrimitiveType::String)
+                }
+                TypeKind::Reference { .. }
+                | TypeKind::RawPointer { .. }
+                | TypeKind::Function { .. }
+                | TypeKind::TraitObject { .. }
+                | TypeKind::Builtin { .. }
+                | TypeKind::Foreign { .. }
+                | TypeKind::GenericParameter(_)
+                | TypeKind::Error => true,
+                TypeKind::Alias { target, .. } => walk(types, *target, depth - 1),
+                TypeKind::Array { element, .. } => walk(types, *element, depth - 1),
+                TypeKind::Slice(element) => walk(types, *element, depth - 1),
+                TypeKind::Tuple(elements) => elements
+                    .iter()
+                    .any(|element| walk(types, *element, depth - 1)),
+                TypeKind::Nominal { .. }
+                | TypeKind::SelfType(_)
+                | TypeKind::InferenceVariable(_) => true,
+            }
+        }
+        walk(&self.typed.types, ty, 16)
     }
 
     fn c_type(&mut self, ty: TypeId, span: Option<Span>) -> Option<String> {
@@ -1190,7 +1382,9 @@ impl<'a> CEmitter<'a> {
             {
                 enum_name(identity.declaration)
             }
-            TypeKind::RawPointer { target, .. } => {
+            // `&T`, `&var T`, `*T`, and `*var T` are all `T *`; mutability is
+            // compile-time only (LEDGER 19).
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
                 format!("{} *", self.c_type(*target, span)?)
             }
             TypeKind::Error => {
@@ -1291,6 +1485,12 @@ fn copy_helper_name(ty: TypeId) -> String {
 
 fn local_name(binding: crate::resolution::LocalBindingId) -> String {
     format!("l{}", binding.index())
+}
+
+/// The managed cell backing a promoted local. Distinct from [`local_name`] so
+/// a promoted parameter keeps its incoming C parameter alongside its cell.
+fn cell_name(binding: crate::resolution::LocalBindingId) -> String {
+    format!("c{}", binding.index())
 }
 
 fn temporary_name(temporary: TemporaryId) -> String {

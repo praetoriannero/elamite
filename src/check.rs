@@ -112,6 +112,11 @@ struct Checker<'a> {
     local_types: BTreeMap<LocalBindingId, TypeId>,
     local_rebindable: BTreeMap<LocalBindingId, Rebindable>,
     loop_depth: u32,
+    /// Nesting depth of `defer` statements being checked. A deferred body runs
+    /// while its scope is already exiting, so it may not redirect control.
+    defer_depth: u32,
+    /// Nesting depth of `unsafe` blocks being checked.
+    unsafe_depth: u32,
     pointer_bits: u8,
     program: CheckedProgram,
     diagnostics: Vec<Diagnostic>,
@@ -130,6 +135,8 @@ impl<'a> Checker<'a> {
             local_types: BTreeMap::new(),
             local_rebindable: BTreeMap::new(),
             loop_depth: 0,
+            defer_depth: 0,
+            unsafe_depth: 0,
             pointer_bits,
             program: CheckedProgram::default(),
             diagnostics: Vec::new(),
@@ -239,9 +246,41 @@ impl<'a> Checker<'a> {
                 true
             }
             SyntaxKind::DeferStatement => {
-                if let Some(call) = child_nodes(node).into_iter().next() {
-                    self.check_expr(call, ExpectedType::None);
+                if self.defer_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ControlFlow,
+                            "a `defer` statement cannot appear inside a deferred block",
+                        )
+                        .with_primary(node.span),
+                    );
                 }
+                if self.unsafe_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ControlFlow,
+                            "a `defer` statement cannot appear inside an `unsafe` block",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
+                self.defer_depth += 1;
+                match child_nodes(node)
+                    .into_iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                {
+                    // `defer:` block form.
+                    Some(block) => {
+                        self.check_block(block, return_type);
+                    }
+                    // `defer call` single-call form.
+                    None => {
+                        if let Some(call) = child_nodes(node).into_iter().next() {
+                            self.check_expr(call, ExpectedType::None);
+                        }
+                    }
+                }
+                self.defer_depth -= 1;
                 false
             }
             SyntaxKind::IfStatement => self.check_if_statement(node, return_type),
@@ -285,16 +324,41 @@ impl<'a> Checker<'a> {
             }
             SyntaxKind::MatchStatement => self.check_match_statement(node, return_type),
             SyntaxKind::UnsafeBlock => {
-                match child_nodes(node)
+                if self.defer_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ControlFlow,
+                            "an `unsafe` block cannot appear inside a deferred block",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
+                self.unsafe_depth += 1;
+                let terminates = match child_nodes(node)
                     .into_iter()
                     .find(|child| child.kind == SyntaxKind::Block)
                 {
                     Some(block) => self.check_block(block, return_type),
                     None => false,
-                }
+                };
+                self.unsafe_depth -= 1;
+                terminates
             }
             SyntaxKind::BreakStatement | SyntaxKind::ContinueStatement => {
-                if self.loop_depth == 0 {
+                if self.defer_depth > 0 {
+                    let what = if node.kind == SyntaxKind::BreakStatement {
+                        "break"
+                    } else {
+                        "continue"
+                    };
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ControlFlow,
+                            format!("`{what}` cannot appear inside a deferred block"),
+                        )
+                        .with_primary(node.span),
+                    );
+                } else if self.loop_depth == 0 {
                     let what = if node.kind == SyntaxKind::BreakStatement {
                         "break"
                     } else {
@@ -433,6 +497,15 @@ impl<'a> Checker<'a> {
     }
 
     fn check_return_statement(&mut self, node: &SyntaxNode, return_type: TypeId) {
+        if self.defer_depth > 0 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ControlFlow,
+                    "`return` cannot appear inside a deferred block",
+                )
+                .with_primary(node.span),
+            );
+        }
         let expression = child_nodes(node).into_iter().next();
         let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
         let is_unit = self.typed.types.exactly_equal(return_type, unit_type);
@@ -1496,6 +1569,19 @@ impl<'a> Checker<'a> {
         self.is_integer_type(ty) || self.is_float_type(ty)
     }
 
+    /// Whether a canonical type names a trait declaration, which may appear as
+    /// a type only behind a safe reference (`SPEC.md` 6).
+    fn is_trait_declaration_type(&self, ty: TypeId) -> bool {
+        let resolved = self.typed.types.resolve_inference(ty);
+        match self.typed.types.kind(resolved) {
+            TypeKind::Nominal { identity, .. } => {
+                self.resolved.declarations[identity.declaration.index()].kind
+                    == DeclarationKind::Trait
+            }
+            _ => false,
+        }
+    }
+
     fn is_trait_object_reference(&self, ty: TypeId) -> bool {
         let resolved = self.typed.types.resolve_inference(ty);
         let target = match self.typed.types.kind(resolved) {
@@ -1509,9 +1595,9 @@ impl<'a> Checker<'a> {
     /// Whether an expression of type `actual` may be used where `expected`
     /// is required. Milestone 6 requires exact type equality (`SPEC.md` has
     /// no implicit conversion), with one deliberate exception: coercing a
-    /// concrete reference to a matching `&dyn Trait`/`&var dyn Trait` is
-    /// Milestone 13 territory, so it is accepted here rather than
-    /// misdiagnosed as a type mismatch.
+    /// concrete reference to a matching `&Trait`/`&var Trait` is Milestone 13
+    /// territory, so it is accepted here rather than misdiagnosed as a type
+    /// mismatch.
     fn types_compatible(&self, actual: TypeId, expected: TypeId) -> bool {
         actual == self.typed.types.error()
             || expected == self.typed.types.error()
@@ -1543,17 +1629,19 @@ impl<'a> Checker<'a> {
                 });
                 let (operand_type, operand_place) = self.check_expr(operand, ExpectedType::None);
                 let composite_literal_exception = operand.kind == SyntaxKind::RecordExpression;
+                // A collection interior is an assignable place but never a
+                // safe-reference target (SPEC 3.2), so `permits_safe_reference`
+                // gates both forms and `&var` additionally requires mutability.
                 let allowed = composite_literal_exception
-                    || if mutable {
-                        operand_place.is_mutable()
-                    } else {
-                        operand_place.is_addressable()
-                    };
+                    || (operand_place.permits_safe_reference()
+                        && (!mutable || operand_place.is_mutable()));
                 if !allowed && operand_type != self.typed.types.error() {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::Place,
-                            if mutable {
+                            if operand_place == PlaceKind::CollectionInterior {
+                                "cannot form a safe reference to a collection interior"
+                            } else if mutable {
                                 "cannot form `&var` from a non-mutable place"
                             } else {
                                 "cannot form a reference to a non-addressable expression"
@@ -1770,6 +1858,45 @@ impl<'a> Checker<'a> {
         if source_type == self.typed.types.error() || target_type == self.typed.types.error() {
             return (target_type, PlaceKind::Value);
         }
+        // Forming a trait object is an explicit conversion (`SPEC.md` 6):
+        // `reference as &Trait` / `as &var Trait`. Verifying that the source
+        // target type actually implements the trait, and that the trait is
+        // object-safe, is Milestone 13 territory; the mutability and
+        // reference-shape requirements are checked here.
+        if self.is_trait_object_reference(target_type) {
+            let source = self.typed.types.resolve_inference(source_type);
+            match self.typed.types.kind(source) {
+                TypeKind::Reference { mutability, .. } => {
+                    let source_mutability = *mutability;
+                    let target = self.typed.types.resolve_inference(target_type);
+                    let target_mutability = match self.typed.types.kind(target) {
+                        TypeKind::Reference { mutability, .. } => *mutability,
+                        _ => source_mutability,
+                    };
+                    if source_mutability != target_mutability {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::ExpressionType,
+                                "a trait-object conversion must preserve reference mutability",
+                            )
+                            .with_primary(node.span),
+                        );
+                        return (self.typed.types.error(), PlaceKind::Value);
+                    }
+                    return (target_type, PlaceKind::Value);
+                }
+                _ => {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a trait object is formed only from a safe reference",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+            }
+        }
         if !self.is_numeric_type(source_type) || !self.is_numeric_type(target_type) {
             self.diagnostics.push(
                 Diagnostic::new(
@@ -1787,6 +1914,15 @@ impl<'a> Checker<'a> {
         // Full `?` propagation-target checking is Milestone 15; here the
         // operand is still checked and, when it is visibly `Result[T, E]`,
         // its success payload type is threaded through.
+        if self.defer_depth > 0 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ControlFlow,
+                    "postfix `?` cannot appear inside a deferred statement",
+                )
+                .with_primary(node.span),
+            );
+        }
         let Some(operand) = child_nodes(node).into_iter().next() else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
@@ -2433,9 +2569,9 @@ impl<'a> Checker<'a> {
 
     /// Lowers a `Type` syntax node using names Milestone 4 already resolved.
     /// This intentionally supports less than the full `Milestone 5` lowering
-    /// used for declared signatures: `dyn` and function-pointer type
-    /// annotations resolve to the error type here, matching this module's
-    /// non-generic, non-trait scope.
+    /// used for declared signatures: function-pointer type annotations
+    /// resolve to the error type here, matching this module's non-generic,
+    /// non-trait scope.
     fn lower_type(&mut self, node: &SyntaxNode) -> TypeId {
         let tokens = types::direct_tokens(node);
         let first = tokens.first().map(|token| &token.kind);
@@ -2445,12 +2581,20 @@ impl<'a> Checker<'a> {
             let mutable = tokens
                 .iter()
                 .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Var)));
-            let target = match types::direct_child(node, SyntaxKind::Type) {
+            let mut target = match types::direct_child(node, SyntaxKind::Type) {
                 Some(child) => self.lower_type(child),
                 None => error,
             };
             if target == error {
                 return error;
+            }
+            // A trait names a type only behind a safe reference, where
+            // `&Trait`/`&var Trait` denote a trait object (`SPEC.md` 6).
+            if !raw && self.is_trait_declaration_type(target) {
+                target = self
+                    .typed
+                    .types
+                    .intern(TypeKind::TraitObject { trait_type: target });
             }
             let mutability = if mutable {
                 Mutability::Mutable
@@ -2463,13 +2607,13 @@ impl<'a> Checker<'a> {
                 TypeKind::Reference { mutability, target }
             });
         }
-        // `dyn Trait` and function-pointer/`unsafe fn`/`extern fn` type
-        // annotations are Milestone 11/13 territory; they resolve to the
-        // error type here rather than to an incorrect ordinary type.
+        // Function-pointer/`unsafe fn`/`extern fn` type annotations are
+        // Milestone 11 territory; they resolve to the error type here rather
+        // than to an incorrect ordinary type.
         if matches!(
             first,
             Some(TokenKind::Keyword(
-                Keyword::Dyn | Keyword::Fn | Keyword::Unsafe | Keyword::Extern
+                Keyword::Fn | Keyword::Unsafe | Keyword::Extern
             ))
         ) {
             return error;

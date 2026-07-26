@@ -7,7 +7,7 @@
 //! trapping operations explicit before any C is emitted. Milestone 9 adds the
 //! canonical logical-copy contract and source-ordered pattern-match lowering.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::check::CheckedProgram;
 use crate::diagnostics::{Category, Diagnostic};
@@ -203,6 +203,16 @@ pub enum TypedExpressionKind {
         base: Box<TypedExpression>,
         index: Box<TypedExpression>,
     },
+    /// `&place` / `&var place`: the address of an addressable place. The
+    /// place's root local is promoted to managed storage by
+    /// [`crate::promotion`], so this is always the address of a managed cell
+    /// or of a subvalue inside one.
+    AddressOf(Box<TypedPlace>),
+    /// `&Composite { .. }`: a referenced composite literal, which allocates
+    /// its own managed cell because it has no source-level binding.
+    AddressOfTemporary(Box<TypedExpression>),
+    /// `*reference`: the value the reference names.
+    Dereference(Box<TypedExpression>),
     Tuple(Vec<TypedExpression>),
     Array(Vec<TypedExpression>),
     Struct {
@@ -279,20 +289,33 @@ pub enum TypedPlace {
         length: u128,
         span: Span,
     },
+    /// `*reference` as an assignable place. Its base is a reference *value*,
+    /// not a place, so writes land in the referenced storage.
+    Dereference {
+        base: Box<TypedExpression>,
+        ty: TypeId,
+        span: Span,
+    },
 }
 
 impl TypedPlace {
     #[must_use]
     pub fn ty(&self) -> TypeId {
         match self {
-            Self::Local { ty, .. } | Self::Field { ty, .. } | Self::Index { ty, .. } => *ty,
+            Self::Local { ty, .. }
+            | Self::Field { ty, .. }
+            | Self::Index { ty, .. }
+            | Self::Dereference { ty, .. } => *ty,
         }
     }
 
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::Local { span, .. } | Self::Field { span, .. } | Self::Index { span, .. } => *span,
+            Self::Local { span, .. }
+            | Self::Field { span, .. }
+            | Self::Index { span, .. }
+            | Self::Dereference { span, .. } => *span,
         }
     }
 }
@@ -353,6 +376,14 @@ pub struct TypedFunction {
     pub return_type: TypeId,
     pub body: Vec<TypedStatement>,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
+    /// Locals whose address is taken, and which therefore need managed storage
+    /// rather than a C stack slot (`IMPL.md` Milestone 10). Conservative: every
+    /// address-taken local is promoted.
+    pub promoted_locals: BTreeSet<LocalBindingId>,
+    /// Whether the body allocates a managed cell for a referenced composite
+    /// literal. Such a cell has no binding, so promotion alone does not imply
+    /// it.
+    pub allocates_managed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -531,6 +562,15 @@ impl<'a> TypedLowerer<'a> {
                 local_types.insert(binding, parameter.ty);
             }
         }
+        // Promotion is computed from the function's syntax rather than from
+        // lowered statements, so it is available even for bodies whose
+        // reference lowering is not yet represented.
+        let body_block = crate::types::direct_child(&data.syntax, SyntaxKind::Block);
+        let promoted_locals = body_block
+            .map(|block| crate::promotion::address_taken_locals(self.resolved, block))
+            .unwrap_or_default();
+        let allocates_managed =
+            body_block.is_some_and(crate::promotion::allocates_managed_temporary);
         let body = crate::types::direct_child(&data.syntax, SyntaxKind::Block)
             .map(|block| self.lower_block(block, &mut local_types))
             .unwrap_or_default();
@@ -542,6 +582,8 @@ impl<'a> TypedLowerer<'a> {
             return_type: signature.return_type,
             body,
             local_types,
+            promoted_locals,
+            allocates_managed,
         })
     }
 
@@ -550,10 +592,21 @@ impl<'a> TypedLowerer<'a> {
         block: &SyntaxNode,
         local_types: &mut BTreeMap<LocalBindingId, TypeId>,
     ) -> Vec<TypedStatement> {
-        child_nodes(block)
-            .into_iter()
-            .filter_map(|statement| self.lower_statement(statement, local_types))
-            .collect()
+        let mut statements = Vec::new();
+        for node in child_nodes(block) {
+            let before = self.diagnostics.len();
+            match self.lower_statement(node, local_types) {
+                Some(statement) => statements.push(statement),
+                // A statement that cannot be lowered must be reported. Dropping
+                // it silently would generate a program missing an effect the
+                // source asked for.
+                None if self.diagnostics.len() == before => {
+                    self.unsupported(node.span, "this statement");
+                }
+                None => {}
+            }
+        }
+        statements
     }
 
     fn lower_statement(
@@ -592,7 +645,11 @@ impl<'a> TypedLowerer<'a> {
             }
             SyntaxKind::AssignmentStatement => {
                 let nodes = child_nodes(node);
-                let place = self.lower_place(*nodes.first()?)?;
+                let target = *nodes.first()?;
+                let Some(place) = self.lower_place(target) else {
+                    self.unsupported(target.span, "an assignment to this place");
+                    return None;
+                };
                 let value = self.lower_expression(*nodes.get(1)?)?;
                 let operator = node.children.iter().find_map(|child| match child {
                     SyntaxElement::Token(token) => assignment_operator(&token.kind),
@@ -991,9 +1048,40 @@ impl<'a> TypedLowerer<'a> {
             SyntaxKind::UnaryExpression => {
                 let operand_node = child_nodes(node).into_iter().next_back()?;
                 let token = first_token(node)?;
-                if matches!(token.kind, TokenKind::Amp | TokenKind::Star) {
-                    self.unsupported(node.span, "managed or raw reference lowering");
-                    return None;
+                if matches!(token.kind, TokenKind::Amp) {
+                    // A referenced composite literal has no place to address;
+                    // it allocates a managed cell of its own (SPEC 3.2).
+                    if operand_node.kind == SyntaxKind::RecordExpression {
+                        let value = self.lower_expression(operand_node)?;
+                        return Some(TypedExpression {
+                            kind: TypedExpressionKind::AddressOfTemporary(Box::new(value)),
+                            ty,
+                            place,
+                            copy: false,
+                            span: node.span,
+                        });
+                    }
+                    let Some(target) = self.lower_place(operand_node) else {
+                        self.unsupported(node.span, "a reference to this place");
+                        return None;
+                    };
+                    return Some(TypedExpression {
+                        kind: TypedExpressionKind::AddressOf(Box::new(target)),
+                        ty,
+                        place,
+                        copy: false,
+                        span: node.span,
+                    });
+                }
+                if matches!(token.kind, TokenKind::Star) {
+                    let operand = self.lower_expression(operand_node)?;
+                    return Some(TypedExpression {
+                        kind: TypedExpressionKind::Dereference(Box::new(operand)),
+                        ty,
+                        place,
+                        copy: self.checked.copies.contains(&node.span),
+                        span: node.span,
+                    });
                 }
                 let operator = unary_operator(&token.kind)?;
                 let negative_literal = operator == UnaryOperator::Negative
@@ -1041,7 +1129,7 @@ impl<'a> TypedLowerer<'a> {
                     let base_node = child_nodes(node).into_iter().next()?;
                     let field = self.resolve_field(node, base_node)?;
                     TypedExpressionKind::Field {
-                        base: Box::new(self.lower_expression(base_node)?),
+                        base: Box::new(self.lower_receiver(base_node)?),
                         field,
                     }
                 }
@@ -1286,7 +1374,7 @@ impl<'a> TypedLowerer<'a> {
                 let base_node = child_nodes(node).into_iter().next()?;
                 let field = self.resolve_field(node, base_node)?;
                 Some(TypedPlace::Field {
-                    base: Box::new(self.lower_place(base_node)?),
+                    base: Box::new(self.lower_place_receiver(base_node)?),
                     field,
                     ty,
                     span: node.span,
@@ -1316,18 +1404,82 @@ impl<'a> TypedLowerer<'a> {
                     span: node.span,
                 })
             }
+            SyntaxKind::UnaryExpression => {
+                let token = first_token(node)?;
+                if !matches!(token.kind, TokenKind::Star) {
+                    return None;
+                }
+                let operand = child_nodes(node).into_iter().next_back()?;
+                Some(TypedPlace::Dereference {
+                    base: Box::new(self.lower_expression(operand)?),
+                    ty,
+                    span: node.span,
+                })
+            }
             _ => None,
         }
     }
 
     fn resolve_field(&self, node: &SyntaxNode, base: &SyntaxNode) -> Option<FieldId> {
         let base_type = self.checked.expression_types.get(&base.span).copied()?;
-        let declaration = match self.expanded_kind(base_type) {
-            TypeKind::Nominal { identity, .. } => identity.declaration,
-            _ => return None,
-        };
+        let declaration = self.field_owner(base_type)?;
         let name = identifier_text(first_identifier(node)?);
         self.find_field(declaration, name)
+    }
+
+    /// Lowers a field-access base, inserting the automatic dereference when it
+    /// is a safe reference (SPEC 3.2).
+    fn lower_receiver(&mut self, base: &SyntaxNode) -> Option<TypedExpression> {
+        let value = self.lower_expression(base)?;
+        if !self.is_reference_type(value.ty) {
+            return Some(value);
+        }
+        let target = self.reference_target(value.ty)?;
+        Some(TypedExpression {
+            ty: target,
+            place: PlaceKind::Mutable,
+            copy: false,
+            span: base.span,
+            kind: TypedExpressionKind::Dereference(Box::new(value)),
+        })
+    }
+
+    /// The place form of [`Self::lower_receiver`].
+    fn lower_place_receiver(&mut self, base: &SyntaxNode) -> Option<TypedPlace> {
+        let base_type = self.checked.expression_types.get(&base.span).copied()?;
+        if !self.is_reference_type(base_type) {
+            return self.lower_place(base);
+        }
+        let target = self.reference_target(base_type)?;
+        Some(TypedPlace::Dereference {
+            base: Box::new(self.lower_expression(base)?),
+            ty: target,
+            span: base.span,
+        })
+    }
+
+    fn is_reference_type(&self, ty: TypeId) -> bool {
+        matches!(self.expanded_kind(ty), TypeKind::Reference { .. })
+    }
+
+    fn reference_target(&self, ty: TypeId) -> Option<TypeId> {
+        match self.expanded_kind(ty) {
+            TypeKind::Reference { target, .. } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// The struct a field selection resolves against, seeing through a safe
+    /// reference: reference field access automatically dereferences (SPEC 3.2).
+    fn field_owner(&self, base_type: TypeId) -> Option<DeclarationId> {
+        match self.expanded_kind(base_type) {
+            TypeKind::Nominal { identity, .. } => Some(identity.declaration),
+            TypeKind::Reference { target, .. } => match self.expanded_kind(*target) {
+                TypeKind::Nominal { identity, .. } => Some(identity.declaration),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn find_field(&self, declaration: DeclarationId, name: &str) -> Option<FieldId> {
@@ -1444,6 +1596,15 @@ pub enum AggregateValue {
 pub enum Rvalue {
     Constant(Constant),
     Load(ControlFlowPlace),
+    /// The address of a place. Its root local is promoted, so the address is
+    /// stable for as long as the reference is reachable.
+    AddressOf(ControlFlowPlace),
+    /// Allocates a managed cell, initializes it from a temporary, and yields
+    /// its address. This backs a referenced composite literal.
+    AllocateManaged {
+        value: TemporaryId,
+        value_type: TypeId,
+    },
     Copy(TemporaryId),
     Discriminant(TemporaryId),
     CompareEqual {
@@ -1531,6 +1692,10 @@ pub struct ControlFlowFunction {
     pub parameters: Vec<TypedParameter>,
     pub return_type: TypeId,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
+    /// Locals promoted to managed storage; see [`TypedFunction::promoted_locals`].
+    pub promoted_locals: BTreeSet<LocalBindingId>,
+    /// See [`TypedFunction::allocates_managed`].
+    pub allocates_managed: bool,
     pub temporary_types: Vec<TypeId>,
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
@@ -1541,6 +1706,12 @@ pub struct ControlFlowProgram {
     pub functions: Vec<ControlFlowFunction>,
     pub structs: Vec<TypedStruct>,
     pub enums: Vec<TypedEnum>,
+    /// Whether lowering produced any managed allocation, promoted storage, or
+    /// managed root. The backend engages `ManagedMemoryStrategy` — and the
+    /// driver links its native libraries — only when this is set, so programs
+    /// that never need the collector keep a dependency-free translation unit.
+    /// Milestone 10 promotion analysis is what turns this on.
+    pub requires_managed_memory: bool,
 }
 
 #[must_use]
@@ -1553,6 +1724,11 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
             .collect(),
         structs: program.structs.clone(),
         enums: program.enums.clone(),
+        // Managed storage is needed exactly when some local was promoted.
+        requires_managed_memory: program
+            .functions
+            .iter()
+            .any(|function| !function.promoted_locals.is_empty() || function.allocates_managed),
     }
 }
 
@@ -1607,6 +1783,8 @@ impl<'a> FunctionLowerer<'a> {
             parameters: self.function.parameters.clone(),
             return_type: self.function.return_type,
             local_types: self.function.local_types.clone(),
+            promoted_locals: self.function.promoted_locals.clone(),
+            allocates_managed: self.function.allocates_managed,
             temporary_types: self.temporary_types,
             entry: BlockId(0),
             blocks,
@@ -1988,6 +2166,21 @@ impl<'a> FunctionLowerer<'a> {
         let value = match &expression.kind {
             TypedExpressionKind::Constant(constant) => Rvalue::Constant(constant.clone()),
             TypedExpressionKind::Local(binding) => Rvalue::Load(ControlFlowPlace::Local(*binding)),
+            TypedExpressionKind::AddressOf(place) => {
+                let place = self.lower_place(place);
+                Rvalue::AddressOf(place)
+            }
+            TypedExpressionKind::AddressOfTemporary(value) => {
+                let value_type = value.ty;
+                let value = self.lower_expression(value);
+                Rvalue::AllocateManaged { value, value_type }
+            }
+            TypedExpressionKind::Dereference(operand) => {
+                let operand = self.lower_expression(operand);
+                Rvalue::Load(ControlFlowPlace::Dereference {
+                    base: Box::new(ControlFlowPlace::Temporary(operand)),
+                })
+            }
             TypedExpressionKind::Unary { operator, operand } => {
                 let operand = self.lower_expression(operand);
                 Rvalue::Unary {
@@ -2227,6 +2420,12 @@ impl<'a> FunctionLowerer<'a> {
                     trap: TrapKind::IndexOutOfBounds,
                 }
             }
+            TypedPlace::Dereference { base, .. } => {
+                let base = self.lower_expression(base);
+                ControlFlowPlace::Dereference {
+                    base: Box::new(ControlFlowPlace::Temporary(base)),
+                }
+            }
         }
     }
 
@@ -2252,6 +2451,12 @@ impl<'a> FunctionLowerer<'a> {
                     index,
                     length,
                     trap: TrapKind::IndexOutOfBounds,
+                }
+            }
+            TypedExpressionKind::Dereference(operand) => {
+                let operand = self.lower_expression(operand);
+                ControlFlowPlace::Dereference {
+                    base: Box::new(ControlFlowPlace::Temporary(operand)),
                 }
             }
             _ => ControlFlowPlace::Temporary(self.lower_expression(expression)),

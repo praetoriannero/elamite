@@ -1,6 +1,6 @@
 # Elamite Feature Ledger
 
-> Status: Planning draft — Milestone 0 deliverable
+> Status: Active — Milestone 0 deliverable, maintained as milestones complete
 >
 > Basis: `SPEC.md` version 0.4.0-draft and `examples/spec_demo.elx`
 >
@@ -47,10 +47,10 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 9 are complete (Milestones 6 through 9 for their
-stated non-generic, non-method, non-trait scope, implemented together in one
-frontend pass where applicable; see `IMPL.md`); later rows remain planned until
-their milestone status changes in `IMPL.md`.
+tracker. Milestones 0 through 10 are complete (Milestones 6 through 10 for
+their stated non-generic, non-method, non-trait scope, implemented together in
+one frontend pass where applicable; see `IMPL.md`); later rows remain planned
+until their milestone status changes in `IMPL.md`.
 
 ## 0.1 Legacy artifact inventory
 
@@ -64,10 +64,11 @@ output, or grammar files survive to migrate or reconcile. This closes that
 part of Milestone 0's exit criteria by observation rather than by migration
 work.
 
-`notes.txt` at the repository root predates the current specification (it
-uses brace-delimited bodies, `mut`, and printf-style calls that contradict
-`SPEC.md`'s indentation-delimited, `var`-based design) and is not treated as
-an implementation input by this ledger.
+A `notes.txt` at the repository root predated the current specification (it
+used brace-delimited bodies, `mut`, printf-style calls, and `case`/`abstract`
+keywords that contradict `SPEC.md`'s indentation-delimited, `var`-based
+design). It was never an implementation input to this ledger and has been
+removed.
 
 ---
 
@@ -116,7 +117,7 @@ an implementation input by this ledger.
 | Package = compilation/dependency/nominal-identity/coherence unit; `elamite.toml` declares name, version, target kind (`library`\|`executable`), dependencies, root file; default roots `src/lib.elx`/`src/main.elx` | M1 | — | compile-fail (malformed manifest), integration |
 | Root file defines `root` module; other `.elx` files define file-backed modules from relative path; directories are namespace components; path components must be valid identifiers | M1 | — | integration, compile-fail (invalid component) |
 | `mod name:` inline nested module; inline and file-backed modules cannot collide; file-backed modules need no bodyless `mod` declaration | M1 (discover file-backed paths), M3 (parse inline modules), M4 (reject collision during collection) | — | compile-fail (duplicate module path) |
-| Path roots `root`, `self`, `super` (error at package root), `std`, dependency aliases | M4 | — | compile-fail (`super` at root) |
+| Path roots `root`, `self`, `super` (error at package root) are keywords; `std` and dependency aliases are ordinary names resolved after lexical bindings, module declarations, imports, and prelude names, so a module may shadow `std` ([I-019](ISSUES.md#i-019-trait-object-syntax-and-the-std-path-root)) | M4 | — | compile-fail (`super` at root) |
 | Unqualified name lookup: lexical bindings, current-module decls/imports, prelude only — never unrelated modules | M4 | — | compile-fail |
 | `import path` / `import path as name`; not inherited by nested modules; no wildcard/grouped imports; import order has no semantic effect | M3 (parse), M4 (resolve) | — | compile-pass, compile-fail |
 | `pub` visibility on modules/fns/structs/enums/traits/aliases; fields and inherent methods package-private unless individually `pub`; all variants/payload fields of a `pub enum` are public; all methods of a `pub trait` are public | M4 | — | compile-fail (private access across packages) |
@@ -150,9 +151,10 @@ an implementation input by this ledger.
 | Collection interiors are never addressable for reference formation; value-context collection access returns an independent copy | M6, M14 | — | compile-fail |
 | Array/`Vec` element and `Map` value may be assignable places via a mutable collection path (replace/compound-assign/nested-mutate) without a reference escaping; `Map` keys/`Set` elements are never mutable places | M6, M14 | — | run-pass |
 | References are valid struct fields, enum payloads, parameter types, and return types (no closure captures — closures do not exist) | M5 | — | compile-pass |
-| A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 | Boehm GC | run-pass (`answer() -> &i32`) |
-| A reference formed directly from a binding targets that binding's storage cell and observes later assignment; promotion preserves this | M10 | Boehm GC | run-pass |
-| A reference into a nested aggregate targets the selected subvalue, not rebased by later replacement of the container | M10 | Boehm GC | run-pass (`city` example) |
+| A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is M20) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
+| A reference formed directly from a binding targets that binding's storage cell and observes later assignment; promotion preserves this | M10 (done) | Boehm GC | run-pass (`references_observe_storage_through_binding_and_path`) |
+| A reference into a nested aggregate points to that subvalue's storage within its container, so replacing the container is observable through the reference, and mutation through the reference is visible in the container (§19, [I-018](ISSUES.md#i-018-reference-target-model-for-nested-aggregates)) | M10 (done) | Boehm GC (interior pointers) | run-pass (`city` example) |
+| A reference into an aggregate keeps its whole container reachable | M10 (done; `GC_set_all_interior_pointers(1)` before `GC_INIT`) | Boehm GC (interior pointers) | run-pass (`an_interior_reference_keeps_its_whole_container_reachable`) |
 
 ### 3.3 Raw pointers and null
 
@@ -245,14 +247,14 @@ an implementation input by this ledger.
 | No overloading: one function per name per namespace regardless of signature; generics/distinct names are the alternative; doesn't decide inherent-vs-trait collisions | M4 | — | compile-fail (duplicate name) |
 | No default parameter values; every non-variadic call needs the exact declared arity | M6 | — | compile-fail (arity mismatch) |
 | Variadic final parameter `name: ...T`: 0+ trailing `T` args bound as `[T]`; homogeneous, only once, final position; type marker preserved (`&fn(i32, ...String) -> ()`); lowered as a slice argument, not C's variadic ABI | M3, M6, M8 | — | compile-pass, run-pass |
-| Function value = *function reference*: safe `&fn(P) -> R`, unsafe `&unsafe fn(P) -> R`; bare `fn(...)`/`unsafe fn(...)` types are inhabited only behind a reference (like `dyn Trait`); no `&var fn`; **no closures, anonymous function literals, captured environments, or bound-method values**; a reference is produced only by naming a named function or unbound method, with the matching safety qualifier | M5 (types), M11 (semantics) | — | compile-fail (bare `fn` type as a value) |
+| Function value = *function reference*: safe `&fn(P) -> R`, unsafe `&unsafe fn(P) -> R`; bare `fn(...)`/`unsafe fn(...)` types are inhabited only behind a reference (like a trait); no `&var fn`; **no closures, anonymous function literals, captured environments, or bound-method values**; a reference is produced only by naming a named function or unbound method, with the matching safety qualifier | M5 (types), M11 (semantics) | — | compile-fail (bare `fn` type as a value) |
 | Referencing a named function (`let bump = increment`) produces an `&fn` value; call syntax auto-dereferences it | M11 | — | run-pass |
 | Referencing an `unsafe` function/method produces `&unsafe fn`; taking/storing/copying/passing/returning/comparing it is safe (no invocation); calling requires `unsafe:` | M11, M16 | — | compile-fail (call without `unsafe:`), run-pass |
 | Function reference is storable in a binding/field/enum payload/collection/parameter/return; two references are compatible only on exact match of params+return+arity+variadic marker+safety qualifier; safe↔unsafe never converts implicitly; no variance; collections homogeneous by exact type | M11, M12 | — | compile-fail (safe/unsafe mismatch) |
 | A named function has a stable whole-program address, so its function reference is always valid and never needs escape promotion; it carries no captured environment | M10 (no promotion path needed), M11 | — | run-pass |
-| A generic function becomes a function reference only once all type arguments are determined; no erased any-callable type, dynamic call-operator, runtime signature inspection, or heterogeneous function-value collection; `dyn Trait` dispatch is separate and not directly callable | M12 | — | compile-fail |
+| A generic function becomes a function reference only once all type arguments are determined; no erased any-callable type, dynamic call-operator, runtime signature inspection, or heterogeneous function-value collection; trait-object dispatch is separate and not directly callable | M12 | — | compile-fail |
 | Selecting a method from a *type* yields an unbound function reference; selecting from an *instance* does not (`session.stop` alone is invalid; direct call is fine); an unbound method retains its receiver parameter and safety qualifier; trait-qualified selection follows the same rule | M11 | — | compile-fail (`session.stop` without a call), run-pass |
-| A function reference carries no state, so a stateful callback uses `&dyn Trait` instead (data in a struct, trait impl, dispatch through the reference) | M13 | — | run-pass (`Transform`/`AddOffset` demo) |
+| A function reference carries no state, so a stateful callback uses `&Trait` instead (data in a struct, trait impl, dispatch through the reference) | M13 | — | run-pass (`Transform`/`AddOffset` demo) |
 | Named functions may call themselves and other named functions in the same lexical scope — this is how recursion is expressed, since there are no closures | M4 (predeclare for recursion) | — | run-pass (`is_even`/`is_odd`) |
 | Function-reference `==`/`!=` is reference identity (equal iff naming the same function); no behavior comparison; no relational order | M11 | — | run-pass |
 
@@ -264,9 +266,10 @@ an implementation input by this ledger.
 | A call infers all generic arguments from argument types + expected result type only when unique; otherwise every argument must be explicit (no partial explicit lists); struct/enum literals infer the same way | M12 | — | compile-fail (ambiguous/partial inference), compile-pass |
 | A generic body is type-checked once against its bounds only; constructed generic types have exact identity, no subtype/variance; the C backend monomorphizes per concrete instantiation; finite mutually-recursive instantiation sets are valid, unbounded expansion (`T`, `Vec[T]`, `Vec[Vec[T]]`, …) is rejected | M12 | — | compile-fail (unbounded expansion), run-pass |
 | `trait`/`impl Trait for Type`; bodyless method = required, with-body = default; an impl must supply every required method with the exact signature, may override defaults, may not add extra methods; traits initially have methods only (no associated types/constants) | M13 | — | compile-fail (missing/extra method, signature mismatch) |
-| Concrete/monomorphized calls use static dispatch; `dyn Trait` is explicit dynamic dispatch only behind a safe reference (`&dyn Trait`/`&var dyn Trait`); bare trait-object values/raw pointers to trait objects are invalid; a concrete reference coerces to a matching-mutability trait-object reference when its target implements the trait; the object is a fat reference (target + vtable) | M13 | — | compile-fail (bare `dyn` value), run-pass |
-| Object safety: every object-reachable method needs `&Self`/`&var Self`, no method-level generics, no other `Self` mention; a failing trait remains usable with static dispatch only; a generic trait needs concrete type arguments to form an object; default methods participate in the vtable | M13 | — | compile-fail (non-object-safe trait as `dyn`) |
-| Trait-object calls dispatch through the vtable; heterogeneous concrete types coexist in e.g. `Vec[&dyn Trait]`; no downcasting/runtime-type-inspection/multi-trait objects initially; safe-reference reachability/escape promotion applies to concrete targets | M13 | Boehm GC | run-pass |
+| Concrete/monomorphized calls use static dispatch; a trait object is `&Trait`/`&var Trait` and appears only behind a safe reference; bare trait-object values/raw pointers to trait objects are invalid; a concrete reference becomes a trait-object reference only through the explicit conversion `reference as &Trait` of matching mutability, valid when its target implements the trait; the object is a fat reference (target + vtable) ([I-019](ISSUES.md#i-019-trait-object-syntax-and-the-std-path-root)) | M6 (reference shape + mutability), M13 (implements + object safety) | — | compile-fail (bare trait value, mutability mismatch, non-reference source), run-pass |
+| A trait has no value representation: a trait name is a type only as a safe-reference target, a generic/impl bound, or the trait of an `impl Trait for Type`; a bare trait name in a field, parameter, return, local annotation, alias, or generic argument is an error, as is `*Trait` | M5 | — | compile-fail (bare trait in each value position) |
+| Object safety: every object-reachable method needs `&Self`/`&var Self`, no method-level generics, no other `Self` mention; a failing trait remains usable with static dispatch only; a generic trait needs concrete type arguments to form an object; default methods participate in the vtable | M13 | — | compile-fail (non-object-safe trait as a trait object) |
+| Trait-object calls dispatch through the vtable; heterogeneous concrete types coexist in e.g. `Vec[&Trait]`, each element formed by an explicit conversion; no downcasting/runtime-type-inspection/multi-trait objects initially; safe-reference reachability/escape promotion applies to concrete targets | M13 | Boehm GC | run-pass |
 | `pub trait` exposes all methods where the trait is accessible; trait method declarations and impl methods carry no separate `pub` modifiers | M4, M13 | — | compile-fail (`pub` on a trait method) |
 | Bound-call lookup considers inherent methods + in-scope-trait methods; inherent wins over a same-named trait method; multiple matching in-scope traits are ambiguous | M11, M13 | — | compile-fail (ambiguity) |
 | `Type.Trait.method` unconditionally selects the named impl member, bypassing field selection, inherent-method lookup, and bound trait lookup; valid only when accessible and the trait is implemented for the type; unbound, retains its receiver parameter; selecting without calling yields an unbound function reference; also selects receiverless trait functions | M11, M13 | — | run-pass (`Session.Toggle.status`), compile-fail (trait not implemented) |
@@ -309,10 +312,10 @@ an implementation input by this ledger.
 | No implicit destruction protocol; GC manages memory only; deterministic external cleanup = `Close` trait + lexical `defer` | M15 | — | — |
 | `Close`: `fn close(self: &Self) -> ()`; callable explicitly; must be idempotent; returns unit, handles recoverable cleanup errors internally; fallible flush/commit/finalize is a separate `Result`-returning operation, not part of `Close` | M15 | — | compile-pass (idempotence itself is a manual-impl law, not statically checked) |
 | A `Close`-implementing type is an identity-bearing shared resource handle, an explicit exception to independent copying: copying retains one shared managed resource state; closing through any copy closes it for every handle; ops on a closed resource return an appropriate error; manual impls are responsible for these laws | M15 (shared-state copy semantics) | — | run-pass (`DemoResource` shared-state demo) |
-| `defer call` registers one safe unit-returning call for block exit; only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block | M3 (parse single-call `defer`), M15 (registration semantics) | — | compile-fail (multiline `defer`, non-unit return), run-pass |
+| `defer call` registers one safe unit-returning call for block exit; `defer:` defers an indented block of statements as one registration, its body an ordinary lexical scope; both only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block ([I-020](ISSUES.md#i-020-multi-statement-defer-blocks)) | M3 (parse both forms), M15 (registration semantics) | — | compile-fail (non-call `defer` operand, non-unit return), compile-pass (block form), run-pass |
 | The deferred call evaluates at block exit using the callee/receiver/argument values *at that time* (not at registration); referenced bindings stay alive until the call finishes; reassigning a `var` after registration affects the later call | M15 | — | run-pass (reassigned-`var` affects `defer`) |
 | Deferred calls run on fallthrough/`return`/`?`-propagation/`break`/`continue`; one block's calls run in reverse registration order; an inner block's calls run before an enclosing block's; a return value/propagated error is evaluated and copied *before* deferred calls begin (so an unconditionally deferred `close()` on a returned resource closes the returned handle too); no `errdefer` | M15 (cleanup-chain lowering in CFG IR) | — | run-pass (reverse order, nested scopes, return-then-cleanup) |
-| Only the single-call form; no `errdefer`/multiline `defer:`; a direct unsafe/foreign call cannot be deferred (wrap it in a safe unit method); the deferred expression cannot contain postfix `?`; an unrecoverable trap (including during a deferred call) or OOM doesn't guarantee remaining deferred calls run | M15, M16 | trap path | compile-fail (deferred unsafe call, deferred `?`) |
+| No `errdefer` and no conditional error-only deferral; a deferred block cannot redirect control, so `return`/`break`/`continue`/postfix `?`/nested `defer` are invalid inside it; a `defer` statement is invalid inside an `unsafe` block and an `unsafe` block is invalid inside a `defer:` block; a direct unsafe/foreign call cannot be deferred (wrap it in a safe unit method); an unrecoverable trap (including during deferred execution) or OOM doesn't guarantee remaining deferred statements run | M7 (placement rules), M15, M16 | trap path | compile-fail (each control-flow escape, nested `defer`, `defer` in `unsafe`, `unsafe` in `defer`) |
 | Leaving a scope does not implicitly `close()` a `Close`-implementing value; only an explicit `defer`/direct call runs cleanup; GC never calls `close()`; an un-deferred resource may leak; an implementation may warn on provable local leaks (not required to be complete) | M15 | — | run-pass (leak is not a requirement) |
 
 ## 9. Garbage collection (§9)
@@ -323,7 +326,7 @@ an implementation input by this ledger.
 | Strong roots: every local binding until scope end, function parameters for the complete call, temporaries until their full expression finishes, module-level values, safe references, managed handles in structs/enums/collections/hidden loop state; assigning a new value to a `var` removes the binding's strong path to the old value (other strong paths remain effective) | M10 (root tracking) | Boehm GC | run-pass (liveness tests) |
 | Reachable safe references are roots for managed targets; a reference constructed from a raw pointer roots the target only if managed; it doesn't extend foreign/manual storage lifetime | M10, M16 | Boehm GC | run-pass, doc-contract |
 | Raw pointers are *not* language roots; code retaining one is responsible for a separate managed path; Boehm may conservatively over-retain via bit-pattern resemblance but a program cannot rely on it | M10, M16 | Boehm GC | doc-contract, best-effort test |
-| Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | run-pass (best-effort cycle collection) |
+| Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | untested (pending recursive `Option` payloads) |
 | No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes `Close`; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
 | Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, then terminates with an OOM diagnostic; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path) | Boehm GC | integration (OOM termination — likely a manually driven test) |
 | No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, M20 | Boehm GC (nonportable extensions) | optional tooling, not required |
@@ -407,7 +410,7 @@ Per `IMPL.md` Milestone 0, the initial supported-target assumptions:
 | Pointer width | `isize`/`usize` match the selected C target's pointer width (§4.1). With two supported architectures this means **two** pointer widths in scope (64-bit on x86-64, 32-bit on x86) — the backend must not hardcode a single width | fixed by the target-matrix decision above; M8/M16 numeric-boundary code must be tested at both widths |
 | Integer representations | Fixed-width types map to `stdint.h` types; `isize`/`usize` map to `intptr_t`/`uintptr_t` (§10.1) | fixed by spec |
 | C compiler requirement | **Decided: C99.** `stdint.h` fixed-width types and `stdbool.h` (§10.1, §4.1) are both available. The C backend (M8) and foreign declarations (M10.1) must not emit or require C11-only features (`_Static_assert`, `_Generic`, anonymous struct/union members) — tagged unions for enum lowering must be hand-rolled with a discriminant field rather than relying on C11 anonymous unions | fixed — M8/M10.1 must conform |
-| Boehm GC availability | Assumed available on Linux via a distro-provided Boehm GC development package (e.g. `libgc-dev` on Debian/Ubuntu-family systems), for both x86-64 and x86; the manifest's native-library/link-option mechanism (§2.3, §10.1) is the same path used to supply it | target OS/arch fixed above; exact vendoring/discovery mechanism (system package vs. bundled build) is still an M10 implementation detail |
+| Boehm GC availability | Assumed available on Linux via a distro-provided Boehm GC development package (e.g. `libgc-dev` on Debian/Ubuntu-family systems), for both x86-64 and x86; the manifest's native-library/link-option mechanism (§2.3, §10.1) is the same path used to supply it | target OS/arch fixed above. **Decided (M10): the dependency is demand-driven** — `ManagedMemoryStrategy` contributes its native libraries, and the backend engages the collector prelude, entry-shim initialization, and link inputs only when lowering produced managed storage, so programs needing no managed storage keep a collector-free translation unit. System package vs. bundled build remains open |
 | Native library supply | Declared in `elamite.toml` (native libraries, link options); consumed without executing code (§2.3, §10.1) | fixed by spec, mechanism unbuilt |
 
 ## 14. Command-level outcomes
@@ -453,7 +456,8 @@ Every construct in `examples/spec_demo.elx` maps to a section of this ledger:
 | `import`, `mod`, `pub`, re-exports, `type` alias | §2.3, §4.4 |
 | `Point(Default, PartialEq)`, `MyType`/`MyBetterType` derive examples | §4.2, §4.3 |
 | `Session` — five `self` receiver forms, `Close`, `Toggle` trait | §4.2, §6, §8 |
-| `Packet`, `DemoResourceState`, `DemoResource`, `use_demo_resource` (`defer`) | §4.2, §8 |
+| `Packet`, `DemoResourceState`, `DemoResource`, `use_demo_resource` (`defer call`), `use_demo_resource_block` (`defer:` block) | §4.2, §8 |
+| `Address`, `Account` — reference into an aggregate observing container replacement and caller-visible mutation | §3.2, §19 |
 | `IntTransform`, `apply_offset`, `increment`, `Transform`/`AddOffset`, `apply_transform` | §5, §6 |
 | `Chain[T]`, `chain_length` | §4.2, §6, §9 |
 | `State` enum | §4.4 |
@@ -478,8 +482,9 @@ Per `IMPL.md`:
   reconciled.
 - [x] **`I-017` can be closed without claiming the compiler is
   implemented.** This ledger is that closure artifact; `ISSUES.md` is updated
-  accordingly. No row above claims anything is built — every row's status is
-  "planned."
+  accordingly. When these criteria were met no row claimed anything was built —
+  every row's status was "planned." Rows now reach "complete" only as their
+  owning milestone's status changes in `IMPL.md`; see §0.
 
 Both tooling gaps surfaced by this exercise are now decided (§13): the C
 compiler requirement is **C99**, and the supported OS/architecture matrix is
@@ -804,3 +809,89 @@ ledger follows the same split.
   at all and matches that rule directly; `slotmap` or `id-arena` remain
   available if generational-key safety is ever worth the dependency, but
   aren't required.
+
+## 19. Reference storage model (M10)
+
+An implementation decision on the same footing as §13/§14/§18. `SPEC.md` §3.2
+fixes the observable behavior; this section records how the backend achieves
+it and why an earlier, more elaborate model was abandoned.
+
+### 19.1 The rule
+
+A reference names storage. Every assignment that overwrites that storage is
+observable through the reference, whether the reference was formed from a
+binding (`&point`) or from a path into an aggregate (`&user.address.city`).
+Mutation through a reference into an aggregate is visible in the container for
+the same reason: both name the same storage.
+
+This is exactly the C and Go model. `&user.address.city` is a pointer into the
+container's storage, and replacing the container writes through it.
+
+### 19.2 Implementation
+
+- `&T` and `&var T` both lower to `T *`. `Mutability` is compile-time only.
+  A single C representation is required by function references (M11),
+  `&Trait` dispatch (M13), and the public C ABI and callbacks (M17), all of
+  which need a `&T` parameter to accept any `&T` regardless of provenance.
+- Struct layouts stay flat. No field is indirected to satisfy reference
+  semantics, so a nominal type's C layout does not depend on what any other
+  part of the program does with it.
+- Promotion is per-function and conservative: a local whose address is taken
+  is promoted to managed storage, whole. Taking a reference into an aggregate
+  promotes the containing local. Precise escape analysis stays an M20
+  optimization, per `IMPL.md` Milestone 10.
+- The collector must trace **interior pointers**, since a reference into an
+  aggregate points inside a managed allocation rather than at its base. Boehm
+  provides this (`GC_ALL_INTERIOR_POINTERS`, enabled by default in most
+  builds; the backend sets it explicitly rather than relying on the build).
+- A reference into an aggregate therefore keeps its **whole container**
+  reachable, not merely the selected subvalue — the same reachability behavior
+  as Go.
+- Milestone 9's copy helpers are unaffected. Flat layouts mean an ordinary
+  aggregate copy stays a recursive value copy, and references inside a copied
+  aggregate keep their identity exactly as M9 specified.
+
+### 19.3 Root retention
+
+Boehm scans the C stack and machine registers conservatively, so a promoted
+cell's pointer — an ordinary C local in the generated function — is already a
+root for as long as its frame is live. The implementation therefore emits no
+explicit root registration for locals, parameters, or temporaries, and no
+keep-alive barriers: there is no language-level strong path that the C
+compiler could shorten below what the conservative scan already covers.
+
+`RegisterRoot`, `UnregisterRoot`, and `KeepAlive` remain defined on
+`ManagedMemoryStrategy` and unused. They are needed when storage outlives a
+scanned frame or is reachable only from foreign code — Milestone 17's foreign
+roots and callbacks — and a strategy that is not conservatively stack-scanning
+would need them earlier. Emitting no-op barriers now would add noise without
+adding a guarantee.
+
+Allocation failure calls `el_out_of_memory`, which requests a full collection
+through the strategy and then terminates, without running deferred cleanup
+(`SPEC.md` §9).
+
+### 19.4 Rejected: subvalue targeting with field boxing
+
+`SPEC.md` §3.2 originally stated that a reference into a nested aggregate
+targeted the selected subvalue and was *not* rebased by a later replacement of
+its container, with a worked example printing the former value. Satisfying that
+alongside "a binding reference observes reassignment" is impossible for a
+single contiguous cell, and the only resolution preserving one C representation
+for `&T` was to box every address-taken field into its own managed cell.
+
+That was rejected with the rule itself under
+[I-018](ISSUES.md#i-018-reference-target-model-for-nested-aggregates). Boxing
+would have made a nominal type's C layout depend on a whole-program analysis,
+and would have required M9's copy helpers to deep-copy through each box to
+preserve independence — a silent-aliasing failure mode, since a copy that
+duplicated the pointer would produce two values that are supposed to be
+independent but share a subvalue. The cost bought behavior that no C or Go
+programmer would predict.
+
+Two alternatives were considered and rejected on their own terms: *generation
+cells* (allocate a fresh cell per assignment, with binding references pointing
+at the binding slot) split `&T` into two incompatible C representations
+(`T **` and `T *`), breaking M11/M13/M17; and *copy on reference formation*
+broke `&var`'s caller-visible mutation, since writes would land in a private
+copy the container never sees.

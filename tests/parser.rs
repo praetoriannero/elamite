@@ -96,10 +96,10 @@ pub enum Message:
     Write { text: String }
 
 trait Show[T]:
-    fn show(self: &Self, value: &dyn T) -> str
+    fn show(self: &Self, value: &T) -> str
 
 impl[T: Show] Show[T] for Pair[T]:
-    fn show(self: &Self, value: &dyn T) -> str:
+    fn show(self: &Self, value: &T) -> str:
         return "pair"
 
 extern "C":
@@ -125,6 +125,9 @@ fn snapshots_statements_expressions_and_patterns() {
     var values = @vec[1, 2, 3]
     values[0] += -1 + 2 * 3
     defer values.clear()
+    defer:
+        let pending = 1
+        values.clear()
     if value != null && values[0] > 0:
         pass
     else:
@@ -171,7 +174,7 @@ fn parses_each_initial_type_form() {
         "&fn(i32) -> bool",
         "&unsafe fn(*i32) -> &i32",
         "extern \"C\" fn(*u8) -> i32",
-        "&dyn Display",
+        "&Display",
     ];
 
     for ty in cases {
@@ -318,7 +321,7 @@ fn reports_required_invalid_surface_forms_at_source_spans() {
         (
             "non-call defer",
             "fn bad():\n    defer resource\n",
-            "`defer` requires a single function or method call",
+            "`defer` requires a single function or method call, or a `defer:` block",
         ),
         (
             "empty derive list",

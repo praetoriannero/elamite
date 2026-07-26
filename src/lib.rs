@@ -11,6 +11,7 @@ pub mod manifest;
 pub mod memory;
 pub mod package;
 pub mod parser;
+pub mod promotion;
 pub mod resolution;
 pub mod source;
 pub mod types;

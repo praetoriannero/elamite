@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use elamite::backend::Target;
+use elamite::backend::{COptions, Target, emit_c};
 use elamite::diagnostics::{Category, Diagnostic};
 use elamite::driver::{BuildOptions, Optimization, build, compile, run};
 use elamite::package::PackageGraph;
@@ -756,4 +756,291 @@ fn reports_a_toolchain_that_omits_its_promised_artifact() {
         diagnostic.category == Category::Toolchain && diagnostic.message.contains("did not create")
     }));
     assert!(output.join("backend_test.c").is_file());
+}
+
+/// Whether a C toolchain can compile and link against the Boehm collector.
+/// Only the runtime shared object is commonly installed; the headers and the
+/// link archive come from a separate development package, so this probes the
+/// real toolchain instead of guessing from a file path.
+fn libgc_available() -> bool {
+    let tree = TestTree::new("libgc-probe");
+    let probe = tree.root.join("probe.c");
+    let binary = tree.root.join("probe");
+    if fs::write(
+        &probe,
+        "#include <gc.h>\nint main(void) { GC_INIT(); return 0; }\n",
+    )
+    .is_err()
+    {
+        return false;
+    }
+    Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .arg("-std=c99")
+        .arg(&probe)
+        .arg("-o")
+        .arg(&binary)
+        .arg("-lgc")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[test]
+fn programs_without_managed_storage_carry_no_collector_dependency() {
+    let tree = TestTree::new("no-managed-memory");
+    tree.executable("fn main() -> ():\n    println(\"ok\")\n");
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+
+    assert!(!compilation.control_flow_ir.requires_managed_memory);
+    assert!(
+        compilation.native_libraries.is_empty(),
+        "a program with no managed storage must not request runtime libraries"
+    );
+    assert!(!compilation.generated_c.contains("gc.h"));
+    assert!(!compilation.generated_c.contains("GC_INIT"));
+}
+
+#[test]
+fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
+    let tree = TestTree::new("managed-memory");
+    tree.executable("fn main() -> ():\n    println(\"ok\")\n");
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+
+    // Promotion analysis sets this flag from Phase 1 onward; forcing it here
+    // exercises the prelude, entry-shim initialization, and link inputs before
+    // any lowering produces managed storage.
+    let mut program = compilation.control_flow_ir;
+    program.requires_managed_memory = true;
+    let emitted = emit_c(
+        &program,
+        &compilation.resolved,
+        &compilation.typed,
+        &sources,
+        &COptions {
+            target: Target::X86_64,
+            entry: compilation.entry,
+        },
+    );
+
+    assert!(
+        emitted.diagnostics.is_empty(),
+        "{}",
+        render(&sources, &emitted.diagnostics)
+    );
+    assert_eq!(emitted.native_libraries, vec!["gc".to_string()]);
+    assert!(emitted.source.contains("#include <gc.h>"));
+    let initialization = emitted
+        .source
+        .find("GC_INIT();")
+        .expect("the entry shim initializes the collector");
+    let entry = emitted
+        .source
+        .find("int main(void) {")
+        .expect("an executable emits an entry shim");
+    assert!(
+        initialization > entry,
+        "the collector must be initialized inside the entry shim"
+    );
+
+    if !libgc_available() {
+        eprintln!("skipping libgc link verification: no gc.h or link archive available");
+        return;
+    }
+    let c_path = tree.root.join("managed.c");
+    let binary = tree.root.join("managed");
+    fs::write(&c_path, &emitted.source).expect("write generated C");
+    let output = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .arg("-std=c99")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-Werror")
+        .arg("-m64")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&binary)
+        .args(
+            emitted
+                .native_libraries
+                .iter()
+                .map(|library| format!("-l{library}")),
+        )
+        .output()
+        .expect("invoke the C compiler");
+    assert!(
+        output.status.success(),
+        "collector-enabled C must compile and link:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let executed = Command::new(&binary).output().expect("run linked program");
+    assert!(executed.status.success());
+    assert_eq!(String::from_utf8_lossy(&executed.stdout), "ok\n");
+}
+
+#[test]
+fn references_observe_storage_through_binding_and_path() {
+    // SPEC 3.2 / I-018: a reference names storage. A binding reference sees
+    // reassignment, and a reference into an aggregate sees replacement of its
+    // container, exactly as in C and Go.
+    let source = r#"
+struct Address:
+    city: i32
+
+struct Account:
+    id: i32
+    address: Address
+
+fn main() -> ():
+    var point = Address { city: 0 }
+    let view = &point
+    point = Address { city: 1 }
+    println(f"binding={view.city}")
+
+    var account = Account { id: 1, address: Address { city: 10 } }
+    let city = &var account.address.city
+    println(f"before={*city}")
+    account = Account { id: 2, address: Address { city: 20 } }
+    println(f"after={*city}")
+    *city = 30
+    println(f"container={account.address.city}")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(
+            stdout, "binding=1\nbefore=10\nafter=20\ncontainer=30\n",
+            "optimization must not change reference behavior"
+        );
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
+fn mutable_aliases_apply_sequential_writes() {
+    // SPEC 3.2: references are not exclusive; later writes replace earlier
+    // ones. This is the specification's own `count == 2` example.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn main() -> ():
+    var count = 0
+    let first = &var count
+    let second = &var count
+    *first = 1
+    *second = *second + 1
+    println(f"{count}")
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(stdout, "2\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn a_reference_to_a_local_survives_its_frame() {
+    // SPEC 3.2: returning a reference to a local is valid because the local is
+    // promoted to managed storage when its address escapes.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn answer() -> &i32:
+    let value = 42
+    return &value
+
+struct Boxed:
+    value: i32
+
+fn literal() -> &Boxed:
+    // Only a *composite* literal is addressable; `&7` is correctly rejected.
+    let boxed = &Boxed { value: 7 }
+    return boxed
+
+fn main() -> ():
+    let escaped = answer()
+    let composite = literal()
+    println(f"{*escaped},{composite.value}")
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "42,7\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn an_interior_reference_keeps_its_whole_container_reachable() {
+    // LEDGER 19: a reference into an aggregate points inside a managed
+    // allocation, so the collector must trace interior pointers and keep the
+    // whole container alive. Allocation churn between the reference and its
+    // use forces real collection cycles in between.
+    if !libgc_available() {
+        eprintln!("skipping: libgc unavailable");
+        return;
+    }
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Address:
+    city: i32
+
+struct Account:
+    id: i32
+    address: Address
+
+fn churn(rounds: i32) -> i32:
+    var index = 0
+    var total = 0
+    while index < rounds:
+        let garbage = &Account { id: index, address: Address { city: index } }
+        total += garbage.id
+        index += 1
+    return total
+
+fn main() -> ():
+    var account = Account { id: 1, address: Address { city: 4242 } }
+    let city = &account.address.city
+    let ignored = churn(2000)
+    println(f"{*city},{ignored}")
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(
+        stdout, "4242,1999000\n",
+        "the container must survive collection while only its interior is referenced"
+    );
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn sustained_allocation_churn_is_reclaimed() {
+    // IMPL Milestone 10: collection is best-effort and its *timing* is not a
+    // conformance requirement, so this asserts only that a program allocating
+    // far more than it retains completes normally rather than exhausting
+    // memory.
+    if !libgc_available() {
+        eprintln!("skipping: libgc unavailable");
+        return;
+    }
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Node:
+    value: i32
+
+fn main() -> ():
+    var index = 0
+    var live = 0
+    while index < 300000:
+        let node = &Node { value: index }
+        live = node.value
+        index += 1
+    println(f"{live}")
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "299999\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
 }

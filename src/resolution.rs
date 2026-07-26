@@ -243,7 +243,6 @@ enum PathPart {
     Root,
     SelfModule,
     Super,
-    Standard,
     Name(Symbol),
 }
 
@@ -1377,14 +1376,6 @@ impl<'a> Resolver<'a> {
                     false,
                 )
             }
-            PathPart::Standard => (
-                LookupResult {
-                    item: ItemId::Module(self.program.std_root),
-                    provenance: Vec::new(),
-                },
-                1,
-                true,
-            ),
             PathPart::Name(name) => {
                 if let Some(package) = &from_package {
                     if let Some(dependency) = self
@@ -1412,6 +1403,8 @@ impl<'a> Resolver<'a> {
                             1,
                             false,
                         )
+                    } else if let Some(found) = self.standard_package_root(name) {
+                        (found, 1, true)
                     } else {
                         self.unresolved_name(name, use_span);
                         return None;
@@ -1419,6 +1412,8 @@ impl<'a> Resolver<'a> {
                 } else if let Some(found) =
                     self.lookup_module_name(from_module, name, false, use_span)
                 {
+                    (found, 1, true)
+                } else if let Some(found) = self.standard_package_root(name) {
                     (found, 1, true)
                 } else {
                     self.unresolved_name(name, use_span);
@@ -1567,6 +1562,19 @@ impl<'a> Resolver<'a> {
                 .symbol_text(self.program.builtins[builtin.index()].name)
                 .to_string(),
         }
+    }
+
+    /// Resolves the name `std` to the standard-library package root.
+    ///
+    /// `std` is an ordinary name rather than a keyword (SPEC 2.2), so this is
+    /// consulted only after lexical bindings, module declarations, imports,
+    /// dependency aliases, and prelude names have all failed. A module that
+    /// declares or imports its own `std` therefore shadows this.
+    fn standard_package_root(&self, name: Symbol) -> Option<LookupResult> {
+        (self.program.symbol_text(name) == "std").then(|| LookupResult {
+            item: ItemId::Module(self.program.std_root),
+            provenance: Vec::new(),
+        })
     }
 
     fn unresolved_name(&mut self, name: Symbol, span: Span) {
@@ -1752,7 +1760,6 @@ impl<'a> Resolver<'a> {
                                     | Keyword::SelfValue
                                     | Keyword::SelfType
                                     | Keyword::Super
-                                    | Keyword::Std
                             )
                             | TokenKind::Dot
                     ) =>
@@ -1785,7 +1792,6 @@ impl<'a> Resolver<'a> {
                                     | Keyword::SelfValue
                                     | Keyword::SelfType
                                     | Keyword::Super
-                                    | Keyword::Std
                             )
                             | TokenKind::Dot
                     ) =>
@@ -2015,10 +2021,20 @@ impl<'a> Resolver<'a> {
             }
             SyntaxKind::AssignmentStatement
             | SyntaxKind::ExpressionStatement
-            | SyntaxKind::ReturnStatement
-            | SyntaxKind::DeferStatement => {
+            | SyntaxKind::ReturnStatement => {
                 for child in child_nodes(node) {
                     self.resolve_expression(child, module, generics, scopes, self_allowed);
+                }
+            }
+            // `defer:` defers a block, whose body is its own lexical scope;
+            // `defer call` defers one call expression.
+            SyntaxKind::DeferStatement => {
+                for child in child_nodes(node) {
+                    if child.kind == SyntaxKind::Block {
+                        self.resolve_block(child, module, generics, scopes, self_allowed, true);
+                    } else {
+                        self.resolve_expression(child, module, generics, scopes, self_allowed);
+                    }
                 }
             }
             SyntaxKind::BreakStatement
@@ -2319,7 +2335,6 @@ impl<'a> Resolver<'a> {
             TokenKind::Keyword(Keyword::SelfType) => (self.intern("Self"), Some(Keyword::SelfType)),
             TokenKind::Keyword(Keyword::Root) => (self.intern("root"), Some(Keyword::Root)),
             TokenKind::Keyword(Keyword::Super) => (self.intern("super"), Some(Keyword::Super)),
-            TokenKind::Keyword(Keyword::Std) => (self.intern("std"), Some(Keyword::Std)),
             _ => return None,
         };
         if special == Some(Keyword::SelfValue) {
@@ -2360,9 +2375,6 @@ impl<'a> Resolver<'a> {
             Some(Keyword::Super) => {
                 self.resolve_module_path(module, &[PathPart::Super], token.span)
             }
-            Some(Keyword::Std) => {
-                self.resolve_module_path(module, &[PathPart::Standard], token.span)
-            }
             _ => {
                 let package = self.program.modules[module.index()].package.clone();
                 if let Some(package) = package {
@@ -2387,9 +2399,11 @@ impl<'a> Resolver<'a> {
                                 item: ItemId::Builtin(builtin),
                                 provenance: Vec::new(),
                             })
+                            .or_else(|| self.standard_package_root(name))
                     }
                 } else {
                     self.lookup_module_name(module, name, false, token.span)
+                        .or_else(|| self.standard_package_root(name))
                 }
             }
         };
@@ -2797,7 +2811,6 @@ fn path_parts_from_tokens(tokens: &[Token], symbols: &mut Rodeo<Spur>) -> Vec<Pa
             TokenKind::Keyword(Keyword::Root) => Some(PathPart::Root),
             TokenKind::Keyword(Keyword::SelfValue) => Some(PathPart::SelfModule),
             TokenKind::Keyword(Keyword::Super) => Some(PathPart::Super),
-            TokenKind::Keyword(Keyword::Std) => Some(PathPart::Standard),
             TokenKind::Keyword(Keyword::SelfType) => {
                 Some(PathPart::Name(Symbol(symbols.get_or_intern("Self"))))
             }
@@ -2895,7 +2908,6 @@ fn import_path(
                     Keyword::Root => PathPart::Root,
                     Keyword::SelfValue => PathPart::SelfModule,
                     Keyword::Super => PathPart::Super,
-                    Keyword::Std => PathPart::Standard,
                     _ => continue,
                 };
                 parts.push(part);
@@ -2903,7 +2915,6 @@ fn import_path(
                     Keyword::Root => "root",
                     Keyword::SelfValue => "self",
                     Keyword::Super => "super",
-                    Keyword::Std => "std",
                     _ => unreachable!(),
                 };
                 last = Some((Symbol(symbols.get_or_intern(text)), token.span));

@@ -381,6 +381,48 @@ fn main() -> ():
 }
 
 #[test]
+fn rejects_safe_references_to_collection_interiors() {
+    // SPEC 3.2: a collection interior is an assignable place but is never a
+    // safe-reference target, for either reference form. A mutable collection
+    // path keeps element assignment valid.
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    var numbers = @vec[1, 2, 3]
+    numbers[0] = 4
+    println(f"{numbers[0]}")
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var numbers = @vec[1, 2, 3]
+    let element = &numbers[0]
+    println(f"{*element}")
+"#,
+        Category::Place,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var numbers = @vec[1, 2, 3]
+    let element = &var numbers[0]
+    println(f"{*element}")
+"#,
+        Category::Place,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var array = [1, 2, 3]
+    let element = &var array[0]
+    println(f"{*element}")
+"#,
+        Category::Place,
+    );
+}
+
+#[test]
 fn checks_struct_containment_cycles() {
     assert_no_diagnostics(
         r#"
@@ -887,5 +929,122 @@ fn describe(pair: (i32, i32)) -> str:
             return "origin"
 "#,
         Category::Pattern,
+    );
+}
+
+#[test]
+fn forms_trait_objects_only_through_an_explicit_conversion() {
+    // SPEC 6: `&Trait`/`&var Trait` denote a trait object, and a concrete
+    // reference becomes one only through an explicit `as` conversion.
+    assert_no_diagnostics(
+        r#"
+trait Toggle:
+    fn status(self: &Self) -> str
+
+struct Session:
+    active: bool
+
+impl Toggle for Session:
+    fn status(self: &Self) -> str:
+        return "on"
+
+fn describe(toggle: &Toggle) -> str:
+    return toggle.status()
+
+fn main() -> ():
+    let session = Session { active: true }
+    let session_ref = &session
+    println(describe(session_ref as &Toggle))
+"#,
+    );
+    // Mutability must be preserved across the conversion.
+    assert_has_category(
+        r#"
+trait Toggle:
+    fn status(self: &Self) -> str
+
+struct Session:
+    active: bool
+
+impl Toggle for Session:
+    fn status(self: &Self) -> str:
+        return "on"
+
+fn main() -> ():
+    var session = Session { active: true }
+    let session_ref = &session
+    let toggle = session_ref as &var Toggle
+    println(toggle.status())
+"#,
+        Category::ExpressionType,
+    );
+    // A trait object is formed only from a safe reference.
+    assert_has_category(
+        r#"
+trait Toggle:
+    fn status(self: &Self) -> str
+
+fn main() -> ():
+    let value = 1
+    let toggle = value as &Toggle
+    println(f"{value}")
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
+fn defers_a_block_of_statements_under_control_flow_restrictions() {
+    // SPEC 8: `defer:` defers several statements as one registration. Its body
+    // is a lexical scope and cannot redirect control, because it runs while the
+    // enclosing scope is already exiting.
+    assert_no_diagnostics(
+        r#"
+fn release() -> ():
+    pass
+
+fn log(value: i32) -> ():
+    pass
+
+fn main() -> ():
+    var index = 0
+    defer:
+        let count = 2
+        if count > 1:
+            log(count)
+        release()
+    defer release()
+    while index < 3:
+        defer release()
+        index += 1
+    unsafe:
+        release()
+"#,
+    );
+    for rejected in [
+        "            break\n",
+        "            continue\n",
+        "            return\n",
+        "            defer release()\n",
+        "            unsafe:\n                release()\n",
+    ] {
+        let source = format!(
+            "fn release() -> ():\n    pass\n\nfn main() -> ():\n    var index = 0\n\
+             \x20\x20\x20\x20while index < 3:\n        defer:\n{rejected}\
+             \x20\x20\x20\x20\x20\x20\x20\x20index += 1\n"
+        );
+        assert_has_category(&source, Category::ControlFlow);
+    }
+    // A `defer` statement may not appear inside an `unsafe` block.
+    assert_has_category(
+        r#"
+fn release() -> ():
+    pass
+
+fn main() -> ():
+    unsafe:
+        defer release()
+"#,
+        Category::ControlFlow,
     );
 }

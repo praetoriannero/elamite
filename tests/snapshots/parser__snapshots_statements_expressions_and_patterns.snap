@@ -2,8 +2,8 @@
 source: tests/parser.rs
 expression: render(&output.tree)
 ---
-File @ 0..652
-  Function @ 0..652
+File @ 0..710
+  Function @ 0..710
     Keyword(Fn)
     Identifier("exercise")
     Parameters @ 11..47
@@ -28,7 +28,7 @@ File @ 0..652
             Identifier("i32")
           RBracket
       RParen
-    Block @ 47..652
+    Block @ 47..710
       Colon
       LetStatement @ 53..72
         Keyword(Let)
@@ -90,216 +90,235 @@ File @ 0..652
             Identifier("clear")
           LParen
           RParen
-      IfStatement @ 160..276
+      DeferStatement @ 160..218
+        Keyword(Defer)
+        Block @ 165..218
+          Colon
+          LetStatement @ 175..191
+            Keyword(Let)
+            Identifier("pending")
+            Assign
+            LiteralExpression @ 189..190
+              IntegerLiteral { raw: "1", radix: 10, suffix: None }
+          ExpressionStatement @ 199..214
+            CallExpression @ 199..213
+              MemberExpression @ 199..211
+                NameExpression @ 199..205
+                  Identifier("values")
+                Dot
+                Identifier("clear")
+              LParen
+              RParen
+      IfStatement @ 218..334
         Keyword(If)
-        BinaryExpression @ 163..193
-          BinaryExpression @ 163..176
-            NameExpression @ 163..168
+        BinaryExpression @ 221..251
+          BinaryExpression @ 221..234
+            NameExpression @ 221..226
               Identifier("value")
             NotEq
-            LiteralExpression @ 172..176
+            LiteralExpression @ 230..234
               Keyword(Null)
           AndAnd
-          BinaryExpression @ 180..193
-            BracketExpression @ 180..189
-              NameExpression @ 180..186
+          BinaryExpression @ 238..251
+            BracketExpression @ 238..247
+              NameExpression @ 238..244
                 Identifier("values")
               LBracket
-              LiteralExpression @ 187..188
+              LiteralExpression @ 245..246
                 IntegerLiteral { raw: "0", radix: 10, suffix: None }
               RBracket
             Greater
-            LiteralExpression @ 192..193
+            LiteralExpression @ 250..251
               IntegerLiteral { raw: "0", radix: 10, suffix: None }
-        Block @ 193..212
+        Block @ 251..270
           Colon
-          PassStatement @ 203..208
+          PassStatement @ 261..266
             Keyword(Pass)
-        ElseClause @ 212..276
+        ElseClause @ 270..334
           Keyword(Else)
-          Block @ 216..276
+          Block @ 274..334
             Colon
-            UnsafeBlock @ 226..276
+            UnsafeBlock @ 284..334
               Keyword(Unsafe)
-              Block @ 232..276
+              Block @ 290..334
                 Colon
-                AssignmentStatement @ 246..272
-                  BracketExpression @ 246..255
-                    NameExpression @ 246..252
+                AssignmentStatement @ 304..330
+                  BracketExpression @ 304..313
+                    NameExpression @ 304..310
                       Identifier("values")
                     LBracket
-                    LiteralExpression @ 253..254
+                    LiteralExpression @ 311..312
                       IntegerLiteral { raw: "0", radix: 10, suffix: None }
                     RBracket
                   Assign
-                  UnaryExpression @ 258..271
+                  UnaryExpression @ 316..329
                     Star
-                    ParenthesizedExpression @ 259..271
+                    ParenthesizedExpression @ 317..329
                       LParen
-                      UnaryExpression @ 260..270
+                      UnaryExpression @ 318..328
                         Amp
-                        BracketExpression @ 261..270
-                          NameExpression @ 261..267
+                        BracketExpression @ 319..328
+                          NameExpression @ 319..325
                             Identifier("values")
                           LBracket
-                          LiteralExpression @ 268..269
+                          LiteralExpression @ 326..327
                             IntegerLiteral { raw: "0", radix: 10, suffix: None }
                           RBracket
                       RParen
-      MatchStatement @ 276..457
+      MatchStatement @ 334..515
         Keyword(Match)
-        NameExpression @ 282..287
+        NameExpression @ 340..345
           Identifier("value")
-        Block @ 287..457
+        Block @ 345..515
           Colon
-          MatchArm @ 297..383
-            Pattern @ 297..331
-              VariantPattern @ 297..331
+          MatchArm @ 355..441
+            Pattern @ 355..389
+              VariantPattern @ 355..389
                 Identifier("Option")
                 Dot
                 Identifier("Some")
                 LParen
-                Pattern @ 309..330
-                  RecordPattern @ 309..330
+                Pattern @ 367..388
+                  RecordPattern @ 367..388
                     Identifier("Point")
                     LBrace
-                    PatternField @ 317..318
+                    PatternField @ 375..376
                       Identifier("x")
                     Comma
-                    PatternField @ 320..324
+                    PatternField @ 378..382
                       Identifier("y")
                       Colon
-                      Pattern @ 323..324
-                        Pattern @ 323..324
+                      Pattern @ 381..382
+                        Pattern @ 381..382
                           IntegerLiteral { raw: "0", radix: 10, suffix: None }
                     Comma
-                    PatternField @ 326..328
+                    PatternField @ 384..386
                       DotDot
                     RBrace
                 RParen
-            Guard @ 332..340
+            Guard @ 390..398
               Keyword(If)
-              BinaryExpression @ 335..340
-                NameExpression @ 335..336
+              BinaryExpression @ 393..398
+                NameExpression @ 393..394
                   Identifier("x")
                 Greater
-                LiteralExpression @ 339..340
+                LiteralExpression @ 397..398
                   IntegerLiteral { raw: "0", radix: 10, suffix: None }
-            Block @ 340..383
+            Block @ 398..441
               Colon
-              ReturnStatement @ 354..375
+              ReturnStatement @ 412..433
                 Keyword(Return)
-                TryExpression @ 361..374
-                  CallExpression @ 361..373
-                    MemberExpression @ 361..370
-                      NameExpression @ 361..367
+                TryExpression @ 419..432
+                  CallExpression @ 419..431
+                    MemberExpression @ 419..428
+                      NameExpression @ 419..425
                         Identifier("Result")
                       Dot
                       Identifier("Ok")
                     LParen
-                    NameExpression @ 371..372
+                    NameExpression @ 429..430
                       Identifier("x")
                     RParen
                   Question
-          MatchArm @ 383..432
-            AlternativePattern @ 383..401
-              Pattern @ 383..394
+          MatchArm @ 441..490
+            AlternativePattern @ 441..459
+              Pattern @ 441..452
                 Identifier("Option")
                 Dot
                 Identifier("None")
               Pipe
-              Pattern @ 397..401
+              Pattern @ 455..459
                 Keyword(Null)
-            Block @ 401..432
+            Block @ 459..490
               Colon
-              ContinueStatement @ 415..424
+              ContinueStatement @ 473..482
                 Keyword(Continue)
-          MatchArm @ 432..457
-            Pattern @ 432..433
-              Pattern @ 432..433
+          MatchArm @ 490..515
+            Pattern @ 490..491
+              Pattern @ 490..491
                 Identifier("_")
-            Block @ 433..457
+            Block @ 491..515
               Colon
-              BreakStatement @ 447..453
+              BreakStatement @ 505..511
                 Keyword(Break)
-      ForStatement @ 457..515
+      ForStatement @ 515..573
         Keyword(For)
         Identifier("item")
         Keyword(In)
-        NameExpression @ 469..474
+        NameExpression @ 527..532
           Identifier("items")
-        Block @ 474..515
+        Block @ 532..573
           Colon
-          ExpressionStatement @ 484..511
-            CallExpression @ 484..510
-              MemberExpression @ 484..497
-                NameExpression @ 484..490
+          ExpressionStatement @ 542..569
+            CallExpression @ 542..568
+              MemberExpression @ 542..555
+                NameExpression @ 542..548
                   Identifier("values")
                 Dot
                 Identifier("append")
               LParen
-              CastExpression @ 498..509
-                NameExpression @ 498..502
+              CastExpression @ 556..567
+                NameExpression @ 556..560
                   Identifier("item")
                 Keyword(As)
-                Type @ 506..509
+                Type @ 564..567
                   Identifier("i64")
               RParen
-      WhileStatement @ 515..545
+      WhileStatement @ 573..603
         Keyword(While)
-        LiteralExpression @ 521..526
+        LiteralExpression @ 579..584
           Keyword(False)
-        Block @ 526..545
+        Block @ 584..603
           Colon
-          PassStatement @ 536..541
+          PassStatement @ 594..599
             Keyword(Pass)
-      LetStatement @ 545..567
+      LetStatement @ 603..625
         Keyword(Let)
         Identifier("array")
         Assign
-        ArrayExpression @ 557..566
+        ArrayExpression @ 615..624
           LBracket
-          LiteralExpression @ 558..559
+          LiteralExpression @ 616..617
             IntegerLiteral { raw: "1", radix: 10, suffix: None }
           Comma
-          LiteralExpression @ 561..562
+          LiteralExpression @ 619..620
             IntegerLiteral { raw: "2", radix: 10, suffix: None }
           Comma
-          LiteralExpression @ 564..565
+          LiteralExpression @ 622..623
             IntegerLiteral { raw: "3", radix: 10, suffix: None }
           RBracket
-      LetStatement @ 571..596
+      LetStatement @ 629..654
         Keyword(Let)
         Identifier("map")
         Assign
-        MacroExpression @ 581..595
+        MacroExpression @ 639..653
           At
           Identifier("map")
           LBrace
-          LiteralExpression @ 586..591
+          LiteralExpression @ 644..649
             StringLiteral("one")
           Colon
-          LiteralExpression @ 593..594
+          LiteralExpression @ 651..652
             IntegerLiteral { raw: "1", radix: 10, suffix: None }
           RBrace
-      LetStatement @ 600..622
+      LetStatement @ 658..680
         Keyword(Let)
         Identifier("set")
         Assign
-        MacroExpression @ 610..621
+        MacroExpression @ 668..679
           At
           Identifier("set")
           LBrace
-          LiteralExpression @ 615..620
+          LiteralExpression @ 673..678
             StringLiteral("one")
           RBrace
-      ExpressionStatement @ 626..652
-        CallExpression @ 626..651
-          NameExpression @ 626..633
+      ExpressionStatement @ 684..710
+        CallExpression @ 684..709
+          NameExpression @ 684..691
             Identifier("println")
           LParen
-          FormattedStringExpression @ 634..648
-            FormattedString([FormattedSegment { kind: Text("value "), span: Span { file: FileId(0), start: 636, end: 642 } }, FormattedSegment { kind: Expression { source: "tuple", tokens: [Token { kind: Identifier("tuple"), span: Span { file: FileId(0), start: 643, end: 648 } }] }, span: Span { file: FileId(0), start: 643, end: 648 } }])
-            NameExpression @ 643..648
+          FormattedStringExpression @ 692..706
+            FormattedString([FormattedSegment { kind: Text("value "), span: Span { file: FileId(0), start: 694, end: 700 } }, FormattedSegment { kind: Expression { source: "tuple", tokens: [Token { kind: Identifier("tuple"), span: Span { file: FileId(0), start: 701, end: 706 } }] }, span: Span { file: FileId(0), start: 701, end: 706 } }])
+            NameExpression @ 701..706
               Identifier("tuple")
           RParen

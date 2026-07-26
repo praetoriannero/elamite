@@ -564,3 +564,64 @@ fn canonicalizes_the_authoritative_demonstration() {
     );
     assert!(typed.program.types.len() > 30);
 }
+
+#[test]
+fn a_bare_trait_name_is_a_type_only_where_a_trait_is_expected() {
+    // SPEC 6: a trait has no value representation, so it names a type only as
+    // a reference target, a bound, or an `impl Trait for Type` trait.
+    let accepted = "trait Toggle:\n\
+         \x20\x20\x20\x20fn status(self: &Self) -> str\n\
+         struct Session:\n\
+         \x20\x20\x20\x20active: bool\n\
+         impl Toggle for Session:\n\
+         \x20\x20\x20\x20fn status(self: &Self) -> str:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20return \"on\"\n\
+         fn shared(t: &Toggle) -> ():\n\
+         \x20\x20\x20\x20pass\n\
+         fn mutable(t: &var Toggle) -> ():\n\
+         \x20\x20\x20\x20pass\n\
+         fn bounded[T: Toggle](value: &T) -> ():\n\
+         \x20\x20\x20\x20pass\n";
+    let tree = TestTree::new("trait-position-ok");
+    let package = tree.package("app", "executable", &[], &[("src/main.elx", accepted)]);
+    let (sources, resolved) = resolve_package(&package);
+    let typed = resolve_types(&resolved.program);
+    assert!(
+        typed.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &typed.diagnostics)
+    );
+
+    for (index, value_position) in [
+        "struct Holder:\n\x20\x20\x20\x20field: Toggle\n",
+        "type Alias = Toggle\n",
+        "fn parameter(t: Toggle) -> ():\n\x20\x20\x20\x20pass\n",
+        "fn returns() -> Toggle:\n\x20\x20\x20\x20pass\n",
+        "fn generic_argument(v: Vec[Toggle]) -> ():\n\x20\x20\x20\x20pass\n",
+        "fn raw(t: *Toggle) -> ():\n\x20\x20\x20\x20pass\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = format!(
+            "trait Toggle:\n\x20\x20\x20\x20fn status(self: &Self) -> str\n{value_position}"
+        );
+        let tree = TestTree::new(&format!("trait-position-{index}"));
+        let package = tree.package("app", "executable", &[], &[("src/main.elx", &source)]);
+        let (sources, resolved) = resolve_package(&package);
+        let typed = resolve_types(&resolved.program);
+        let text = diagnostics(&sources, &typed.diagnostics);
+        assert!(
+            typed
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.category == Category::TypeSystem),
+            "{text}"
+        );
+        assert!(
+            text.contains("only behind a safe reference")
+                || text.contains("raw pointer cannot address a trait object"),
+            "expected a bare-trait rejection for `{value_position}`, got:\n{text}"
+        );
+    }
+}
