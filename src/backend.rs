@@ -143,6 +143,10 @@ struct CEmitter<'a> {
     emitting_copy_helpers: BTreeSet<TypeId>,
     emitted_equality_helpers: BTreeSet<TypeId>,
     emitting_equality_helpers: BTreeSet<TypeId>,
+    emitted_ordering_helpers: BTreeSet<TypeId>,
+    emitting_ordering_helpers: BTreeSet<TypeId>,
+    emitted_default_helpers: BTreeSet<TypeId>,
+    emitting_default_helpers: BTreeSet<TypeId>,
     strategy: &'static dyn ManagedMemoryStrategy,
     /// Promoted locals of the function currently being emitted. A promoted
     /// local lives in a managed cell, so every place naming it dereferences
@@ -182,6 +186,10 @@ impl<'a> CEmitter<'a> {
             emitting_copy_helpers: BTreeSet::new(),
             emitted_equality_helpers: BTreeSet::new(),
             emitting_equality_helpers: BTreeSet::new(),
+            emitted_ordering_helpers: BTreeSet::new(),
+            emitting_ordering_helpers: BTreeSet::new(),
+            emitted_default_helpers: BTreeSet::new(),
+            emitting_default_helpers: BTreeSet::new(),
             strategy: default_managed_memory_strategy(),
             promoted: BTreeSet::new(),
         }
@@ -206,7 +214,17 @@ impl<'a> CEmitter<'a> {
                 self.emit_equality_helper(ty, None);
             }
         }
+        for ty in self.ordered_types() {
+            if self.needs_ordering_helper(ty) {
+                self.emit_ordering_helper(ty, None);
+            }
+        }
         self.emit_prototypes();
+        for ty in self.defaulted_types() {
+            if self.needs_default_helper(ty) {
+                self.emit_default_helper(ty, None);
+            }
+        }
         self.emit_vtable_tables();
         for function in &self.program.functions {
             self.emit_function(function);
@@ -722,6 +740,43 @@ impl<'a> CEmitter<'a> {
         types
     }
 
+    /// Operand types of every structural ordering operation in the program.
+    fn ordered_types(&self) -> BTreeSet<TypeId> {
+        let mut types = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        value: Rvalue::CompareOrder { operand_type, .. },
+                        ..
+                    } = instruction
+                    {
+                        types.insert(*operand_type);
+                    }
+                }
+            }
+        }
+        types
+    }
+
+    fn defaulted_types(&self) -> BTreeSet<TypeId> {
+        let mut types = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        value: Rvalue::DefaultValue(ty),
+                        ..
+                    } = instruction
+                    {
+                        types.insert(*ty);
+                    }
+                }
+            }
+        }
+        types
+    }
+
     /// Emits `bool el_eq_T(T, T)` for an aggregate, comparing structurally.
     ///
     /// `SPEC.md` 4.3: derived equality compares components. Reference-like
@@ -853,6 +908,141 @@ impl<'a> CEmitter<'a> {
             TypeKind::Tuple(_) | TypeKind::Array { .. }
         ) || self.structs.contains_key(&ty)
             || self.enums.contains_key(&ty)
+    }
+
+    /// Emits a comparison helper returning -1, 0, 1, or 2 for unordered.
+    ///
+    /// The fourth result preserves IEEE partial ordering when a derived
+    /// aggregate contains a floating-point field. Call sites translate it to
+    /// `false` for all four relational operators.
+    fn emit_ordering_helper(&mut self, ty: TypeId, span: Option<Span>) {
+        let ty = self.resolve_alias(ty);
+        if self.emitted_ordering_helpers.contains(&ty) || !self.emitting_ordering_helpers.insert(ty)
+        {
+            return;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        let mut components = Vec::new();
+        match &kind {
+            TypeKind::Tuple(elements) => components.extend(elements.iter().copied()),
+            TypeKind::Array { element, .. } => components.push(*element),
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    components.extend(structure.fields.iter().map(|(_, _, ty)| *ty));
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
+                    for variant in &enumeration.variants {
+                        components.extend(variant.fields.iter().map(|(_, _, ty)| *ty));
+                    }
+                }
+            }
+            _ => {}
+        }
+        for component in components {
+            if self.needs_ordering_helper(component) {
+                self.emit_ordering_helper(component, span);
+            }
+        }
+        let Some(c_type) = self.c_type(ty, span) else {
+            self.emitting_ordering_helpers.remove(&ty);
+            return;
+        };
+        let name = ordering_helper_name(ty);
+        let mut body = String::from("    int order;\n");
+        let append_component = |body: &mut String, expression: String, indentation: &str| {
+            body.push_str(&format!(
+                "{indentation}order = {expression};\n\
+                     {indentation}if (order != 0) return order;\n"
+            ));
+        };
+        match &kind {
+            TypeKind::Tuple(elements) => {
+                for (index, element) in elements.iter().enumerate() {
+                    let expression = self.component_ordering(
+                        *element,
+                        &format!("a.v{index}"),
+                        &format!("b.v{index}"),
+                    );
+                    append_component(&mut body, expression, "    ");
+                }
+            }
+            TypeKind::Array { element, length } => {
+                body.push_str(&format!(
+                    "    for (uintptr_t i = 0; i < {length}u; ++i) {{\n"
+                ));
+                let expression = self.component_ordering(*element, "a.values[i]", "b.values[i]");
+                append_component(&mut body, expression, "        ");
+                body.push_str("    }\n");
+            }
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    for (field, _, field_type) in &structure.fields {
+                        let member = field_name(*field);
+                        let expression = self.component_ordering(
+                            *field_type,
+                            &format!("a.{member}"),
+                            &format!("b.{member}"),
+                        );
+                        append_component(&mut body, expression, "    ");
+                    }
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
+                    body.push_str("    if (a.tag != b.tag) return a.tag < b.tag ? -1 : 1;\n");
+                    for variant in &enumeration.variants {
+                        if variant.fields.is_empty() {
+                            continue;
+                        }
+                        let member = variant_member_name(variant.id);
+                        body.push_str(&format!(
+                            "    if (a.tag == UINT32_C({})) {{\n",
+                            variant.id.index()
+                        ));
+                        for (field, _, field_type) in &variant.fields {
+                            let field_member = field_name(*field);
+                            let expression = self.component_ordering(
+                                *field_type,
+                                &format!("a.payload.{member}.{field_member}"),
+                                &format!("b.payload.{member}.{field_member}"),
+                            );
+                            append_component(&mut body, expression, "        ");
+                        }
+                        body.push_str("    }\n");
+                    }
+                }
+            }
+            _ => {}
+        }
+        let _ = writeln!(
+            self.output,
+            "static int {name}({c_type} a, {c_type} b) {{\n{body}    (void)a;\n    \
+             (void)b;\n    return 0;\n}}\n"
+        );
+        self.emitting_ordering_helpers.remove(&ty);
+        self.emitted_ordering_helpers.insert(ty);
+    }
+
+    /// A normalized structural comparison expression: -1, 0, 1, or 2 when
+    /// unordered.
+    fn component_ordering(&mut self, ty: TypeId, left: &str, right: &str) -> String {
+        let ty = self.resolve_alias(ty);
+        if matches!(
+            self.typed.types.expanded_primitive(ty),
+            Some(PrimitiveType::Str | PrimitiveType::String)
+        ) {
+            return format!(
+                "(strcmp({left}, {right}) < 0 ? -1 : \
+                 (strcmp({left}, {right}) > 0 ? 1 : 0))"
+            );
+        }
+        if self.needs_ordering_helper(ty) {
+            return format!("{}({left}, {right})", ordering_helper_name(ty));
+        }
+        format!(
+            "(({left}) < ({right}) ? -1 : (({left}) > ({right}) ? 1 : \
+             (({left}) == ({right}) ? 0 : 2)))"
+        )
+    }
+
+    fn needs_ordering_helper(&self, ty: TypeId) -> bool {
+        self.needs_equality_helper(ty)
     }
 
     fn emit_copy_helper(&mut self, ty: TypeId, span: Option<Span>) {
@@ -1251,6 +1441,27 @@ impl<'a> CEmitter<'a> {
                 let left = temporary_name(*left);
                 let right = temporary_name(*right);
                 self.component_equality(*operand_type, &left, &right)
+            }
+            Rvalue::CompareOrder {
+                operator,
+                left,
+                right,
+                operand_type,
+            } => {
+                let left = temporary_name(*left);
+                let right = temporary_name(*right);
+                let comparison = self.component_ordering(*operand_type, &left, &right);
+                match operator {
+                    BinaryOperator::Less => format!("(({comparison}) == -1)"),
+                    BinaryOperator::LessEqual => {
+                        format!("((({comparison}) == -1) || (({comparison}) == 0))")
+                    }
+                    BinaryOperator::Greater => format!("(({comparison}) == 1)"),
+                    BinaryOperator::GreaterEqual => {
+                        format!("((({comparison}) == 0) || (({comparison}) == 1))")
+                    }
+                    _ => "false".to_string(),
+                }
             }
             Rvalue::Unary {
                 operator, operand, ..
@@ -1755,24 +1966,125 @@ impl<'a> CEmitter<'a> {
         let _ = writeln!(self.output, "    (void){symbol}();\n    return 0;\n}}");
     }
 
-    /// The structural default of `ty` (`SPEC.md` 4.3): zero for numerics,
-    /// `false` for `bool`, U+0000 for `char`, empty text for `str`/`String`,
-    /// `null` for raw pointers, and fieldwise defaults for aggregates.
-    fn default_expression(&mut self, ty: TypeId, span: Span) -> Option<String> {
+    fn emit_default_helper(&mut self, ty: TypeId, span: Option<Span>) {
+        let ty = self.resolve_alias(ty);
+        if self.emitted_default_helpers.contains(&ty) || !self.emitting_default_helpers.insert(ty) {
+            return;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        let components = match &kind {
+            TypeKind::Tuple(elements) => elements.clone(),
+            TypeKind::Array { element, .. } => vec![*element],
+            TypeKind::Nominal { .. } => self
+                .structs
+                .get(&ty)
+                .map(|structure| {
+                    structure
+                        .fields
+                        .iter()
+                        .map(|(_, _, field_type)| *field_type)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        for component in components {
+            if self.needs_default_helper(component) {
+                self.emit_default_helper(component, span);
+            }
+        }
+        let Some(c_type) = self.c_type(ty, span) else {
+            self.emitting_default_helpers.remove(&ty);
+            return;
+        };
+        let name = default_helper_name(ty);
+        let mut body = format!("    {c_type} value = {{0}};\n");
+        match kind {
+            TypeKind::Tuple(elements) => {
+                for (index, element) in elements.into_iter().enumerate() {
+                    if let Some(value) = self.component_default(element, span) {
+                        let _ = writeln!(body, "    value.v{index} = {value};");
+                    }
+                }
+            }
+            TypeKind::Array { element, length } => {
+                if let Some(value) = self.component_default(element, span) {
+                    let _ = writeln!(
+                        body,
+                        "    for (uintptr_t i = 0; i < {length}u; ++i) value.values[i] = {value};"
+                    );
+                }
+            }
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    let fields = structure.fields.clone();
+                    for (field, _, field_type) in fields {
+                        if let Some(value) = self.component_default(field_type, span) {
+                            let _ = writeln!(body, "    value.{} = {value};", field_name(field));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        body.push_str("    return value;\n");
+        let _ = writeln!(self.output, "static {c_type} {name}(void) {{\n{body}}}\n");
+        self.emitting_default_helpers.remove(&ty);
+        self.emitted_default_helpers.insert(ty);
+    }
+
+    fn needs_default_helper(&self, ty: TypeId) -> bool {
         let resolved = self.resolve_alias(ty);
-        let c_type = self.c_type(resolved, Some(span))?;
+        matches!(
+            self.typed.types.kind(resolved),
+            TypeKind::Tuple(_) | TypeKind::Array { .. }
+        ) || match self.typed.types.kind(resolved) {
+            TypeKind::Nominal { identity, .. } => {
+                self.structs.contains_key(&resolved)
+                    && crate::traits::derives(self.resolved, identity.declaration, "Default")
+            }
+            _ => false,
+        }
+    }
+
+    fn component_default(&mut self, ty: TypeId, span: Option<Span>) -> Option<String> {
+        let resolved = self.resolve_alias(ty);
+        if self.needs_default_helper(resolved) {
+            return Some(format!("{}()", default_helper_name(resolved)));
+        }
         match self.typed.types.kind(resolved).clone() {
             TypeKind::Primitive(PrimitiveType::Str) => Some("\"\"".to_string()),
             TypeKind::Primitive(PrimitiveType::String) => Some("el_copy_string(\"\")".to_string()),
             TypeKind::Reference { .. } | TypeKind::Function { .. } => {
                 self.type_error(
                     ty,
-                    Some(span),
+                    span,
                     "a safe reference or function reference has no default",
                 );
                 None
             }
+            TypeKind::Nominal { .. } => {
+                let selected = crate::traits::select_trait_method(
+                    self.resolved,
+                    self.typed,
+                    resolved,
+                    "default",
+                    None,
+                )
+                .ok()
+                .flatten()?;
+                let instance = FunctionInstance {
+                    declaration: selected.declaration,
+                    arguments: selected.arguments,
+                    self_type: selected.self_type,
+                };
+                Some(format!(
+                    "{}()",
+                    mangle_function_instance(self.resolved, &instance)
+                ))
+            }
             _ => {
+                let c_type = self.c_type(resolved, span)?;
                 let zero = zero_value(resolved, &self.typed.types);
                 if zero.starts_with('{') {
                     Some(format!("({c_type}){zero}"))
@@ -1781,6 +2093,13 @@ impl<'a> CEmitter<'a> {
                 }
             }
         }
+    }
+
+    /// The structural default of `ty` (`SPEC.md` 4.3): zero for numerics,
+    /// `false` for `bool`, U+0000 for `char`, empty text for `str`/`String`,
+    /// `null` for raw pointers, and fieldwise defaults for aggregates.
+    fn default_expression(&mut self, ty: TypeId, span: Span) -> Option<String> {
+        self.component_default(ty, Some(span))
     }
 
     /// Whether an allocation of `ty` may contain managed pointers and must
@@ -2009,6 +2328,14 @@ fn cell_name(binding: crate::resolution::LocalBindingId) -> String {
 /// The C struct representing a trait object of one trait.
 fn equality_helper_name(ty: TypeId) -> String {
     format!("el_eq_t{}", ty.index())
+}
+
+fn ordering_helper_name(ty: TypeId) -> String {
+    format!("el_ord_t{}", ty.index())
+}
+
+fn default_helper_name(ty: TypeId) -> String {
+    format!("el_default_t{}", ty.index())
 }
 
 fn object_name(trait_declaration: DeclarationId) -> String {

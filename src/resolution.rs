@@ -285,6 +285,23 @@ impl ResolvedProgram {
         self.symbols.resolve(&symbol.0)
     }
 
+    /// Whether a declaration is directly nameable in a module through that
+    /// module's declarations or imports.
+    #[must_use]
+    pub fn declaration_in_scope(&self, module: ModuleId, declaration: DeclarationId) -> bool {
+        let name = self.declarations[declaration.index()].name;
+        self.modules[module.index()]
+            .namespace
+            .get(&name)
+            .is_some_and(|entry| match entry.target {
+                NamespaceTarget::Item(ItemId::Declaration(candidate)) => candidate == declaration,
+                NamespaceTarget::Import(import) => {
+                    self.imports[import.index()].target == Some(ItemId::Declaration(declaration))
+                }
+                _ => false,
+            })
+    }
+
     /// Returns the source spelling of a compiler-provided name.
     #[must_use]
     pub fn builtin_name(&self, builtin: BuiltinId) -> &str {

@@ -634,7 +634,7 @@ impl<'a> TypedLowerer<'a> {
             };
             let instance = FunctionInstance {
                 declaration: entry.declaration,
-                arguments: Vec::new(),
+                arguments: entry.arguments,
                 self_type: entry.self_type,
             };
             self.enqueue_reachable(instance.clone(), span);
@@ -658,7 +658,8 @@ impl<'a> TypedLowerer<'a> {
                 let trait_type = self.typed.impl_trait_types.get(&block.id).copied()?;
                 let target = self.typed.impl_target_types.get(&block.id).copied()?;
                 (crate::traits::object_trait_of_nominal(self.resolved, self.typed, trait_type)
-                    == Some(trait_declaration))
+                    == Some(trait_declaration)
+                    && !self.typed.types.contains_generic_parameter(target))
                 .then_some(target)
             })
             .collect::<Vec<_>>();
@@ -678,6 +679,74 @@ impl<'a> TypedLowerer<'a> {
             ancestry.push(current.clone());
         }
         self.enqueue(instance, ancestry, span);
+    }
+
+    fn enqueue_default_dependencies(
+        &mut self,
+        ty: TypeId,
+        span: Span,
+        visiting: &mut BTreeSet<TypeId>,
+    ) {
+        let ty = self.concrete_type(ty);
+        if !visiting.insert(ty) {
+            return;
+        }
+        match self.typed.types.kind(ty).clone() {
+            TypeKind::Alias { target, .. } => {
+                self.enqueue_default_dependencies(target, span, visiting);
+            }
+            TypeKind::Tuple(elements) => {
+                for element in elements {
+                    self.enqueue_default_dependencies(element, span, visiting);
+                }
+            }
+            TypeKind::Array { element, .. } => {
+                self.enqueue_default_dependencies(element, span, visiting);
+            }
+            TypeKind::Nominal {
+                identity,
+                arguments,
+            } if crate::traits::derives(self.resolved, identity.declaration, "Default") => {
+                let fields = self
+                    .resolved
+                    .fields
+                    .iter()
+                    .filter(|field| {
+                        field.parent_declaration == identity.declaration
+                            && field.parent_variant.is_none()
+                    })
+                    .map(|field| field.id)
+                    .collect::<Vec<_>>();
+                for field in fields {
+                    if let Some(field_type) =
+                        self.typed
+                            .instantiate_field_type(self.resolved, field, &arguments)
+                    {
+                        self.enqueue_default_dependencies(field_type, span, visiting);
+                    }
+                }
+            }
+            TypeKind::Nominal { .. } => {
+                if let Ok(Some(selected)) = crate::traits::select_trait_method(
+                    self.resolved,
+                    self.typed,
+                    ty,
+                    "default",
+                    None,
+                ) {
+                    self.enqueue_reachable(
+                        FunctionInstance {
+                            declaration: selected.declaration,
+                            arguments: selected.arguments,
+                            self_type: selected.self_type,
+                        },
+                        span,
+                    );
+                }
+            }
+            _ => {}
+        }
+        visiting.remove(&ty);
     }
 
     fn collect_concrete_nominals(&mut self, program: &mut TypedIrProgram) {
@@ -1542,6 +1611,7 @@ impl<'a> TypedLowerer<'a> {
             }
             CheckedCall::DerivedDefault { ty } => {
                 let ty = self.concrete_type(ty);
+                self.enqueue_default_dependencies(ty, node.span, &mut BTreeSet::new());
                 return Some(TypedExpressionKind::DefaultValue(ty));
             }
             CheckedCall::TraitSelfMethod {
@@ -1566,7 +1636,7 @@ impl<'a> TypedLowerer<'a> {
                 )?;
                 let instance = FunctionInstance {
                     declaration: entry.declaration,
-                    arguments: Vec::new(),
+                    arguments: entry.arguments,
                     self_type: entry.self_type,
                 };
                 let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
@@ -2104,6 +2174,15 @@ pub enum Rvalue {
     Copy(TemporaryId),
     Discriminant(TemporaryId),
     CompareEqual {
+        left: TemporaryId,
+        right: TemporaryId,
+        operand_type: TypeId,
+    },
+    /// One structural relational comparison. The backend preserves unordered
+    /// floating-point components while comparing aggregate fields
+    /// lexicographically.
+    CompareOrder {
+        operator: BinaryOperator,
         left: TemporaryId,
         right: TemporaryId,
         operand_type: TypeId,
@@ -2757,6 +2836,20 @@ impl<'a> FunctionLowerer<'a> {
                         operand: equal,
                         trap: None,
                     }
+                } else if matches!(
+                    operator,
+                    BinaryOperator::Less
+                        | BinaryOperator::LessEqual
+                        | BinaryOperator::Greater
+                        | BinaryOperator::GreaterEqual
+                ) && structural_ordering(&self.types.types, operand_type)
+                {
+                    Rvalue::CompareOrder {
+                        operator: *operator,
+                        left: left_value,
+                        right: right_value,
+                        operand_type,
+                    }
                 } else {
                     Rvalue::Binary {
                         operator: *operator,
@@ -3117,6 +3210,12 @@ fn structural_equality(types: &TypeContext, ty: TypeId) -> bool {
         types.expanded_primitive(ty),
         Some(PrimitiveType::Str | PrimitiveType::String)
     )
+}
+
+/// Whether ordering on `ty` must compare components rather than machine
+/// values.
+fn structural_ordering(types: &TypeContext, ty: TypeId) -> bool {
+    structural_equality(types, ty)
 }
 
 fn binary_trap(operator: BinaryOperator, ty: TypeId, types: &TypedProgram) -> Option<TrapKind> {

@@ -47,9 +47,8 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 12 are complete (Milestones 6 through 12 for
-their stated pre-trait scope, implemented together in one frontend pass where
-applicable; see `IMPL.md`); later rows remain planned until their milestone
+tracker. Milestones 0 through 13 are complete (implemented together in one
+frontend pass where applicable; see `IMPL.md`); later rows remain planned until their milestone
 status changes in `IMPL.md`.
 
 ## 0.1 Legacy artifact inventory
@@ -792,6 +791,32 @@ copy recording begin in Milestone 6.
   expected-result, ambiguous, and partial generic arguments. Run-pass coverage
   exercises generic functions, function references, structs, enums, methods,
   recursive types through explicit indirection, and finite mutual recursion.
+
+### 17.13 Milestone 13 exit criteria
+
+- [x] Trait implementations are checked for required/default/extra methods and
+  exact signatures after `Self` substitution; orphan and overlapping concrete
+  or generic implementations are rejected.
+- [x] Static calls prefer inherent members, diagnose trait ambiguity, support
+  unconditional `Type.Trait.method` selection, and enforce declared generic
+  capabilities for functions and implementations.
+- [x] Object safety is validated before explicit concrete-reference conversion;
+  trait references lower to data-plus-vtable fat references with typed C99
+  thunks, default slots, overrides, and generic implementation specialization.
+- [x] Derive lists reject duplicates, unsupported traits, invalid enum
+  `Default`, and permanently incapable fields. Generic derivations remain
+  conditional on their concrete field instantiations.
+- [x] Fieldwise `Default`, structural equality, and lexicographic structural
+  ordering execute for structs, arrays, tuples, and enums; nested floating
+  values preserve IEEE unordered relational behavior.
+- [x] `Eq`, `Ord`, and `Hash` capabilities are component-conditional, while
+  `StableHash` is structurally inferred only from compiler-known stable leaves
+  and compiler-derived `Eq` plus `Hash`; ordinary manual impls cannot claim it.
+- [x] Compile-pass/fail and run-pass coverage exercises defaults, overrides,
+  signature failures, ambiguity, qualified selection, generic overlap and
+  bounds, conditional derivation, structural comparison, object-safety
+  restrictions, multiple concrete vtables, and generic static/dynamic
+  dispatch. Collection-backed consumers remain Milestone 14.
 
 ## 18. Third-party crate decisions
 

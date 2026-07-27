@@ -6,13 +6,16 @@
 //! a trait may form a trait object. Body-level trait *use* — bound-call
 //! selection and dispatch — belongs to the checker and the backend.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostics::{Category, Diagnostic};
 use crate::package::PackageId;
-use crate::resolution::{DeclarationId, DeclarationKind, ImplId, ResolvedProgram, Visibility};
+use crate::resolution::{
+    DeclarationId, DeclarationKind, GenericParameterId, ImplId, ModuleId, ResolvedProgram,
+    Visibility,
+};
 use crate::source::Span;
-use crate::types::{FunctionSignature, TypeId, TypeKind, TypedProgram};
+use crate::types::{FunctionSignature, PrimitiveType, TypeId, TypeKind, TypedProgram};
 
 /// One implementation of a trait, resolved to its trait and target
 /// declarations.
@@ -36,6 +39,7 @@ pub struct TraitOutput {
 #[must_use]
 pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> TraitOutput {
     let mut output = TraitOutput::default();
+    check_derivations(resolved, typed, &mut output.diagnostics);
     let implementations = collect(resolved, typed);
     for implementation in &implementations {
         check_conformance(resolved, typed, *implementation, &mut output.diagnostics);
@@ -43,6 +47,113 @@ pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> Tra
     check_coherence(resolved, typed, &implementations, &mut output.diagnostics);
     output.implementations = implementations;
     output
+}
+
+fn check_derivations(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    const SUPPORTED: [&str; 6] = ["Default", "PartialEq", "Eq", "PartialOrd", "Ord", "Hash"];
+    for declaration in &resolved.declarations {
+        if !matches!(
+            declaration.kind,
+            DeclarationKind::Struct | DeclarationKind::Enum
+        ) {
+            continue;
+        }
+        let entries = derivation_entries(&declaration.syntax);
+        let mut seen = BTreeMap::<String, Span>::new();
+        for (name, span) in &entries {
+            if let Some(previous) = seen.insert(name.clone(), *span) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        format!("derived trait `{name}` is listed more than once"),
+                    )
+                    .with_primary(*span)
+                    .with_related(previous, "the earlier entry is here"),
+                );
+                continue;
+            }
+            if !SUPPORTED.contains(&name.as_str()) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        format!("`{name}` is not a compiler-supported derivable trait"),
+                    )
+                    .with_primary(*span),
+                );
+                continue;
+            }
+            if name == "Default" && declaration.kind == DeclarationKind::Enum {
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "`Default` cannot be derived for an enum; implement it manually",
+                    )
+                    .with_primary(*span),
+                );
+                continue;
+            }
+            let prerequisite = match name.as_str() {
+                "Eq" if !derives(resolved, declaration.id, "PartialEq") => Some("PartialEq"),
+                "Ord" if !derives(resolved, declaration.id, "Eq") => Some("Eq"),
+                "Ord" if !derives(resolved, declaration.id, "PartialOrd") => Some("PartialOrd"),
+                _ => None,
+            };
+            if let Some(prerequisite) = prerequisite {
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        format!("deriving `{name}` also requires deriving `{prerequisite}`"),
+                    )
+                    .with_primary(*span),
+                );
+                continue;
+            }
+            let Some(ty) = typed.declaration_types.get(&declaration.id).copied() else {
+                continue;
+            };
+            if !provides_inner(
+                resolved,
+                typed,
+                ty,
+                name,
+                &BTreeMap::new(),
+                true,
+                &mut BTreeSet::new(),
+            ) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        format!(
+                            "`{name}` cannot be derived because at least one field does not \
+                             provide `{name}`"
+                        ),
+                    )
+                    .with_primary(*span),
+                );
+            }
+        }
+    }
+}
+
+fn derivation_entries(syntax: &crate::parser::SyntaxNode) -> Vec<(String, Span)> {
+    let Some(list) = crate::types::direct_child(syntax, crate::parser::SyntaxKind::DeriveList)
+    else {
+        return Vec::new();
+    };
+    list.children
+        .iter()
+        .filter_map(|child| match child {
+            crate::parser::SyntaxElement::Token(token) => match &token.kind {
+                crate::lexer::TokenKind::Identifier(name) => Some((name.clone(), token.span)),
+                _ => None,
+            },
+            crate::parser::SyntaxElement::Node(_) => None,
+        })
+        .collect()
 }
 
 /// Trait implementations in declaration order, skipping inherent impls and
@@ -336,7 +447,7 @@ fn check_coherence(
 
         if let Some((_, _, previous)) = seen.iter().find(|(trait_declaration, target, _)| {
             *trait_declaration == implementation.trait_declaration
-                && typed.types.exactly_equal(*target, implementation.target)
+                && type_patterns_overlap(typed, *target, implementation.target)
         }) {
             diagnostics.push(
                 Diagnostic::new(
@@ -357,6 +468,250 @@ fn check_coherence(
             ));
         }
     }
+}
+
+fn match_type_pattern(
+    typed: &TypedProgram,
+    pattern: TypeId,
+    actual: TypeId,
+    bindings: &mut BTreeMap<GenericParameterId, TypeId>,
+) -> bool {
+    let pattern = typed.types.resolve_inference(pattern);
+    let actual = typed.types.resolve_inference(actual);
+    if let TypeKind::Alias { target, .. } = typed.types.kind(pattern) {
+        return match_type_pattern(typed, *target, actual, bindings);
+    }
+    if let TypeKind::Alias { target, .. } = typed.types.kind(actual) {
+        return match_type_pattern(typed, pattern, *target, bindings);
+    }
+    if let TypeKind::GenericParameter(parameter) = typed.types.kind(pattern) {
+        if let Some(bound) = bindings.get(parameter) {
+            return typed.types.exactly_equal(*bound, actual);
+        }
+        bindings.insert(*parameter, actual);
+        return true;
+    }
+    match (typed.types.kind(pattern), typed.types.kind(actual)) {
+        (TypeKind::Error, TypeKind::Error)
+        | (TypeKind::Primitive(_), TypeKind::Primitive(_))
+        | (TypeKind::SelfType(_), TypeKind::SelfType(_))
+        | (TypeKind::InferenceVariable(_), TypeKind::InferenceVariable(_)) => {
+            typed.types.exactly_equal(pattern, actual)
+        }
+        (
+            TypeKind::Nominal {
+                identity: left,
+                arguments: left_arguments,
+            },
+            TypeKind::Nominal {
+                identity: right,
+                arguments: right_arguments,
+            },
+        ) => {
+            left == right && match_type_arguments(typed, left_arguments, right_arguments, bindings)
+        }
+        (
+            TypeKind::Builtin {
+                builtin: left,
+                arguments: left_arguments,
+            },
+            TypeKind::Builtin {
+                builtin: right,
+                arguments: right_arguments,
+            },
+        ) => {
+            left == right && match_type_arguments(typed, left_arguments, right_arguments, bindings)
+        }
+        (TypeKind::Tuple(left), TypeKind::Tuple(right)) => {
+            match_type_arguments(typed, left, right, bindings)
+        }
+        (
+            TypeKind::Array {
+                element: left,
+                length: left_length,
+            },
+            TypeKind::Array {
+                element: right,
+                length: right_length,
+            },
+        ) => left_length == right_length && match_type_pattern(typed, *left, *right, bindings),
+        (TypeKind::Slice(left), TypeKind::Slice(right)) => {
+            match_type_pattern(typed, *left, *right, bindings)
+        }
+        (
+            TypeKind::Reference {
+                mutability: left_mutability,
+                target: left,
+            },
+            TypeKind::Reference {
+                mutability: right_mutability,
+                target: right,
+            },
+        )
+        | (
+            TypeKind::RawPointer {
+                mutability: left_mutability,
+                target: left,
+            },
+            TypeKind::RawPointer {
+                mutability: right_mutability,
+                target: right,
+            },
+        ) => {
+            left_mutability == right_mutability
+                && match_type_pattern(typed, *left, *right, bindings)
+        }
+        (
+            TypeKind::Function {
+                safety: left_safety,
+                abi: left_abi,
+                receiver: left_receiver,
+                parameters: left_parameters,
+                return_type: left_return,
+            },
+            TypeKind::Function {
+                safety: right_safety,
+                abi: right_abi,
+                receiver: right_receiver,
+                parameters: right_parameters,
+                return_type: right_return,
+            },
+        ) => {
+            left_safety == right_safety
+                && left_abi == right_abi
+                && match (left_receiver, right_receiver) {
+                    (Some(left), Some(right)) => match_type_pattern(typed, *left, *right, bindings),
+                    (None, None) => true,
+                    _ => false,
+                }
+                && left_parameters.len() == right_parameters.len()
+                && left_parameters
+                    .iter()
+                    .zip(right_parameters)
+                    .all(|(left, right)| {
+                        left.variadic == right.variadic
+                            && match_type_pattern(typed, left.ty, right.ty, bindings)
+                    })
+                && match_type_pattern(typed, *left_return, *right_return, bindings)
+        }
+        (
+            TypeKind::TraitObject { trait_type: left },
+            TypeKind::TraitObject { trait_type: right },
+        ) => match_type_pattern(typed, *left, *right, bindings),
+        (
+            TypeKind::Foreign {
+                identity: left,
+                complete: left_complete,
+            },
+            TypeKind::Foreign {
+                identity: right,
+                complete: right_complete,
+            },
+        ) => left == right && left_complete == right_complete,
+        _ => false,
+    }
+}
+
+fn match_type_arguments(
+    typed: &TypedProgram,
+    patterns: &[TypeId],
+    actuals: &[TypeId],
+    bindings: &mut BTreeMap<GenericParameterId, TypeId>,
+) -> bool {
+    patterns.len() == actuals.len()
+        && patterns
+            .iter()
+            .zip(actuals)
+            .all(|(pattern, actual)| match_type_pattern(typed, *pattern, *actual, bindings))
+}
+
+fn type_patterns_overlap(typed: &TypedProgram, left: TypeId, right: TypeId) -> bool {
+    let left = typed.types.resolve_inference(left);
+    let right = typed.types.resolve_inference(right);
+    if matches!(typed.types.kind(left), TypeKind::GenericParameter(_))
+        || matches!(typed.types.kind(right), TypeKind::GenericParameter(_))
+    {
+        return true;
+    }
+    if let TypeKind::Alias { target, .. } = typed.types.kind(left) {
+        return type_patterns_overlap(typed, *target, right);
+    }
+    if let TypeKind::Alias { target, .. } = typed.types.kind(right) {
+        return type_patterns_overlap(typed, left, *target);
+    }
+    match (typed.types.kind(left), typed.types.kind(right)) {
+        (
+            TypeKind::Nominal {
+                identity: left_identity,
+                arguments: left_arguments,
+            },
+            TypeKind::Nominal {
+                identity: right_identity,
+                arguments: right_arguments,
+            },
+        ) => {
+            left_identity == right_identity
+                && overlapping_arguments(typed, left_arguments, right_arguments)
+        }
+        (
+            TypeKind::Builtin {
+                builtin: left_builtin,
+                arguments: left_arguments,
+            },
+            TypeKind::Builtin {
+                builtin: right_builtin,
+                arguments: right_arguments,
+            },
+        ) => {
+            left_builtin == right_builtin
+                && overlapping_arguments(typed, left_arguments, right_arguments)
+        }
+        (TypeKind::Tuple(left), TypeKind::Tuple(right)) => {
+            overlapping_arguments(typed, left, right)
+        }
+        (
+            TypeKind::Array {
+                element: left,
+                length: left_length,
+            },
+            TypeKind::Array {
+                element: right,
+                length: right_length,
+            },
+        ) => left_length == right_length && type_patterns_overlap(typed, *left, *right),
+        (TypeKind::Slice(left), TypeKind::Slice(right)) => {
+            type_patterns_overlap(typed, *left, *right)
+        }
+        (
+            TypeKind::Reference {
+                mutability: left_mutability,
+                target: left,
+            },
+            TypeKind::Reference {
+                mutability: right_mutability,
+                target: right,
+            },
+        )
+        | (
+            TypeKind::RawPointer {
+                mutability: left_mutability,
+                target: left,
+            },
+            TypeKind::RawPointer {
+                mutability: right_mutability,
+                target: right,
+            },
+        ) => left_mutability == right_mutability && type_patterns_overlap(typed, *left, *right),
+        _ => typed.types.exactly_equal(left, right),
+    }
+}
+
+fn overlapping_arguments(typed: &TypedProgram, left: &[TypeId], right: &[TypeId]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| type_patterns_overlap(typed, *left, *right))
 }
 
 fn target_declaration(
@@ -393,7 +748,7 @@ fn declaration_name(resolved: &ResolvedProgram, declaration: DeclarationId) -> S
 }
 
 /// A trait method selected for a concrete receiver type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SelectedTraitMethod {
     /// The declaration to call: an implementation's method, or the trait's
     /// default body.
@@ -403,6 +758,8 @@ pub struct SelectedTraitMethod {
     /// `Some` when `declaration` is a default body, which is written against
     /// `Self` and must be specialized for this receiver.
     pub self_type: Option<TypeId>,
+    /// Concrete arguments for an implementation block's generic parameters.
+    pub arguments: Vec<TypeId>,
 }
 
 /// Selects a trait method named `name` for `target`.
@@ -418,19 +775,34 @@ pub fn select_trait_method(
     typed: &TypedProgram,
     target: TypeId,
     name: &str,
+    module: Option<ModuleId>,
 ) -> Result<Option<SelectedTraitMethod>, Vec<String>> {
     let mut found: Vec<(SelectedTraitMethod, String)> = Vec::new();
     for block in &resolved.impls {
         let Some(implemented) = typed.impl_target_types.get(&block.id).copied() else {
             continue;
         };
-        if !typed.types.exactly_equal(implemented, target) {
+        let mut bindings = BTreeMap::new();
+        if !match_type_pattern(typed, implemented, target, &mut bindings) {
             continue;
         }
+        if !implementation_bounds_hold(resolved, typed, block, &bindings) {
+            continue;
+        }
+        let implementation_arguments = block
+            .generic_parameters
+            .iter()
+            .filter_map(|parameter| bindings.get(parameter).copied())
+            .collect::<Vec<_>>();
         let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
             continue;
         };
         let trait_declaration = trait_declaration_of(resolved, typed, trait_type);
+        if let (Some(module), Some(trait_declaration)) = (module, trait_declaration)
+            && !resolved.declaration_in_scope(module, trait_declaration)
+        {
+            continue;
+        }
         let trait_name = trait_declaration.map_or_else(
             || trait_type_name(resolved, typed, trait_type),
             |declaration| declaration_name(resolved, declaration),
@@ -447,6 +819,7 @@ pub fn select_trait_method(
                     declaration,
                     trait_declaration,
                     self_type: None,
+                    arguments: implementation_arguments,
                 },
                 trait_name,
             ));
@@ -462,7 +835,8 @@ pub fn select_trait_method(
                 SelectedTraitMethod {
                     declaration: method,
                     trait_declaration: Some(trait_declaration),
-                    self_type: Some(implemented),
+                    self_type: Some(target),
+                    arguments: Vec::new(),
                 },
                 trait_name,
             ));
@@ -470,9 +844,47 @@ pub fn select_trait_method(
     }
     match found.len() {
         0 => Ok(None),
-        1 => Ok(Some(found[0].0)),
+        1 => Ok(found.pop().map(|(selected, _)| selected)),
         _ => Err(found.into_iter().map(|(_, name)| name).collect()),
     }
+}
+
+/// Selects one explicitly qualified implementation member for
+/// `Type.Trait.method`.
+#[must_use]
+pub fn qualified_trait_method(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    target: TypeId,
+    trait_name: &str,
+    method_name: &str,
+) -> Option<DeclarationId> {
+    for block in &resolved.impls {
+        let Some(implemented) = typed.impl_target_types.get(&block.id).copied() else {
+            continue;
+        };
+        let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
+            continue;
+        };
+        if trait_type_name(resolved, typed, trait_type) != trait_name {
+            continue;
+        }
+        let mut bindings = BTreeMap::new();
+        let matched = match_type_pattern(typed, implemented, target, &mut bindings);
+        let bounds = implementation_bounds_hold(resolved, typed, block, &bindings);
+        if !matched || !bounds {
+            continue;
+        }
+        if let Some(declaration) = resolved.impl_members.get(&block.id).and_then(|members| {
+            members
+                .iter()
+                .find(|(symbol, _)| resolved.symbol_text(**symbol) == method_name)
+                .map(|(_, declaration)| *declaration)
+        }) {
+            return Some(declaration);
+        }
+    }
+    None
 }
 
 /// The trait declaration a *trait type* names (as opposed to a trait-object
@@ -486,13 +898,45 @@ pub fn object_trait_of_nominal(
     trait_declaration_of(resolved, typed, trait_type)
 }
 
+/// Whether one concrete type is covered by an implementation of a
+/// user-declared trait, including an applicable generic implementation.
+#[must_use]
+pub fn implements_trait(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    target: TypeId,
+    trait_declaration: DeclarationId,
+) -> bool {
+    resolved.impls.iter().any(|block| {
+        let Some(implemented) = typed.impl_target_types.get(&block.id).copied() else {
+            return false;
+        };
+        let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
+            return false;
+        };
+        if trait_declaration_of(resolved, typed, trait_type) != Some(trait_declaration) {
+            return false;
+        }
+        let mut bindings = BTreeMap::new();
+        match_type_pattern(typed, implemented, target, &mut bindings)
+            && implementation_bounds_hold(resolved, typed, block, &bindings)
+    })
+}
+
 /// A display name for a trait type that is not a user declaration, such as a
 /// compiler-known builtin trait.
 fn trait_type_name(resolved: &ResolvedProgram, typed: &TypedProgram, trait_type: TypeId) -> String {
     match typed.types.kind(typed.types.resolve_inference(trait_type)) {
         TypeKind::Builtin { builtin, .. } => resolved.builtin_name(*builtin).to_string(),
+        TypeKind::Nominal { identity, .. } => declaration_name(resolved, identity.declaration),
         _ => "trait".to_string(),
     }
+}
+
+/// A diagnostic name for a canonical trait type.
+#[must_use]
+pub fn trait_name(resolved: &ResolvedProgram, typed: &TypedProgram, trait_type: TypeId) -> String {
+    trait_type_name(resolved, typed, trait_type)
 }
 
 /// The vtable layout of a trait: every method reachable through an object,
@@ -526,9 +970,18 @@ pub fn vtable_entry(
         let Some(implemented) = typed.impl_target_types.get(&block.id).copied() else {
             continue;
         };
-        if !typed.types.exactly_equal(implemented, target) {
+        let mut bindings = BTreeMap::new();
+        if !match_type_pattern(typed, implemented, target, &mut bindings) {
             continue;
         }
+        if !implementation_bounds_hold(resolved, typed, block, &bindings) {
+            continue;
+        }
+        let implementation_arguments = block
+            .generic_parameters
+            .iter()
+            .filter_map(|parameter| bindings.get(parameter).copied())
+            .collect::<Vec<_>>();
         let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
             continue;
         };
@@ -544,6 +997,7 @@ pub fn vtable_entry(
                 declaration: *declaration,
                 trait_declaration: Some(trait_declaration),
                 self_type: None,
+                arguments: implementation_arguments,
             });
         }
         if let Some((method, true)) = trait_methods(resolved, trait_declaration)
@@ -553,7 +1007,8 @@ pub fn vtable_entry(
             return Some(SelectedTraitMethod {
                 declaration: method,
                 trait_declaration: Some(trait_declaration),
-                self_type: Some(implemented),
+                self_type: Some(target),
+                arguments: Vec::new(),
             });
         }
     }
@@ -580,8 +1035,14 @@ pub fn derives(resolved: &ResolvedProgram, declaration: DeclarationId, trait_nam
     })
 }
 
-/// Whether a type derives or manually implements `trait_name`, which is what
-/// an operator or associated-function synthesis needs to know.
+/// Whether a type has a compiler-known capability or an applicable manual
+/// implementation.
+///
+/// Derived implementations are conditional: a generic aggregate has the
+/// capability only for instantiations whose participating fields have it.
+/// `StableHash` is deliberately excluded from manual implementation lookup and
+/// is inferred only from compiler-known leaves and compiler-derived `Eq` and
+/// `Hash`.
 #[must_use]
 pub fn provides(
     resolved: &ResolvedProgram,
@@ -589,32 +1050,312 @@ pub fn provides(
     ty: TypeId,
     trait_name: &str,
 ) -> bool {
-    let resolved_type = typed.types.resolve_inference(ty);
-    if let TypeKind::Nominal { identity, .. } = typed.types.kind(resolved_type)
-        && derives(resolved, identity.declaration, trait_name)
-    {
-        return true;
+    provides_inner(
+        resolved,
+        typed,
+        ty,
+        trait_name,
+        &BTreeMap::new(),
+        false,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn provides_inner(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    ty: TypeId,
+    trait_name: &str,
+    substitution: &BTreeMap<GenericParameterId, TypeId>,
+    assume_parameters: bool,
+    visiting: &mut BTreeSet<(TypeId, String)>,
+) -> bool {
+    let ty = typed.types.resolve_inference(ty);
+    if let TypeKind::GenericParameter(parameter) = typed.types.kind(ty) {
+        if let Some(argument) = substitution.get(parameter)
+            && !typed.types.exactly_equal(*argument, ty)
+        {
+            return provides_inner(
+                resolved,
+                typed,
+                *argument,
+                trait_name,
+                substitution,
+                assume_parameters,
+                visiting,
+            );
+        }
+        if assume_parameters {
+            return true;
+        }
+        return typed.obligations_for(*parameter).any(|obligation| {
+            capability_implies(
+                &trait_type_name(resolved, typed, obligation.trait_type),
+                trait_name,
+            )
+        });
     }
+    if let TypeKind::Alias { target, .. } = typed.types.kind(ty) {
+        return provides_inner(
+            resolved,
+            typed,
+            *target,
+            trait_name,
+            substitution,
+            assume_parameters,
+            visiting,
+        );
+    }
+
+    let visit = (ty, trait_name.to_string());
+    if !visiting.insert(visit.clone()) {
+        return false;
+    }
+    let result = match typed.types.kind(ty) {
+        TypeKind::Primitive(primitive) => primitive_provides(*primitive, trait_name),
+        TypeKind::Tuple(elements) => elements.iter().all(|element| {
+            provides_inner(
+                resolved,
+                typed,
+                *element,
+                trait_name,
+                substitution,
+                assume_parameters,
+                visiting,
+            )
+        }),
+        TypeKind::Array { element, .. } => provides_inner(
+            resolved,
+            typed,
+            *element,
+            trait_name,
+            substitution,
+            assume_parameters,
+            visiting,
+        ),
+        TypeKind::Reference { .. } | TypeKind::TraitObject { .. } => {
+            matches!(trait_name, "PartialEq" | "Eq" | "Hash")
+        }
+        TypeKind::RawPointer { .. } => {
+            matches!(trait_name, "Default" | "PartialEq" | "Eq" | "Hash")
+        }
+        TypeKind::Function { .. } => matches!(trait_name, "PartialEq" | "Eq"),
+        TypeKind::Builtin { builtin, arguments } => {
+            let name = resolved.builtin_name(*builtin);
+            match (name, trait_name) {
+                ("Option", "Default") => true,
+                ("Vec" | "Map" | "Set", "Default") => true,
+                ("Vec", "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash") => {
+                    arguments.first().is_some_and(|argument| {
+                        provides_inner(
+                            resolved,
+                            typed,
+                            *argument,
+                            trait_name,
+                            substitution,
+                            assume_parameters,
+                            visiting,
+                        )
+                    })
+                }
+                ("Map" | "Set", "PartialEq" | "Eq" | "Hash") => arguments.iter().all(|argument| {
+                    provides_inner(
+                        resolved,
+                        typed,
+                        *argument,
+                        trait_name,
+                        substitution,
+                        assume_parameters,
+                        visiting,
+                    )
+                }),
+                ("Identity", "PartialEq" | "Eq" | "Hash" | "StableHash") => true,
+                ("String" | "Vec" | "Map" | "Set", "StableHash") => false,
+                (_, "StableHash") => arguments.iter().all(|argument| {
+                    provides_inner(
+                        resolved,
+                        typed,
+                        *argument,
+                        trait_name,
+                        substitution,
+                        assume_parameters,
+                        visiting,
+                    )
+                }),
+                (_, "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash") => {
+                    arguments.iter().all(|argument| {
+                        provides_inner(
+                            resolved,
+                            typed,
+                            *argument,
+                            trait_name,
+                            substitution,
+                            assume_parameters,
+                            visiting,
+                        )
+                    })
+                }
+                _ => false,
+            }
+        }
+        TypeKind::Nominal {
+            identity,
+            arguments,
+        } => {
+            nominal_provides(
+                resolved,
+                typed,
+                identity.declaration,
+                arguments,
+                trait_name,
+                substitution,
+                assume_parameters,
+                visiting,
+            ) || (trait_name != "StableHash"
+                && manual_implementation_provides(
+                    resolved,
+                    typed,
+                    ty,
+                    trait_name,
+                    assume_parameters,
+                    visiting,
+                ))
+        }
+        TypeKind::GenericParameter(_)
+        | TypeKind::Alias { .. }
+        | TypeKind::Error
+        | TypeKind::Slice(_)
+        | TypeKind::Foreign { .. }
+        | TypeKind::SelfType(_)
+        | TypeKind::InferenceVariable(_) => false,
+    };
+    visiting.remove(&visit);
+    result
+}
+
+fn primitive_provides(primitive: PrimitiveType, trait_name: &str) -> bool {
+    match trait_name {
+        "Default" | "PartialEq" | "PartialOrd" => true,
+        "Eq" | "Ord" | "Hash" => !primitive.is_float(),
+        "StableHash" => !primitive.is_float() && primitive != PrimitiveType::String,
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nominal_provides(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    declaration: DeclarationId,
+    arguments: &[TypeId],
+    trait_name: &str,
+    outer_substitution: &BTreeMap<GenericParameterId, TypeId>,
+    assume_parameters: bool,
+    visiting: &mut BTreeSet<(TypeId, String)>,
+) -> bool {
+    let derivation = if trait_name == "StableHash" {
+        derives(resolved, declaration, "Eq") && derives(resolved, declaration, "Hash")
+    } else {
+        derives(resolved, declaration, trait_name)
+    };
+    if !derivation {
+        return false;
+    }
+    if trait_name == "Default"
+        && resolved.declarations[declaration.index()].kind != DeclarationKind::Struct
+    {
+        return false;
+    }
+    let mut substitution = outer_substitution.clone();
+    for (parameter, argument) in resolved.declarations[declaration.index()]
+        .generic_parameters
+        .iter()
+        .zip(arguments)
+    {
+        substitution.insert(*parameter, *argument);
+    }
+    resolved
+        .fields
+        .iter()
+        .filter(|field| field.parent_declaration == declaration)
+        .all(|field| {
+            typed.field_types.get(&field.id).is_some_and(|field_type| {
+                provides_inner(
+                    resolved,
+                    typed,
+                    *field_type,
+                    trait_name,
+                    &substitution,
+                    assume_parameters,
+                    visiting,
+                )
+            })
+        })
+}
+
+fn manual_implementation_provides(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    ty: TypeId,
+    trait_name: &str,
+    assume_parameters: bool,
+    visiting: &mut BTreeSet<(TypeId, String)>,
+) -> bool {
     resolved.impls.iter().any(|block| {
-        typed
-            .impl_target_types
-            .get(&block.id)
-            .is_some_and(|target| typed.types.exactly_equal(*target, resolved_type))
-            && typed
-                .impl_trait_types
-                .get(&block.id)
-                .is_some_and(|trait_type| {
-                    match typed.types.kind(typed.types.resolve_inference(*trait_type)) {
-                        TypeKind::Builtin { builtin, .. } => {
-                            resolved.builtin_name(*builtin) == trait_name
-                        }
-                        TypeKind::Nominal { identity, .. } => {
-                            declaration_name(resolved, identity.declaration) == trait_name
-                        }
-                        _ => false,
-                    }
+        let Some(target) = typed.impl_target_types.get(&block.id).copied() else {
+            return false;
+        };
+        let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
+            return false;
+        };
+        if trait_type_name(resolved, typed, trait_type) != trait_name {
+            return false;
+        }
+        let mut bindings = BTreeMap::new();
+        if !match_type_pattern(typed, target, ty, &mut bindings) {
+            return false;
+        }
+        block.generic_parameters.iter().all(|parameter| {
+            typed.obligations_for(*parameter).all(|obligation| {
+                let required = trait_type_name(resolved, typed, obligation.trait_type);
+                bindings.get(parameter).is_some_and(|argument| {
+                    provides_inner(
+                        resolved,
+                        typed,
+                        *argument,
+                        &required,
+                        &BTreeMap::new(),
+                        assume_parameters,
+                        visiting,
+                    )
                 })
+            })
+        })
     })
+}
+
+fn implementation_bounds_hold(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    block: &crate::resolution::ImplBlock,
+    bindings: &BTreeMap<GenericParameterId, TypeId>,
+) -> bool {
+    block.generic_parameters.iter().all(|parameter| {
+        typed.obligations_for(*parameter).all(|obligation| {
+            let required = trait_type_name(resolved, typed, obligation.trait_type);
+            bindings
+                .get(parameter)
+                .is_some_and(|argument| provides(resolved, typed, *argument, &required))
+        })
+    })
+}
+
+fn capability_implies(provided: &str, required: &str) -> bool {
+    provided == required
+        || matches!(
+            (provided, required),
+            ("Eq" | "Ord", "PartialEq") | ("Ord", "PartialOrd") | ("StableHash", "Eq" | "Hash")
+        )
 }
 
 /// The name of a declaration, for diagnostics.

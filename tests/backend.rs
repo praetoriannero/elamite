@@ -1398,3 +1398,110 @@ fn main() -> ():
     assert_eq!(stderr, "");
     assert_eq!(status, 0);
 }
+
+#[test]
+fn a_manual_default_implementation_supplies_the_associated_function() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+enum Choice:
+    None
+    Value(i32)
+
+impl Default for Choice:
+    fn default() -> Self:
+        return Choice.Value(42)
+
+struct Outer(Default):
+    choice: Choice
+    choices: [Choice; 2]
+
+fn main() -> ():
+    let choice = Choice.default()
+    match choice:
+        Choice.None:
+            println("none")
+        Choice.Value(value):
+            println(value)
+    let outer = Outer.default()
+    match outer.choice:
+        Choice.None:
+            println("none")
+        Choice.Value(value):
+            println(value)
+    match outer.choices[1usize]:
+        Choice.None:
+            println("none")
+        Choice.Value(value):
+            println(value)
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "42\n42\n42\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn derived_ordering_is_lexicographic_and_preserves_unordered_floats() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Pair(PartialEq, PartialOrd):
+    first: i32
+    second: i32
+
+enum Rank(PartialEq, PartialOrd):
+    Low(i32)
+    High(i32)
+
+struct Measure(PartialEq, PartialOrd):
+    value: f64
+
+fn main() -> ():
+    let a = Pair { first: 1, second: 9 }
+    let b = Pair { first: 2, second: 0 }
+    let low = Rank.Low(99)
+    let high = Rank.High(-99)
+    let nan = 0.0f64 / 0.0f64
+    let unordered = Measure { value: nan }
+    println(f"{a < b},{a <= b},{b > a},{b >= a}")
+    println(f"{low < high},{Rank.Low(1) < Rank.Low(2)}")
+    println(f"{unordered < unordered},{unordered <= unordered},{unordered > unordered},{unordered >= unordered}")
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(
+        stdout,
+        "true,true,true,true\ntrue,true\nfalse,false,false,false\n"
+    );
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn generic_trait_implementations_dispatch_statically_and_through_vtables() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+trait Label:
+    fn label(self: &Self) -> str
+
+struct Wrapper[T]:
+    value: T
+
+impl[T] Label for Wrapper[T]:
+    fn label(self: &Self) -> str:
+        return "generic"
+
+fn main() -> ():
+    let wrapped = Wrapper { value: 7i32 }
+    println(wrapped.label())
+    println(Wrapper[i32].Label.label(&wrapped))
+    let reference = &wrapped
+    let object: &Label = reference as &Label
+    println(object.label())
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "generic\ngeneric\ngeneric\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}

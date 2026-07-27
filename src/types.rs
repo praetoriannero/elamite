@@ -768,14 +768,17 @@ impl TypedProgram {
         declaration: DeclarationId,
     ) -> Vec<GenericParameterId> {
         let data = &resolved.declarations[declaration.index()];
-        let mut parameters = data
-            .parent_declaration
-            .map(|parent| {
-                resolved.declarations[parent.index()]
-                    .generic_parameters
-                    .clone()
-            })
-            .unwrap_or_default();
+        let mut parameters = if let Some(parent) = data.parent_declaration {
+            resolved.declarations[parent.index()]
+                .generic_parameters
+                .clone()
+        } else if let Some(implementation) = data.parent_impl {
+            resolved.impls[implementation.index()]
+                .generic_parameters
+                .clone()
+        } else {
+            Vec::new()
+        };
         parameters.extend(data.generic_parameters.iter().copied());
         parameters
     }

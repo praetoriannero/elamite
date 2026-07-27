@@ -546,3 +546,207 @@ fn main() -> ():
         "{text}"
     );
 }
+
+#[test]
+fn generic_derivations_are_conditional_on_instantiated_fields() {
+    assert_clean(
+        r#"
+struct Wrapper[T](Default, PartialEq):
+    value: T
+
+fn main() -> ():
+    let first: Wrapper[i32] = Wrapper.default()
+    let second = Wrapper[i32].default()
+    println(f"{first == second}")
+"#,
+    );
+    assert_reports(
+        r#"
+struct Wrapper[T](Default):
+    value: T
+
+fn main() -> ():
+    let invalid = Wrapper[&i32].default()
+"#,
+        "field type does not provide it",
+    );
+}
+
+#[test]
+fn derivation_lists_and_component_requirements_are_validated() {
+    assert_reports(
+        r#"
+struct Bad(Default):
+    callback: &fn() -> ()
+
+fn main() -> ():
+    pass
+"#,
+        "at least one field does not provide `Default`",
+    );
+    assert_reports(
+        r#"
+enum Choice(Default):
+    None
+
+fn main() -> ():
+    pass
+"#,
+        "`Default` cannot be derived for an enum",
+    );
+    assert_reports(
+        r#"
+struct Duplicate(PartialEq, PartialEq):
+    value: i32
+
+fn main() -> ():
+    pass
+"#,
+        "listed more than once",
+    );
+    assert_reports(
+        r#"
+struct Custom(Display):
+    value: i32
+
+fn main() -> ():
+    pass
+"#,
+        "not a compiler-supported derivable trait",
+    );
+}
+
+#[test]
+fn ordering_requires_partial_ord_and_generic_impl_overlap_is_rejected() {
+    assert_reports(
+        r#"
+struct Plain:
+    value: i32
+
+fn main() -> ():
+    let left = Plain { value: 1 }
+    let right = Plain { value: 2 }
+    println(f"{left < right}")
+"#,
+        "does not implement `PartialOrd`",
+    );
+    assert_reports(
+        r#"
+trait Label:
+    fn label(self: &Self) -> str
+
+struct Wrapper[T]:
+    value: T
+
+impl[T] Label for Wrapper[T]:
+    fn label(self: &Self) -> str:
+        return "generic"
+
+impl Label for Wrapper[i32]:
+    fn label(self: &Self) -> str:
+        return "specific"
+
+fn main() -> ():
+    pass
+"#,
+        "already implemented for this type",
+    );
+}
+
+#[test]
+fn stable_hash_is_structural_and_cannot_be_claimed_manually() {
+    assert_clean(
+        r#"
+struct Key[T](PartialEq, Eq, Hash):
+    value: T
+
+fn accept[T: StableHash](value: &T) -> ():
+    pass
+
+fn main() -> ():
+    let key = Key { value: 1i32 }
+    accept(&key)
+"#,
+    );
+    assert_reports(
+        r#"
+struct Key[T](PartialEq, Eq, Hash):
+    value: T
+
+fn accept[T: StableHash](value: &T) -> ():
+    pass
+
+fn main() -> ():
+    let text: String = "mutable"
+    let key = Key { value: text }
+    accept(&key)
+"#,
+        "does not satisfy required `StableHash` capability",
+    );
+    assert_reports(
+        r#"
+struct Manual:
+    value: i32
+
+impl StableHash for Manual:
+    pass
+
+fn accept[T: StableHash](value: &T) -> ():
+    pass
+
+fn main() -> ():
+    let value = Manual { value: 1 }
+    accept(&value)
+"#,
+        "does not satisfy required `StableHash` capability",
+    );
+}
+
+#[test]
+fn bound_lookup_considers_only_traits_in_the_calling_modules_scope() {
+    let hidden = r#"
+struct Session:
+    value: i32
+
+mod hidden:
+    trait Secret:
+        fn secret(self: &Self) -> str
+
+    impl Secret for root.Session:
+        fn secret(self: &Self) -> str:
+            return "secret"
+
+fn main() -> ():
+    let session = Session { value: 1 }
+    println(session.secret())
+"#;
+    let (sources, diagnostics) = frontend_diagnostics(hidden);
+    let text = render(&sources, &diagnostics);
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("no method named `secret` is available")),
+        "expected hidden trait to be excluded from bound lookup, got:\n{text}"
+    );
+
+    assert_clean(
+        r#"
+struct Session:
+    value: i32
+
+mod hidden:
+    pub trait Secret:
+        fn secret(self: &Self) -> str
+
+    impl Secret for root.Session:
+        fn secret(self: &Self) -> str:
+            return "secret"
+
+import self.hidden.Secret
+
+fn main() -> ():
+    let session = Session { value: 1 }
+    println(session.secret())
+"#,
+    );
+}

@@ -23,8 +23,7 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
-Milestones 1 through 12 are complete (Milestones 6 through 12 for their stated
-pre-trait scope; see `IMPL.md`). The compiler library
+Milestones 1 through 13 are complete (see `IMPL.md`). The compiler library
 includes the package resolver, source manager, diagnostics, span-preserving
 lexer, hand-written surface parser, stable-identity name resolver, canonical
 type/inference core, core expression/function/control-flow checker, typed
@@ -59,7 +58,11 @@ Milestone 12 adds all-or-nothing generic inference from arguments and expected
 results, generic aggregate construction and patterns, cached concrete function
 and nominal instances, fixed-point reachability discovery, deterministic
 rejection of unbounded instantiation growth, and type-argument-bearing C
-symbols and helpers.
+symbols and helpers. Milestone 13 adds exact trait conformance and coherence,
+static and qualified selection, generic-bound enforcement, compiler-supported
+conditional derivations, structural equality and ordering, structural
+`StableHash` inference, object-safety validation, fat trait references, and
+thunked C99 vtables.
 Constructs outside that subset receive lowering diagnostics rather than partial
 code generation.
 

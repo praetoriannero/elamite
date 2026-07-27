@@ -1,6 +1,6 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 12 complete, Milestone 13 next
+> Status: Active — Milestones 0 through 13 complete, Milestone 14 next
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -705,15 +705,13 @@ Validation:
 
 ### Milestone 13: traits, derivation, and dynamic dispatch
 
-> Status: In progress; trait selection and dispatch are complete, derivations
-> are not. `src/traits.rs` validates that each `impl Trait for Type` supplies
-> exactly the trait's methods with the trait's signature after `Self` is
-> replaced by the implementing type, enforces the orphan rule, rejects
-> overlapping implementations, and validates object safety. Bound calls prefer
-> inherent members, report ambiguity between traits, and specialize a trait's
-> default body per implementing type by threading `Self` through
-> `FunctionInstance`. `Type.Trait.method` selects an implementation member
-> unconditionally. Implementation and default bodies are checked and lowered.
+> Status: Complete. `src/traits.rs` validates exact implementation
+> conformance, orphan ownership, overlapping concrete or generic
+> implementations, generic implementation bounds, derivation lists, and object
+> safety. Bound calls prefer inherent members, report trait ambiguity, enforce
+> generic capabilities at instantiation, and specialize implementation and
+> default bodies. `Type.Trait.method` performs unconditional unbound selection,
+> including for generic implementations.
 >
 > `&Trait` is a fat reference — target pointer plus vtable pointer — and is the
 > one reference whose C type is not `T *`. Each trait emits a method-pointer
@@ -723,16 +721,14 @@ Validation:
 > methods participate and may be overridden. Forming an object requires an
 > object-safe trait the source type implements.
 >
-> `Default` and `PartialEq` derivations are implemented structurally:
-> `Type.default()` is synthesized from the derive list with fieldwise defaults,
-> and equality on an aggregate emits a per-type helper comparing components,
-> replacing a C `==` on a struct that would not have compiled. Comparing a
-> nominal value now requires a derivation or implementation.
->
-> Outstanding: `PartialOrd` ordering operators, hashing, and structural
-> `StableHash` inference; conditional component obligations for generic
-> derivations are not yet enforced. The `Vec[&Trait]` validation additionally
-> depends on Milestone 14 collections.
+> Compiler-supported derivations are conditional on their instantiated field
+> capabilities. `Default` is synthesized fieldwise; equality and ordering use
+> structural C99 helpers, with declaration-order enum comparison and IEEE
+> unordered propagation; `Eq`, `Ord`, and `Hash` capabilities are checked
+> structurally. `StableHash` is inferred only from stable compiler-known leaves
+> and compiler-derived `Eq` plus `Hash`, never from ordinary manual impls.
+> Collection hashing and the heterogeneous `Vec[&Trait]` validation remain
+> Milestone 14 consumers of these completed Milestone 13 facilities.
 
 **Goal:** Implement static trait selection, coherence, compiler capabilities,
 and explicit trait objects.
