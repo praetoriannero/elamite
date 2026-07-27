@@ -47,10 +47,10 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 10 are complete (Milestones 6 through 10 for
-their stated non-generic, non-method, non-trait scope, implemented together in
-one frontend pass where applicable; see `IMPL.md`); later rows remain planned
-until their milestone status changes in `IMPL.md`.
+tracker. Milestones 0 through 12 are complete (Milestones 6 through 12 for
+their stated pre-trait scope, implemented together in one frontend pass where
+applicable; see `IMPL.md`); later rows remain planned until their milestone
+status changes in `IMPL.md`.
 
 ## 0.1 Legacy artifact inventory
 
@@ -738,6 +738,60 @@ copy recording begin in Milestone 6.
   representations/copy hooks remain M14.
 - [x] The complete suite contains 133 passing tests under formatting,
   checking, and warning-denied Clippy validation.
+
+### 17.10 Milestone 10 exit criteria
+
+- [x] Safe references lower to one non-moving pointer representation, and every
+  address-taken local is conservatively promoted to Boehm-managed storage.
+- [x] Binding, interior, mutable, escaping, and referenced-composite-literal
+  behavior reaches executable C99 with demand-driven collector linkage.
+- [x] Interior pointers keep their complete containing allocation reachable;
+  root retention and the deferred cycle-collection test are documented in
+  §19 and §9 respectively.
+
+### 17.11 Milestone 11 exit criteria
+
+- [x] Non-generic inherent method bodies are checked and lowered with `Self`
+  and all five legal receiver forms.
+- [x] Bound calls adapt only their receiver: value copying, safe-reference
+  dereference/copy, shared or mutable auto-borrow, exact reference passing, and
+  exact raw-pointer passing are represented explicitly in typed IR.
+- [x] Associated and unbound method selection produces stable named function
+  references; instance selection cannot construct a bound-method value.
+- [x] Safe and unsafe function references have exact invariant signatures,
+  support storage, parameters, returns, indirect calls, and identity equality,
+  and lower to typed C99 function pointers without closures or captures.
+- [x] Field-first postfix calls bypass receiver adaptation, and homogeneous
+  variadic tails are packed into a slice with runtime length for checked
+  indexing.
+- [x] Compile-fail coverage checks invalid receiver adaptation, bound-method
+  values, bare function value types, safety mismatch, variadic mismatch, and
+  raw-pointer mismatch; debug and release run-pass coverage exercises methods,
+  indirect calls, fields, returns, equality, unbound calls, and variadics.
+
+### 17.12 Milestone 12 exit criteria
+
+- [x] Generic function and inherent-method bodies are checked once using
+  canonical generic-parameter types and their declared obligations, without
+  being rechecked against call-site-specific capabilities.
+- [x] Calls and generic function references infer a unique complete argument
+  list from ordinary arguments and expected results; explicit lists must be
+  complete. The same rule applies to struct and enum literals.
+- [x] Generic aggregate fields, selections, patterns, receiver adaptation, and
+  local annotations substitute their enclosing nominal arguments.
+- [x] Concrete function signatures are cached by declaration identity plus
+  canonical type arguments. Typed IR discovers reachable function instances
+  to a fixed point and presents concrete types to control-flow lowering.
+- [x] Concrete generic structs and enums receive distinct backend layouts,
+  copy helpers, and type-bearing symbol identities. Generic function symbols
+  likewise include every concrete type argument.
+- [x] Direct and mutual finite recursion deduplicate successfully, while
+  recursive structural growth is rejected deterministically before C
+  emission.
+- [x] Compile-pass/fail coverage exercises explicit, inferred,
+  expected-result, ambiguous, and partial generic arguments. Run-pass coverage
+  exercises generic functions, function references, structs, enums, methods,
+  recursive types through explicit indirection, and finite mutual recursion.
 
 ## 18. Third-party crate decisions
 

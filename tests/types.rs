@@ -566,6 +566,65 @@ fn canonicalizes_the_authoritative_demonstration() {
 }
 
 #[test]
+fn validates_receiver_forms_and_function_reference_value_types() {
+    let tree = TestTree::new("callable-types-ok");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "struct Counter:\n\
+             \x20\x20\x20\x20value: i32\n\
+             \x20\x20\x20\x20fn by_value(self: Self) -> ():\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+             \x20\x20\x20\x20fn by_ref(self: &Self) -> ():\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+             \x20\x20\x20\x20fn by_mut(self: &var Self) -> ():\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+             \x20\x20\x20\x20fn by_raw(self: *Self) -> ():\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+             \x20\x20\x20\x20fn by_raw_mut(self: *var Self) -> ():\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+             fn accepts_safe(callback: &fn(i32) -> i32) -> ():\n\
+             \x20\x20\x20\x20pass\n\
+             fn accepts_unsafe(callback: &unsafe fn(i32) -> i32) -> ():\n\
+             \x20\x20\x20\x20pass\n",
+        )],
+    );
+    let (sources, resolved) = resolve_package(&package);
+    let typed = resolve_types(&resolved.program);
+    assert!(
+        typed.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &typed.diagnostics)
+    );
+
+    for (name, source, expected) in [
+        (
+            "receiver",
+            "struct Bad:\n\
+             \x20\x20\x20\x20fn invalid(self: &i32) -> ():\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20pass\n",
+            "receiver must have type",
+        ),
+        (
+            "bare-function",
+            "fn invalid(callback: fn(i32) -> i32) -> ():\n\
+             \x20\x20\x20\x20pass\n",
+            "bare function type",
+        ),
+    ] {
+        let tree = TestTree::new(name);
+        let package = tree.package("app", "executable", &[], &[("src/main.elx", source)]);
+        let (sources, resolved) = resolve_package(&package);
+        let typed = resolve_types(&resolved.program);
+        let text = diagnostics(&sources, &typed.diagnostics);
+        assert!(text.contains(expected), "{text}");
+    }
+}
+
+#[test]
 fn a_bare_trait_name_is_a_type_only_where_a_trait_is_expected() {
     // SPEC 6: a trait has no value representation, so it names a type only as
     // a reference target, a bound, or an `impl Trait for Type` trait.

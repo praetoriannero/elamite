@@ -19,7 +19,7 @@ use crate::memory::{
 };
 use crate::resolution::{DeclarationId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};
-use crate::types::{PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram};
+use crate::types::{FunctionInstance, PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
@@ -81,7 +81,7 @@ pub struct COutput {
 
 /// Deterministically mangles an Elamite declaration. The package-instance
 /// hash and declaration identity prevent collisions across dependency units;
-/// concrete generic arguments can be appended by Milestone 12.
+/// concrete generic arguments are appended by [`mangle_function_instance`].
 #[must_use]
 pub fn mangle_declaration(resolved: &ResolvedProgram, declaration: DeclarationId) -> String {
     let data = &resolved.declarations[declaration.index()];
@@ -108,6 +108,15 @@ pub fn mangle_declaration(resolved: &ResolvedProgram, declaration: DeclarationId
 }
 
 #[must_use]
+pub fn mangle_function_instance(resolved: &ResolvedProgram, instance: &FunctionInstance) -> String {
+    let mut symbol = mangle_declaration(resolved, instance.declaration);
+    for argument in &instance.arguments {
+        let _ = write!(symbol, "_t{}", argument.index());
+    }
+    symbol
+}
+
+#[must_use]
 pub fn emit_c(
     program: &ControlFlowProgram,
     resolved: &ResolvedProgram,
@@ -128,8 +137,8 @@ struct CEmitter<'a> {
     diagnostics: Vec<Diagnostic>,
     emitted_types: BTreeSet<TypeId>,
     emitting_types: BTreeSet<TypeId>,
-    structs: BTreeMap<DeclarationId, &'a crate::ir::TypedStruct>,
-    enums: BTreeMap<DeclarationId, &'a TypedEnum>,
+    structs: BTreeMap<TypeId, &'a crate::ir::TypedStruct>,
+    enums: BTreeMap<TypeId, &'a TypedEnum>,
     emitted_copy_helpers: BTreeSet<TypeId>,
     emitting_copy_helpers: BTreeSet<TypeId>,
     strategy: &'static dyn ManagedMemoryStrategy,
@@ -160,12 +169,12 @@ impl<'a> CEmitter<'a> {
             structs: program
                 .structs
                 .iter()
-                .map(|structure| (structure.declaration, structure))
+                .map(|structure| (structure.ty, structure))
                 .collect(),
             enums: program
                 .enums
                 .iter()
-                .map(|enumeration| (enumeration.declaration, enumeration))
+                .map(|enumeration| (enumeration.ty, enumeration))
                 .collect(),
             emitted_copy_helpers: BTreeSet::new(),
             emitting_copy_helpers: BTreeSet::new(),
@@ -350,11 +359,11 @@ impl<'a> CEmitter<'a> {
 
     fn emit_forward_structs(&mut self) {
         for structure in &self.program.structs {
-            let name = struct_name(structure.declaration);
+            let name = struct_name(structure.declaration, structure.ty);
             let _ = writeln!(self.output, "typedef struct {name} {name};");
         }
         for enumeration in &self.program.enums {
-            let name = enum_name(enumeration.declaration);
+            let name = enum_name(enumeration.declaration, enumeration.ty);
             let _ = writeln!(self.output, "typedef struct {name} {name};");
         }
         if !self.program.structs.is_empty() || !self.program.enums.is_empty() {
@@ -418,12 +427,80 @@ impl<'a> CEmitter<'a> {
                     );
                 }
             }
-            TypeKind::Nominal { identity, .. } => {
-                if let Some(structure) = self.structs.get(&identity.declaration).copied() {
+            TypeKind::Slice(element) => {
+                self.emit_type_definition(*element, span);
+                let name = slice_name(ty);
+                if let Some(c_type) = self.c_type(*element, span) {
+                    let _ = writeln!(
+                        self.output,
+                        "typedef struct {name} {{ {c_type} *values; uintptr_t length; }} {name};\n"
+                    );
+                }
+            }
+            TypeKind::Reference { target, .. }
+                if matches!(self.typed.types.kind(*target), TypeKind::Function { .. }) =>
+            {
+                self.emit_type_definition(*target, span);
+            }
+            TypeKind::Function {
+                receiver,
+                parameters,
+                return_type,
+                ..
+            } => {
+                self.emit_type_definition(*return_type, span);
+                if let Some(receiver) = receiver {
+                    self.emit_type_definition(*receiver, span);
+                }
+                for parameter in parameters {
+                    self.emit_type_definition(parameter.ty, span);
+                    if parameter.variadic
+                        && let Some(slice) =
+                            self.typed.types.id_for_kind(&TypeKind::Slice(parameter.ty))
+                    {
+                        self.emit_type_definition(slice, span);
+                    }
+                }
+                let Some(result) = self.c_type(*return_type, span) else {
+                    self.emitting_types.remove(&ty);
+                    return;
+                };
+                let mut c_parameters = Vec::new();
+                if let Some(receiver) = receiver
+                    && let Some(receiver) = self.c_type(*receiver, span)
+                {
+                    c_parameters.push(receiver);
+                }
+                for parameter in parameters {
+                    let parameter_type = if parameter.variadic {
+                        self.typed
+                            .types
+                            .id_for_kind(&TypeKind::Slice(parameter.ty))
+                            .and_then(|slice| self.c_type(slice, span))
+                    } else {
+                        self.c_type(parameter.ty, span)
+                    };
+                    if let Some(parameter_type) = parameter_type {
+                        c_parameters.push(parameter_type);
+                    }
+                }
+                let parameters = if c_parameters.is_empty() {
+                    "void".to_string()
+                } else {
+                    c_parameters.join(", ")
+                };
+                let _ = writeln!(
+                    self.output,
+                    "typedef {result} (*{})({parameters});\n",
+                    function_type_name(ty)
+                );
+            }
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
                     for (_, _, field_type) in &structure.fields {
                         self.emit_type_definition(*field_type, span);
                     }
-                    let name = struct_name(identity.declaration);
+                    let name = struct_name(structure.declaration, ty);
                     let _ = writeln!(self.output, "struct {name} {{");
                     if structure.fields.is_empty() {
                         self.output.push_str("    uint8_t _value;\n");
@@ -436,13 +513,13 @@ impl<'a> CEmitter<'a> {
                         }
                     }
                     self.output.push_str("};\n\n");
-                } else if let Some(enumeration) = self.enums.get(&identity.declaration).copied() {
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
                     for variant in &enumeration.variants {
                         for (_, _, field_type) in &variant.fields {
                             self.emit_type_definition(*field_type, span);
                         }
                     }
-                    let name = enum_name(identity.declaration);
+                    let name = enum_name(enumeration.declaration, ty);
                     let _ = writeln!(self.output, "struct {name} {{");
                     self.output.push_str("    uint32_t tag;\n    union {\n");
                     let mut has_payload = false;
@@ -475,7 +552,7 @@ impl<'a> CEmitter<'a> {
                     self.type_error(
                         ty,
                         span,
-                        "only non-generic structs and enums have a C representation",
+                        "this nominal type has no concrete C representation",
                     );
                 }
             }
@@ -499,12 +576,12 @@ impl<'a> CEmitter<'a> {
                 }
             }
             TypeKind::Array { element, .. } => self.emit_copy_helper(*element, span),
-            TypeKind::Nominal { identity, .. } => {
-                if let Some(structure) = self.structs.get(&identity.declaration).copied() {
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
                     for (_, _, field_type) in &structure.fields {
                         self.emit_copy_helper(*field_type, span);
                     }
-                } else if let Some(enumeration) = self.enums.get(&identity.declaration).copied() {
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
                     for variant in &enumeration.variants {
                         for (_, _, field_type) in &variant.fields {
                             self.emit_copy_helper(*field_type, span);
@@ -551,8 +628,8 @@ impl<'a> CEmitter<'a> {
                 );
                 self.output.push_str("    }\n    return result;\n");
             }
-            TypeKind::Nominal { identity, .. } => {
-                if let Some(structure) = self.structs.get(&identity.declaration).copied() {
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
                     let _ = writeln!(self.output, "    {c_type} result = {{0}};");
                     for (field, _, field_type) in &structure.fields {
                         let helper = copy_helper_name(self.resolve_alias(*field_type));
@@ -561,7 +638,7 @@ impl<'a> CEmitter<'a> {
                             writeln!(self.output, "    result.{field} = {helper}(value.{field});");
                     }
                     self.output.push_str("    return result;\n");
-                } else if let Some(enumeration) = self.enums.get(&identity.declaration).copied() {
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
                     let _ = writeln!(
                         self.output,
                         "    {c_type} result = {{0}};\n    result.tag = value.tag;\n    switch (value.tag) {{"
@@ -612,7 +689,7 @@ impl<'a> CEmitter<'a> {
             let Some(return_type) = self.c_type(function.return_type, Some(function.span)) else {
                 continue;
             };
-            let symbol = mangle_declaration(self.resolved, function.declaration);
+            let symbol = mangle_function_instance(self.resolved, &function.instance);
             let parameters = self.parameter_list(function);
             let _ = writeln!(self.output, "{return_type} {symbol}({parameters});");
         }
@@ -625,7 +702,7 @@ impl<'a> CEmitter<'a> {
             self.promoted.clear();
             return;
         };
-        let symbol = mangle_declaration(self.resolved, function.declaration);
+        let symbol = mangle_function_instance(self.resolved, &function.instance);
         let parameters = self.parameter_list(function);
         let location = self.location(function.span);
         let _ = writeln!(
@@ -803,6 +880,9 @@ impl<'a> CEmitter<'a> {
             Rvalue::Constant(constant) => {
                 self.constant_expression(constant, destination_type, span)?
             }
+            Rvalue::FunctionReference(instance) => {
+                mangle_function_instance(self.resolved, instance)
+            }
             Rvalue::Load(place) => self.place_expression(place),
             Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
             Rvalue::AllocateManaged { value, value_type } => {
@@ -868,17 +948,46 @@ impl<'a> CEmitter<'a> {
                 value, source_type, ..
             } => self.cast_expression(*value, *source_type, destination_type, span)?,
             Rvalue::Call {
-                declaration,
+                instance,
                 arguments,
             } => format!(
                 "{}({})",
-                mangle_declaration(self.resolved, *declaration),
+                mangle_function_instance(self.resolved, instance),
                 arguments
                     .iter()
                     .map(|argument| temporary_name(*argument))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Rvalue::IndirectCall { callee, arguments } => format!(
+                "{}({})",
+                temporary_name(*callee),
+                arguments
+                    .iter()
+                    .map(|argument| temporary_name(*argument))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Rvalue::VariadicSlice {
+                elements,
+                element_type,
+            } => {
+                let slice = self.c_type(destination_type, Some(span))?;
+                if elements.is_empty() {
+                    format!("({slice}){{NULL, (uintptr_t)0}}")
+                } else {
+                    let element = self.c_type(*element_type, Some(span))?;
+                    let values = elements
+                        .iter()
+                        .map(|element| temporary_name(*element))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "({slice}){{({element}[]){{{values}}}, (uintptr_t){}}}",
+                        elements.len()
+                    )
+                }
+            }
             Rvalue::Aggregate(aggregate) => {
                 self.aggregate_expression(aggregate, destination_type, span)?
             }
@@ -1004,6 +1113,22 @@ impl<'a> CEmitter<'a> {
         target: TypeId,
         span: Span,
     ) -> Option<String> {
+        let source_kind = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(source));
+        let target_kind = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(target));
+        if matches!(
+            (source_kind, target_kind),
+            (TypeKind::Reference { .. }, TypeKind::RawPointer { .. })
+                | (TypeKind::RawPointer { .. }, TypeKind::Reference { .. })
+        ) {
+            let target_type = self.c_type(target, Some(span))?;
+            return Some(format!("({target_type}){}", temporary_name(value)));
+        }
         let source_primitive = self.typed.types.expanded_primitive(source)?;
         let target_primitive = self.typed.types.expanded_primitive(target)?;
         let target_type = self.c_type(target, Some(span))?;
@@ -1058,7 +1183,7 @@ impl<'a> CEmitter<'a> {
                     .join(", ")
             ),
             AggregateValue::Enum {
-                declaration,
+                declaration: _,
                 variant,
                 fields,
             } => {
@@ -1066,7 +1191,7 @@ impl<'a> CEmitter<'a> {
                 if fields.is_empty() {
                     let payload = self
                         .enums
-                        .get(declaration)
+                        .get(&ty)
                         .and_then(|enumeration| {
                             enumeration
                                 .variants
@@ -1119,9 +1244,13 @@ impl<'a> CEmitter<'a> {
             } => {
                 self.emit_place_checks(Some(base), span);
                 let arguments = self.trap_arguments(span);
+                let bound = length.map_or_else(
+                    || format!("(uintmax_t){}.length", self.place_expression(base)),
+                    |length| format!("UINTMAX_C({length})"),
+                );
                 let _ = writeln!(
                     self.output,
-                    "    if ((uintmax_t){} >= UINTMAX_C({length})) el_trap(\"{}\", {arguments});",
+                    "    if ((uintmax_t){} >= {bound}) el_trap(\"{}\", {arguments});",
                     temporary_name(*index),
                     trap.code()
                 );
@@ -1372,21 +1501,24 @@ impl<'a> CEmitter<'a> {
             .to_string(),
             TypeKind::Tuple(_) => tuple_name(ty),
             TypeKind::Array { .. } => array_name(ty),
-            TypeKind::Nominal { identity, .. }
-                if self.structs.contains_key(&identity.declaration) =>
-            {
-                struct_name(identity.declaration)
+            TypeKind::Slice(_) => slice_name(ty),
+            TypeKind::Nominal { .. } if self.structs.contains_key(&ty) => {
+                struct_name(self.structs[&ty].declaration, ty)
             }
-            TypeKind::Nominal { identity, .. }
-                if self.enums.contains_key(&identity.declaration) =>
-            {
-                enum_name(identity.declaration)
+            TypeKind::Nominal { .. } if self.enums.contains_key(&ty) => {
+                enum_name(self.enums[&ty].declaration, ty)
             }
             // `&T`, `&var T`, `*T`, and `*var T` are all `T *`; mutability is
             // compile-time only (LEDGER 19).
+            TypeKind::Reference { target, .. }
+                if matches!(self.typed.types.kind(*target), TypeKind::Function { .. }) =>
+            {
+                function_type_name(*target)
+            }
             TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
                 format!("{} *", self.c_type(*target, span)?)
             }
+            TypeKind::Function { .. } => function_type_name(ty),
             TypeKind::Error => {
                 self.type_error(ty, span, "the explicit error type reached C generation");
                 return None;
@@ -1403,9 +1535,12 @@ impl<'a> CEmitter<'a> {
     }
 
     fn resolve_alias(&self, mut ty: TypeId) -> TypeId {
+        ty = self.typed.types.resolve_inference(ty);
         loop {
             match self.typed.types.kind(ty) {
-                TypeKind::Alias { target, .. } => ty = *target,
+                TypeKind::Alias { target, .. } => {
+                    ty = self.typed.types.resolve_inference(*target);
+                }
                 _ => return ty,
             }
         }
@@ -1414,7 +1549,11 @@ impl<'a> CEmitter<'a> {
     fn type_error(&mut self, ty: TypeId, span: Option<Span>, message: &str) {
         let mut diagnostic = Diagnostic::new(
             Category::CodeGeneration,
-            format!("{message} (canonical type {})", ty.index()),
+            format!(
+                "{message} (canonical type {}: {:?})",
+                ty.index(),
+                self.typed.types.kind(ty)
+            ),
         );
         if let Some(span) = span {
             diagnostic = diagnostic.with_primary(span);
@@ -1455,12 +1594,20 @@ fn value_place(value: &Rvalue) -> Option<&ControlFlowPlace> {
     }
 }
 
-fn struct_name(declaration: DeclarationId) -> String {
-    format!("el_struct_d{}", declaration.index())
+fn struct_name(declaration: DeclarationId, ty: TypeId) -> String {
+    format!("el_struct_d{}_t{}", declaration.index(), ty.index())
 }
 
-fn enum_name(declaration: DeclarationId) -> String {
-    format!("el_enum_d{}", declaration.index())
+fn enum_name(declaration: DeclarationId, ty: TypeId) -> String {
+    format!("el_enum_d{}_t{}", declaration.index(), ty.index())
+}
+
+fn slice_name(ty: TypeId) -> String {
+    format!("el_slice_t{}", ty.index())
+}
+
+fn function_type_name(ty: TypeId) -> String {
+    format!("el_fn_t{}", ty.index())
 }
 
 fn variant_member_name(variant: VariantId) -> String {
@@ -1625,6 +1772,7 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             TypeKind::Primitive(PrimitiveType::Unit)
             | TypeKind::Tuple(_)
             | TypeKind::Array { .. }
+            | TypeKind::Slice(_)
             | TypeKind::Nominal { .. }
             | TypeKind::Foreign { .. } => return "{0}".to_string(),
             TypeKind::Primitive(PrimitiveType::Str | PrimitiveType::String)

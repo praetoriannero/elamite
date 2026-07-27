@@ -137,6 +137,128 @@ fn main() -> ():
 }
 
 #[test]
+fn monomorphizes_explicit_and_inferred_generic_calls() {
+    let source = r#"
+fn identity[T](value: T) -> T:
+    return value
+
+fn selector[T]() -> &fn(T) -> T:
+    return identity[T]
+
+fn main() -> ():
+    println(identity[i32](40))
+    println(identity(41))
+    println(identity(42u32))
+    let selected: &fn(i32) -> i32 = selector()
+    println(selected(43))
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "40\n41\n42\n43\n");
+}
+
+#[test]
+fn monomorphizes_explicit_and_inferred_generic_structs() {
+    let source = r#"
+struct Box[T]:
+    value: T
+
+fn main() -> ():
+    let inferred = Box { value: 40 }
+    let explicit = Box[i32] { value: 41 }
+    println(inferred.value)
+    println(explicit.value)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "40\n41\n");
+}
+
+#[test]
+fn infers_enclosing_and_method_generic_arguments_from_bound_calls() {
+    let source = r#"
+struct Box[T]:
+    value: T
+
+    fn get(self: &Self) -> T:
+        return self.value
+
+    fn replace[U](self: &Self, value: U) -> U:
+        return value
+
+    fn create(value: T) -> Self:
+        return Self { value: value }
+
+fn main() -> ():
+    let boxed = Box { value: 40 }
+    let explicit = Box[i32].create(42)
+    let inferred = Box.create(43)
+    println(boxed.get())
+    println(boxed.replace(41))
+    println(explicit.get())
+    println(inferred.get())
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "40\n41\n42\n43\n");
+}
+
+#[test]
+fn monomorphizes_inferred_and_expected_generic_enums() {
+    let source = r#"
+enum Maybe[T]:
+    None
+    Some(T)
+
+fn main() -> ():
+    let some = Maybe.Some(42)
+    let explicit = Maybe[i32].Some(41)
+    let none: Maybe[i32] = Maybe.None
+    println(42)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+}
+
+#[test]
+fn permits_finite_recursive_generic_instantiation_sets() {
+    let source = r#"
+fn left[T](value: T, remaining: i32) -> T:
+    if remaining == 0:
+        return value
+    return right(value, remaining - 1)
+
+fn right[T](value: T, remaining: i32) -> T:
+    if remaining == 0:
+        return value
+    return left(value, remaining - 1)
+
+fn main() -> ():
+    println(left(42, 4))
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+}
+
+#[test]
+fn emits_recursive_generic_types_through_explicit_indirection() {
+    let source = r#"
+struct Node[T]:
+    value: T
+    next: *Node[T]
+
+fn main() -> ():
+    let node = Node { value: 42, next: null }
+    println(node.value)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+}
+
+#[test]
 fn preserves_left_to_right_evaluation_order() {
     let (stdout, stderr, status) = build_and_run(
         r#"
@@ -157,6 +279,69 @@ fn main() -> ():
     assert_eq!(stdout, "AB=3\n");
     assert_eq!(stderr, "");
     assert_eq!(status, 0);
+}
+
+#[test]
+fn builds_and_runs_methods_function_references_and_variadic_packing() {
+    let source = r#"
+struct Counter:
+    value: i32
+
+    fn new(value: i32) -> Self:
+        return Self{value: value}
+
+    fn plus(self: Self, amount: i32) -> i32:
+        return self.value + amount
+
+    fn read(self: &Self) -> i32:
+        return self.value
+
+    fn add(self: &var Self, amount: i32) -> ():
+        self.value += amount
+
+    fn raw_read(self: *Self) -> i32:
+        unsafe:
+            return (*self).value
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn choose() -> &fn(i32) -> i32:
+    return increment
+
+fn apply(callback: &fn(i32) -> i32, value: i32) -> i32:
+    return callback(value)
+
+fn variadic(first: i32, rest: ...i32) -> i32:
+    return first + rest[1]
+
+struct Transform:
+    apply: &fn(i32) -> i32
+
+fn main() -> ():
+    var counter = Counter.new(10)
+    counter.add(2)
+    let shared = &counter
+    let pointer: *Counter = shared as *Counter
+    let unbound: &fn(&var Counter, i32) -> () = Counter.add
+    unbound(&var counter, 3)
+    let callback = choose()
+    let transform = Transform{apply: callback}
+    println(counter.read())
+    println(shared.read())
+    println(Counter.new(20).plus(2))
+    println(pointer.raw_read())
+    println(apply(callback, 40))
+    println(transform.apply(4))
+    println(callback == increment)
+    println(variadic(7, 8, 9))
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "15\n15\n22\n15\n41\n5\ntrue\n16\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
 }
 
 #[test]
@@ -624,6 +809,35 @@ fn executable_subset_rejects_for_at_the_lowering_boundary() {
         diagnostics.iter().any(|diagnostic| {
             diagnostic.category == Category::Lowering
                 && diagnostic.message.contains("`for` lowering")
+                && diagnostic.primary.is_some()
+        }),
+        "{}",
+        render(&sources, &diagnostics)
+    );
+}
+
+#[test]
+fn rejects_unbounded_recursive_generic_instantiation() {
+    let tree = TestTree::new("unbounded-generic");
+    tree.executable(
+        r#"
+fn expand[T](value: T) -> T:
+    expand([value])
+    return value
+
+fn main() -> ():
+    println(expand(1))
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let diagnostics = compile(&graph, &mut sources, Target::X86_64)
+        .err()
+        .expect("unbounded generic expansion must be rejected");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::TypeSystem
+                && diagnostic.message.contains("expands without bound")
                 && diagnostic.primary.is_some()
         }),
         "{}",

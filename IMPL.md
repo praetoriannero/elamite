@@ -1,6 +1,6 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 10 complete, Milestone 11 next
+> Status: Active — Milestones 0 through 12 complete, Milestone 13 next
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -620,6 +620,15 @@ Validation:
 
 ### Milestone 11: methods and function references
 
+> Status: Complete for non-generic inherent methods and named function
+> references. All five receiver forms are checked and lowered; bound calls
+> perform only the specified receiver adaptation; associated and unbound
+> selection, field-first indirect calls, safe/unsafe signature identity,
+> function-reference equality, and homogeneous variadic slice packing reach
+> executable C99. Generic selection is completed in Milestone 12; trait method
+> lookup remains Milestone 13, collection storage remains Milestone 14, and
+> unsafe invocation-context enforcement remains Milestone 16.
+
 **Goal:** Complete callable resolution without introducing closures.
 
 Implementation work:
@@ -655,6 +664,13 @@ Validation:
 - Explicit proof that no syntax path constructs a closure or bound-method value.
 
 ### Milestone 12: generics and monomorphization
+
+> Status: Complete. Generic bodies are checked once against declared
+> comparison bounds; calls, function references, structs, enums, and inherent
+> methods use unique all-or-nothing inference; concrete signatures and nominal
+> layouts are cached; typed IR discovers reachable instances to a fixed point;
+> unbounded structural growth is rejected; and concrete type arguments are
+> retained in backend identities.
 
 **Goal:** Type-check generic code once and emit a finite set of concrete
 instantiations.

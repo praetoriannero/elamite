@@ -209,7 +209,7 @@ fn lowered(source: &str) -> (elamite::ir::TypedIrProgram, bool) {
     assert!(typed.diagnostics.is_empty(), "{:?}", typed.diagnostics);
     let checked = elamite::check::check(&resolved, &mut typed.program);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
-    let high_level = elamite::ir::lower_typed_ir(&resolved, &typed.program, &checked.program);
+    let high_level = elamite::ir::lower_typed_ir(&resolved, &mut typed.program, &checked.program);
     let control_flow = elamite::ir::lower_control_flow(&high_level.program, &typed.program);
     let requires_managed_memory = control_flow.requires_managed_memory;
     for function in &control_flow.functions {

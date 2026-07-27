@@ -1,9 +1,9 @@
-//! Core expression, function, and control-flow checker (`IMPL.md`
-//! Milestones 6 and 7).
+//! Core expression, function, method, and control-flow checker (`IMPL.md`
+//! Milestones 6, 7, 11, and 12).
 //!
-//! This module type-checks the non-generic, non-trait, non-method subset of
-//! the language: plain module-level named functions and the ordinary value
-//! operations, control flow, and patterns in their bodies. It consumes the
+//! This module type-checks the pre-trait subset of the language: module-level
+//! functions, generic and non-generic inherent methods, function references,
+//! and ordinary value operations, control flow, and patterns in their bodies. It consumes the
 //! stable identities from [`crate::resolution`] and the canonical types from
 //! [`crate::types`] and adds: function parameter/return/arity checking for
 //! direct named calls, place classification (value / addressable / mutable /
@@ -23,11 +23,10 @@
 //! untyped in arm bodies. This is a documented merge of two tightly-coupled
 //! milestones' implementation, not a scope reduction of either.
 //!
-//! Several rules that the ledger assigns to later milestones are
-//! deliberately left unchecked here rather than approximated unsoundly:
-//! bound-method and receiver resolution (Milestone 11), generic
-//! instantiation (Milestone 12), trait-bound method/operator dispatch such
-//! as full `PartialEq`/`PartialOrd`/`Display` obligations (Milestone 13),
+//! Several rules that the ledger assigns to later milestones are deliberately
+//! left unchecked here rather than approximated unsoundly: trait-bound method
+//! dispatch and full concrete `PartialEq`/`PartialOrd`/`Display` selection
+//! (Milestone 13),
 //! `for`-binding element typing (Milestone 14), and `?`/`Close`/`defer`
 //! propagation semantics (Milestone 15). Expressions that fall into those
 //! areas are still walked (so nested diagnostics and copies are not lost)
@@ -43,12 +42,13 @@ use crate::diagnostics::{Category, Diagnostic};
 use crate::lexer::{Keyword, Token, TokenKind};
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::resolution::{
-    DeclarationId, DeclarationKind, FieldId, LocalBindingId, MemberId, NameTarget, ResolvedProgram,
-    VariantId,
+    DeclarationId, DeclarationKind, FieldId, GenericParameterId, LocalBindingId, MemberId,
+    NameTarget, ResolvedProgram, VariantId,
 };
 use crate::source::Span;
 use crate::types::{
-    self, ExpectedType, Mutability, PlaceKind, PrimitiveType, TypeId, TypeKind, TypedProgram,
+    self, Abi, ExpectedType, FunctionInstance, FunctionParameter, Mutability, PlaceKind,
+    PrimitiveType, Safety, Substitution, TypeId, TypeKind, TypedProgram,
 };
 
 /// Whether a checked local binding's root storage is a rebindable, mutable
@@ -77,6 +77,43 @@ pub struct CheckedProgram {
     pub copied_pattern_bindings: BTreeSet<LocalBindingId>,
     /// Canonical payload type selected for each copied pattern binding.
     pub pattern_binding_types: BTreeMap<LocalBindingId, TypeId>,
+    /// Named functions and type-selected methods used as first-class function
+    /// references. The key is the complete expression span, not merely its
+    /// final identifier, so lowering can distinguish a type selection from a
+    /// bound member expression.
+    pub function_references: BTreeMap<Span, FunctionInstance>,
+    /// Callable resolution selected for each call expression.
+    pub calls: BTreeMap<Span, CheckedCall>,
+}
+
+/// The callable selected for one checked call expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckedCall {
+    Direct(FunctionInstance),
+    BoundMethod {
+        instance: FunctionInstance,
+        adjustment: ReceiverAdjustment,
+    },
+    Indirect,
+    Print {
+        newline: bool,
+    },
+}
+
+/// The only implicit adaptation permitted by Elamite: adaptation of a bound
+/// method receiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverAdjustment {
+    /// Pass the receiver expression unchanged.
+    Pass,
+    /// Copy an ordinary value receiver.
+    CopyValue,
+    /// Dereference a safe reference and copy its target for `self: Self`.
+    DereferenceAndCopy,
+    /// Form `&receiver` for `self: &Self`.
+    BorrowShared,
+    /// Form `&var receiver` for `self: &var Self`.
+    BorrowMutable,
 }
 
 pub struct CheckOutput {
@@ -84,11 +121,10 @@ pub struct CheckOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Checks every non-generic, non-method, non-trait module-level function
-/// body, and rejects struct/enum containment cycles across the whole
-/// program. `typed` is extended in place with any composite types (tuples,
-/// arrays, collection instantiations, references) that first appear inside
-/// an expression rather than a declared signature.
+/// Checks every module-level function and inherent method body once,
+/// and rejects struct/enum containment cycles across the whole program.
+/// `typed` is extended in place with any composite types that first appear
+/// inside an expression rather than a declared signature.
 #[must_use]
 pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutput {
     check_for_target(resolved, typed, 64)
@@ -118,6 +154,7 @@ struct Checker<'a> {
     /// Nesting depth of `unsafe` blocks being checked.
     unsafe_depth: u32,
     pointer_bits: u8,
+    current_self_declaration: Option<DeclarationId>,
     program: CheckedProgram,
     diagnostics: Vec<Diagnostic>,
 }
@@ -138,6 +175,7 @@ impl<'a> Checker<'a> {
             defer_depth: 0,
             unsafe_depth: 0,
             pointer_bits,
+            current_self_declaration: None,
             program: CheckedProgram::default(),
             diagnostics: Vec::new(),
         }
@@ -150,9 +188,10 @@ impl<'a> Checker<'a> {
             .iter()
             .filter(|declaration| {
                 declaration.kind == DeclarationKind::Function
-                    && declaration.parent_declaration.is_none()
                     && declaration.parent_impl.is_none()
-                    && declaration.generic_parameters.is_empty()
+                    && declaration.parent_declaration.is_none_or(|parent| {
+                        self.resolved.declarations[parent.index()].kind != DeclarationKind::Trait
+                    })
             })
             .map(|declaration| declaration.id)
             .collect();
@@ -177,15 +216,38 @@ impl<'a> Checker<'a> {
         let syntax = self.resolved.declarations[declaration_id.index()]
             .syntax
             .clone();
+        self.current_self_declaration = self.resolved.declarations[declaration_id.index()]
+            .parent_declaration
+            .filter(|parent| {
+                self.resolved.declarations[parent.index()].kind != DeclarationKind::Trait
+            });
         self.local_types.clear();
         self.local_rebindable.clear();
         if let Some(parameters_node) = types::direct_child(&syntax, SyntaxKind::Parameters) {
             let parameter_nodes = types::direct_children(parameters_node, SyntaxKind::Parameter);
-            for (parameter_node, parameter) in parameter_nodes.iter().zip(&signature.parameters) {
+            let mut ordinary_parameters = signature.parameters.iter();
+            for parameter_node in parameter_nodes {
+                let is_receiver = types::direct_tokens(parameter_node)
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::SelfValue)));
+                let parameter_type = if is_receiver {
+                    signature.receiver
+                } else {
+                    ordinary_parameters.next().map(|parameter| {
+                        if parameter.variadic {
+                            self.typed.types.intern(TypeKind::Slice(parameter.ty))
+                        } else {
+                            parameter.ty
+                        }
+                    })
+                };
+                let Some(parameter_type) = parameter_type else {
+                    continue;
+                };
                 if let Some(token) = parameter_name_token(parameter_node)
                     && let Some(&id) = self.span_to_local.get(&token.span)
                 {
-                    self.local_types.insert(id, parameter.ty);
+                    self.local_types.insert(id, parameter_type);
                     self.local_rebindable.insert(id, Rebindable::Let);
                 }
             }
@@ -208,6 +270,7 @@ impl<'a> Checker<'a> {
                 );
             }
         }
+        self.current_self_declaration = None;
     }
 
     /// Checks every statement in `block` and returns whether the block
@@ -688,6 +751,16 @@ impl<'a> Checker<'a> {
                 }
             }
             Coverage::Bools(values) => values.len() >= 2,
+            Coverage::BuiltinVariants(variants) => {
+                let resolved = self.typed.types.resolve_inference(scrutinee_type);
+                matches!(
+                    self.typed.types.kind(resolved),
+                    TypeKind::Builtin { builtin, .. }
+                        if self.resolved.builtin_name(*builtin) == "Option"
+                            && variants.contains("Some")
+                            && variants.contains("None")
+                )
+            }
             Coverage::Variants(variants) => {
                 let resolved = self.typed.types.resolve_inference(scrutinee_type);
                 match self.typed.types.kind(resolved) {
@@ -754,6 +827,30 @@ impl<'a> Checker<'a> {
                         missing.join(", ")
                     ))
                 }
+            }
+            TypeKind::Builtin { builtin, .. }
+                if self.resolved.builtin_name(*builtin) == "Option" =>
+            {
+                let covered = match coverage {
+                    Coverage::BuiltinVariants(variants) => variants,
+                    _ => {
+                        return Some(
+                            "this match is not exhaustive; cover `Option.Some` and \
+                             `Option.None`, or add a catch-all `_` arm"
+                                .to_string(),
+                        );
+                    }
+                };
+                let missing = ["Some", "None"]
+                    .into_iter()
+                    .filter(|variant| !covered.contains(*variant))
+                    .collect::<Vec<_>>();
+                (!missing.is_empty()).then(|| {
+                    format!(
+                        "this match is not exhaustive; unmatched variant(s): {}",
+                        missing.join(", ")
+                    )
+                })
             }
             TypeKind::Error => None,
             _ => Some("this match is not exhaustive; add a catch-all `_` arm".to_string()),
@@ -925,23 +1022,19 @@ impl<'a> Checker<'a> {
             let (Some(&first), Some(&last)) = (identifiers.first(), identifiers.last()) else {
                 return Coverage::Other;
             };
+            if let Some(coverage) =
+                self.check_builtin_variant_pattern(first, last, pattern, scrutinee_type, false)
+            {
+                return coverage;
+            }
             let Some((enum_declaration, variant)) = self.resolve_pattern_variant(first, last)
             else {
                 return Coverage::Other;
             };
-            if !self.resolved.declarations[enum_declaration.index()]
-                .generic_parameters
-                .is_empty()
+            if self
+                .nominal_arguments_for_type(scrutinee_type, enum_declaration)
+                .is_none()
             {
-                return Coverage::Other;
-            }
-            let enum_type = self
-                .typed
-                .declaration_types
-                .get(&enum_declaration)
-                .copied()
-                .unwrap_or_else(|| self.typed.types.error());
-            if !self.types_compatible(enum_type, scrutinee_type) {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::Pattern,
@@ -989,6 +1082,96 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn check_builtin_variant_pattern(
+        &mut self,
+        first: &Token,
+        last: &Token,
+        pattern: &SyntaxNode,
+        scrutinee_type: TypeId,
+        positional: bool,
+    ) -> Option<Coverage> {
+        let NameTarget::Item(crate::resolution::ItemId::Builtin(builtin)) =
+            self.resolved.reference_at(first.span)?.target
+        else {
+            return None;
+        };
+        if self.resolved.builtin_name(builtin) != "Option" {
+            return None;
+        }
+        let variant = token_text(last);
+        if !matches!(variant.as_str(), "Some" | "None") {
+            return None;
+        }
+        let resolved = self.typed.types.resolve_inference(scrutinee_type);
+        let argument = match self.typed.types.kind(resolved).clone() {
+            TypeKind::Builtin {
+                builtin: actual,
+                arguments,
+            } if actual == builtin && arguments.len() == 1 => Some(arguments[0]),
+            TypeKind::Error => Some(self.typed.types.error()),
+            _ => None,
+        };
+        if argument.is_none() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Pattern,
+                    "this pattern's type does not match the scrutinee's type",
+                )
+                .with_primary(pattern.span),
+            );
+        }
+        let children = child_nodes(pattern);
+        let required = usize::from(variant == "Some");
+        if positional {
+            if children.len() != required {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Pattern,
+                        format!(
+                            "`Option.{variant}` has {required} field{}, but the pattern supplies {}",
+                            if required == 1 { "" } else { "s" },
+                            children.len()
+                        ),
+                    )
+                    .with_primary(pattern.span),
+                );
+            }
+            if variant == "Some"
+                && let (Some(child), Some(argument)) = (children.first(), argument)
+            {
+                self.check_pattern(child, argument);
+            }
+        } else if required != 0 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Pattern,
+                    "`Option.Some` has a field and must be matched with `(...)`",
+                )
+                .with_primary(pattern.span),
+            );
+        }
+        Some(Coverage::BuiltinVariants(BTreeSet::from([variant])))
+    }
+
+    fn nominal_arguments_for_type(
+        &self,
+        mut ty: TypeId,
+        declaration: DeclarationId,
+    ) -> Option<Vec<TypeId>> {
+        loop {
+            ty = self.typed.types.resolve_inference(ty);
+            match self.typed.types.kind(ty) {
+                TypeKind::Alias { target, .. } => ty = *target,
+                TypeKind::Nominal {
+                    identity,
+                    arguments,
+                } if identity.declaration == declaration => return Some(arguments.clone()),
+                TypeKind::Error => return Some(Vec::new()),
+                _ => return None,
+            }
+        }
+    }
+
     fn check_aggregate_pattern(
         &mut self,
         pattern: &SyntaxNode,
@@ -1009,24 +1192,17 @@ impl<'a> Checker<'a> {
             else {
                 return Coverage::Other;
             };
+            if let Some(coverage) =
+                self.check_builtin_variant_pattern(first, last, pattern, scrutinee_type, true)
+            {
+                return coverage;
+            }
             let Some((enum_declaration, variant)) = self.resolve_pattern_variant(first, last)
             else {
                 return Coverage::Other;
             };
-            if !self.resolved.declarations[enum_declaration.index()]
-                .generic_parameters
-                .is_empty()
-            {
-                self.check_pattern_lenient(pattern);
-                return Coverage::Other;
-            }
-            let enum_type = self
-                .typed
-                .declaration_types
-                .get(&enum_declaration)
-                .copied()
-                .unwrap_or_else(|| self.typed.types.error());
-            if !self.types_compatible(enum_type, scrutinee_type) {
+            let owner_arguments = self.nominal_arguments_for_type(scrutinee_type, enum_declaration);
+            if owner_arguments.is_none() {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::Pattern,
@@ -1036,12 +1212,21 @@ impl<'a> Checker<'a> {
                 );
             }
             let fields = self.resolved.variants[variant.index()].fields.clone();
+            let owner_arguments = owner_arguments.unwrap_or_default();
             match pattern.kind {
-                SyntaxKind::VariantPattern => {
-                    self.check_variant_positional_pattern(pattern, &fields)
-                }
+                SyntaxKind::VariantPattern => self.check_variant_positional_pattern(
+                    pattern,
+                    &fields,
+                    enum_declaration,
+                    &owner_arguments,
+                ),
                 SyntaxKind::RecordPattern => {
-                    self.check_record_pattern_fields(pattern, &fields);
+                    self.check_record_pattern_fields(
+                        pattern,
+                        &fields,
+                        enum_declaration,
+                        &owner_arguments,
+                    );
                 }
                 _ => {}
             }
@@ -1059,17 +1244,8 @@ impl<'a> Checker<'a> {
         if declaration.kind != DeclarationKind::Struct {
             return Coverage::Other;
         }
-        if !declaration.generic_parameters.is_empty() {
-            self.check_pattern_lenient(pattern);
-            return Coverage::Other;
-        }
-        let struct_type = self
-            .typed
-            .declaration_types
-            .get(&declaration_id)
-            .copied()
-            .unwrap_or_else(|| self.typed.types.error());
-        if !self.types_compatible(struct_type, scrutinee_type) {
+        let owner_arguments = self.nominal_arguments_for_type(scrutinee_type, declaration_id);
+        if owner_arguments.is_none() {
             self.diagnostics.push(
                 Diagnostic::new(
                     Category::Pattern,
@@ -1088,7 +1264,12 @@ impl<'a> Checker<'a> {
             .map(|field| field.id)
             .collect();
         let all_irrefutable = match pattern.kind {
-            SyntaxKind::RecordPattern => self.check_record_pattern_fields(pattern, &fields),
+            SyntaxKind::RecordPattern => self.check_record_pattern_fields(
+                pattern,
+                &fields,
+                declaration_id,
+                &owner_arguments.unwrap_or_default(),
+            ),
             _ => false,
         };
         if all_irrefutable {
@@ -1100,7 +1281,13 @@ impl<'a> Checker<'a> {
 
     /// Checks a `VariantPattern`'s parenthesized positional sub-patterns
     /// against a tuple-like variant's field types.
-    fn check_variant_positional_pattern(&mut self, pattern: &SyntaxNode, fields: &[FieldId]) {
+    fn check_variant_positional_pattern(
+        &mut self,
+        pattern: &SyntaxNode,
+        fields: &[FieldId],
+        _owner: DeclarationId,
+        owner_arguments: &[TypeId],
+    ) {
         let sub_patterns = child_nodes(pattern);
         if sub_patterns.len() != fields.len() {
             self.diagnostics.push(
@@ -1119,8 +1306,10 @@ impl<'a> Checker<'a> {
         for (index, sub_pattern) in sub_patterns.iter().enumerate() {
             let field_type = fields
                 .get(index)
-                .and_then(|field| self.typed.field_types.get(field))
-                .copied()
+                .and_then(|field| {
+                    self.typed
+                        .instantiate_field_type(self.resolved, *field, owner_arguments)
+                })
                 .unwrap_or_else(|| self.typed.types.error());
             self.check_pattern(sub_pattern, field_type);
         }
@@ -1131,7 +1320,13 @@ impl<'a> Checker<'a> {
     /// sub-pattern is itself irrefutable, or `..` was used to ignore the
     /// rest. Enforces "every field must appear, or use `..`" (`SPEC.md`
     /// section 7).
-    fn check_record_pattern_fields(&mut self, pattern: &SyntaxNode, required: &[FieldId]) -> bool {
+    fn check_record_pattern_fields(
+        &mut self,
+        pattern: &SyntaxNode,
+        required: &[FieldId],
+        _owner: DeclarationId,
+        owner_arguments: &[TypeId],
+    ) -> bool {
         let mut seen: BTreeSet<FieldId> = BTreeSet::new();
         let mut has_rest = false;
         let mut all_irrefutable = true;
@@ -1180,9 +1375,7 @@ impl<'a> Checker<'a> {
             }
             let field_type = self
                 .typed
-                .field_types
-                .get(&field_id)
-                .copied()
+                .instantiate_field_type(self.resolved, field_id, owner_arguments)
                 .unwrap_or_else(|| self.typed.types.error());
             match child_nodes(field_node).into_iter().next() {
                 Some(sub_pattern) => {
@@ -1220,40 +1413,6 @@ impl<'a> Checker<'a> {
         has_rest || all_irrefutable
     }
 
-    /// Registers pattern bindings at the error type, without further
-    /// diagnostics, for a generic struct/enum pattern (generic
-    /// instantiation is Milestone 12).
-    fn check_pattern_lenient(&mut self, pattern: &SyntaxNode) {
-        let error = self.typed.types.error();
-        match pattern.kind {
-            SyntaxKind::VariantPattern => {
-                for sub_pattern in child_nodes(pattern) {
-                    self.check_pattern(sub_pattern, error);
-                }
-            }
-            SyntaxKind::RecordPattern => {
-                for field_node in child_nodes(pattern) {
-                    if field_node.kind != SyntaxKind::PatternField {
-                        continue;
-                    }
-                    match child_nodes(field_node).into_iter().next() {
-                        Some(sub_pattern) => {
-                            self.check_pattern(sub_pattern, error);
-                        }
-                        None => {
-                            if let Some(token) = first_identifier_token(field_node)
-                                && token_text(token) != "_"
-                            {
-                                self.bind_pattern(token, error);
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn bind_pattern(&mut self, token: &Token, ty: TypeId) {
         if let Some(&id) = self.span_to_local.get(&token.span) {
             self.local_types.insert(id, ty);
@@ -1271,19 +1430,19 @@ impl<'a> Checker<'a> {
         let (ty, place) = match node.kind {
             SyntaxKind::LiteralExpression => self.check_literal(node, expected),
             SyntaxKind::FormattedStringExpression => self.check_formatted_string(node),
-            SyntaxKind::NameExpression => self.check_name_expression(node),
-            SyntaxKind::MemberExpression => self.check_member_expression(node),
+            SyntaxKind::NameExpression => self.check_name_expression(node, expected),
+            SyntaxKind::MemberExpression => self.check_member_expression(node, expected),
             SyntaxKind::UnaryExpression => self.check_unary(node, expected),
             SyntaxKind::BinaryExpression => self.check_binary(node),
             SyntaxKind::CastExpression => self.check_cast(node),
-            SyntaxKind::CallExpression => self.check_call(node),
-            SyntaxKind::BracketExpression => self.check_index(node),
+            SyntaxKind::CallExpression => self.check_call(node, expected),
+            SyntaxKind::BracketExpression => self.check_bracket_expression(node, expected),
             SyntaxKind::TryExpression => self.check_try(node),
             SyntaxKind::ParenthesizedExpression => self.check_parenthesized(node, expected),
             SyntaxKind::TupleExpression => self.check_tuple(node, expected),
             SyntaxKind::ArrayExpression => self.check_array(node, expected),
             SyntaxKind::MacroExpression => self.check_macro(node),
-            SyntaxKind::RecordExpression => self.check_record_expression(node),
+            SyntaxKind::RecordExpression => self.check_record_expression(node, expected),
             _ => (self.typed.types.error(), PlaceKind::Value),
         };
         self.program.expression_types.insert(node.span, ty);
@@ -1377,17 +1536,25 @@ impl<'a> Checker<'a> {
         )
     }
 
-    fn check_name_expression(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+    fn check_name_expression(
+        &mut self,
+        node: &SyntaxNode,
+        expected: ExpectedType,
+    ) -> (TypeId, PlaceKind) {
         let Some(token) = node.children.iter().find_map(|child| match child {
             SyntaxElement::Token(token) => Some(token),
             SyntaxElement::Node(_) => None,
         }) else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
-        self.check_name_target(token.span)
+        let result = self.check_name_target(token.span, expected);
+        if let Some(instance) = self.program.function_references.get(&token.span).cloned() {
+            self.program.function_references.insert(node.span, instance);
+        }
+        result
     }
 
-    fn check_name_target(&mut self, span: Span) -> (TypeId, PlaceKind) {
+    fn check_name_target(&mut self, span: Span, expected: ExpectedType) -> (TypeId, PlaceKind) {
         match self
             .resolved
             .reference_at(span)
@@ -1406,11 +1573,530 @@ impl<'a> Checker<'a> {
                 };
                 (ty, place)
             }
-            // Items, `Self`, and generic parameters used as a bare value are
-            // Milestone 11 (function references) territory; unresolved names
-            // were already diagnosed in Milestone 4.
+            Some(NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)))
+                if matches!(
+                    self.resolved.declarations[declaration.index()].kind,
+                    DeclarationKind::Function | DeclarationKind::ForeignFunction
+                ) =>
+            {
+                let Some(instance) =
+                    self.function_instance_from_expected(declaration, None, expected, span)
+                else {
+                    return (self.typed.types.error(), PlaceKind::Value);
+                };
+                let ty = self.function_reference_type(&instance);
+                self.program.function_references.insert(span, instance);
+                (ty, PlaceKind::Value)
+            }
+            // Other items, `Self`, and generic parameters used as bare values
+            // have no runtime value in the Milestone 11 subset.
             _ => (self.typed.types.error(), PlaceKind::Value),
         }
+    }
+
+    fn function_reference_type(&mut self, instance: &FunctionInstance) -> TypeId {
+        let Some(signature) = self.typed.instantiate_signature(self.resolved, instance) else {
+            return self.typed.types.error();
+        };
+        let TypeKind::Function {
+            safety,
+            abi,
+            receiver,
+            parameters,
+            return_type,
+        } = self.typed.types.kind(signature.ty).clone()
+        else {
+            return self.typed.types.error();
+        };
+        let parameters = receiver
+            .map(|ty| FunctionParameter {
+                ty,
+                variadic: false,
+            })
+            .into_iter()
+            .chain(parameters)
+            .collect();
+        let function = self.typed.types.intern(TypeKind::Function {
+            safety,
+            abi,
+            receiver: None,
+            parameters,
+            return_type,
+        });
+        self.typed.types.intern(TypeKind::Reference {
+            mutability: Mutability::Shared,
+            target: function,
+        })
+    }
+
+    fn callable_parameters(&self, declaration: DeclarationId) -> Vec<GenericParameterId> {
+        self.typed
+            .callable_generic_parameters(self.resolved, declaration)
+    }
+
+    fn generic_inference_variables(
+        &mut self,
+        parameters: &[GenericParameterId],
+    ) -> BTreeMap<GenericParameterId, TypeId> {
+        parameters
+            .iter()
+            .map(|parameter| (*parameter, self.typed.types.fresh_inference_variable()))
+            .collect()
+    }
+
+    fn inference_substitution(variables: &BTreeMap<GenericParameterId, TypeId>) -> Substitution {
+        let mut substitution = Substitution::new();
+        for (parameter, variable) in variables {
+            substitution.insert(*parameter, *variable);
+        }
+        substitution
+    }
+
+    fn infer_against(
+        &mut self,
+        template: TypeId,
+        actual: TypeId,
+        variables: &BTreeMap<GenericParameterId, TypeId>,
+    ) -> bool {
+        let pattern = self
+            .typed
+            .types
+            .substitute(template, &Self::inference_substitution(variables));
+        self.typed.types.unify(pattern, actual).is_ok()
+    }
+
+    fn finish_inference(
+        &self,
+        parameters: &[GenericParameterId],
+        variables: &BTreeMap<GenericParameterId, TypeId>,
+    ) -> Option<Vec<TypeId>> {
+        parameters
+            .iter()
+            .map(|parameter| {
+                let variable = variables.get(parameter)?;
+                let resolved = self.typed.types.resolve_inference(*variable);
+                (!matches!(
+                    self.typed.types.kind(resolved),
+                    TypeKind::InferenceVariable(_)
+                ))
+                .then_some(resolved)
+            })
+            .collect()
+    }
+
+    fn type_from_expression(&mut self, node: &SyntaxNode) -> Option<TypeId> {
+        match node.kind {
+            SyntaxKind::NameExpression | SyntaxKind::MemberExpression => {
+                let span = Self::callee_target_span(node)?;
+                match self.resolved.reference_at(span)?.target {
+                    NameTarget::GenericParameter(parameter) => Some(
+                        self.typed
+                            .types
+                            .intern(TypeKind::GenericParameter(parameter)),
+                    ),
+                    NameTarget::SelfType => self.current_self_declaration.and_then(|declaration| {
+                        self.typed.declaration_types.get(&declaration).copied()
+                    }),
+                    NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) => self
+                        .typed
+                        .instantiate_declaration_type(self.resolved, declaration, &[]),
+                    NameTarget::Item(crate::resolution::ItemId::Builtin(builtin)) => {
+                        let name = self.resolved.builtin_name(builtin);
+                        types::primitive_from_name(name)
+                            .map(|primitive| self.typed.types.primitive(primitive))
+                            .or_else(|| {
+                                Some(self.typed.types.intern(TypeKind::Builtin {
+                                    builtin,
+                                    arguments: Vec::new(),
+                                }))
+                            })
+                    }
+                    _ => None,
+                }
+            }
+            SyntaxKind::BracketExpression => {
+                let nodes = child_nodes(node);
+                let base = *nodes.first()?;
+                let arguments = nodes[1..]
+                    .iter()
+                    .map(|argument| self.type_from_expression(argument))
+                    .collect::<Option<Vec<_>>>()?;
+                let span = Self::callee_target_span(base)?;
+                match self.resolved.reference_at(span)?.target {
+                    NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) => self
+                        .typed
+                        .instantiate_declaration_type(self.resolved, declaration, &arguments),
+                    NameTarget::Item(crate::resolution::ItemId::Builtin(builtin)) => Some(
+                        self.typed
+                            .types
+                            .intern(TypeKind::Builtin { builtin, arguments }),
+                    ),
+                    _ => None,
+                }
+            }
+            SyntaxKind::TupleExpression => {
+                let elements = child_nodes(node)
+                    .into_iter()
+                    .map(|element| self.type_from_expression(element))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(if elements.is_empty() {
+                    self.typed.types.primitive(PrimitiveType::Unit)
+                } else {
+                    self.typed.types.intern(TypeKind::Tuple(elements))
+                })
+            }
+            SyntaxKind::UnaryExpression => {
+                let token = node.children.iter().find_map(|child| match child {
+                    SyntaxElement::Token(token) => Some(token),
+                    SyntaxElement::Node(_) => None,
+                })?;
+                let target =
+                    self.type_from_expression(child_nodes(node).into_iter().next_back()?)?;
+                let mutability = if node.children.iter().any(|child| {
+                    matches!(
+                        child,
+                        SyntaxElement::Token(Token {
+                            kind: TokenKind::Keyword(Keyword::Var),
+                            ..
+                        })
+                    )
+                }) {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Shared
+                };
+                match token.kind {
+                    TokenKind::Amp => Some(
+                        self.typed
+                            .types
+                            .intern(TypeKind::Reference { mutability, target }),
+                    ),
+                    TokenKind::Star => Some(
+                        self.typed
+                            .types
+                            .intern(TypeKind::RawPointer { mutability, target }),
+                    ),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn explicit_function_selection(
+        &mut self,
+        node: &SyntaxNode,
+    ) -> Option<(DeclarationId, Vec<TypeId>)> {
+        if node.kind != SyntaxKind::BracketExpression {
+            return None;
+        }
+        let nodes = child_nodes(node);
+        let base = *nodes.first()?;
+        let span = Self::callee_target_span(base)?;
+        let NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) =
+            self.resolved.reference_at(span)?.target
+        else {
+            return None;
+        };
+        if !matches!(
+            self.resolved.declarations[declaration.index()].kind,
+            DeclarationKind::Function | DeclarationKind::ForeignFunction
+        ) {
+            return None;
+        }
+        let arguments = nodes[1..]
+            .iter()
+            .map(|argument| self.type_from_expression(argument))
+            .collect::<Option<Vec<_>>>()?;
+        Some((declaration, arguments))
+    }
+
+    fn function_instance_from_expected(
+        &mut self,
+        declaration: DeclarationId,
+        explicit: Option<Vec<TypeId>>,
+        expected: ExpectedType,
+        span: Span,
+    ) -> Option<FunctionInstance> {
+        let parameters = self.callable_parameters(declaration);
+        if let Some(arguments) = explicit {
+            if arguments.len() != parameters.len() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        format!(
+                            "this function requires {} generic argument{}, but {} were supplied",
+                            parameters.len(),
+                            if parameters.len() == 1 { "" } else { "s" },
+                            arguments.len()
+                        ),
+                    )
+                    .with_primary(span),
+                );
+                return None;
+            }
+            return Some(FunctionInstance {
+                declaration,
+                arguments,
+            });
+        }
+        if parameters.is_empty() {
+            return Some(FunctionInstance {
+                declaration,
+                arguments: Vec::new(),
+            });
+        }
+        let ExpectedType::Exact(expected) = expected else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "generic arguments cannot be inferred uniquely without arguments or an \
+                     expected function-reference type",
+                )
+                .with_primary(span),
+            );
+            return None;
+        };
+        let variables = self.generic_inference_variables(&parameters);
+        let template_arguments = parameters
+            .iter()
+            .map(|parameter| {
+                self.typed
+                    .types
+                    .intern(TypeKind::GenericParameter(*parameter))
+            })
+            .collect();
+        let template_instance = FunctionInstance {
+            declaration,
+            arguments: template_arguments,
+        };
+        let template = self.function_reference_type(&template_instance);
+        if !self.infer_against(template, expected, &variables) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "the expected function-reference type is incompatible with this generic \
+                     function",
+                )
+                .with_primary(span),
+            );
+            return None;
+        }
+        let arguments = self.finish_inference(&parameters, &variables)?;
+        Some(FunctionInstance {
+            declaration,
+            arguments,
+        })
+    }
+
+    fn check_bracket_expression(
+        &mut self,
+        node: &SyntaxNode,
+        expected: ExpectedType,
+    ) -> (TypeId, PlaceKind) {
+        if let Some((declaration, arguments)) = self.explicit_function_selection(node) {
+            let Some(instance) = self.function_instance_from_expected(
+                declaration,
+                Some(arguments),
+                expected,
+                node.span,
+            ) else {
+                return (self.typed.types.error(), PlaceKind::Value);
+            };
+            let ty = self.function_reference_type(&instance);
+            self.program.function_references.insert(node.span, instance);
+            return (ty, PlaceKind::Value);
+        }
+        self.check_index(node)
+    }
+
+    fn check_function_call(
+        &mut self,
+        call_span: Span,
+        declaration: DeclarationId,
+        explicit: Option<Vec<TypeId>>,
+        arguments: &[&SyntaxNode],
+        expected: ExpectedType,
+        include_receiver: bool,
+    ) -> (TypeId, PlaceKind) {
+        let generic_parameters = self.callable_parameters(declaration);
+        if let Some(explicit) = explicit {
+            let Some(instance) = self.function_instance_from_expected(
+                declaration,
+                Some(explicit),
+                expected,
+                call_span,
+            ) else {
+                for argument in arguments {
+                    self.check_expr(argument, ExpectedType::None);
+                }
+                return (self.typed.types.error(), PlaceKind::Value);
+            };
+            let Some(signature) = self.typed.instantiate_signature(self.resolved, &instance) else {
+                return (self.typed.types.error(), PlaceKind::Value);
+            };
+            let mut parameters = signature.parameters.clone();
+            if include_receiver && let Some(receiver) = signature.receiver {
+                parameters.insert(
+                    0,
+                    FunctionParameter {
+                        ty: receiver,
+                        variadic: false,
+                    },
+                );
+            }
+            self.check_call_arguments(call_span, &parameters, arguments);
+            if let ExpectedType::Exact(expected) = expected
+                && !self.types_compatible(signature.return_type, expected)
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "this call's result does not match the expected type",
+                    )
+                    .with_primary(call_span),
+                );
+            }
+            self.program
+                .calls
+                .insert(call_span, CheckedCall::Direct(instance));
+            return (signature.return_type, PlaceKind::Value);
+        }
+
+        if generic_parameters.is_empty() {
+            let instance = FunctionInstance {
+                declaration,
+                arguments: Vec::new(),
+            };
+            let Some(signature) = self.typed.instantiate_signature(self.resolved, &instance) else {
+                return (self.typed.types.error(), PlaceKind::Value);
+            };
+            let mut parameters = signature.parameters.clone();
+            if include_receiver && let Some(receiver) = signature.receiver {
+                parameters.insert(
+                    0,
+                    FunctionParameter {
+                        ty: receiver,
+                        variadic: false,
+                    },
+                );
+            }
+            self.check_call_arguments(call_span, &parameters, arguments);
+            self.program
+                .calls
+                .insert(call_span, CheckedCall::Direct(instance));
+            return (signature.return_type, PlaceKind::Value);
+        }
+
+        let Some(template) = self.typed.function_signatures.get(&declaration).cloned() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let variables = self.generic_inference_variables(&generic_parameters);
+        if let ExpectedType::Exact(expected) = expected {
+            self.infer_against(template.return_type, expected, &variables);
+        }
+
+        let mut call_parameters = template.parameters.clone();
+        if include_receiver && let Some(receiver) = template.receiver {
+            call_parameters.insert(
+                0,
+                FunctionParameter {
+                    ty: receiver,
+                    variadic: false,
+                },
+            );
+        }
+        let variadic = call_parameters
+            .last()
+            .is_some_and(|parameter| parameter.variadic);
+        let fixed = call_parameters.len() - usize::from(variadic);
+        let arity_ok = if variadic {
+            arguments.len() >= fixed
+        } else {
+            arguments.len() == fixed
+        };
+        if !arity_ok {
+            self.report_call_arity(call_span, arguments.len(), fixed, variadic);
+        }
+
+        for (index, argument) in arguments.iter().enumerate() {
+            let parameter = if index < fixed {
+                call_parameters.get(index)
+            } else {
+                call_parameters.last().filter(|_| variadic)
+            };
+            let expected_argument = parameter.map(|parameter| {
+                self.typed
+                    .types
+                    .substitute(parameter.ty, &Self::inference_substitution(&variables))
+            });
+            let (actual, _) = self.check_expr(
+                argument,
+                expected_argument.map_or(ExpectedType::None, ExpectedType::Exact),
+            );
+            self.program.copies.insert(argument.span);
+            if let Some(parameter) = parameter
+                && !self.infer_against(parameter.ty, actual, &variables)
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "this argument's type cannot satisfy the generic parameter type",
+                    )
+                    .with_primary(argument.span),
+                );
+            }
+        }
+
+        let Some(concrete_arguments) = self.finish_inference(&generic_parameters, &variables)
+        else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "generic arguments cannot be inferred uniquely; supply the complete argument list",
+                )
+                .with_primary(call_span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let instance = FunctionInstance {
+            declaration,
+            arguments: concrete_arguments,
+        };
+        let Some(signature) = self.typed.instantiate_signature(self.resolved, &instance) else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        if let ExpectedType::Exact(expected) = expected
+            && !self.types_compatible(signature.return_type, expected)
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "this call's result does not match the expected type",
+                )
+                .with_primary(call_span),
+            );
+        }
+        self.program
+            .calls
+            .insert(call_span, CheckedCall::Direct(instance));
+        (signature.return_type, PlaceKind::Value)
+    }
+
+    fn report_call_arity(&mut self, span: Span, supplied: usize, fixed: usize, variadic: bool) {
+        self.diagnostics.push(
+            Diagnostic::new(
+                Category::Call,
+                format!(
+                    "this call supplies {} argument{}, but the function requires {}{}",
+                    supplied,
+                    if supplied == 1 { "" } else { "s" },
+                    if variadic { "at least " } else { "" },
+                    fixed,
+                ),
+            )
+            .with_primary(span),
+        );
     }
 
     /// The span of the identifier a call or construction callee ultimately
@@ -1433,6 +2119,10 @@ impl<'a> Checker<'a> {
                     _ => None,
                 })
             }
+            SyntaxKind::BracketExpression => child_nodes(node)
+                .into_iter()
+                .next()
+                .and_then(Self::callee_target_span),
             _ => None,
         }
     }
@@ -1444,6 +2134,24 @@ impl<'a> Checker<'a> {
             .iter()
             .find(|(symbol, _)| self.resolved.symbol_text(**symbol) == name)
             .map(|(_, member)| *member)
+    }
+
+    fn type_declaration_expression(&self, node: &SyntaxNode) -> Option<DeclarationId> {
+        let span = Self::callee_target_span(node)?;
+        match self.resolved.reference_at(span)?.target {
+            NameTarget::Item(crate::resolution::ItemId::Declaration(declaration))
+                if matches!(
+                    self.resolved.declarations[declaration.index()].kind,
+                    DeclarationKind::Struct
+                        | DeclarationKind::Enum
+                        | DeclarationKind::ForeignStruct
+                ) =>
+            {
+                Some(declaration)
+            }
+            NameTarget::SelfType => self.current_self_declaration,
+            _ => None,
+        }
     }
 
     fn resolve_enum_variant_callee(&self, node: &SyntaxNode) -> Option<(DeclarationId, VariantId)> {
@@ -1473,19 +2181,31 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_member_expression(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+    fn check_member_expression(
+        &mut self,
+        node: &SyntaxNode,
+        expected: ExpectedType,
+    ) -> (TypeId, PlaceKind) {
         if let Some((enum_declaration, _)) = self.resolve_enum_variant_callee(node) {
-            if !self.resolved.declarations[enum_declaration.index()]
-                .generic_parameters
-                .is_empty()
-            {
-                return (self.typed.types.error(), PlaceKind::Value);
-            }
+            let explicit = self.enum_variant_arguments(node);
+            let (parameters, variables) = match self.initial_nominal_inference(
+                node.span,
+                enum_declaration,
+                explicit,
+                expected,
+            ) {
+                Some(inference) => inference,
+                None => return (self.typed.types.error(), PlaceKind::Value),
+            };
             let ty = self
-                .typed
-                .declaration_types
-                .get(&enum_declaration)
-                .copied()
+                .finish_nominal_inference(node.span, &parameters, &variables)
+                .and_then(|arguments| {
+                    self.typed.instantiate_declaration_type(
+                        self.resolved,
+                        enum_declaration,
+                        &arguments,
+                    )
+                })
                 .unwrap_or_else(|| self.typed.types.error());
             return (ty, PlaceKind::Value);
         }
@@ -1498,46 +2218,79 @@ impl<'a> Checker<'a> {
             }
             _ => None,
         });
-        if let Some(member_token) = member_token
-            && self.resolved.reference_at(member_token.span).is_some()
-        {
-            // A module-qualified path already resolved in Milestone 4 (for
-            // example `mod_name.function`). Using the resolved item as a
-            // bare function-reference value is Milestone 11 territory.
-            self.check_expr(base, ExpectedType::None);
-            return (self.typed.types.error(), PlaceKind::Value);
-        }
-        let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
         let Some(member_token) = member_token else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
-        let resolved_base = self.typed.types.resolve_inference(base_type);
-        let (declaration, field_place) = match self.typed.types.kind(resolved_base).clone() {
-            TypeKind::Nominal { identity, .. } => (identity.declaration, base_place),
-            TypeKind::Reference { mutability, target } => {
-                let target = self.typed.types.resolve_inference(target);
-                match self.typed.types.kind(target).clone() {
-                    TypeKind::Nominal { identity, .. } => {
-                        let place = if mutability == Mutability::Mutable {
-                            PlaceKind::Mutable
-                        } else {
-                            PlaceKind::Addressable
-                        };
-                        (identity.declaration, place)
-                    }
-                    _ => return (self.typed.types.error(), PlaceKind::Value),
+        if let Some(reference) = self.resolved.reference_at(member_token.span)
+            && let NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) =
+                reference.target
+            && matches!(
+                self.resolved.declarations[declaration.index()].kind,
+                DeclarationKind::Function | DeclarationKind::ForeignFunction
+            )
+            && self.resolved.declarations[declaration.index()]
+                .generic_parameters
+                .is_empty()
+        {
+            let instance = FunctionInstance {
+                declaration,
+                arguments: Vec::new(),
+            };
+            let ty = self.function_reference_type(&instance);
+            self.program.function_references.insert(node.span, instance);
+            return (ty, PlaceKind::Value);
+        }
+        if let Some(declaration) = self.type_declaration_expression(base) {
+            return match self.find_member(declaration, &token_text(member_token)) {
+                Some(MemberId::Method(method))
+                    if self.resolved.declarations[method.index()]
+                        .generic_parameters
+                        .is_empty() =>
+                {
+                    let instance = FunctionInstance {
+                        declaration: method,
+                        arguments: Vec::new(),
+                    };
+                    let ty = self.function_reference_type(&instance);
+                    self.program.function_references.insert(node.span, instance);
+                    (ty, PlaceKind::Value)
                 }
-            }
-            TypeKind::Error => return (self.typed.types.error(), PlaceKind::Value),
-            _ => return (self.typed.types.error(), PlaceKind::Value),
-        };
+                _ => (self.typed.types.error(), PlaceKind::Value),
+            };
+        }
+        let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
+        let resolved_base = self.typed.types.resolve_inference(base_type);
+        let (declaration, owner_arguments, field_place) =
+            match self.typed.types.kind(resolved_base).clone() {
+                TypeKind::Nominal {
+                    identity,
+                    arguments,
+                } => (identity.declaration, arguments, base_place),
+                TypeKind::Reference { mutability, target } => {
+                    let target = self.typed.types.resolve_inference(target);
+                    match self.typed.types.kind(target).clone() {
+                        TypeKind::Nominal {
+                            identity,
+                            arguments,
+                        } => {
+                            let place = if mutability == Mutability::Mutable {
+                                PlaceKind::Mutable
+                            } else {
+                                PlaceKind::Addressable
+                            };
+                            (identity.declaration, arguments, place)
+                        }
+                        _ => return (self.typed.types.error(), PlaceKind::Value),
+                    }
+                }
+                TypeKind::Error => return (self.typed.types.error(), PlaceKind::Value),
+                _ => return (self.typed.types.error(), PlaceKind::Value),
+            };
         match self.find_member(declaration, &token_text(member_token)) {
             Some(MemberId::Field(field_id)) => {
                 let field_type = self
                     .typed
-                    .field_types
-                    .get(&field_id)
-                    .copied()
+                    .instantiate_field_type(self.resolved, field_id, &owner_arguments)
                     .unwrap_or_else(|| self.typed.types.error());
                 let place = match field_place {
                     PlaceKind::Mutable | PlaceKind::CollectionInterior => PlaceKind::Mutable,
@@ -1546,7 +2299,23 @@ impl<'a> Checker<'a> {
                 };
                 (field_type, place)
             }
-            // Bound-method and trait-qualified selection are Milestone 11/13.
+            Some(MemberId::Method(method))
+                if self
+                    .typed
+                    .function_signatures
+                    .get(&method)
+                    .is_some_and(|signature| signature.receiver.is_some()) =>
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        "an instance method cannot be used as a bound-method value; call it \
+                         directly or select the unbound method from its type",
+                    )
+                    .with_primary(node.span),
+                );
+                (self.typed.types.error(), PlaceKind::Value)
+            }
             _ => (self.typed.types.error(), PlaceKind::Value),
         }
     }
@@ -1795,12 +2564,44 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         }
         match operator {
-            TokenKind::EqEq
-            | TokenKind::NotEq
-            | TokenKind::Less
-            | TokenKind::LessEq
-            | TokenKind::Greater
-            | TokenKind::GreaterEq => (bool_type, PlaceKind::Value),
+            TokenKind::EqEq | TokenKind::NotEq => {
+                if !self.generic_operation_is_bound(left_type, "PartialEq") {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "comparison on a generic parameter requires a `PartialEq` bound",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                (bool_type, PlaceKind::Value)
+            }
+            TokenKind::Less | TokenKind::LessEq | TokenKind::Greater | TokenKind::GreaterEq
+                if self.function_value_signature(left_type).is_some() =>
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "function references support only `==` and `!=` identity comparison",
+                    )
+                    .with_primary(node.span),
+                );
+                (self.typed.types.error(), PlaceKind::Value)
+            }
+            TokenKind::Less | TokenKind::LessEq | TokenKind::Greater | TokenKind::GreaterEq => {
+                if !self.generic_operation_is_bound(left_type, "PartialOrd") {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "ordering a generic parameter requires a `PartialOrd` bound",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                (bool_type, PlaceKind::Value)
+            }
             TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash => {
                 if left_type != self.typed.types.error() && !self.is_numeric_type(left_type) {
                     self.diagnostics.push(
@@ -1842,6 +2643,31 @@ impl<'a> Checker<'a> {
                 (left_type, PlaceKind::Value)
             }
             _ => (self.typed.types.error(), PlaceKind::Value),
+        }
+    }
+
+    fn generic_operation_is_bound(&self, mut ty: TypeId, required: &str) -> bool {
+        loop {
+            ty = self.typed.types.resolve_inference(ty);
+            match self.typed.types.kind(ty) {
+                TypeKind::Alias { target, .. } => ty = *target,
+                TypeKind::GenericParameter(parameter) => {
+                    return self.typed.obligations_for(*parameter).any(|obligation| {
+                        matches!(
+                            self.typed.types.kind(obligation.trait_type),
+                            TypeKind::Builtin { builtin, .. }
+                                if {
+                                    let bound = self.resolved.builtin_name(*builtin);
+                                    bound == required
+                                        || (required == "PartialEq"
+                                            && matches!(bound, "Eq" | "Ord"))
+                                        || (required == "PartialOrd" && bound == "Ord")
+                                }
+                        )
+                    });
+                }
+                _ => return true,
+            }
         }
     }
 
@@ -1896,6 +2722,49 @@ impl<'a> Checker<'a> {
                     return (self.typed.types.error(), PlaceKind::Value);
                 }
             }
+        }
+        let source_resolved = self.typed.types.resolve_inference(source_type);
+        let target_resolved = self.typed.types.resolve_inference(target_type);
+        if let (
+            TypeKind::Reference {
+                mutability: source_mutability,
+                target: source_target,
+            },
+            TypeKind::RawPointer {
+                mutability: target_mutability,
+                target: target_target,
+            },
+        ) = (
+            self.typed.types.kind(source_resolved),
+            self.typed.types.kind(target_resolved),
+        ) && source_mutability == target_mutability
+            && self
+                .typed
+                .types
+                .exactly_equal(*source_target, *target_target)
+        {
+            return (target_type, PlaceKind::Value);
+        }
+        if let (
+            TypeKind::RawPointer {
+                mutability: source_mutability,
+                target: source_target,
+            },
+            TypeKind::Reference {
+                mutability: target_mutability,
+                target: target_target,
+            },
+        ) = (
+            self.typed.types.kind(source_resolved),
+            self.typed.types.kind(target_resolved),
+        ) && self.unsafe_depth > 0
+            && source_mutability == target_mutability
+            && self
+                .typed
+                .types
+                .exactly_equal(*source_target, *target_target)
+        {
+            return (target_type, PlaceKind::Value);
         }
         if !self.is_numeric_type(source_type) || !self.is_numeric_type(target_type) {
             self.diagnostics.push(
@@ -2205,20 +3074,40 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_call(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+    fn check_call(&mut self, node: &SyntaxNode, expected: ExpectedType) -> (TypeId, PlaceKind) {
         let nodes = child_nodes(node);
         let Some(&callee) = nodes.first() else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         let arguments = &nodes[1..];
 
+        if let Some((declaration, generic_arguments)) = self.explicit_function_selection(callee) {
+            return self.check_function_call(
+                node.span,
+                declaration,
+                Some(generic_arguments),
+                arguments,
+                expected,
+                false,
+            );
+        }
+
         if let Some((enum_declaration, variant)) = self.resolve_enum_variant_callee(callee) {
+            let explicit = self.enum_variant_arguments(callee);
             return self.check_variant_tuple_construction(
                 node.span,
                 enum_declaration,
                 variant,
                 arguments,
+                explicit,
+                expected,
             );
+        }
+
+        if callee.kind == SyntaxKind::MemberExpression
+            && let Some(result) = self.check_member_call(node.span, callee, arguments, expected)
+        {
+            return result;
         }
 
         if let Some(span) = Self::callee_target_span(callee)
@@ -2231,18 +3120,25 @@ impl<'a> Checker<'a> {
                         declaration.kind,
                         DeclarationKind::Function | DeclarationKind::ForeignFunction
                     ) {
-                        if !declaration.generic_parameters.is_empty() {
-                            for argument in arguments {
-                                self.check_expr(argument, ExpectedType::None);
-                            }
-                            return (self.typed.types.error(), PlaceKind::Value);
-                        }
-                        return self.check_direct_call(node.span, declaration_id, arguments);
+                        return self.check_function_call(
+                            node.span,
+                            declaration_id,
+                            None,
+                            arguments,
+                            expected,
+                            false,
+                        );
                     }
                 }
                 NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))
                     if matches!(self.resolved.builtin_name(builtin_id), "print" | "println") =>
                 {
+                    self.program.calls.insert(
+                        node.span,
+                        CheckedCall::Print {
+                            newline: self.resolved.builtin_name(builtin_id) == "println",
+                        },
+                    );
                     if arguments.len() != 1 {
                         self.diagnostics.push(
                             Diagnostic::new(
@@ -2269,36 +3165,322 @@ impl<'a> Checker<'a> {
             }
         }
 
-        // Bound-method calls and calling an arbitrary function-valued
-        // expression are Milestone 11/12 territory; still walk the callee
-        // and arguments so nested diagnostics and copies are not lost.
-        self.check_expr(callee, ExpectedType::None);
+        let (callee_type, _) = self.check_expr(callee, ExpectedType::None);
+        if let Some((parameters, return_type)) = self.function_value_signature(callee_type) {
+            self.program.calls.insert(node.span, CheckedCall::Indirect);
+            self.check_call_arguments(node.span, &parameters, arguments);
+            return (return_type, PlaceKind::Value);
+        }
         for argument in arguments {
             self.check_expr(argument, ExpectedType::None);
+        }
+        if callee_type != self.typed.types.error() {
+            self.diagnostics.push(
+                Diagnostic::new(Category::Call, "this expression is not callable")
+                    .with_primary(callee.span),
+            );
         }
         (self.typed.types.error(), PlaceKind::Value)
     }
 
-    fn check_direct_call(
+    fn check_member_call(
         &mut self,
         call_span: Span,
-        declaration_id: DeclarationId,
+        callee: &SyntaxNode,
         arguments: &[&SyntaxNode],
-    ) -> (TypeId, PlaceKind) {
-        let Some(signature) = self.typed.function_signatures.get(&declaration_id).cloned() else {
-            for argument in arguments {
-                self.check_expr(argument, ExpectedType::None);
+        expected: ExpectedType,
+    ) -> Option<(TypeId, PlaceKind)> {
+        let base = child_nodes(callee).into_iter().next()?;
+        let member_token = callee.children.iter().rev().find_map(|child| match child {
+            SyntaxElement::Token(token) if matches!(token.kind, TokenKind::Identifier(_)) => {
+                Some(token)
             }
-            return (self.typed.types.error(), PlaceKind::Value);
+            _ => None,
+        })?;
+        let member_name = token_text(member_token);
+
+        // `Type.member(...)` is an ordinary call of the selected associated
+        // function or unbound method. A receiver-bearing method therefore
+        // expects its receiver as the first explicit argument.
+        if let Some((owner, owner_arguments)) = self.nominal_selection(base) {
+            let Some(MemberId::Method(method)) = self.find_member(owner, &member_name) else {
+                return None;
+            };
+            return Some(self.check_function_call(
+                call_span,
+                method,
+                owner_arguments,
+                arguments,
+                expected,
+                true,
+            ));
+        }
+
+        let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
+        let (owner, _) = self.receiver_owner(base_type)?;
+        match self.find_member(owner, &member_name) {
+            // Field lookup has precedence over method lookup. Calling it is an
+            // ordinary indirect call and performs no receiver adaptation.
+            Some(MemberId::Field(field)) => {
+                let field_type = self
+                    .typed
+                    .field_types
+                    .get(&field)
+                    .copied()
+                    .unwrap_or_else(|| self.typed.types.error());
+                self.program
+                    .expression_types
+                    .insert(callee.span, field_type);
+                self.program
+                    .expression_places
+                    .insert(callee.span, base_place);
+                if let Some((parameters, return_type)) = self.function_value_signature(field_type) {
+                    self.program.calls.insert(call_span, CheckedCall::Indirect);
+                    self.check_call_arguments(call_span, &parameters, arguments);
+                    Some((return_type, PlaceKind::Value))
+                } else {
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    if field_type != self.typed.types.error() {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::Call,
+                                format!("field `{member_name}` is not callable"),
+                            )
+                            .with_primary(member_token.span),
+                        );
+                    }
+                    Some((self.typed.types.error(), PlaceKind::Value))
+                }
+            }
+            Some(MemberId::Method(method)) => {
+                let template = self.typed.function_signatures.get(&method)?.clone();
+                let Some(template_receiver) = template.receiver else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            format!(
+                                "associated function `{member_name}` must be selected from its type"
+                            ),
+                        )
+                        .with_primary(member_token.span),
+                    );
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                };
+                let generic_parameters = self.callable_parameters(method);
+                let variables = self.generic_inference_variables(&generic_parameters);
+                let template_self = match self.typed.types.kind(template_receiver).clone() {
+                    TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                        target
+                    }
+                    _ => template_receiver,
+                };
+                let actual_self = self
+                    .receiver_owner(base_type)
+                    .map_or(base_type, |(_, owner)| owner);
+                self.infer_against(template_self, actual_self, &variables);
+                if let ExpectedType::Exact(expected) = expected {
+                    self.infer_against(template.return_type, expected, &variables);
+                }
+                let variadic = template
+                    .parameters
+                    .last()
+                    .is_some_and(|parameter| parameter.variadic);
+                let fixed = template.parameters.len() - usize::from(variadic);
+                if (!variadic && arguments.len() != fixed) || (variadic && arguments.len() < fixed)
+                {
+                    self.report_call_arity(call_span, arguments.len(), fixed, variadic);
+                }
+                for (index, argument) in arguments.iter().enumerate() {
+                    let parameter = if index < fixed {
+                        template.parameters.get(index)
+                    } else {
+                        template.parameters.last().filter(|_| variadic)
+                    };
+                    let expected_argument = parameter.map(|parameter| {
+                        self.typed
+                            .types
+                            .substitute(parameter.ty, &Self::inference_substitution(&variables))
+                    });
+                    let (actual, _) = self.check_expr(
+                        argument,
+                        expected_argument.map_or(ExpectedType::None, ExpectedType::Exact),
+                    );
+                    self.program.copies.insert(argument.span);
+                    if let Some(parameter) = parameter
+                        && !self.infer_against(parameter.ty, actual, &variables)
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::ExpressionType,
+                                "this argument's type cannot satisfy the generic method parameter",
+                            )
+                            .with_primary(argument.span),
+                        );
+                    }
+                }
+                let Some(concrete_arguments) =
+                    self.finish_inference(&generic_parameters, &variables)
+                else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            "generic method arguments cannot be inferred uniquely",
+                        )
+                        .with_primary(call_span),
+                    );
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                };
+                let instance = FunctionInstance {
+                    declaration: method,
+                    arguments: concrete_arguments,
+                };
+                let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
+                let receiver_type = signature.receiver?;
+                let Some(adjustment) =
+                    self.check_receiver_adjustment(base, base_type, base_place, receiver_type)
+                else {
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                };
+                if matches!(
+                    adjustment,
+                    ReceiverAdjustment::CopyValue | ReceiverAdjustment::DereferenceAndCopy
+                ) {
+                    self.program.copies.insert(base.span);
+                }
+                self.program.calls.insert(
+                    call_span,
+                    CheckedCall::BoundMethod {
+                        instance,
+                        adjustment,
+                    },
+                );
+                Some((signature.return_type, PlaceKind::Value))
+            }
+            _ => None,
+        }
+    }
+
+    fn receiver_owner(&self, ty: TypeId) -> Option<(DeclarationId, TypeId)> {
+        let ty = self.typed.types.resolve_inference(ty);
+        match self.typed.types.kind(ty) {
+            TypeKind::Nominal { identity, .. } => Some((identity.declaration, ty)),
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                let target = self.typed.types.resolve_inference(*target);
+                match self.typed.types.kind(target) {
+                    TypeKind::Nominal { identity, .. } => Some((identity.declaration, target)),
+                    _ => None,
+                }
+            }
+            TypeKind::Alias { target, .. } => self.receiver_owner(*target),
+            _ => None,
+        }
+    }
+
+    fn check_receiver_adjustment(
+        &mut self,
+        base: &SyntaxNode,
+        actual: TypeId,
+        place: PlaceKind,
+        expected: TypeId,
+    ) -> Option<ReceiverAdjustment> {
+        let actual = self.typed.types.resolve_inference(actual);
+        let expected = self.typed.types.resolve_inference(expected);
+        let (_, self_type) = self.receiver_owner(expected)?;
+        let adjustment = match self.typed.types.kind(expected).clone() {
+            TypeKind::Nominal { .. } => match self.typed.types.kind(actual).clone() {
+                TypeKind::Nominal { .. } if self.typed.types.exactly_equal(actual, self_type) => {
+                    Some(ReceiverAdjustment::CopyValue)
+                }
+                TypeKind::Reference { target, .. }
+                    if self.typed.types.exactly_equal(target, self_type) =>
+                {
+                    Some(ReceiverAdjustment::DereferenceAndCopy)
+                }
+                _ => None,
+            },
+            TypeKind::Reference { mutability, target } => {
+                match self.typed.types.kind(actual).clone() {
+                    TypeKind::Nominal { .. } if self.typed.types.exactly_equal(actual, target) => {
+                        if mutability == Mutability::Mutable {
+                            place
+                                .is_mutable()
+                                .then_some(ReceiverAdjustment::BorrowMutable)
+                        } else {
+                            place
+                                .permits_safe_reference()
+                                .then_some(ReceiverAdjustment::BorrowShared)
+                        }
+                    }
+                    TypeKind::Reference {
+                        mutability: actual_mutability,
+                        target: actual_target,
+                    } if self.typed.types.exactly_equal(actual_target, target)
+                        && (actual_mutability == mutability
+                            || (actual_mutability == Mutability::Mutable
+                                && mutability == Mutability::Shared)) =>
+                    {
+                        Some(ReceiverAdjustment::Pass)
+                    }
+                    _ => None,
+                }
+            }
+            TypeKind::RawPointer { .. } if self.typed.types.exactly_equal(actual, expected) => {
+                Some(ReceiverAdjustment::Pass)
+            }
+            _ => None,
         };
-        let variadic = signature
-            .parameters
+        if adjustment.is_none() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "this value cannot satisfy the method's declared receiver type",
+                )
+                .with_primary(base.span),
+            );
+        }
+        adjustment
+    }
+
+    fn function_value_signature(&self, ty: TypeId) -> Option<(Vec<FunctionParameter>, TypeId)> {
+        let ty = self.typed.types.resolve_inference(ty);
+        let target = match self.typed.types.kind(ty) {
+            TypeKind::Reference { target, .. } => self.typed.types.resolve_inference(*target),
+            TypeKind::Alias { target, .. } => {
+                return self.function_value_signature(*target);
+            }
+            _ => return None,
+        };
+        match self.typed.types.kind(target) {
+            TypeKind::Function {
+                parameters,
+                return_type,
+                ..
+            } => Some((parameters.clone(), *return_type)),
+            _ => None,
+        }
+    }
+
+    fn check_call_arguments(
+        &mut self,
+        call_span: Span,
+        parameters: &[FunctionParameter],
+        arguments: &[&SyntaxNode],
+    ) {
+        let variadic = parameters
             .last()
             .is_some_and(|parameter| parameter.variadic);
         let fixed = if variadic {
-            signature.parameters.len() - 1
+            parameters.len() - 1
         } else {
-            signature.parameters.len()
+            parameters.len()
         };
         let arity_ok = if variadic {
             arguments.len() >= fixed
@@ -2322,13 +3504,9 @@ impl<'a> Checker<'a> {
         }
         for (index, argument) in arguments.iter().enumerate() {
             let parameter_type = if index < fixed {
-                Some(signature.parameters[index].ty)
+                Some(parameters[index].ty)
             } else {
-                signature
-                    .parameters
-                    .last()
-                    .filter(|_| variadic)
-                    .map(|p| p.ty)
+                parameters.last().filter(|_| variadic).map(|p| p.ty)
             };
             let expected = parameter_type.map_or(ExpectedType::None, ExpectedType::Exact);
             let (argument_type, _) = self.check_expr(argument, expected);
@@ -2345,7 +3523,6 @@ impl<'a> Checker<'a> {
                 );
             }
         }
-        (signature.return_type, PlaceKind::Value)
     }
 
     fn check_variant_tuple_construction(
@@ -2354,16 +3531,9 @@ impl<'a> Checker<'a> {
         enum_declaration: DeclarationId,
         variant: VariantId,
         arguments: &[&SyntaxNode],
+        explicit: Option<Vec<TypeId>>,
+        expected: ExpectedType,
     ) -> (TypeId, PlaceKind) {
-        if !self.resolved.declarations[enum_declaration.index()]
-            .generic_parameters
-            .is_empty()
-        {
-            for argument in arguments {
-                self.check_expr(argument, ExpectedType::None);
-            }
-            return (self.typed.types.error(), PlaceKind::Value);
-        }
         let field_ids = self.resolved.variants[variant.index()].fields.clone();
         if field_ids.len() != arguments.len() {
             self.diagnostics.push(
@@ -2380,56 +3550,179 @@ impl<'a> Checker<'a> {
                 .with_primary(span),
             );
         }
-        for (index, argument) in arguments.iter().enumerate() {
-            let field_type = field_ids
+        let owner_arguments = self.infer_nominal_from_positional_fields(
+            span,
+            enum_declaration,
+            explicit,
+            expected,
+            &field_ids,
+            arguments,
+        );
+        let ty = owner_arguments
+            .and_then(|arguments| {
+                self.typed
+                    .instantiate_declaration_type(self.resolved, enum_declaration, &arguments)
+            })
+            .unwrap_or_else(|| self.typed.types.error());
+        (ty, PlaceKind::Value)
+    }
+
+    fn nominal_selection(
+        &mut self,
+        node: &SyntaxNode,
+    ) -> Option<(DeclarationId, Option<Vec<TypeId>>)> {
+        if node.kind == SyntaxKind::BracketExpression {
+            let nodes = child_nodes(node);
+            let base = *nodes.first()?;
+            let span = Self::callee_target_span(base)?;
+            let NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) =
+                self.resolved.reference_at(span)?.target
+            else {
+                return None;
+            };
+            if !matches!(
+                self.resolved.declarations[declaration.index()].kind,
+                DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::ForeignStruct
+            ) {
+                return None;
+            }
+            let arguments = nodes[1..]
+                .iter()
+                .map(|argument| self.type_from_expression(argument))
+                .collect::<Option<Vec<_>>>()?;
+            return Some((declaration, Some(arguments)));
+        }
+        self.type_declaration_expression(node)
+            .map(|declaration| (declaration, None))
+    }
+
+    fn enum_variant_arguments(&mut self, node: &SyntaxNode) -> Option<Vec<TypeId>> {
+        let base = child_nodes(node).into_iter().next()?;
+        (base.kind == SyntaxKind::BracketExpression)
+            .then(|| {
+                self.nominal_selection(base)
+                    .and_then(|(_, arguments)| arguments)
+            })
+            .flatten()
+    }
+
+    fn initial_nominal_inference(
+        &mut self,
+        span: Span,
+        declaration: DeclarationId,
+        explicit: Option<Vec<TypeId>>,
+        expected: ExpectedType,
+    ) -> Option<(
+        Vec<GenericParameterId>,
+        BTreeMap<GenericParameterId, TypeId>,
+    )> {
+        let parameters = self.resolved.declarations[declaration.index()]
+            .generic_parameters
+            .clone();
+        if let Some(arguments) = explicit {
+            if arguments.len() != parameters.len() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Construction,
+                        format!(
+                            "this type requires {} generic argument{}, but {} were supplied",
+                            parameters.len(),
+                            if parameters.len() == 1 { "" } else { "s" },
+                            arguments.len()
+                        ),
+                    )
+                    .with_primary(span),
+                );
+                return None;
+            }
+            return Some((
+                parameters.clone(),
+                parameters.into_iter().zip(arguments).collect(),
+            ));
+        }
+        let variables = self.generic_inference_variables(&parameters);
+        if let ExpectedType::Exact(expected) = expected
+            && let Some(template) = self.typed.declaration_types.get(&declaration).copied()
+        {
+            self.infer_against(template, expected, &variables);
+        }
+        Some((parameters, variables))
+    }
+
+    fn finish_nominal_inference(
+        &mut self,
+        span: Span,
+        parameters: &[GenericParameterId],
+        variables: &BTreeMap<GenericParameterId, TypeId>,
+    ) -> Option<Vec<TypeId>> {
+        let result = self.finish_inference(parameters, variables);
+        if result.is_none() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Construction,
+                    "generic arguments cannot be inferred uniquely; supply the complete argument list",
+                )
+                .with_primary(span),
+            );
+        }
+        result
+    }
+
+    fn infer_nominal_from_positional_fields(
+        &mut self,
+        span: Span,
+        declaration: DeclarationId,
+        explicit: Option<Vec<TypeId>>,
+        expected: ExpectedType,
+        fields: &[FieldId],
+        values: &[&SyntaxNode],
+    ) -> Option<Vec<TypeId>> {
+        let (parameters, variables) =
+            self.initial_nominal_inference(span, declaration, explicit, expected)?;
+        for (index, value) in values.iter().enumerate() {
+            let field_template = fields
                 .get(index)
                 .and_then(|field| self.typed.field_types.get(field))
                 .copied();
-            let expected = field_type.map_or(ExpectedType::None, ExpectedType::Exact);
-            let (argument_type, _) = self.check_expr(argument, expected);
-            self.program.copies.insert(argument.span);
-            if let Some(field_type) = field_type
-                && !self.types_compatible(argument_type, field_type)
+            let expected_field = field_template.map(|template| {
+                self.typed
+                    .types
+                    .substitute(template, &Self::inference_substitution(&variables))
+            });
+            let (actual, _) = self.check_expr(
+                value,
+                expected_field.map_or(ExpectedType::None, ExpectedType::Exact),
+            );
+            self.program.copies.insert(value.span);
+            if let Some(template) = field_template
+                && !self.infer_against(template, actual, &variables)
             {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::ExpressionType,
                         "this value's type does not match the variant's field type",
                     )
-                    .with_primary(argument.span),
+                    .with_primary(value.span),
                 );
             }
         }
-        let ty = self
-            .typed
-            .declaration_types
-            .get(&enum_declaration)
-            .copied()
-            .unwrap_or_else(|| self.typed.types.error());
-        (ty, PlaceKind::Value)
+        self.finish_nominal_inference(span, &parameters, &variables)
     }
 
-    fn check_record_expression(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+    fn check_record_expression(
+        &mut self,
+        node: &SyntaxNode,
+        expected: ExpectedType,
+    ) -> (TypeId, PlaceKind) {
         let nodes = child_nodes(node);
         let Some(&callee) = nodes.first() else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         let fields = &nodes[1..];
 
-        if callee.kind == SyntaxKind::NameExpression
-            && let Some(span) = Self::callee_target_span(callee)
-            && let Some(reference) = self.resolved.reference_at(span)
-            && let NameTarget::Item(crate::resolution::ItemId::Declaration(declaration_id)) =
-                reference.target
-        {
+        if let Some((declaration_id, explicit)) = self.nominal_selection(callee) {
             let declaration = &self.resolved.declarations[declaration_id.index()];
             if declaration.kind == DeclarationKind::Struct {
-                if !declaration.generic_parameters.is_empty() {
-                    for field in fields {
-                        self.check_expr_lenient_record_field(field);
-                    }
-                    return (self.typed.types.error(), PlaceKind::Value);
-                }
                 let required: Vec<FieldId> = self
                     .resolved
                     .fields
@@ -2439,34 +3732,46 @@ impl<'a> Checker<'a> {
                     })
                     .map(|field| field.id)
                     .collect();
-                self.check_record_fields(node.span, fields, &required);
                 let ty = self
-                    .typed
-                    .declaration_types
-                    .get(&declaration_id)
-                    .copied()
+                    .infer_nominal_from_record_fields(
+                        node.span,
+                        declaration_id,
+                        explicit,
+                        expected,
+                        fields,
+                        &required,
+                    )
+                    .and_then(|arguments| {
+                        self.typed.instantiate_declaration_type(
+                            self.resolved,
+                            declaration_id,
+                            &arguments,
+                        )
+                    })
                     .unwrap_or_else(|| self.typed.types.error());
                 return (ty, PlaceKind::Value);
             }
         }
 
         if let Some((enum_declaration, variant)) = self.resolve_enum_variant_callee(callee) {
-            if !self.resolved.declarations[enum_declaration.index()]
-                .generic_parameters
-                .is_empty()
-            {
-                for field in fields {
-                    self.check_expr_lenient_record_field(field);
-                }
-                return (self.typed.types.error(), PlaceKind::Value);
-            }
+            let explicit = self.enum_variant_arguments(callee);
             let required = self.resolved.variants[variant.index()].fields.clone();
-            self.check_record_fields(node.span, fields, &required);
             let ty = self
-                .typed
-                .declaration_types
-                .get(&enum_declaration)
-                .copied()
+                .infer_nominal_from_record_fields(
+                    node.span,
+                    enum_declaration,
+                    explicit,
+                    expected,
+                    fields,
+                    &required,
+                )
+                .and_then(|arguments| {
+                    self.typed.instantiate_declaration_type(
+                        self.resolved,
+                        enum_declaration,
+                        &arguments,
+                    )
+                })
                 .unwrap_or_else(|| self.typed.types.error());
             return (ty, PlaceKind::Value);
         }
@@ -2483,12 +3788,17 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_record_fields(
+    fn infer_nominal_from_record_fields(
         &mut self,
         whole_span: Span,
+        declaration: DeclarationId,
+        explicit: Option<Vec<TypeId>>,
+        expected: ExpectedType,
         field_nodes: &[&SyntaxNode],
         required: &[FieldId],
-    ) {
+    ) -> Option<Vec<TypeId>> {
+        let (parameters, variables) =
+            self.initial_nominal_inference(whole_span, declaration, explicit, expected)?;
         let mut seen: BTreeSet<FieldId> = BTreeSet::new();
         for field_node in field_nodes {
             let Some(name_token) = field_node.children.iter().find_map(|child| match child {
@@ -2525,22 +3835,30 @@ impl<'a> Checker<'a> {
                     .with_primary(name_token.span),
                 );
             }
-            let field_type = self
+            let field_template = self
                 .typed
                 .field_types
                 .get(&field_id)
                 .copied()
                 .unwrap_or_else(|| self.typed.types.error());
+            let field_type = self
+                .typed
+                .types
+                .substitute(field_template, &Self::inference_substitution(&variables));
             let (value_type, value_span) = match child_nodes(field_node).into_iter().next() {
                 Some(expression) => (
                     self.check_expr(expression, ExpectedType::Exact(field_type))
                         .0,
                     expression.span,
                 ),
-                None => (self.check_name_target(name_token.span).0, name_token.span),
+                None => (
+                    self.check_name_target(name_token.span, ExpectedType::None)
+                        .0,
+                    name_token.span,
+                ),
             };
             self.program.copies.insert(value_span);
-            if !self.types_compatible(value_type, field_type) {
+            if !self.infer_against(field_template, value_type, &variables) {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::ExpressionType,
@@ -2561,6 +3879,7 @@ impl<'a> Checker<'a> {
                 );
             }
         }
+        self.finish_nominal_inference(whole_span, &parameters, &variables)
     }
 
     // ---------------------------------------------------------------
@@ -2568,10 +3887,8 @@ impl<'a> Checker<'a> {
     // ---------------------------------------------------------------
 
     /// Lowers a `Type` syntax node using names Milestone 4 already resolved.
-    /// This intentionally supports less than the full `Milestone 5` lowering
-    /// used for declared signatures: function-pointer type annotations
-    /// resolve to the error type here, matching this module's non-generic,
-    /// non-trait scope.
+    /// This intentionally supports the pre-trait subset of the full
+    /// Milestone 5 lowering used for declared signatures.
     fn lower_type(&mut self, node: &SyntaxNode) -> TypeId {
         let tokens = types::direct_tokens(node);
         let first = tokens.first().map(|token| &token.kind);
@@ -2582,9 +3899,39 @@ impl<'a> Checker<'a> {
                 .iter()
                 .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Var)));
             let mut target = match types::direct_child(node, SyntaxKind::Type) {
+                Some(child)
+                    if matches!(
+                        types::direct_tokens(child).first().map(|token| &token.kind),
+                        Some(TokenKind::Keyword(
+                            Keyword::Fn | Keyword::Unsafe | Keyword::Extern
+                        ))
+                    ) =>
+                {
+                    self.lower_function_type_annotation(child)
+                }
                 Some(child) => self.lower_type(child),
                 None => error,
             };
+            if !raw
+                && tokens
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Unsafe)))
+                && let TypeKind::Function {
+                    abi,
+                    receiver,
+                    parameters,
+                    return_type,
+                    ..
+                } = self.typed.types.kind(target).clone()
+            {
+                target = self.typed.types.intern(TypeKind::Function {
+                    safety: Safety::Unsafe,
+                    abi,
+                    receiver,
+                    parameters,
+                    return_type,
+                });
+            }
             if target == error {
                 return error;
             }
@@ -2601,21 +3948,36 @@ impl<'a> Checker<'a> {
             } else {
                 Mutability::Shared
             };
+            if !raw && mutable && matches!(self.typed.types.kind(target), TypeKind::Function { .. })
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "function references cannot be mutable",
+                    )
+                    .with_primary(node.span),
+                );
+                return error;
+            }
             return self.typed.types.intern(if raw {
                 TypeKind::RawPointer { mutability, target }
             } else {
                 TypeKind::Reference { mutability, target }
             });
         }
-        // Function-pointer/`unsafe fn`/`extern fn` type annotations are
-        // Milestone 11 territory; they resolve to the error type here rather
-        // than to an incorrect ordinary type.
         if matches!(
             first,
             Some(TokenKind::Keyword(
                 Keyword::Fn | Keyword::Unsafe | Keyword::Extern
             ))
         ) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "a bare function type has no value representation; use `&fn` or `&unsafe fn`",
+                )
+                .with_primary(node.span),
+            );
             return error;
         }
         if matches!(first, Some(TokenKind::LBracket)) {
@@ -2663,15 +4025,24 @@ impl<'a> Checker<'a> {
             return self.typed.types.error();
         };
         match reference.target {
+            NameTarget::GenericParameter(parameter) => self
+                .typed
+                .types
+                .intern(TypeKind::GenericParameter(parameter)),
             NameTarget::Item(crate::resolution::ItemId::Declaration(declaration_id)) => {
-                let declaration = &self.resolved.declarations[declaration_id.index()];
-                if !declaration.generic_parameters.is_empty() {
-                    return self.typed.types.error();
+                let arguments: Vec<TypeId> = types::direct_child(node, SyntaxKind::TypeArguments)
+                    .map(|arguments| {
+                        types::direct_children(arguments, SyntaxKind::Type)
+                            .into_iter()
+                            .map(|argument| self.lower_type(argument))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if arguments.contains(&error) {
+                    return error;
                 }
                 self.typed
-                    .declaration_types
-                    .get(&declaration_id)
-                    .copied()
+                    .instantiate_declaration_type(self.resolved, declaration_id, &arguments)
                     .unwrap_or_else(|| self.typed.types.error())
             }
             NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id)) => {
@@ -2695,8 +4066,66 @@ impl<'a> Checker<'a> {
                     arguments,
                 })
             }
+            NameTarget::SelfType => self
+                .current_self_declaration
+                .and_then(|declaration| self.typed.declaration_types.get(&declaration).copied())
+                .unwrap_or_else(|| self.typed.types.error()),
             _ => self.typed.types.error(),
         }
+    }
+
+    fn lower_function_type_annotation(&mut self, node: &SyntaxNode) -> TypeId {
+        let tokens = types::direct_tokens(node);
+        let safety = if tokens
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Unsafe)))
+        {
+            Safety::Unsafe
+        } else {
+            Safety::Safe
+        };
+        let abi = if tokens
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Extern)))
+        {
+            Abi::C
+        } else {
+            Abi::Elamite
+        };
+        let type_nodes = types::direct_children(node, SyntaxKind::Type);
+        let return_type = match type_nodes.last() {
+            Some(result) => self.lower_type(result),
+            None => self.typed.types.error(),
+        };
+        let mut parameters = Vec::new();
+        let mut type_position = 0usize;
+        let mut variadic_next = false;
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(Token {
+                    kind: TokenKind::Ellipsis,
+                    ..
+                }) => variadic_next = true,
+                SyntaxElement::Node(child) if child.kind == SyntaxKind::Type => {
+                    type_position += 1;
+                    if type_position < type_nodes.len() {
+                        parameters.push(FunctionParameter {
+                            ty: self.lower_type(child),
+                            variadic: variadic_next,
+                        });
+                    }
+                    variadic_next = false;
+                }
+                _ => {}
+            }
+        }
+        self.typed.types.intern(TypeKind::Function {
+            safety,
+            abi,
+            receiver: None,
+            parameters,
+            return_type,
+        })
     }
 
     // ---------------------------------------------------------------
@@ -3004,6 +4433,8 @@ enum Coverage {
     /// Matches exactly these enum variants, unconditionally on their field
     /// values.
     Variants(BTreeSet<VariantId>),
+    /// Matches named constructors of a compiler builtin ADT.
+    BuiltinVariants(BTreeSet<String>),
     /// Matches exactly these `bool` literals.
     Bools(BTreeSet<bool>),
     /// Coverage after explicitly dereferencing one non-null safe reference.
@@ -3023,6 +4454,10 @@ impl Coverage {
             (Coverage::Variants(mut a), Coverage::Variants(b)) => {
                 a.extend(b);
                 Coverage::Variants(a)
+            }
+            (Coverage::BuiltinVariants(mut a), Coverage::BuiltinVariants(b)) => {
+                a.extend(b);
+                Coverage::BuiltinVariants(a)
             }
             (Coverage::Bools(mut a), Coverage::Bools(b)) => {
                 a.extend(b);
@@ -3059,12 +4494,23 @@ impl Coverage {
         }
     }
 
+    fn covers_builtin_variants(&self, variants: &BTreeSet<String>) -> bool {
+        match self {
+            Coverage::BuiltinVariants(covered) => variants.is_subset(covered),
+            Coverage::Dereferenced(inner) => inner.covers_builtin_variants(variants),
+            _ => false,
+        }
+    }
+
     fn is_covered_by(&self, previous: &Coverage) -> bool {
         match self {
             Coverage::Variants(variants) => {
                 !variants.is_empty() && previous.covers_variants(variants)
             }
             Coverage::Bools(values) => !values.is_empty() && previous.covers_bools(values),
+            Coverage::BuiltinVariants(variants) => {
+                !variants.is_empty() && previous.covers_builtin_variants(variants)
+            }
             Coverage::Dereferenced(inner) => match previous {
                 Coverage::Dereferenced(previous_inner) => inner.is_covered_by(previous_inner),
                 _ => false,

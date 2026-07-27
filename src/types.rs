@@ -281,6 +281,20 @@ impl TypeContext {
         &self.kinds[ty.index()]
     }
 
+    #[must_use]
+    pub fn id_at(&self, index: usize) -> Option<TypeId> {
+        (index < self.kinds.len())
+            .then(|| TypeId(u32::try_from(index).expect("canonical type index fits in u32")))
+    }
+
+    /// Returns an already-interned canonical type without mutating the arena.
+    /// Lowering uses this for derived signature representations, such as the
+    /// slice bound to a homogeneous variadic parameter.
+    #[must_use]
+    pub fn id_for_kind(&self, kind: &TypeKind) -> Option<TypeId> {
+        self.interned.get(kind).copied()
+    }
+
     pub fn intern(&mut self, kind: TypeKind) -> TypeId {
         if let Some(existing) = self.interned.get(&kind) {
             return *existing;
@@ -435,6 +449,43 @@ impl TypeContext {
                     if !matches!(self.kind(*target), TypeKind::Function { .. })
             )
         })
+    }
+
+    #[must_use]
+    pub fn contains_generic_parameter(&self, ty: TypeId) -> bool {
+        self.any_type(ty, &mut BTreeSet::new(), &|kind| {
+            matches!(
+                kind,
+                TypeKind::GenericParameter(_)
+                    | TypeKind::SelfType(_)
+                    | TypeKind::InferenceVariable(_)
+            )
+        })
+    }
+
+    #[must_use]
+    pub fn contains_type(&self, outer: TypeId, needle: TypeId) -> bool {
+        fn visit(
+            types: &TypeContext,
+            outer: TypeId,
+            needle: TypeId,
+            seen: &mut BTreeSet<TypeId>,
+        ) -> bool {
+            let outer = types.resolve_inference(outer);
+            if outer == needle {
+                return true;
+            }
+            seen.insert(outer)
+                && type_children(types.kind(outer))
+                    .into_iter()
+                    .any(|child| visit(types, child, needle, seen))
+        }
+        visit(
+            self,
+            outer,
+            self.resolve_inference(needle),
+            &mut BTreeSet::new(),
+        )
     }
 
     #[must_use]
@@ -623,6 +674,15 @@ pub struct FunctionSignature {
     pub return_type: TypeId,
 }
 
+/// One concrete (or still-template-relative) named function instantiation.
+/// Arguments are ordered as enclosing nominal parameters followed by the
+/// function's own generic parameters.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FunctionInstance {
+    pub declaration: DeclarationId,
+    pub arguments: Vec<TypeId>,
+}
+
 /// Whether a syntactic type position may name a trait.
 ///
 /// A trait has no value representation, so it names a type only as the target
@@ -648,6 +708,7 @@ pub struct TypedProgram {
     pub declaration_types: BTreeMap<DeclarationId, TypeId>,
     pub field_types: BTreeMap<FieldId, TypeId>,
     pub function_signatures: BTreeMap<DeclarationId, FunctionSignature>,
+    pub function_instance_signatures: BTreeMap<FunctionInstance, FunctionSignature>,
     pub impl_trait_types: BTreeMap<ImplId, TypeId>,
     pub impl_target_types: BTreeMap<ImplId, TypeId>,
     pub obligations: Vec<TraitObligation>,
@@ -672,6 +733,122 @@ pub fn resolve_types(resolved: &ResolvedProgram) -> TypeOutput {
 }
 
 impl TypedProgram {
+    #[must_use]
+    pub fn callable_generic_parameters(
+        &self,
+        resolved: &ResolvedProgram,
+        declaration: DeclarationId,
+    ) -> Vec<GenericParameterId> {
+        let data = &resolved.declarations[declaration.index()];
+        let mut parameters = data
+            .parent_declaration
+            .map(|parent| {
+                resolved.declarations[parent.index()]
+                    .generic_parameters
+                    .clone()
+            })
+            .unwrap_or_default();
+        parameters.extend(data.generic_parameters.iter().copied());
+        parameters
+    }
+
+    #[must_use]
+    pub fn instance_substitution(
+        &self,
+        resolved: &ResolvedProgram,
+        instance: &FunctionInstance,
+    ) -> Substitution {
+        let mut substitution = Substitution::new();
+        for (parameter, argument) in self
+            .callable_generic_parameters(resolved, instance.declaration)
+            .into_iter()
+            .zip(instance.arguments.iter().copied())
+        {
+            substitution.insert(parameter, argument);
+        }
+        substitution
+    }
+
+    pub fn instantiate_signature(
+        &mut self,
+        resolved: &ResolvedProgram,
+        instance: &FunctionInstance,
+    ) -> Option<FunctionSignature> {
+        if let Some(signature) = self.function_instance_signatures.get(instance) {
+            return Some(signature.clone());
+        }
+        let template = self.function_signatures.get(&instance.declaration)?.clone();
+        let substitution = self.instance_substitution(resolved, instance);
+        let receiver = template
+            .receiver
+            .map(|receiver| self.types.substitute(receiver, &substitution));
+        let parameters = template
+            .parameters
+            .iter()
+            .map(|parameter| FunctionParameter {
+                ty: self.types.substitute(parameter.ty, &substitution),
+                variadic: parameter.variadic,
+            })
+            .collect::<Vec<_>>();
+        let return_type = self.types.substitute(template.return_type, &substitution);
+        let TypeKind::Function { safety, abi, .. } = self.types.kind(template.ty).clone() else {
+            return None;
+        };
+        let ty = self.types.intern(TypeKind::Function {
+            safety,
+            abi,
+            receiver,
+            parameters: parameters.clone(),
+            return_type,
+        });
+        let signature = FunctionSignature {
+            ty,
+            receiver,
+            parameters,
+            return_type,
+        };
+        self.function_instance_signatures
+            .insert(instance.clone(), signature.clone());
+        Some(signature)
+    }
+
+    pub fn instantiate_declaration_type(
+        &mut self,
+        resolved: &ResolvedProgram,
+        declaration: DeclarationId,
+        arguments: &[TypeId],
+    ) -> Option<TypeId> {
+        let parameters = &resolved.declarations[declaration.index()].generic_parameters;
+        if parameters.len() != arguments.len() {
+            return None;
+        }
+        let template = *self.declaration_types.get(&declaration)?;
+        let mut substitution = Substitution::new();
+        for (parameter, argument) in parameters.iter().zip(arguments.iter()) {
+            substitution.insert(*parameter, *argument);
+        }
+        Some(self.types.substitute(template, &substitution))
+    }
+
+    pub fn instantiate_field_type(
+        &mut self,
+        resolved: &ResolvedProgram,
+        field: FieldId,
+        owner_arguments: &[TypeId],
+    ) -> Option<TypeId> {
+        let template = *self.field_types.get(&field)?;
+        let owner = resolved.fields[field.index()].parent_declaration;
+        let parameters = &resolved.declarations[owner.index()].generic_parameters;
+        if parameters.len() != owner_arguments.len() {
+            return None;
+        }
+        let mut substitution = Substitution::new();
+        for (parameter, argument) in parameters.iter().zip(owner_arguments.iter()) {
+            substitution.insert(*parameter, *argument);
+        }
+        Some(self.types.substitute(template, &substitution))
+    }
+
     pub fn obligations_for(
         &self,
         parameter: GenericParameterId,
@@ -933,6 +1110,7 @@ impl<'a> TypeBuilder<'a> {
                 declaration_types: self.declaration_types,
                 field_types: self.field_types,
                 function_signatures: self.function_signatures,
+                function_instance_signatures: BTreeMap::new(),
                 impl_trait_types: self.impl_trait_types,
                 impl_target_types: self.impl_target_types,
                 obligations: self.obligations,
@@ -1105,6 +1283,26 @@ impl<'a> TypeBuilder<'a> {
             } else {
                 self.types.error()
             };
+            if !raw
+                && tokens
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Unsafe)))
+                && let TypeKind::Function {
+                    abi,
+                    receiver,
+                    parameters,
+                    return_type,
+                    ..
+                } = self.types.kind(target).clone()
+            {
+                target = self.types.intern(TypeKind::Function {
+                    safety: Safety::Unsafe,
+                    abi,
+                    receiver,
+                    parameters,
+                    return_type,
+                });
+            }
             // A trait names a type only behind a safe reference, where `&Trait`
             // and `&var Trait` denote a trait object (SPEC 6). Trait names in
             // bound position keep their nominal trait type because bounds do
@@ -1151,6 +1349,17 @@ impl<'a> TypeBuilder<'a> {
                 Keyword::Fn | Keyword::Unsafe | Keyword::Extern
             ))
         ) {
+            if position == TypePosition::Value {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "a bare function type has no value representation; use `&fn` or \
+                         `&unsafe fn`",
+                    )
+                    .with_primary(node.span),
+                );
+                return self.types.error();
+            }
             return self.lower_function_type(node);
         }
         if matches!(first, Some(TokenKind::LBracket)) {
@@ -1409,6 +1618,18 @@ impl<'a> TypeBuilder<'a> {
             parameters: parameters.clone(),
             return_type,
         });
+        if let (Some(receiver), Some(self_type)) = (receiver, self_type)
+            && !self.valid_receiver_type(receiver, self_type)
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "a `self` receiver must have type `Self`, `&Self`, `&var Self`, `*Self`, or \
+                     `*var Self`",
+                )
+                .with_primary(declaration_data.span),
+            );
+        }
         self.function_signatures.insert(
             declaration,
             FunctionSignature {
@@ -1418,6 +1639,19 @@ impl<'a> TypeBuilder<'a> {
                 return_type,
             },
         );
+    }
+
+    fn valid_receiver_type(&self, receiver: TypeId, self_type: TypeId) -> bool {
+        let receiver = self.types.resolve_inference(receiver);
+        if self.types.exactly_equal(receiver, self_type) {
+            return true;
+        }
+        match self.types.kind(receiver) {
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                self.types.exactly_equal(*target, self_type)
+            }
+            _ => false,
+        }
     }
 
     fn lower_generic_bounds(&mut self, declaration: DeclarationId) {

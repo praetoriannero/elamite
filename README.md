@@ -23,8 +23,8 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
-Milestones 1 through 10 are complete (Milestones 6 through 10 for their stated
-non-generic, non-method, non-trait scope; see `IMPL.md`). The compiler library
+Milestones 1 through 12 are complete (Milestones 6 through 12 for their stated
+pre-trait scope; see `IMPL.md`). The compiler library
 includes the package resolver, source manager, diagnostics, span-preserving
 lexer, hand-written surface parser, stable-identity name resolver, canonical
 type/inference core, core expression/function/control-flow checker, typed
@@ -52,6 +52,14 @@ recursive logical copies, non-generic enums, and `match` over the currently
 representable value types. Milestone 10 adds safe references: `&T` and
 `&var T` lower to `T *`, every local whose address is taken is promoted to
 managed storage, and referenced composite literals allocate their own cell.
+Milestone 11 adds executable inherent methods, all five receiver forms,
+associated and unbound selection, typed function references and indirect
+calls, identity comparison, and homogeneous variadic slice packing.
+Milestone 12 adds all-or-nothing generic inference from arguments and expected
+results, generic aggregate construction and patterns, cached concrete function
+and nominal instances, fixed-point reachability discovery, deterministic
+rejection of unbounded instantiation growth, and type-argument-bearing C
+symbols and helpers.
 Constructs outside that subset receive lowering diagnostics rather than partial
 code generation.
 

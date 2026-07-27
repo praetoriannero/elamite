@@ -136,10 +136,9 @@ fn assert_has_category(source: &str, category: Category) {
 
 #[test]
 fn the_authoritative_demonstration_produces_no_false_positive_diagnostics() {
-    // Milestone 6 deliberately checks only the non-generic, non-method,
-    // non-trait subset (methods, generics, and traits are Milestones
-    // 11-13); this asserts the checker never *misdiagnoses* the parts of
-    // the demonstration it does look at, not that it fully checks it.
+    // Milestone 11 checks non-generic inherent methods and function
+    // references. Generics and traits remain Milestones 12-13, so this still
+    // asserts that deferred constructs are not misdiagnosed.
     assert_no_diagnostics(include_str!("../examples/spec_demo.elx"));
 }
 
@@ -190,6 +189,141 @@ fn main() -> ():
     variadic(1)
     variadic(1, String.from("a"), String.from("b"))
 "#,
+    );
+}
+
+#[test]
+fn checks_methods_receiver_adaptation_and_function_references() {
+    assert_no_diagnostics(
+        r#"
+struct Counter:
+    value: i32
+
+    fn new(value: i32) -> Self:
+        return Self{value: value}
+
+    fn copied(self: Self) -> i32:
+        return self.value
+
+    fn shared(self: &Self) -> i32:
+        return self.value
+
+    fn mutable(self: &var Self, value: i32) -> ():
+        self.value = value
+
+    fn raw(self: *Self) -> ():
+        pass
+
+    fn raw_mut(self: *var Self) -> ():
+        pass
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn apply(callback: &fn(i32) -> i32, value: i32) -> i32:
+    return callback(value)
+
+enum Callback:
+    One(&fn(i32) -> i32)
+
+fn main() -> ():
+    var counter = Counter.new(1)
+    let shared = &counter
+    let mutable = &var counter
+    let raw: *Counter = shared as *Counter
+    let raw_mut: *var Counter = mutable as *var Counter
+    let from_value = counter.copied()
+    let from_computed = Counter.new(2).copied()
+    let from_shared = counter.shared()
+    let from_reference = shared.shared()
+    counter.mutable(3)
+    mutable.mutable(4)
+    raw.raw()
+    raw_mut.raw_mut()
+    let unbound: &fn(&var Counter, i32) -> () = Counter.mutable
+    unbound(&var counter, 5)
+    let callback: &fn(i32) -> i32 = increment
+    let wrapped = Callback.One(increment)
+    let callbacks = [increment, increment]
+    let result = apply(callback, from_value + from_computed + from_shared + from_reference)
+    println(result)
+"#,
+    );
+}
+
+#[test]
+fn rejects_invalid_receivers_bound_method_values_and_function_signatures() {
+    assert_has_category(
+        r#"
+struct Counter:
+    value: i32
+
+    fn update(self: &var Self) -> ():
+        pass
+
+fn main() -> ():
+    let counter = Counter{value: 1}
+    counter.update()
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+struct Counter:
+    value: i32
+
+    fn read(self: &Self) -> i32:
+        return self.value
+
+fn main() -> ():
+    let counter = Counter{value: 1}
+    let method = counter.read
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+unsafe fn dangerous(value: i32) -> i32:
+    return value
+
+fn main() -> ():
+    let callback: &fn(i32) -> i32 = dangerous
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let callback: fn(i32) -> i32 = increment
+"#,
+        Category::TypeSystem,
+    );
+    assert_has_category(
+        r#"
+struct Counter:
+    value: i32
+
+    fn raw(self: *Self) -> ():
+        pass
+
+fn main() -> ():
+    let pointer: *var Counter = null
+    pointer.raw()
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+fn variadic(values: ...i32) -> ():
+    pass
+
+fn main() -> ():
+    let callback: &fn(i32) -> () = variadic
+"#,
+        Category::ExpressionType,
     );
 }
 
@@ -1046,5 +1180,79 @@ fn main() -> ():
         defer release()
 "#,
         Category::ControlFlow,
+    );
+}
+
+#[test]
+fn generic_inference_requires_a_unique_complete_solution() {
+    assert_no_diagnostics(
+        r#"
+fn select[T, U](left: T, right: U) -> T:
+    return left
+
+struct Pair[T, U]:
+    left: T
+    right: U
+
+fn main() -> ():
+    let inferred = select(1, 2u32)
+    let explicit = select[i32, u32](1, 2u32)
+    let pair = Pair { left: 1, right: 2u32 }
+    println(inferred)
+    println(explicit)
+    println(pair.left)
+"#,
+    );
+    assert_has_category(
+        r#"
+fn unused[T](value: i32) -> i32:
+    return value
+
+fn main() -> ():
+    println(unused(1))
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+fn select[T, U](left: T, right: U) -> T:
+    return left
+
+fn main() -> ():
+    println(select[i32](1, 2u32))
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+struct Pair[T, U]:
+    left: T
+    right: U
+
+fn main() -> ():
+    let pair = Pair[i32] { left: 1, right: 2u32 }
+    println(pair.left)
+"#,
+        Category::Construction,
+    );
+}
+
+#[test]
+fn generic_bodies_use_declared_comparison_bounds() {
+    assert_no_diagnostics(
+        r#"
+fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
+    return *left == *right
+
+fn ordered[T: PartialOrd](left: &T, right: &T) -> bool:
+    return *left < *right
+"#,
+    );
+    assert_has_category(
+        r#"
+fn invalid[T](left: &T, right: &T) -> bool:
+    return *left == *right
+"#,
+        Category::TypeSystem,
     );
 }

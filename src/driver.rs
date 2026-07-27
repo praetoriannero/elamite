@@ -93,7 +93,7 @@ pub fn compile(
     if !checked.diagnostics.is_empty() {
         return Err(checked.diagnostics);
     }
-    let high_level = lower_typed_ir(&resolved, &type_output.program, &checked.program);
+    let high_level = lower_typed_ir(&resolved, &mut type_output.program, &checked.program);
     if !high_level.diagnostics.is_empty() {
         return Err(high_level.diagnostics);
     }

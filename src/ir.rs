@@ -1,4 +1,5 @@
-//! Typed high-level IR and explicit control-flow IR (`IMPL.md` Milestones 8-9).
+//! Typed high-level IR and explicit control-flow IR (`IMPL.md` Milestones
+//! 8-11).
 //!
 //! The high-level form owns selected declaration and type identities while
 //! retaining source spans, place classifications, and explicit logical-copy
@@ -7,9 +8,9 @@
 //! trapping operations explicit before any C is emitted. Milestone 9 adds the
 //! canonical logical-copy contract and source-ordered pattern-match lowering.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::check::CheckedProgram;
+use crate::check::{CheckedCall, CheckedProgram, ReceiverAdjustment};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::lexer::{FormattedSegmentKind, Keyword, Token, TokenKind};
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -19,7 +20,8 @@ use crate::resolution::{
 };
 use crate::source::Span;
 use crate::types::{
-    PlaceKind, PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram, parse_integer_magnitude,
+    FunctionInstance, PlaceKind, PrimitiveType, Substitution, TypeContext, TypeId, TypeKind,
+    TypedProgram, parse_integer_magnitude,
 };
 
 macro_rules! id_type {
@@ -165,7 +167,8 @@ impl TrapKind {
 
 #[derive(Debug, Clone)]
 pub enum TypedCallee {
-    Function(DeclarationId),
+    Function(FunctionInstance),
+    Indirect(Box<TypedExpression>),
     Print { newline: bool },
 }
 
@@ -178,6 +181,7 @@ pub enum FormattedPart {
 #[derive(Debug, Clone)]
 pub enum TypedExpressionKind {
     Constant(Constant),
+    FunctionReference(FunctionInstance),
     Local(LocalBindingId),
     Unary {
         operator: UnaryOperator,
@@ -224,6 +228,9 @@ pub enum TypedExpressionKind {
         variant: VariantId,
         fields: Vec<(FieldId, TypedExpression)>,
     },
+    /// A homogeneous variadic tail packed into the language slice
+    /// representation before the call.
+    VariadicSlice(Vec<TypedExpression>),
     FormattedString(Vec<FormattedPart>),
 }
 
@@ -370,6 +377,7 @@ pub struct TypedParameter {
 #[derive(Debug, Clone)]
 pub struct TypedFunction {
     pub declaration: DeclarationId,
+    pub instance: FunctionInstance,
     pub name: String,
     pub span: Span,
     pub parameters: Vec<TypedParameter>,
@@ -388,6 +396,7 @@ pub struct TypedFunction {
 
 #[derive(Debug, Clone)]
 pub struct TypedStruct {
+    pub ty: TypeId,
     pub declaration: DeclarationId,
     pub name: String,
     pub fields: Vec<(FieldId, String, TypeId)>,
@@ -402,6 +411,7 @@ pub struct TypedVariant {
 
 #[derive(Debug, Clone)]
 pub struct TypedEnum {
+    pub ty: TypeId,
     pub declaration: DeclarationId,
     pub name: String,
     pub variants: Vec<TypedVariant>,
@@ -419,29 +429,40 @@ pub struct TypedIrOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Lowers the plain, non-generic Milestone 6/7 subset into typed high-level
-/// IR. Features assigned to later milestones are not selected.
+/// Monomorphizes and lowers the pre-trait executable subset into typed
+/// high-level IR. Features assigned to later milestones are not selected.
 #[must_use]
 pub fn lower_typed_ir(
     resolved: &ResolvedProgram,
-    typed: &TypedProgram,
+    typed: &mut TypedProgram,
     checked: &CheckedProgram,
 ) -> TypedIrOutput {
     TypedLowerer::new(resolved, typed, checked).run()
 }
 
+#[derive(Clone)]
+struct PendingInstance {
+    instance: FunctionInstance,
+    ancestry: Vec<FunctionInstance>,
+}
+
 struct TypedLowerer<'a> {
     resolved: &'a ResolvedProgram,
-    typed: &'a TypedProgram,
+    typed: &'a mut TypedProgram,
     checked: &'a CheckedProgram,
     binding_by_span: BTreeMap<Span, LocalBindingId>,
     diagnostics: Vec<Diagnostic>,
+    substitution: Substitution,
+    current_instance: Option<FunctionInstance>,
+    ancestry: Vec<FunctionInstance>,
+    pending: VecDeque<PendingInstance>,
+    queued: BTreeSet<FunctionInstance>,
 }
 
 impl<'a> TypedLowerer<'a> {
     fn new(
         resolved: &'a ResolvedProgram,
-        typed: &'a TypedProgram,
+        typed: &'a mut TypedProgram,
         checked: &'a CheckedProgram,
     ) -> Self {
         let binding_by_span = resolved
@@ -455,15 +476,127 @@ impl<'a> TypedLowerer<'a> {
             checked,
             binding_by_span,
             diagnostics: Vec::new(),
+            substitution: Substitution::new(),
+            current_instance: None,
+            ancestry: Vec::new(),
+            pending: VecDeque::new(),
+            queued: BTreeSet::new(),
         }
     }
 
     fn run(mut self) -> TypedIrOutput {
         let mut program = TypedIrProgram::default();
-        for declaration in &self.resolved.declarations {
-            if declaration.kind == DeclarationKind::Struct
-                && declaration.generic_parameters.is_empty()
-            {
+        let roots = self
+            .resolved
+            .declarations
+            .iter()
+            .filter(|declaration| {
+                declaration.kind == DeclarationKind::Function
+                    && declaration.parent_impl.is_none()
+                    && self
+                        .typed
+                        .callable_generic_parameters(self.resolved, declaration.id)
+                        .is_empty()
+                    && !declaration.parent_declaration.is_some_and(|parent| {
+                        self.resolved.declarations[parent.index()].kind == DeclarationKind::Trait
+                    })
+            })
+            .map(|declaration| FunctionInstance {
+                declaration: declaration.id,
+                arguments: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        for instance in roots {
+            let span = self.resolved.declarations[instance.declaration.index()].span;
+            self.enqueue(instance, Vec::new(), span);
+        }
+        while let Some(pending) = self.pending.pop_front() {
+            self.current_instance = Some(pending.instance.clone());
+            self.ancestry = pending.ancestry;
+            self.substitution = self
+                .typed
+                .instance_substitution(self.resolved, &pending.instance);
+            if let Some(function) = self.lower_function(&pending.instance) {
+                program.functions.push(function);
+            }
+        }
+        self.collect_concrete_nominals(&mut program);
+        TypedIrOutput {
+            program,
+            diagnostics: self.diagnostics,
+        }
+    }
+
+    fn concrete_type(&mut self, ty: TypeId) -> TypeId {
+        self.typed.types.substitute(ty, &self.substitution)
+    }
+
+    fn concrete_instance(&mut self, instance: &FunctionInstance) -> FunctionInstance {
+        FunctionInstance {
+            declaration: instance.declaration,
+            arguments: instance
+                .arguments
+                .iter()
+                .map(|argument| self.concrete_type(*argument))
+                .collect(),
+        }
+    }
+
+    fn enqueue(&mut self, instance: FunctionInstance, ancestry: Vec<FunctionInstance>, span: Span) {
+        if ancestry.iter().any(|ancestor| {
+            ancestor.declaration == instance.declaration
+                && ancestor.arguments != instance.arguments
+                && ancestor
+                    .arguments
+                    .iter()
+                    .zip(&instance.arguments)
+                    .any(|(old, new)| old != new && self.typed.types.contains_type(*new, *old))
+        }) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "generic instantiation expands without bound",
+                )
+                .with_primary(span),
+            );
+            return;
+        }
+        if self.queued.insert(instance.clone()) {
+            self.pending
+                .push_back(PendingInstance { instance, ancestry });
+        }
+    }
+
+    fn enqueue_reachable(&mut self, instance: FunctionInstance, span: Span) {
+        if self.resolved.declarations[instance.declaration.index()].kind
+            != DeclarationKind::Function
+        {
+            return;
+        }
+        let mut ancestry = self.ancestry.clone();
+        if let Some(current) = &self.current_instance {
+            ancestry.push(current.clone());
+        }
+        self.enqueue(instance, ancestry, span);
+    }
+
+    fn collect_concrete_nominals(&mut self, program: &mut TypedIrProgram) {
+        let concrete = (0..self.typed.types.len())
+            .filter_map(|index| {
+                let ty = self.typed.types.id_at(index)?;
+                (!self.typed.types.contains_generic_parameter(ty)).then_some(ty)
+            })
+            .collect::<Vec<_>>();
+        for ty in concrete {
+            let TypeKind::Nominal {
+                identity,
+                arguments,
+            } = self.typed.types.kind(ty).clone()
+            else {
+                continue;
+            };
+            let declaration = &self.resolved.declarations[identity.declaration.index()];
+            if declaration.kind == DeclarationKind::Struct {
                 let fields = self
                     .resolved
                     .fields
@@ -472,23 +605,24 @@ impl<'a> TypedLowerer<'a> {
                         field.parent_declaration == declaration.id && field.parent_variant.is_none()
                     })
                     .filter_map(|field| {
-                        self.typed.field_types.get(&field.id).copied().map(|ty| {
-                            (
-                                field.id,
-                                self.resolved.symbol_text(field.name).to_string(),
-                                ty,
-                            )
-                        })
+                        self.typed
+                            .instantiate_field_type(self.resolved, field.id, &arguments)
+                            .map(|field_type| {
+                                (
+                                    field.id,
+                                    self.resolved.symbol_text(field.name).to_string(),
+                                    field_type,
+                                )
+                            })
                     })
                     .collect();
                 program.structs.push(TypedStruct {
+                    ty,
                     declaration: declaration.id,
                     name: self.resolved.symbol_text(declaration.name).to_string(),
                     fields,
                 });
-            } else if declaration.kind == DeclarationKind::Enum
-                && declaration.generic_parameters.is_empty()
-            {
+            } else if declaration.kind == DeclarationKind::Enum {
                 let variants = self
                     .resolved
                     .variants
@@ -502,52 +636,61 @@ impl<'a> TypedLowerer<'a> {
                             .iter()
                             .filter_map(|field_id| {
                                 let field = &self.resolved.fields[field_id.index()];
-                                self.typed.field_types.get(field_id).copied().map(|ty| {
-                                    (
-                                        *field_id,
-                                        self.resolved.symbol_text(field.name).to_string(),
-                                        ty,
-                                    )
-                                })
+                                self.typed
+                                    .instantiate_field_type(self.resolved, *field_id, &arguments)
+                                    .map(|field_type| {
+                                        (
+                                            *field_id,
+                                            self.resolved.symbol_text(field.name).to_string(),
+                                            field_type,
+                                        )
+                                    })
                             })
                             .collect(),
                     })
                     .collect();
                 program.enums.push(TypedEnum {
+                    ty,
                     declaration: declaration.id,
                     name: self.resolved.symbol_text(declaration.name).to_string(),
                     variants,
                 });
             }
         }
-        for declaration in &self.resolved.declarations {
-            if declaration.kind != DeclarationKind::Function
-                || declaration.parent_declaration.is_some()
-                || declaration.parent_impl.is_some()
-                || !declaration.generic_parameters.is_empty()
-            {
-                continue;
-            }
-            if let Some(function) = self.lower_function(declaration.id) {
-                program.functions.push(function);
-            }
-        }
-        TypedIrOutput {
-            program,
-            diagnostics: self.diagnostics,
-        }
     }
 
-    fn lower_function(&mut self, declaration: DeclarationId) -> Option<TypedFunction> {
+    fn lower_function(&mut self, instance: &FunctionInstance) -> Option<TypedFunction> {
+        let declaration = instance.declaration;
         let data = &self.resolved.declarations[declaration.index()];
-        let signature = self.typed.function_signatures.get(&declaration)?;
+        let signature = self.typed.instantiate_signature(self.resolved, instance)?;
         let mut parameters = Vec::new();
         let mut local_types = BTreeMap::new();
         if let Some(parameter_list) =
             crate::types::direct_child(&data.syntax, SyntaxKind::Parameters)
         {
             let nodes = crate::types::direct_children(parameter_list, SyntaxKind::Parameter);
-            for (node, parameter) in nodes.into_iter().zip(&signature.parameters) {
+            let mut ordinary_parameters = signature.parameters.iter();
+            for node in nodes {
+                let is_receiver = crate::types::direct_tokens(node)
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::SelfValue)));
+                let parameter_type = if is_receiver {
+                    signature.receiver
+                } else {
+                    ordinary_parameters.next().map(|parameter| {
+                        if parameter.variadic {
+                            self.typed
+                                .types
+                                .id_for_kind(&TypeKind::Slice(parameter.ty))
+                                .expect("checking interns every variadic binding's slice type")
+                        } else {
+                            parameter.ty
+                        }
+                    })
+                };
+                let Some(parameter_type) = parameter_type else {
+                    continue;
+                };
                 let Some(token) = parameter_name_token(node) else {
                     continue;
                 };
@@ -556,10 +699,10 @@ impl<'a> TypedLowerer<'a> {
                 };
                 parameters.push(TypedParameter {
                     binding,
-                    ty: parameter.ty,
+                    ty: parameter_type,
                     span: token.span,
                 });
-                local_types.insert(binding, parameter.ty);
+                local_types.insert(binding, parameter_type);
             }
         }
         // Promotion is computed from the function's syntax rather than from
@@ -576,6 +719,7 @@ impl<'a> TypedLowerer<'a> {
             .unwrap_or_default();
         Some(TypedFunction {
             declaration,
+            instance: instance.clone(),
             name: self.resolved.symbol_text(data.name).to_string(),
             span: data.span,
             parameters,
@@ -626,6 +770,7 @@ impl<'a> TypedLowerer<'a> {
                     .get(&value_node.span)
                     .copied()
                     .unwrap_or(value.ty);
+                let ty = self.concrete_type(ty);
                 local_types.insert(binding, ty);
                 let mutable = node.children.iter().any(|child| {
                     matches!(
@@ -872,6 +1017,7 @@ impl<'a> TypedLowerer<'a> {
                             .get(&binding)
                             .copied()
                             .unwrap_or(expected);
+                        let ty = self.concrete_type(ty);
                         local_types.insert(binding, ty);
                         TypedPatternKind::Binding(binding)
                     }
@@ -933,14 +1079,14 @@ impl<'a> TypedLowerer<'a> {
         required: &[FieldId],
         bindings: &BTreeMap<String, LocalBindingId>,
         local_types: &mut BTreeMap<LocalBindingId, TypeId>,
-        _expected: TypeId,
+        expected: TypeId,
     ) -> Option<Vec<(FieldId, TypedPattern)>> {
         if node.kind == SyntaxKind::VariantPattern {
             return child_nodes(node)
                 .into_iter()
                 .zip(required.iter().copied())
                 .map(|(pattern, field)| {
-                    let ty = self.typed.field_types.get(&field).copied()?;
+                    let ty = self.instantiated_pattern_field_type(field, expected)?;
                     Some((
                         field,
                         self.lower_pattern(pattern, ty, bindings, local_types)?,
@@ -969,7 +1115,7 @@ impl<'a> TypedLowerer<'a> {
                     .symbol_text(self.resolved.fields[field.index()].name)
                     == name
             })?;
-            let ty = self.typed.field_types.get(&field).copied()?;
+            let ty = self.instantiated_pattern_field_type(field, expected)?;
             let pattern = if let Some(nested) = child_nodes(field_node).into_iter().next() {
                 self.lower_pattern(nested, ty, bindings, local_types)?
             } else {
@@ -984,6 +1130,21 @@ impl<'a> TypedLowerer<'a> {
             fields.push((field, pattern));
         }
         Some(fields)
+    }
+
+    fn instantiated_pattern_field_type(
+        &mut self,
+        field: FieldId,
+        expected: TypeId,
+    ) -> Option<TypeId> {
+        let expected = self.concrete_type(expected);
+        let arguments = match self.expanded_kind(expected) {
+            TypeKind::Nominal { arguments, .. } => arguments.clone(),
+            _ => Vec::new(),
+        };
+        self.typed
+            .instantiate_field_type(self.resolved, field, &arguments)
+            .map(|ty| self.concrete_type(ty))
     }
 
     fn resolve_pattern_variant(&self, node: &SyntaxNode) -> Option<(DeclarationId, VariantId)> {
@@ -1011,12 +1172,13 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn lower_expression(&mut self, node: &SyntaxNode) -> Option<TypedExpression> {
-        let ty = self
+        let template = self
             .checked
             .expression_types
             .get(&node.span)
             .copied()
             .unwrap_or_else(|| self.typed.types.error());
+        let ty = self.concrete_type(template);
         if ty == self.typed.types.error() {
             self.unsupported(
                 node.span,
@@ -1035,13 +1197,19 @@ impl<'a> TypedLowerer<'a> {
                 TypedExpressionKind::Constant(lower_constant(node, false)?)
             }
             SyntaxKind::NameExpression => {
-                let token = first_token(node)?;
-                let target = self.resolved.reference_at(token.span)?.target;
-                match target {
-                    NameTarget::Local(binding) => TypedExpressionKind::Local(binding),
-                    _ => {
-                        self.unsupported(node.span, "a non-local value reference");
-                        return None;
+                if let Some(instance) = self.checked.function_references.get(&node.span).cloned() {
+                    let instance = self.concrete_instance(&instance);
+                    self.enqueue_reachable(instance.clone(), node.span);
+                    TypedExpressionKind::FunctionReference(instance)
+                } else {
+                    let token = first_token(node)?;
+                    let target = self.resolved.reference_at(token.span)?.target;
+                    match target {
+                        NameTarget::Local(binding) => TypedExpressionKind::Local(binding),
+                        _ => {
+                            self.unsupported(node.span, "a non-local value reference");
+                            return None;
+                        }
                     }
                 }
             }
@@ -1119,7 +1287,13 @@ impl<'a> TypedLowerer<'a> {
             },
             SyntaxKind::CallExpression => self.lower_call(node)?,
             SyntaxKind::MemberExpression => {
-                if let Some((declaration, variant)) = self.resolve_enum_variant_expression(node) {
+                if let Some(instance) = self.checked.function_references.get(&node.span).cloned() {
+                    let instance = self.concrete_instance(&instance);
+                    self.enqueue_reachable(instance.clone(), node.span);
+                    TypedExpressionKind::FunctionReference(instance)
+                } else if let Some((declaration, variant)) =
+                    self.resolve_enum_variant_expression(node)
+                {
                     TypedExpressionKind::Enum {
                         declaration,
                         variant,
@@ -1135,10 +1309,16 @@ impl<'a> TypedLowerer<'a> {
                 }
             }
             SyntaxKind::BracketExpression => {
-                let nodes = child_nodes(node);
-                TypedExpressionKind::Index {
-                    base: Box::new(self.lower_expression(*nodes.first()?)?),
-                    index: Box::new(self.lower_expression(*nodes.get(1)?)?),
+                if let Some(instance) = self.checked.function_references.get(&node.span).cloned() {
+                    let instance = self.concrete_instance(&instance);
+                    self.enqueue_reachable(instance.clone(), node.span);
+                    TypedExpressionKind::FunctionReference(instance)
+                } else {
+                    let nodes = child_nodes(node);
+                    TypedExpressionKind::Index {
+                        base: Box::new(self.lower_expression(*nodes.first()?)?),
+                        index: Box::new(self.lower_expression(*nodes.get(1)?)?),
+                    }
                 }
             }
             SyntaxKind::ParenthesizedExpression => {
@@ -1200,43 +1380,157 @@ impl<'a> TypedLowerer<'a> {
                 fields,
             });
         }
-        let span = callee_target_span(callee_node)?;
-        let reference = self.resolved.reference_at(span)?;
-        let callee = match reference.target {
-            NameTarget::Item(ItemId::Declaration(declaration))
-                if self.resolved.declarations[declaration.index()].kind
-                    == DeclarationKind::Function =>
-            {
-                TypedCallee::Function(declaration)
-            }
-            NameTarget::Item(ItemId::Builtin(builtin))
-                if matches!(self.resolved.builtin_name(builtin), "print" | "println") =>
-            {
-                TypedCallee::Print {
-                    newline: self.resolved.builtin_name(builtin) == "println",
+        let checked_call = self.checked.calls.get(&node.span).cloned()?;
+        let mut source_arguments = nodes[1..].to_vec();
+        let (callee, parameters, receiver) = match checked_call {
+            CheckedCall::Direct(instance) => {
+                let instance = self.concrete_instance(&instance);
+                let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
+                self.enqueue_reachable(instance.clone(), node.span);
+                let mut parameters = signature.parameters.clone();
+                if let Some(receiver) = signature.receiver {
+                    parameters.insert(
+                        0,
+                        crate::types::FunctionParameter {
+                            ty: receiver,
+                            variadic: false,
+                        },
+                    );
                 }
+                (TypedCallee::Function(instance), parameters, None)
             }
-            _ => {
-                self.unsupported(node.span, "an indirect, method, generic, or foreign call");
-                return None;
+            CheckedCall::BoundMethod {
+                instance,
+                adjustment,
+            } => {
+                let instance = self.concrete_instance(&instance);
+                let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
+                self.enqueue_reachable(instance.clone(), node.span);
+                let base = child_nodes(callee_node).into_iter().next()?;
+                let receiver = self.lower_bound_receiver(base, signature.receiver?, adjustment)?;
+                (
+                    TypedCallee::Function(instance),
+                    signature.parameters,
+                    Some(receiver),
+                )
             }
+            CheckedCall::Indirect => {
+                let callee = self.lower_expression(callee_node)?;
+                let parameters = self.function_parameters(callee.ty)?;
+                (TypedCallee::Indirect(Box::new(callee)), parameters, None)
+            }
+            CheckedCall::Print { newline } => (TypedCallee::Print { newline }, Vec::new(), None),
         };
         let is_print = matches!(callee, TypedCallee::Print { .. });
-        let arguments = nodes[1..]
-            .iter()
-            .map(|argument| {
-                if is_print && argument.kind == SyntaxKind::FormattedStringExpression {
-                    self.lower_print_formatted(argument)
-                } else {
-                    self.lower_expression(argument)
-                }
-            })
-            .collect::<Option<Vec<_>>>()?;
+        let mut arguments = if is_print {
+            source_arguments
+                .drain(..)
+                .map(|argument| {
+                    if is_print && argument.kind == SyntaxKind::FormattedStringExpression {
+                        self.lower_print_formatted(argument)
+                    } else {
+                        self.lower_expression(argument)
+                    }
+                })
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            self.lower_call_arguments(node.span, &source_arguments, &parameters)?
+        };
+        if let Some(receiver) = receiver {
+            arguments.insert(0, receiver);
+        }
         Some(TypedExpressionKind::Call { callee, arguments })
     }
 
+    fn function_parameters(&self, ty: TypeId) -> Option<Vec<crate::types::FunctionParameter>> {
+        let ty = self.typed.types.resolve_inference(ty);
+        let target = match self.typed.types.kind(ty) {
+            TypeKind::Reference { target, .. } => self.typed.types.resolve_inference(*target),
+            TypeKind::Alias { target, .. } => return self.function_parameters(*target),
+            _ => return None,
+        };
+        match self.typed.types.kind(target) {
+            TypeKind::Function { parameters, .. } => Some(parameters.clone()),
+            _ => None,
+        }
+    }
+
+    fn lower_call_arguments(
+        &mut self,
+        call_span: Span,
+        arguments: &[&SyntaxNode],
+        parameters: &[crate::types::FunctionParameter],
+    ) -> Option<Vec<TypedExpression>> {
+        let variadic = parameters
+            .last()
+            .is_some_and(|parameter| parameter.variadic);
+        if !variadic {
+            return arguments
+                .iter()
+                .map(|argument| self.lower_expression(argument))
+                .collect();
+        }
+        let fixed = parameters.len().saturating_sub(1);
+        let mut lowered = arguments[..arguments.len().min(fixed)]
+            .iter()
+            .map(|argument| self.lower_expression(argument))
+            .collect::<Option<Vec<_>>>()?;
+        let element = parameters.last()?.ty;
+        let ty = self.typed.types.id_for_kind(&TypeKind::Slice(element))?;
+        let values = arguments[arguments.len().min(fixed)..]
+            .iter()
+            .map(|argument| self.lower_expression(argument))
+            .collect::<Option<Vec<_>>>()?;
+        lowered.push(TypedExpression {
+            ty,
+            place: PlaceKind::Value,
+            copy: false,
+            span: arguments
+                .get(fixed)
+                .map_or(call_span, |argument| argument.span),
+            kind: TypedExpressionKind::VariadicSlice(values),
+        });
+        Some(lowered)
+    }
+
+    fn lower_bound_receiver(
+        &mut self,
+        base: &SyntaxNode,
+        receiver_type: TypeId,
+        adjustment: ReceiverAdjustment,
+    ) -> Option<TypedExpression> {
+        match adjustment {
+            ReceiverAdjustment::Pass => self.lower_expression(base),
+            ReceiverAdjustment::CopyValue => {
+                let mut receiver = self.lower_expression(base)?;
+                receiver.copy = true;
+                Some(receiver)
+            }
+            ReceiverAdjustment::DereferenceAndCopy => {
+                let operand = self.lower_expression(base)?;
+                Some(TypedExpression {
+                    ty: receiver_type,
+                    place: PlaceKind::Value,
+                    copy: true,
+                    span: base.span,
+                    kind: TypedExpressionKind::Dereference(Box::new(operand)),
+                })
+            }
+            ReceiverAdjustment::BorrowShared | ReceiverAdjustment::BorrowMutable => {
+                Some(TypedExpression {
+                    ty: receiver_type,
+                    place: PlaceKind::Value,
+                    copy: false,
+                    span: base.span,
+                    kind: TypedExpressionKind::AddressOf(Box::new(self.lower_place(base)?)),
+                })
+            }
+        }
+    }
+
     fn lower_print_formatted(&mut self, node: &SyntaxNode) -> Option<TypedExpression> {
-        let ty = self.checked.expression_types.get(&node.span).copied()?;
+        let template = self.checked.expression_types.get(&node.span).copied()?;
+        let ty = self.concrete_type(template);
         if ty == self.typed.types.error() {
             return None;
         }
@@ -1260,14 +1554,15 @@ impl<'a> TypedLowerer<'a> {
         let declaration = if let Some((declaration, _)) = enum_variant {
             declaration
         } else {
-            let span = callee_target_span(callee)?;
-            let NameTarget::Item(ItemId::Declaration(declaration)) =
-                self.resolved.reference_at(span)?.target
-            else {
-                self.unsupported(node.span, "a non-struct record construction");
-                return None;
-            };
-            declaration
+            let template = self.checked.expression_types.get(&node.span).copied()?;
+            let ty = self.concrete_type(template);
+            match self.expanded_kind(ty) {
+                TypeKind::Nominal { identity, .. } => identity.declaration,
+                _ => {
+                    self.unsupported(node.span, "a non-struct record construction");
+                    return None;
+                }
+            }
         };
         if self.resolved.declarations[declaration.index()].kind != DeclarationKind::Struct
             && enum_variant.is_none()
@@ -1306,7 +1601,8 @@ impl<'a> TypedLowerer<'a> {
                 let NameTarget::Local(binding) = target else {
                     return None;
                 };
-                let ty = self.typed.field_types.get(&field).copied()?;
+                let template = self.typed.field_types.get(&field).copied()?;
+                let ty = self.concrete_type(template);
                 TypedExpression {
                     ty,
                     place: PlaceKind::Addressable,
@@ -1356,7 +1652,8 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn lower_place(&mut self, node: &SyntaxNode) -> Option<TypedPlace> {
-        let ty = self.checked.expression_types.get(&node.span).copied()?;
+        let template = self.checked.expression_types.get(&node.span).copied()?;
+        let ty = self.concrete_type(template);
         match node.kind {
             SyntaxKind::NameExpression => {
                 let token = first_token(node)?;
@@ -1446,7 +1743,8 @@ impl<'a> TypedLowerer<'a> {
 
     /// The place form of [`Self::lower_receiver`].
     fn lower_place_receiver(&mut self, base: &SyntaxNode) -> Option<TypedPlace> {
-        let base_type = self.checked.expression_types.get(&base.span).copied()?;
+        let template = self.checked.expression_types.get(&base.span).copied()?;
+        let base_type = self.concrete_type(template);
         if !self.is_reference_type(base_type) {
             return self.lower_place(base);
         }
@@ -1572,7 +1870,9 @@ pub enum ControlFlowPlace {
     Index {
         base: Box<ControlFlowPlace>,
         index: TemporaryId,
-        length: u128,
+        /// Fixed arrays carry a constant bound; slices read `.length` from
+        /// their evaluated base.
+        length: Option<u128>,
         trap: TrapKind,
     },
 }
@@ -1595,6 +1895,7 @@ pub enum AggregateValue {
 #[derive(Debug, Clone)]
 pub enum Rvalue {
     Constant(Constant),
+    FunctionReference(FunctionInstance),
     Load(ControlFlowPlace),
     /// The address of a place. Its root local is promoted, so the address is
     /// stable for as long as the reference is reachable.
@@ -1629,8 +1930,16 @@ pub enum Rvalue {
         trap: Option<TrapKind>,
     },
     Call {
-        declaration: DeclarationId,
+        instance: FunctionInstance,
         arguments: Vec<TemporaryId>,
+    },
+    IndirectCall {
+        callee: TemporaryId,
+        arguments: Vec<TemporaryId>,
+    },
+    VariadicSlice {
+        elements: Vec<TemporaryId>,
+        element_type: TypeId,
     },
     Aggregate(AggregateValue),
 }
@@ -1687,6 +1996,7 @@ pub struct BasicBlock {
 #[derive(Debug, Clone)]
 pub struct ControlFlowFunction {
     pub declaration: DeclarationId,
+    pub instance: FunctionInstance,
     pub name: String,
     pub span: Span,
     pub parameters: Vec<TypedParameter>,
@@ -1778,6 +2088,7 @@ impl<'a> FunctionLowerer<'a> {
             .collect();
         ControlFlowFunction {
             declaration: self.function.declaration,
+            instance: self.function.instance.clone(),
             name: self.function.name.clone(),
             span: self.function.span,
             parameters: self.function.parameters.clone(),
@@ -2165,6 +2476,9 @@ impl<'a> FunctionLowerer<'a> {
     fn lower_expression(&mut self, expression: &TypedExpression) -> TemporaryId {
         let value = match &expression.kind {
             TypedExpressionKind::Constant(constant) => Rvalue::Constant(constant.clone()),
+            TypedExpressionKind::FunctionReference(instance) => {
+                Rvalue::FunctionReference(instance.clone())
+            }
             TypedExpressionKind::Local(binding) => Rvalue::Load(ControlFlowPlace::Local(*binding)),
             TypedExpressionKind::AddressOf(place) => {
                 let place = self.lower_place(place);
@@ -2224,7 +2538,7 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             TypedExpressionKind::Call {
-                callee: TypedCallee::Function(declaration),
+                callee: TypedCallee::Function(instance),
                 arguments,
             } => {
                 let arguments = arguments
@@ -2232,9 +2546,20 @@ impl<'a> FunctionLowerer<'a> {
                     .map(|argument| self.lower_expression(argument))
                     .collect();
                 Rvalue::Call {
-                    declaration: *declaration,
+                    instance: instance.clone(),
                     arguments,
                 }
+            }
+            TypedExpressionKind::Call {
+                callee: TypedCallee::Indirect(callee),
+                arguments,
+            } => {
+                let callee = self.lower_expression(callee);
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect();
+                Rvalue::IndirectCall { callee, arguments }
             }
             TypedExpressionKind::Call {
                 callee: TypedCallee::Print { newline },
@@ -2261,8 +2586,9 @@ impl<'a> FunctionLowerer<'a> {
                 let base_place = self.expression_place(base);
                 let index = self.lower_expression(index);
                 let length = match expanded_kind(&self.types.types, base.ty) {
-                    TypeKind::Array { length, .. } => *length,
-                    _ => 0,
+                    TypeKind::Array { length, .. } => Some(*length),
+                    TypeKind::Slice(_) => None,
+                    _ => Some(0),
                 };
                 Rvalue::Load(ControlFlowPlace::Index {
                     base: Box::new(base_place),
@@ -2305,6 +2631,19 @@ impl<'a> FunctionLowerer<'a> {
                     .map(|(field, value)| (*field, self.lower_expression(value)))
                     .collect(),
             }),
+            TypedExpressionKind::VariadicSlice(elements) => {
+                let element_type = match expanded_kind(&self.types.types, expression.ty) {
+                    TypeKind::Slice(element) => *element,
+                    _ => self.types.types.error(),
+                };
+                Rvalue::VariadicSlice {
+                    elements: elements
+                        .iter()
+                        .map(|element| self.lower_expression(element))
+                        .collect(),
+                    element_type,
+                }
+            }
             TypedExpressionKind::FormattedString(_) => {
                 self.lower_print(expression);
                 Rvalue::Constant(Constant::String(String::new()))
@@ -2416,7 +2755,7 @@ impl<'a> FunctionLowerer<'a> {
                 ControlFlowPlace::Index {
                     base: Box::new(base),
                     index,
-                    length: *length,
+                    length: Some(*length),
                     trap: TrapKind::IndexOutOfBounds,
                 }
             }
@@ -2443,8 +2782,9 @@ impl<'a> FunctionLowerer<'a> {
                     &self.types.types,
                     base_expression_type(&expression.kind),
                 ) {
-                    TypeKind::Array { length, .. } => *length,
-                    _ => 0,
+                    TypeKind::Array { length, .. } => Some(*length),
+                    TypeKind::Slice(_) => None,
+                    _ => Some(0),
                 };
                 ControlFlowPlace::Index {
                     base: Box::new(base),
@@ -2717,6 +3057,10 @@ fn callee_target_span(node: &SyntaxNode) -> Option<Span> {
             }
             _ => None,
         }),
+        SyntaxKind::BracketExpression => child_nodes(node)
+            .into_iter()
+            .next()
+            .and_then(callee_target_span),
         _ => None,
     }
 }
