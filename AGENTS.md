@@ -10,6 +10,9 @@
 - `src/resolution.rs` owns stable module, declaration, member, generic, impl,
   import, and lexical-binding identities. Keep type-dependent member selection
   in later semantic passes rather than folding it into name lookup.
+- `src/traits.rs` validates trait implementations: conformance, coherence, and
+  object safety. It checks declarations, not bodies — bound-call selection and
+  dispatch belong to `src/check.rs` and `src/backend.rs`.
 - `src/promotion.rs` decides which locals need managed storage. It answers only
   "is this local's address taken", deliberately conservatively; precise escape
   analysis is Milestone 20 work and belongs there, not here.

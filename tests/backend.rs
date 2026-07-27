@@ -1258,3 +1258,143 @@ fn main() -> ():
     assert_eq!(stderr, "");
     assert_eq!(status, 0);
 }
+
+#[test]
+fn static_trait_dispatch_prefers_inherent_and_honors_qualified_selection() {
+    // SPEC 6: a bound call prefers an inherent method; `Type.Trait.method`
+    // selects the implementation's member unconditionally. A trait default
+    // body is specialized for the implementing type.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+trait Toggle:
+    fn status(self: &Self) -> i32
+    fn doubled(self: &Self) -> i32:
+        return self.status() + self.status()
+
+struct Session:
+    active: bool
+
+    fn status(self: &Self) -> i32:
+        return 1
+
+impl Toggle for Session:
+    fn status(self: &Self) -> i32:
+        return 2
+
+fn main() -> ():
+    let session = Session { active: true }
+    println(f"bound={session.status()}")
+    println(f"qualified={Session.Toggle.status(&session)}")
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "bound=1\nqualified=2\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn dynamic_dispatch_selects_by_concrete_type_through_one_trait() {
+    // IMPL Milestone 13: vtable dispatch with several concrete types behind one
+    // trait object. Default methods participate in the vtable and an
+    // implementation may override them.
+    let source = r#"
+trait Shape:
+    fn area(self: &Self) -> i32
+    fn describe(self: &Self) -> i32:
+        return self.area() + 1000
+
+struct Square:
+    side: i32
+
+struct Rect:
+    width: i32
+    height: i32
+
+impl Shape for Square:
+    fn area(self: &Self) -> i32:
+        return self.side * self.side
+
+impl Shape for Rect:
+    fn area(self: &Self) -> i32:
+        return self.width * self.height
+    fn describe(self: &Self) -> i32:
+        return self.area() + 2000
+
+fn measure(shape: &Shape) -> i32:
+    return shape.area()
+
+fn describe(shape: &Shape) -> i32:
+    return shape.describe()
+
+fn main() -> ():
+    let square = Square { side: 3 }
+    let rect = Rect { width: 2, height: 5 }
+    let sq = &square
+    let rc = &rect
+    println(f"{measure(sq as &Shape)},{measure(rc as &Shape)}")
+    println(f"{describe(sq as &Shape)},{describe(rc as &Shape)}")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(
+            stdout, "9,10\n1009,2010\n",
+            "each object must dispatch to its own implementation"
+        );
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
+fn a_trait_object_uses_a_fat_reference_and_thunked_vtable() {
+    let tree = TestTree::new("vtable-shape");
+    tree.executable(
+        "trait Shape:\n    fn area(self: &Self) -> i32\n\nstruct Square:\n    side: i32\n\n\
+         impl Shape for Square:\n    fn area(self: &Self) -> i32:\n        return self.side\n\n\
+         fn measure(shape: &Shape) -> i32:\n    return shape.area()\n\n\
+         fn main() -> ():\n    let square = Square { side: 2 }\n    let reference = &square\n\
+         \x20\x20\x20\x20println(measure(reference as &Shape))\n",
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    // A fat reference: data plus vtable, dispatched indirectly.
+    assert!(compilation.generated_c.contains("void *data;"));
+    assert!(compilation.generated_c.contains("vtable->m0("));
+    // Thunks adapt the receiver so no function pointer is cast between
+    // incompatible types.
+    assert!(compilation.generated_c.contains("el_thunk"));
+    assert!(!compilation.generated_c.contains("_Static_assert"));
+}
+
+#[test]
+fn derived_default_and_equality_are_structural() {
+    // SPEC 4.3: `Default` supplies `Self.default()` fieldwise, and derived
+    // equality compares components rather than machine representations.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Inner(Default, PartialEq):
+    value: i32
+
+struct Point(Default, PartialEq):
+    x: i32
+    y: i32
+    inner: Inner
+
+fn main() -> ():
+    let origin = Point.default()
+    let same = Point { x: 0, y: 0, inner: Inner { value: 0 } }
+    let different = Point { x: 1, y: 0, inner: Inner { value: 0 } }
+    let nested = Point { x: 0, y: 0, inner: Inner { value: 7 } }
+    println(f"{origin.x},{origin.y},{origin.inner.value}")
+    println(f"{origin == same},{origin == different},{origin == nested}")
+    println(f"{origin != different}")
+"#,
+        Optimization::Release,
+    );
+    assert_eq!(stdout, "0,0,0\ntrue,false,false\ntrue\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}

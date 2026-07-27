@@ -423,6 +423,21 @@ impl TypeContext {
                 .all(|(left, right)| self.equal_inner(left, right, seen))
     }
 
+    /// Replaces `Self` with a concrete implementation target.
+    ///
+    /// A trait method's declared signature mentions `Self`, so comparing it
+    /// with an implementation's signature requires rewriting `Self` to the
+    /// implemented type first.
+    pub fn substitute_self(&mut self, ty: TypeId, target: TypeId) -> TypeId {
+        let ty = self.resolve_inference(ty);
+        if matches!(self.kind(ty), TypeKind::SelfType(_)) {
+            return target;
+        }
+        let kind = self.kind(ty).clone();
+        let replaced = map_type_children(kind, |child| self.substitute_self(child, target));
+        self.intern(replaced)
+    }
+
     pub fn substitute(&mut self, ty: TypeId, substitution: &Substitution) -> TypeId {
         let ty = self.resolve_inference(ty);
         if let TypeKind::GenericParameter(parameter) = self.kind(ty) {
@@ -433,7 +448,14 @@ impl TypeContext {
         self.intern(replaced)
     }
 
+    /// Whether `ty` mentions `Self` anywhere, used by object-safety checking.
     #[must_use]
+    pub fn mentions_self(&self, ty: TypeId) -> bool {
+        self.any_type(ty, &mut BTreeSet::new(), &|kind| {
+            matches!(kind, TypeKind::SelfType(_))
+        })
+    }
+
     pub fn contains_explicit_alias(&self, ty: TypeId) -> bool {
         self.any_type(ty, &mut BTreeSet::new(), &|kind| {
             matches!(kind, TypeKind::Alias { .. })
@@ -681,6 +703,12 @@ pub struct FunctionSignature {
 pub struct FunctionInstance {
     pub declaration: DeclarationId,
     pub arguments: Vec<TypeId>,
+    /// The concrete type `Self` denotes, when this instance is a trait's
+    /// *default* method body specialized for one implementing type. A default
+    /// body is declared once against `Self`, so it monomorphizes per
+    /// implementing type exactly as a generic function does over its
+    /// parameters. `None` for every other callable.
+    pub self_type: Option<TypeId>,
 }
 
 /// Whether a syntactic type position may name a trait.
@@ -777,7 +805,24 @@ impl TypedProgram {
         if let Some(signature) = self.function_instance_signatures.get(instance) {
             return Some(signature.clone());
         }
-        let template = self.function_signatures.get(&instance.declaration)?.clone();
+        let mut template = self.function_signatures.get(&instance.declaration)?.clone();
+        if let Some(self_type) = instance.self_type {
+            template = FunctionSignature {
+                ty: template.ty,
+                receiver: template
+                    .receiver
+                    .map(|receiver| self.types.substitute_self(receiver, self_type)),
+                parameters: template
+                    .parameters
+                    .iter()
+                    .map(|parameter| FunctionParameter {
+                        ty: self.types.substitute_self(parameter.ty, self_type),
+                        variadic: parameter.variadic,
+                    })
+                    .collect(),
+                return_type: self.types.substitute_self(template.return_type, self_type),
+            };
+        }
         let substitution = self.instance_substitution(resolved, instance);
         let receiver = template
             .receiver

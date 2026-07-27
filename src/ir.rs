@@ -169,7 +169,15 @@ impl TrapKind {
 pub enum TypedCallee {
     Function(FunctionInstance),
     Indirect(Box<TypedExpression>),
-    Print { newline: bool },
+    /// A call through a trait object's vtable. The object supplies both the
+    /// receiver and the function pointer.
+    Dynamic {
+        trait_declaration: DeclarationId,
+        slot: usize,
+    },
+    Print {
+        newline: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +225,16 @@ pub enum TypedExpressionKind {
     AddressOfTemporary(Box<TypedExpression>),
     /// `*reference`: the value the reference names.
     Dereference(Box<TypedExpression>),
+    /// `Type.default()` from a `Default` derivation: the type's structural
+    /// default value.
+    DefaultValue(TypeId),
+    /// `reference as &Trait`: pairs a concrete reference with the vtable of
+    /// its implementing type.
+    MakeTraitObject {
+        value: Box<TypedExpression>,
+        trait_declaration: DeclarationId,
+        concrete: TypeId,
+    },
     Tuple(Vec<TypedExpression>),
     Array(Vec<TypedExpression>),
     Struct {
@@ -422,6 +440,19 @@ pub struct TypedIrProgram {
     pub functions: Vec<TypedFunction>,
     pub structs: Vec<TypedStruct>,
     pub enums: Vec<TypedEnum>,
+    /// One vtable per (trait, implementing type) reachable through a trait
+    /// object, in deterministic order.
+    pub vtables: Vec<Vtable>,
+}
+
+/// A trait's method table for one implementing type.
+#[derive(Debug, Clone)]
+pub struct Vtable {
+    pub trait_declaration: DeclarationId,
+    pub concrete: TypeId,
+    /// One entry per slot of [`crate::traits::vtable_slots`], in the same
+    /// order.
+    pub methods: Vec<FunctionInstance>,
 }
 
 pub struct TypedIrOutput {
@@ -447,6 +478,7 @@ struct PendingInstance {
 }
 
 struct TypedLowerer<'a> {
+    vtables: Vec<Vtable>,
     resolved: &'a ResolvedProgram,
     typed: &'a mut TypedProgram,
     checked: &'a CheckedProgram,
@@ -471,6 +503,7 @@ impl<'a> TypedLowerer<'a> {
             .map(|binding| (binding.span, binding.id))
             .collect();
         Self {
+            vtables: Vec::new(),
             resolved,
             typed,
             checked,
@@ -504,6 +537,7 @@ impl<'a> TypedLowerer<'a> {
             .map(|declaration| FunctionInstance {
                 declaration: declaration.id,
                 arguments: Vec::new(),
+                self_type: None,
             })
             .collect::<Vec<_>>();
         for instance in roots {
@@ -521,6 +555,7 @@ impl<'a> TypedLowerer<'a> {
             }
         }
         self.collect_concrete_nominals(&mut program);
+        program.vtables = std::mem::take(&mut self.vtables);
         TypedIrOutput {
             program,
             diagnostics: self.diagnostics,
@@ -528,7 +563,14 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn concrete_type(&mut self, ty: TypeId) -> TypeId {
-        self.typed.types.substitute(ty, &self.substitution)
+        let ty = self.typed.types.substitute(ty, &self.substitution);
+        // A trait default body is written against `Self`; specializing it for
+        // an implementing type rewrites `Self` the same way generic arguments
+        // rewrite type parameters.
+        match self.current_instance.as_ref().and_then(|i| i.self_type) {
+            Some(self_type) => self.typed.types.substitute_self(ty, self_type),
+            None => ty,
+        }
     }
 
     fn concrete_instance(&mut self, instance: &FunctionInstance) -> FunctionInstance {
@@ -539,6 +581,9 @@ impl<'a> TypedLowerer<'a> {
                 .iter()
                 .map(|argument| self.concrete_type(*argument))
                 .collect(),
+            self_type: instance
+                .self_type
+                .map(|self_type| self.concrete_type(self_type)),
         }
     }
 
@@ -564,6 +609,61 @@ impl<'a> TypedLowerer<'a> {
         if self.queued.insert(instance.clone()) {
             self.pending
                 .push_back(PendingInstance { instance, ancestry });
+        }
+    }
+
+    /// Records the vtable for one (trait, implementing type) pair and enqueues
+    /// every method it names, since a dynamic call can select any of them.
+    fn register_vtable(&mut self, trait_declaration: DeclarationId, concrete: TypeId, span: Span) {
+        if self.vtables.iter().any(|vtable| {
+            vtable.trait_declaration == trait_declaration
+                && self.typed.types.exactly_equal(vtable.concrete, concrete)
+        }) {
+            return;
+        }
+        let mut methods = Vec::new();
+        for (name, _) in crate::traits::vtable_slots(self.resolved, trait_declaration) {
+            let Some(entry) = crate::traits::vtable_entry(
+                self.resolved,
+                self.typed,
+                trait_declaration,
+                concrete,
+                &name,
+            ) else {
+                return;
+            };
+            let instance = FunctionInstance {
+                declaration: entry.declaration,
+                arguments: Vec::new(),
+                self_type: entry.self_type,
+            };
+            self.enqueue_reachable(instance.clone(), span);
+            methods.push(instance);
+        }
+        self.vtables.push(Vtable {
+            trait_declaration,
+            concrete,
+            methods,
+        });
+    }
+
+    /// Registers vtables for every implementation of a trait, which a dynamic
+    /// call may reach.
+    fn enqueue_trait_implementations(&mut self, trait_declaration: DeclarationId, span: Span) {
+        let targets = self
+            .resolved
+            .impls
+            .iter()
+            .filter_map(|block| {
+                let trait_type = self.typed.impl_trait_types.get(&block.id).copied()?;
+                let target = self.typed.impl_target_types.get(&block.id).copied()?;
+                (crate::traits::object_trait_of_nominal(self.resolved, self.typed, trait_type)
+                    == Some(trait_declaration))
+                .then_some(target)
+            })
+            .collect::<Vec<_>>();
+        for target in targets {
+            self.register_vtable(trait_declaration, target, span);
         }
     }
 
@@ -1282,9 +1382,30 @@ impl<'a> TypedLowerer<'a> {
                     right: Box::new(self.lower_expression(*nodes.get(1)?)?),
                 }
             }
-            SyntaxKind::CastExpression => TypedExpressionKind::Cast {
-                value: Box::new(self.lower_expression(child_nodes(node).into_iter().next()?)?),
-            },
+            SyntaxKind::CastExpression => {
+                let value = self.lower_expression(child_nodes(node).into_iter().next()?)?;
+                // A conversion to a trait object pairs the concrete reference
+                // with its implementing type's vtable rather than reinterpreting
+                // a scalar.
+                if let Some(trait_declaration) =
+                    crate::traits::object_trait(self.resolved, self.typed, ty)
+                {
+                    let concrete = match self.expanded_kind(value.ty) {
+                        TypeKind::Reference { target, .. } => *target,
+                        _ => value.ty,
+                    };
+                    self.register_vtable(trait_declaration, concrete, node.span);
+                    TypedExpressionKind::MakeTraitObject {
+                        value: Box::new(value),
+                        trait_declaration,
+                        concrete,
+                    }
+                } else {
+                    TypedExpressionKind::Cast {
+                        value: Box::new(value),
+                    }
+                }
+            }
             SyntaxKind::CallExpression => self.lower_call(node)?,
             SyntaxKind::MemberExpression => {
                 if let Some(instance) = self.checked.function_references.get(&node.span).cloned() {
@@ -1418,6 +1539,65 @@ impl<'a> TypedLowerer<'a> {
                 let callee = self.lower_expression(callee_node)?;
                 let parameters = self.function_parameters(callee.ty)?;
                 (TypedCallee::Indirect(Box::new(callee)), parameters, None)
+            }
+            CheckedCall::DerivedDefault { ty } => {
+                let ty = self.concrete_type(ty);
+                return Some(TypedExpressionKind::DefaultValue(ty));
+            }
+            CheckedCall::TraitSelfMethod {
+                trait_declaration,
+                method,
+            } => {
+                // The enclosing default body is specialized for one
+                // implementing type; resolve `self.method(...)` against it.
+                let concrete = self
+                    .current_instance
+                    .as_ref()
+                    .and_then(|instance| instance.self_type)?;
+                let name = self
+                    .resolved
+                    .symbol_text(self.resolved.declarations[method.index()].name);
+                let entry = crate::traits::vtable_entry(
+                    self.resolved,
+                    self.typed,
+                    trait_declaration,
+                    concrete,
+                    name,
+                )?;
+                let instance = FunctionInstance {
+                    declaration: entry.declaration,
+                    arguments: Vec::new(),
+                    self_type: entry.self_type,
+                };
+                let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
+                self.enqueue_reachable(instance.clone(), node.span);
+                let base = child_nodes(callee_node).into_iter().next()?;
+                let receiver = self.lower_expression(base)?;
+                (
+                    TypedCallee::Function(instance),
+                    signature.parameters,
+                    Some(receiver),
+                )
+            }
+            CheckedCall::DynamicMethod {
+                trait_declaration,
+                method,
+                slot,
+            } => {
+                let signature = self.typed.function_signatures.get(&method)?.clone();
+                // Every concrete implementation reachable through this trait
+                // must be lowered, since the vtable can select any of them.
+                self.enqueue_trait_implementations(trait_declaration, node.span);
+                let base = child_nodes(callee_node).into_iter().next()?;
+                let receiver = self.lower_expression(base)?;
+                (
+                    TypedCallee::Dynamic {
+                        trait_declaration,
+                        slot,
+                    },
+                    signature.parameters,
+                    Some(receiver),
+                )
             }
             CheckedCall::Print { newline } => (TypedCallee::Print { newline }, Vec::new(), None),
         };
@@ -1900,6 +2080,21 @@ pub enum Rvalue {
     /// The address of a place. Its root local is promoted, so the address is
     /// stable for as long as the reference is reachable.
     AddressOf(ControlFlowPlace),
+    /// The structural default of a type, from a `Default` derivation.
+    DefaultValue(TypeId),
+    /// Pairs a concrete reference with a vtable to form a trait object.
+    MakeTraitObject {
+        value: TemporaryId,
+        trait_declaration: DeclarationId,
+        concrete: TypeId,
+    },
+    /// Calls through a trait object's vtable slot.
+    DynamicCall {
+        receiver: TemporaryId,
+        trait_declaration: DeclarationId,
+        slot: usize,
+        arguments: Vec<TemporaryId>,
+    },
     /// Allocates a managed cell, initializes it from a temporary, and yields
     /// its address. This backs a referenced composite literal.
     AllocateManaged {
@@ -2016,6 +2211,8 @@ pub struct ControlFlowProgram {
     pub functions: Vec<ControlFlowFunction>,
     pub structs: Vec<TypedStruct>,
     pub enums: Vec<TypedEnum>,
+    /// Vtables reachable through trait objects; see [`Vtable`].
+    pub vtables: Vec<Vtable>,
     /// Whether lowering produced any managed allocation, promoted storage, or
     /// managed root. The backend engages `ManagedMemoryStrategy` — and the
     /// driver links its native libraries — only when this is set, so programs
@@ -2034,6 +2231,7 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
             .collect(),
         structs: program.structs.clone(),
         enums: program.enums.clone(),
+        vtables: program.vtables.clone(),
         // Managed storage is needed exactly when some local was promoted.
         requires_managed_memory: program
             .functions
@@ -2495,6 +2693,19 @@ impl<'a> FunctionLowerer<'a> {
                     base: Box::new(ControlFlowPlace::Temporary(operand)),
                 })
             }
+            TypedExpressionKind::DefaultValue(ty) => Rvalue::DefaultValue(*ty),
+            TypedExpressionKind::MakeTraitObject {
+                value,
+                trait_declaration,
+                concrete,
+            } => {
+                let value = self.lower_expression(value);
+                Rvalue::MakeTraitObject {
+                    value,
+                    trait_declaration: *trait_declaration,
+                    concrete: *concrete,
+                }
+            }
             TypedExpressionKind::Unary { operator, operand } => {
                 let operand = self.lower_expression(operand);
                 Rvalue::Unary {
@@ -2519,13 +2730,40 @@ impl<'a> FunctionLowerer<'a> {
                 left,
                 right,
             } => {
-                let left = self.lower_expression(left);
-                let right = self.lower_expression(right);
-                Rvalue::Binary {
-                    operator: *operator,
-                    left,
-                    right,
-                    trap: binary_trap(*operator, expression.ty, self.types),
+                let operand_type = left.ty;
+                let left_value = self.lower_expression(left);
+                let right_value = self.lower_expression(right);
+                // Equality on an aggregate compares components (`SPEC.md`
+                // 4.3), so it carries its operand type to the backend rather
+                // than becoming a C `==` on a struct.
+                if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
+                    && structural_equality(&self.types.types, operand_type)
+                {
+                    let equal = self.temp(self.types.types.primitive_id(PrimitiveType::Bool));
+                    self.emit(Instruction::Assign {
+                        destination: equal,
+                        value: Rvalue::CompareEqual {
+                            left: left_value,
+                            right: right_value,
+                            operand_type,
+                        },
+                        span: expression.span,
+                    });
+                    if *operator == BinaryOperator::Equal {
+                        return equal;
+                    }
+                    Rvalue::Unary {
+                        operator: UnaryOperator::LogicalNot,
+                        operand: equal,
+                        trap: None,
+                    }
+                } else {
+                    Rvalue::Binary {
+                        operator: *operator,
+                        left: left_value,
+                        right: right_value,
+                        trap: binary_trap(*operator, expression.ty, self.types),
+                    }
                 }
             }
             TypedExpressionKind::Cast { value } => {
@@ -2548,6 +2786,28 @@ impl<'a> FunctionLowerer<'a> {
                 Rvalue::Call {
                     instance: instance.clone(),
                     arguments,
+                }
+            }
+            TypedExpressionKind::Call {
+                callee:
+                    TypedCallee::Dynamic {
+                        trait_declaration,
+                        slot,
+                    },
+                arguments,
+            } => {
+                // The receiver was lowered as the first argument by typed-IR
+                // call lowering; the vtable supplies the function pointer.
+                let mut lowered = arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect::<Vec<_>>();
+                let receiver = lowered.remove(0);
+                Rvalue::DynamicCall {
+                    receiver,
+                    trait_declaration: *trait_declaration,
+                    slot: *slot,
+                    arguments: lowered,
                 }
             }
             TypedExpressionKind::Call {
@@ -2842,6 +3102,21 @@ fn unary_trap(operator: UnaryOperator, ty: TypeId, types: &TypedProgram) -> Opti
             .expanded_primitive(ty)
             .is_some_and(PrimitiveType::is_integer))
     .then_some(TrapKind::IntegerOverflow)
+}
+
+/// Whether equality on `ty` compares components rather than machine values.
+fn structural_equality(types: &TypeContext, ty: TypeId) -> bool {
+    let mut ty = ty;
+    while let TypeKind::Alias { target, .. } = types.kind(ty) {
+        ty = *target;
+    }
+    matches!(
+        types.kind(ty),
+        TypeKind::Tuple(_) | TypeKind::Array { .. } | TypeKind::Nominal { .. }
+    ) || matches!(
+        types.expanded_primitive(ty),
+        Some(PrimitiveType::Str | PrimitiveType::String)
+    )
 }
 
 fn binary_trap(operator: BinaryOperator, ty: TypeId, types: &TypedProgram) -> Option<TrapKind> {

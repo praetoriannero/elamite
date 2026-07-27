@@ -141,6 +141,8 @@ struct CEmitter<'a> {
     enums: BTreeMap<TypeId, &'a TypedEnum>,
     emitted_copy_helpers: BTreeSet<TypeId>,
     emitting_copy_helpers: BTreeSet<TypeId>,
+    emitted_equality_helpers: BTreeSet<TypeId>,
+    emitting_equality_helpers: BTreeSet<TypeId>,
     strategy: &'static dyn ManagedMemoryStrategy,
     /// Promoted locals of the function currently being emitted. A promoted
     /// local lives in a managed cell, so every place naming it dereferences
@@ -178,6 +180,8 @@ impl<'a> CEmitter<'a> {
                 .collect(),
             emitted_copy_helpers: BTreeSet::new(),
             emitting_copy_helpers: BTreeSet::new(),
+            emitted_equality_helpers: BTreeSet::new(),
+            emitting_equality_helpers: BTreeSet::new(),
             strategy: default_managed_memory_strategy(),
             promoted: BTreeSet::new(),
         }
@@ -187,14 +191,23 @@ impl<'a> CEmitter<'a> {
         self.emit_prelude();
         self.emit_managed_memory_prelude();
         self.emit_forward_structs();
+        self.emit_object_types();
         let used_types = self.used_types();
         for ty in &used_types {
             self.emit_type_definition(*ty, None);
         }
-        for ty in used_types {
-            self.emit_copy_helper(ty, None);
+        for ty in &used_types {
+            self.emit_copy_helper(*ty, None);
+        }
+        // Only types the program actually compares get a helper; emitting one
+        // per aggregate would leave unused static functions behind.
+        for ty in self.compared_types() {
+            if self.needs_equality_helper(ty) {
+                self.emit_equality_helper(ty, None);
+            }
         }
         self.emit_prototypes();
+        self.emit_vtable_tables();
         for function in &self.program.functions {
             self.emit_function(function);
         }
@@ -212,6 +225,127 @@ impl<'a> CEmitter<'a> {
             source: self.output,
             diagnostics: self.diagnostics,
             native_libraries,
+        }
+    }
+
+    /// Emits one method-pointer struct per trait, a `void *`-receiver thunk per
+    /// slot, and one static table per implementing type.
+    ///
+    /// Thunks exist so no function pointer is ever cast between incompatible
+    /// types: each thunk has exactly the slot's signature and casts only the
+    /// receiver, which is a plain object-pointer conversion.
+    fn emit_object_types(&mut self) {
+        let vtables = self.program.vtables.clone();
+        if vtables.is_empty() {
+            return;
+        }
+        let mut traits: BTreeMap<DeclarationId, Vec<&crate::ir::Vtable>> = BTreeMap::new();
+        for vtable in &vtables {
+            traits
+                .entry(vtable.trait_declaration)
+                .or_default()
+                .push(vtable);
+        }
+        for (trait_declaration, _tables) in traits {
+            let slots = crate::traits::vtable_slots(self.resolved, trait_declaration);
+            let vtable_type = vtable_type_name(trait_declaration);
+            let object = object_name(trait_declaration);
+            // The method-pointer struct and the fat-reference struct.
+            let _ = writeln!(self.output, "typedef struct {vtable_type} {{");
+            for (slot, (_, method)) in slots.iter().enumerate() {
+                let Some(signature) = self.typed.function_signatures.get(method).cloned() else {
+                    continue;
+                };
+                let Some(return_type) = self.c_type(signature.return_type, None) else {
+                    continue;
+                };
+                let mut parameters = vec!["void *".to_string()];
+                for parameter in &signature.parameters {
+                    match self.c_type(parameter.ty, None) {
+                        Some(ty) => parameters.push(ty),
+                        None => return,
+                    }
+                }
+                let _ = writeln!(
+                    self.output,
+                    "    {return_type} (*{})({});",
+                    vtable_slot_name(slot),
+                    parameters.join(", ")
+                );
+            }
+            let _ = writeln!(self.output, "}} {vtable_type};\n");
+            let _ = writeln!(
+                self.output,
+                "typedef struct {object} {{\n    void *data;\n    const {vtable_type} *vtable;\n}} {object};\n"
+            );
+        }
+    }
+
+    /// Emits the `void *`-receiver thunks and the static tables. Separate from
+    /// the type emission above because a thunk calls a mangled function and so
+    /// must follow the prototypes.
+    fn emit_vtable_tables(&mut self) {
+        let vtables = self.program.vtables.clone();
+        if vtables.is_empty() {
+            return;
+        }
+        let mut traits: BTreeMap<DeclarationId, Vec<&crate::ir::Vtable>> = BTreeMap::new();
+        for vtable in &vtables {
+            traits
+                .entry(vtable.trait_declaration)
+                .or_default()
+                .push(vtable);
+        }
+        for (trait_declaration, tables) in traits {
+            let vtable_type = vtable_type_name(trait_declaration);
+            let _ = &tables;
+            for table in tables {
+                let Some(concrete_type) = self.c_type(table.concrete, None) else {
+                    continue;
+                };
+                for (slot, instance) in table.methods.iter().enumerate() {
+                    // Instance signatures were cached during lowering; the
+                    // backend only reads them.
+                    let Some(signature) = self
+                        .typed
+                        .function_instance_signatures
+                        .get(instance)
+                        .or_else(|| self.typed.function_signatures.get(&instance.declaration))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let Some(return_type) = self.c_type(signature.return_type, None) else {
+                        continue;
+                    };
+                    let thunk = thunk_name(trait_declaration, table.concrete, slot);
+                    let mut parameters = vec!["void *el_self".to_string()];
+                    let mut arguments = vec![format!("({concrete_type} *)el_self")];
+                    for (index, parameter) in signature.parameters.iter().enumerate() {
+                        let Some(ty) = self.c_type(parameter.ty, None) else {
+                            return;
+                        };
+                        parameters.push(format!("{ty} a{index}"));
+                        arguments.push(format!("a{index}"));
+                    }
+                    let symbol = mangle_function_instance(self.resolved, instance);
+                    let _ = writeln!(
+                        self.output,
+                        "static {return_type} {thunk}({}) {{\n    return {symbol}({});\n}}\n",
+                        parameters.join(", "),
+                        arguments.join(", ")
+                    );
+                }
+                let entries = (0..table.methods.len())
+                    .map(|slot| thunk_name(trait_declaration, table.concrete, slot))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    self.output,
+                    "static const {vtable_type} {} = {{ {entries} }};\n",
+                    vtable_instance_name(self.typed, trait_declaration, table.concrete)
+                );
+            }
         }
     }
 
@@ -442,6 +576,13 @@ impl<'a> CEmitter<'a> {
             {
                 self.emit_type_definition(*target, span);
             }
+            // A trait object's struct is emitted with its vtable, not here.
+            TypeKind::TraitObject { .. } => {}
+            TypeKind::Reference { target, .. }
+                if matches!(
+                    self.typed.types.kind(self.resolve_alias(*target)),
+                    TypeKind::TraitObject { .. }
+                ) => {}
             TypeKind::Function {
                 receiver,
                 parameters,
@@ -560,6 +701,158 @@ impl<'a> CEmitter<'a> {
         }
         self.emitting_types.remove(&ty);
         self.emitted_types.insert(ty);
+    }
+
+    /// Operand types of every structural comparison in the program.
+    fn compared_types(&self) -> BTreeSet<TypeId> {
+        let mut types = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        value: Rvalue::CompareEqual { operand_type, .. },
+                        ..
+                    } = instruction
+                    {
+                        types.insert(*operand_type);
+                    }
+                }
+            }
+        }
+        types
+    }
+
+    /// Emits `bool el_eq_T(T, T)` for an aggregate, comparing structurally.
+    ///
+    /// `SPEC.md` 4.3: derived equality compares components. Reference-like
+    /// components compare by identity, which is what `==` on a pointer already
+    /// does.
+    fn emit_equality_helper(&mut self, ty: TypeId, span: Option<Span>) {
+        let ty = self.resolve_alias(ty);
+        if self.emitted_equality_helpers.contains(&ty) || !self.emitting_equality_helpers.insert(ty)
+        {
+            return;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        // Only components that compare structurally need their own helper.
+        let mut components: Vec<TypeId> = Vec::new();
+        match &kind {
+            TypeKind::Tuple(elements) => components.extend(elements.iter().copied()),
+            TypeKind::Array { element, .. } => components.push(*element),
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    components.extend(structure.fields.iter().map(|(_, _, ty)| *ty));
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
+                    for variant in &enumeration.variants {
+                        components.extend(variant.fields.iter().map(|(_, _, ty)| *ty));
+                    }
+                }
+            }
+            _ => {}
+        }
+        for component in components {
+            if self.needs_equality_helper(component) {
+                self.emit_equality_helper(component, span);
+            }
+        }
+        let Some(c_type) = self.c_type(ty, span) else {
+            self.emitting_equality_helpers.remove(&ty);
+            return;
+        };
+        let name = equality_helper_name(ty);
+        let mut body = String::new();
+        match &kind {
+            TypeKind::Tuple(elements) => {
+                for (index, element) in elements.iter().enumerate() {
+                    body.push_str(&format!(
+                        "    if (!{}) return false;\n",
+                        self.component_equality(
+                            *element,
+                            &format!("a.v{index}"),
+                            &format!("b.v{index}")
+                        )
+                    ));
+                }
+            }
+            TypeKind::Array { element, length } => {
+                body.push_str(&format!(
+                    "    for (uintptr_t i = 0; i < {length}u; ++i) {{\n        if (!{}) return false;\n    }}\n",
+                    self.component_equality(*element, "a.values[i]", "b.values[i]")
+                ));
+            }
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    for (field, _, field_type) in &structure.fields {
+                        let member = field_name(*field);
+                        body.push_str(&format!(
+                            "    if (!{}) return false;\n",
+                            self.component_equality(
+                                *field_type,
+                                &format!("a.{member}"),
+                                &format!("b.{member}")
+                            )
+                        ));
+                    }
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
+                    body.push_str("    if (a.tag != b.tag) return false;\n");
+                    for variant in &enumeration.variants {
+                        if variant.fields.is_empty() {
+                            continue;
+                        }
+                        let member = variant_member_name(variant.id);
+                        let mut arm = String::new();
+                        for (field, _, field_type) in &variant.fields {
+                            let field_member = field_name(*field);
+                            arm.push_str(&format!(
+                                "        if (!{}) return false;\n",
+                                self.component_equality(
+                                    *field_type,
+                                    &format!("a.payload.{member}.{field_member}"),
+                                    &format!("b.payload.{member}.{field_member}")
+                                )
+                            ));
+                        }
+                        body.push_str(&format!(
+                            "    if (a.tag == UINT32_C({})) {{\n{arm}    }}\n",
+                            variant.id.index()
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        let _ = writeln!(
+            self.output,
+            "static bool {name}({c_type} a, {c_type} b) {{\n{body}    (void)a;\n    (void)b;\n    return true;\n}}\n"
+        );
+        self.emitting_equality_helpers.remove(&ty);
+        self.emitted_equality_helpers.insert(ty);
+    }
+
+    /// A boolean C expression comparing one component.
+    fn component_equality(&mut self, ty: TypeId, left: &str, right: &str) -> String {
+        let ty = self.resolve_alias(ty);
+        if matches!(
+            self.typed.types.expanded_primitive(ty),
+            Some(PrimitiveType::Str | PrimitiveType::String)
+        ) {
+            return format!("(strcmp({left}, {right}) == 0)");
+        }
+        if self.needs_equality_helper(ty) {
+            format!("{}({left}, {right})", equality_helper_name(ty))
+        } else {
+            format!("({left} == {right})")
+        }
+    }
+
+    /// Whether a type compares structurally rather than with C `==`.
+    fn needs_equality_helper(&self, ty: TypeId) -> bool {
+        let ty = self.resolve_alias(ty);
+        matches!(
+            self.typed.types.kind(ty),
+            TypeKind::Tuple(_) | TypeKind::Array { .. }
+        ) || self.structs.contains_key(&ty)
+            || self.enums.contains_key(&ty)
     }
 
     fn emit_copy_helper(&mut self, ty: TypeId, span: Option<Span>) {
@@ -885,6 +1178,37 @@ impl<'a> CEmitter<'a> {
             }
             Rvalue::Load(place) => self.place_expression(place),
             Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
+            Rvalue::DefaultValue(ty) => self.default_expression(*ty, span)?,
+            Rvalue::MakeTraitObject {
+                trait_declaration,
+                concrete,
+                value,
+            } => {
+                let object = object_name(*trait_declaration);
+                let table = vtable_instance_name(self.typed, *trait_declaration, *concrete);
+                format!(
+                    "({object}){{ (void *){}, &{table} }}",
+                    temporary_name(*value)
+                )
+            }
+            Rvalue::DynamicCall {
+                receiver,
+                trait_declaration,
+                slot,
+                arguments,
+            } => {
+                let receiver_name = temporary_name(*receiver);
+                let mut call = format!(
+                    "{receiver_name}.vtable->{}({receiver_name}.data",
+                    vtable_slot_name(*slot)
+                );
+                for argument in arguments {
+                    call.push_str(&format!(", {}", temporary_name(*argument)));
+                }
+                let _ = trait_declaration;
+                call.push(')');
+                call
+            }
             Rvalue::AllocateManaged { value, value_type } => {
                 // A referenced composite literal needs its own managed cell.
                 // Allocation is a statement, so it is emitted before the
@@ -926,14 +1250,7 @@ impl<'a> CEmitter<'a> {
             } => {
                 let left = temporary_name(*left);
                 let right = temporary_name(*right);
-                if matches!(
-                    self.typed.types.expanded_primitive(*operand_type),
-                    Some(PrimitiveType::Str | PrimitiveType::String)
-                ) {
-                    format!("(strcmp({left}, {right}) == 0)")
-                } else {
-                    format!("({left} == {right})")
-                }
+                self.component_equality(*operand_type, &left, &right)
             }
             Rvalue::Unary {
                 operator, operand, ..
@@ -1438,6 +1755,34 @@ impl<'a> CEmitter<'a> {
         let _ = writeln!(self.output, "    (void){symbol}();\n    return 0;\n}}");
     }
 
+    /// The structural default of `ty` (`SPEC.md` 4.3): zero for numerics,
+    /// `false` for `bool`, U+0000 for `char`, empty text for `str`/`String`,
+    /// `null` for raw pointers, and fieldwise defaults for aggregates.
+    fn default_expression(&mut self, ty: TypeId, span: Span) -> Option<String> {
+        let resolved = self.resolve_alias(ty);
+        let c_type = self.c_type(resolved, Some(span))?;
+        match self.typed.types.kind(resolved).clone() {
+            TypeKind::Primitive(PrimitiveType::Str) => Some("\"\"".to_string()),
+            TypeKind::Primitive(PrimitiveType::String) => Some("el_copy_string(\"\")".to_string()),
+            TypeKind::Reference { .. } | TypeKind::Function { .. } => {
+                self.type_error(
+                    ty,
+                    Some(span),
+                    "a safe reference or function reference has no default",
+                );
+                None
+            }
+            _ => {
+                let zero = zero_value(resolved, &self.typed.types);
+                if zero.starts_with('{') {
+                    Some(format!("({c_type}){zero}"))
+                } else {
+                    Some(zero)
+                }
+            }
+        }
+    }
+
     /// Whether an allocation of `ty` may contain managed pointers and must
     /// therefore be scanned by the collector. Conservative: only types proven
     /// free of references, pointers, and owned buffers are left unscanned.
@@ -1514,6 +1859,27 @@ impl<'a> CEmitter<'a> {
                 if matches!(self.typed.types.kind(*target), TypeKind::Function { .. }) =>
             {
                 function_type_name(*target)
+            }
+            // A trait object is a fat reference: target plus vtable
+            // (`SPEC.md` 6). It is the one reference whose C type is not `T *`.
+            TypeKind::Reference { target, .. }
+                if matches!(
+                    self.typed.types.kind(self.resolve_alias(*target)),
+                    TypeKind::TraitObject { .. }
+                ) =>
+            {
+                let TypeKind::TraitObject { trait_type } =
+                    self.typed.types.kind(self.resolve_alias(*target)).clone()
+                else {
+                    return None;
+                };
+                let Some(trait_declaration) =
+                    crate::traits::object_trait_of_nominal(self.resolved, self.typed, trait_type)
+                else {
+                    self.type_error(ty, span, "this trait object has no trait declaration");
+                    return None;
+                };
+                object_name(trait_declaration)
             }
             TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
                 format!("{} *", self.c_type(*target, span)?)
@@ -1638,6 +2004,44 @@ fn local_name(binding: crate::resolution::LocalBindingId) -> String {
 /// a promoted parameter keeps its incoming C parameter alongside its cell.
 fn cell_name(binding: crate::resolution::LocalBindingId) -> String {
     format!("c{}", binding.index())
+}
+
+/// The C struct representing a trait object of one trait.
+fn equality_helper_name(ty: TypeId) -> String {
+    format!("el_eq_t{}", ty.index())
+}
+
+fn object_name(trait_declaration: DeclarationId) -> String {
+    format!("el_obj{}", trait_declaration.index())
+}
+
+/// The C struct holding one trait's method pointers.
+fn vtable_type_name(trait_declaration: DeclarationId) -> String {
+    format!("el_vt{}", trait_declaration.index())
+}
+
+fn vtable_slot_name(slot: usize) -> String {
+    format!("m{slot}")
+}
+
+/// The static vtable for one (trait, implementing type) pair. The type is
+/// identified by its canonical id, which is stable for a given program.
+fn vtable_instance_name(
+    typed: &TypedProgram,
+    trait_declaration: DeclarationId,
+    concrete: TypeId,
+) -> String {
+    let _ = typed;
+    format!("el_vtbl{}_{}", trait_declaration.index(), concrete.index())
+}
+
+/// The `void *`-receiver thunk that adapts a concrete method to a vtable slot.
+fn thunk_name(trait_declaration: DeclarationId, concrete: TypeId, slot: usize) -> String {
+    format!(
+        "el_thunk{}_{}_{slot}",
+        trait_declaration.index(),
+        concrete.index()
+    )
 }
 
 fn temporary_name(temporary: TemporaryId) -> String {
@@ -1775,6 +2179,13 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             | TypeKind::Slice(_)
             | TypeKind::Nominal { .. }
             | TypeKind::Foreign { .. } => return "{0}".to_string(),
+            // A trait object is a struct, not a pointer, so it zeroes with an
+            // initializer rather than `NULL`.
+            TypeKind::Reference { target, .. }
+                if matches!(types.kind(*target), TypeKind::TraitObject { .. }) =>
+            {
+                return "{0}".to_string();
+            }
             TypeKind::Primitive(PrimitiveType::Str | PrimitiveType::String)
             | TypeKind::Reference { .. }
             | TypeKind::RawPointer { .. }

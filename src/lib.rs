@@ -14,6 +14,7 @@ pub mod parser;
 pub mod promotion;
 pub mod resolution;
 pub mod source;
+pub mod traits;
 pub mod types;
 
 /// Returns the compiler package version.

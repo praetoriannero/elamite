@@ -73,13 +73,23 @@ pub struct RunResult {
     pub stderr: Vec<u8>,
 }
 
-/// Runs the complete Milestone 8 frontend and lowering pipeline without
-/// writing files or invoking an external toolchain.
-pub fn compile(
+/// Frontend result for `check`: everything needed to report diagnostics or
+/// summarize a package, without lowering or invoking a toolchain.
+pub struct FrontendOutput {
+    pub resolved: ResolvedProgram,
+    pub typed: TypedProgram,
+    pub checked: crate::check::CheckedProgram,
+}
+
+/// Runs resolution, canonical typing, trait checking, and body checking.
+///
+/// `check` and `build` share this so the two commands cannot diverge: a
+/// package that checks clean is one whose frontend `build` will also accept.
+pub fn check_frontend(
     graph: &PackageGraph,
     sources: &mut SourceManager,
     target: Target,
-) -> Result<Compilation, Vec<Diagnostic>> {
+) -> Result<FrontendOutput, Vec<Diagnostic>> {
     let resolution = resolve(graph, sources);
     if !resolution.diagnostics.is_empty() {
         return Err(resolution.diagnostics);
@@ -89,15 +99,37 @@ pub fn compile(
     if !type_output.diagnostics.is_empty() {
         return Err(type_output.diagnostics);
     }
+    let trait_output = crate::traits::check_traits(&resolved, &mut type_output.program);
+    if !trait_output.diagnostics.is_empty() {
+        return Err(trait_output.diagnostics);
+    }
     let checked = check_for_target(&resolved, &mut type_output.program, target.pointer_bits());
     if !checked.diagnostics.is_empty() {
         return Err(checked.diagnostics);
     }
-    let high_level = lower_typed_ir(&resolved, &mut type_output.program, &checked.program);
+    Ok(FrontendOutput {
+        resolved,
+        typed: type_output.program,
+        checked: checked.program,
+    })
+}
+
+/// Runs the complete Milestone 8 frontend and lowering pipeline without
+/// writing files or invoking an external toolchain.
+pub fn compile(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+) -> Result<Compilation, Vec<Diagnostic>> {
+    let frontend = check_frontend(graph, sources, target)?;
+    let resolved = frontend.resolved;
+    let mut typed = frontend.typed;
+    let checked = frontend.checked;
+    let high_level = lower_typed_ir(&resolved, &mut typed, &checked);
     if !high_level.diagnostics.is_empty() {
         return Err(high_level.diagnostics);
     }
-    let control_flow = lower_control_flow(&high_level.program, &type_output.program);
+    let control_flow = lower_control_flow(&high_level.program, &typed);
     let root = &graph.packages[&graph.root];
     let entry = if root.manifest.target_kind == TargetKind::Executable {
         Some(find_entry(&resolved, graph)?)
@@ -107,7 +139,7 @@ pub fn compile(
     let c_output = emit_c(
         &control_flow,
         &resolved,
-        &type_output.program,
+        &typed,
         sources,
         &COptions { target, entry },
     );
@@ -116,7 +148,7 @@ pub fn compile(
     }
     Ok(Compilation {
         resolved,
-        typed: type_output.program,
+        typed,
         high_level_ir: high_level.program,
         control_flow_ir: control_flow,
         generated_c: c_output.source,

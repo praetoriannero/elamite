@@ -95,6 +95,26 @@ pub enum CheckedCall {
         adjustment: ReceiverAdjustment,
     },
     Indirect,
+    /// `Type.default()` supplied by a `Default` derivation, which has no
+    /// declaration to call.
+    DerivedDefault {
+        ty: TypeId,
+    },
+    /// A call on `self` inside a trait's default body. `Self` is unknown when
+    /// the body is checked, so the concrete implementation is selected when the
+    /// body is specialized for an implementing type.
+    TraitSelfMethod {
+        trait_declaration: DeclarationId,
+        method: DeclarationId,
+    },
+    /// A call through a trait object's vtable. The receiver is the object
+    /// itself; `slot` is the method's index in the trait's vtable, ordered by
+    /// method name so the layout is deterministic.
+    DynamicMethod {
+        trait_declaration: DeclarationId,
+        method: DeclarationId,
+        slot: usize,
+    },
     Print {
         newline: bool,
     },
@@ -147,6 +167,10 @@ struct Checker<'a> {
     span_to_local: BTreeMap<Span, LocalBindingId>,
     local_types: BTreeMap<LocalBindingId, TypeId>,
     local_rebindable: BTreeMap<LocalBindingId, Rebindable>,
+    trait_implementations: Vec<crate::traits::TraitImplementation>,
+    /// Set while checking a call that selected a trait's default body, so the
+    /// resulting instance specializes `Self` to the receiver's type.
+    pending_self_type: Option<TypeId>,
     loop_depth: u32,
     /// Nesting depth of `defer` statements being checked. A deferred body runs
     /// while its scope is already exiting, so it may not redirect control.
@@ -159,18 +183,28 @@ struct Checker<'a> {
     diagnostics: Vec<Diagnostic>,
 }
 
+/// Outcome of selecting a trait method for a receiver.
+enum TraitSelection {
+    Found(crate::traits::SelectedTraitMethod),
+    Ambiguous,
+    None,
+}
+
 impl<'a> Checker<'a> {
     fn new(resolved: &'a ResolvedProgram, typed: &'a mut TypedProgram, pointer_bits: u8) -> Self {
         let mut span_to_local = BTreeMap::new();
         for local in &resolved.local_bindings {
             span_to_local.insert(local.span, local.id);
         }
+        let trait_implementations = crate::traits::implementations(resolved, typed);
         Self {
             resolved,
             typed,
             span_to_local,
             local_types: BTreeMap::new(),
             local_rebindable: BTreeMap::new(),
+            trait_implementations,
+            pending_self_type: None,
             loop_depth: 0,
             defer_depth: 0,
             unsafe_depth: 0,
@@ -187,11 +221,16 @@ impl<'a> Checker<'a> {
             .declarations
             .iter()
             .filter(|declaration| {
+                // Trait *declaration* methods without bodies have nothing to
+                // check; default bodies and implementation methods do.
                 declaration.kind == DeclarationKind::Function
-                    && declaration.parent_impl.is_none()
-                    && declaration.parent_declaration.is_none_or(|parent| {
-                        self.resolved.declarations[parent.index()].kind != DeclarationKind::Trait
-                    })
+                    && (declaration.parent_impl.is_some()
+                        || declaration.parent_declaration.is_none_or(|parent| {
+                            self.resolved.declarations[parent.index()].kind
+                                != DeclarationKind::Trait
+                        })
+                        || crate::types::direct_child(&declaration.syntax, SyntaxKind::Block)
+                            .is_some())
             })
             .map(|declaration| declaration.id)
             .collect();
@@ -1838,12 +1877,14 @@ impl<'a> Checker<'a> {
             return Some(FunctionInstance {
                 declaration,
                 arguments,
+                self_type: None,
             });
         }
         if parameters.is_empty() {
             return Some(FunctionInstance {
                 declaration,
                 arguments: Vec::new(),
+                self_type: None,
             });
         }
         let ExpectedType::Exact(expected) = expected else {
@@ -1869,6 +1910,7 @@ impl<'a> Checker<'a> {
         let template_instance = FunctionInstance {
             declaration,
             arguments: template_arguments,
+            self_type: None,
         };
         let template = self.function_reference_type(&template_instance);
         if !self.infer_against(template, expected, &variables) {
@@ -1886,6 +1928,7 @@ impl<'a> Checker<'a> {
         Some(FunctionInstance {
             declaration,
             arguments,
+            self_type: None,
         })
     }
 
@@ -1967,6 +2010,7 @@ impl<'a> Checker<'a> {
             let instance = FunctionInstance {
                 declaration,
                 arguments: Vec::new(),
+                self_type: None,
             };
             let Some(signature) = self.typed.instantiate_signature(self.resolved, &instance) else {
                 return (self.typed.types.error(), PlaceKind::Value);
@@ -2062,6 +2106,7 @@ impl<'a> Checker<'a> {
         let instance = FunctionInstance {
             declaration,
             arguments: concrete_arguments,
+            self_type: None,
         };
         let Some(signature) = self.typed.instantiate_signature(self.resolved, &instance) else {
             return (self.typed.types.error(), PlaceKind::Value);
@@ -2235,6 +2280,7 @@ impl<'a> Checker<'a> {
             let instance = FunctionInstance {
                 declaration,
                 arguments: Vec::new(),
+                self_type: None,
             };
             let ty = self.function_reference_type(&instance);
             self.program.function_references.insert(node.span, instance);
@@ -2250,6 +2296,7 @@ impl<'a> Checker<'a> {
                     let instance = FunctionInstance {
                         declaration: method,
                         arguments: Vec::new(),
+                        self_type: None,
                     };
                     let ty = self.function_reference_type(&instance);
                     self.program.function_references.insert(node.span, instance);
@@ -2336,6 +2383,55 @@ impl<'a> Checker<'a> {
 
     fn is_numeric_type(&self, ty: TypeId) -> bool {
         self.is_integer_type(ty) || self.is_float_type(ty)
+    }
+
+    /// Verifies that `source_target` implements the trait named by a
+    /// trait-object type, and that the trait is object-safe.
+    fn check_trait_object_formation(
+        &mut self,
+        object_type: TypeId,
+        source_target: TypeId,
+        span: Span,
+    ) -> bool {
+        let Some(trait_declaration) =
+            crate::traits::object_trait(self.resolved, self.typed, object_type)
+        else {
+            return true;
+        };
+        let trait_name = self
+            .resolved
+            .symbol_text(self.resolved.declarations[trait_declaration.index()].name)
+            .to_string();
+        if let Some(violation) =
+            crate::traits::object_safety_violation(self.resolved, self.typed, trait_declaration)
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    format!("trait `{trait_name}` cannot form a trait object because {violation}"),
+                )
+                .with_primary(span),
+            );
+            return false;
+        }
+        let implemented = self.trait_implementations.iter().any(|implementation| {
+            implementation.trait_declaration == trait_declaration
+                && self
+                    .typed
+                    .types
+                    .exactly_equal(implementation.target, source_target)
+        });
+        if !implemented {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    format!("this type does not implement trait `{trait_name}`"),
+                )
+                .with_primary(span),
+            );
+            return false;
+        }
+        true
     }
 
     /// Whether a canonical type names a trait declaration, which may appear as
@@ -2565,6 +2661,24 @@ impl<'a> Checker<'a> {
         }
         match operator {
             TokenKind::EqEq | TokenKind::NotEq => {
+                // A nominal type compares only when it derives or implements
+                // `PartialEq` (`SPEC.md` 4.3).
+                if matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(left_type)),
+                    TypeKind::Nominal { .. }
+                ) && !crate::traits::provides(self.resolved, self.typed, left_type, "PartialEq")
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "this type does not implement `PartialEq`; derive or implement it                              to compare values",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
                 if !self.generic_operation_is_bound(left_type, "PartialEq") {
                     self.diagnostics.push(
                         Diagnostic::new(
@@ -2685,10 +2799,9 @@ impl<'a> Checker<'a> {
             return (target_type, PlaceKind::Value);
         }
         // Forming a trait object is an explicit conversion (`SPEC.md` 6):
-        // `reference as &Trait` / `as &var Trait`. Verifying that the source
-        // target type actually implements the trait, and that the trait is
-        // object-safe, is Milestone 13 territory; the mutability and
-        // reference-shape requirements are checked here.
+        // `reference as &Trait` / `as &var Trait`. The source must be a safe
+        // reference of matching mutability whose target implements an
+        // object-safe trait.
         if self.is_trait_object_reference(target_type) {
             let source = self.typed.types.resolve_inference(source_type);
             match self.typed.types.kind(source) {
@@ -2707,6 +2820,16 @@ impl<'a> Checker<'a> {
                             )
                             .with_primary(node.span),
                         );
+                        return (self.typed.types.error(), PlaceKind::Value);
+                    }
+                    let TypeKind::Reference {
+                        target: source_target,
+                        ..
+                    } = self.typed.types.kind(source).clone()
+                    else {
+                        return (target_type, PlaceKind::Value);
+                    };
+                    if !self.check_trait_object_formation(target_type, source_target, node.span) {
                         return (self.typed.types.error(), PlaceKind::Value);
                     }
                     return (target_type, PlaceKind::Value);
@@ -3199,12 +3322,53 @@ impl<'a> Checker<'a> {
         })?;
         let member_name = token_text(member_token);
 
+        // `Type.Trait.method(...)` selects that implementation's member
+        // unconditionally, bypassing fields, inherent methods, and bound trait
+        // lookup (`SPEC.md` 6). Like any unbound selection, a receiver-bearing
+        // method takes its receiver as the first explicit argument.
+        if let Some(method) = self.qualified_trait_method(base, &member_name) {
+            return Some(
+                self.check_function_call(call_span, method, None, arguments, expected, true),
+            );
+        }
+
         // `Type.member(...)` is an ordinary call of the selected associated
         // function or unbound method. A receiver-bearing method therefore
         // expects its receiver as the first explicit argument.
         if let Some((owner, owner_arguments)) = self.nominal_selection(base) {
+            // `Type.default()` comes from a derivation, so there is no member
+            // declaration to select (`SPEC.md` 4.3).
+            if member_name == "default" && self.find_member(owner, &member_name).is_none() {
+                let ty = self.nominal_type_of(owner, owner_arguments.clone());
+                if crate::traits::derives(self.resolved, owner, "Default") {
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    if !arguments.is_empty() {
+                        self.diagnostics.push(
+                            Diagnostic::new(Category::Call, "`default` takes no arguments")
+                                .with_primary(call_span),
+                        );
+                        return Some((self.typed.types.error(), PlaceKind::Value));
+                    }
+                    self.program
+                        .calls
+                        .insert(call_span, CheckedCall::DerivedDefault { ty });
+                    return Some((ty, PlaceKind::Value));
+                }
+            }
             let Some(MemberId::Method(method)) = self.find_member(owner, &member_name) else {
-                return None;
+                for argument in arguments {
+                    self.check_expr(argument, ExpectedType::None);
+                }
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        format!("this type has no associated function named `{member_name}`"),
+                    )
+                    .with_primary(member_token.span),
+                );
+                return Some((self.typed.types.error(), PlaceKind::Value));
             };
             return Some(self.check_function_call(
                 call_span,
@@ -3217,8 +3381,53 @@ impl<'a> Checker<'a> {
         }
 
         let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
-        let (owner, _) = self.receiver_owner(base_type)?;
-        match self.find_member(owner, &member_name) {
+        // A call on a trait object dispatches through its vtable rather than
+        // selecting a concrete implementation (`SPEC.md` 6).
+        if let Some(trait_declaration) =
+            crate::traits::object_trait(self.resolved, self.typed, base_type)
+        {
+            return Some(self.check_dynamic_call(
+                call_span,
+                callee,
+                trait_declaration,
+                &member_name,
+                member_token.span,
+                arguments,
+            ));
+        }
+        // Inside a trait's default body the receiver is `&Self`, whose methods
+        // are the trait's own.
+        if let Some(trait_declaration) = self.self_receiver_trait(base_type) {
+            return Some(self.check_trait_self_call(
+                call_span,
+                callee,
+                trait_declaration,
+                &member_name,
+                member_token.span,
+                arguments,
+            ));
+        }
+        let (owner, self_type) = self.receiver_owner(base_type)?;
+        // Fields and inherent methods are found first; a trait method is
+        // selected only when the type itself provides no member of that name
+        // (`SPEC.md` 6).
+        let member = match self.find_member(owner, &member_name) {
+            Some(member) => Some(member),
+            None => match self.select_trait_method(self_type, &member_name, member_token.span) {
+                TraitSelection::Found(selected) => {
+                    self.pending_self_type = selected.self_type;
+                    Some(MemberId::Method(selected.declaration))
+                }
+                TraitSelection::Ambiguous => {
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                }
+                TraitSelection::None => None,
+            },
+        };
+        let result = match member {
             // Field lookup has precedence over method lookup. Calling it is an
             // ordinary indirect call and performs no receiver adaptation.
             Some(MemberId::Field(field)) => {
@@ -3338,6 +3547,8 @@ impl<'a> Checker<'a> {
                 let instance = FunctionInstance {
                     declaration: method,
                     arguments: concrete_arguments,
+                    // A trait default body is specialized to the receiver.
+                    self_type: self.pending_self_type,
                 };
                 let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
                 let receiver_type = signature.receiver?;
@@ -3365,6 +3576,47 @@ impl<'a> Checker<'a> {
                 Some((signature.return_type, PlaceKind::Value))
             }
             _ => None,
+        };
+        self.pending_self_type = None;
+        if result.is_none() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!("no method named `{member_name}` is available for this type"),
+                )
+                .with_primary(member_token.span),
+            );
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            return Some((self.typed.types.error(), PlaceKind::Value));
+        }
+        result
+    }
+
+    /// Selects a trait method for a receiver, reporting ambiguity when more
+    /// than one in-scope trait supplies the name.
+    fn select_trait_method(&mut self, self_type: TypeId, name: &str, span: Span) -> TraitSelection {
+        match crate::traits::select_trait_method(self.resolved, self.typed, self_type, name) {
+            Ok(Some(selected)) => TraitSelection::Found(selected),
+            Ok(None) => TraitSelection::None,
+            Err(traits) => {
+                let names = traits
+                    .iter()
+                    .map(|trait_name| format!("`{trait_name}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        format!(
+                            "method `{name}` is provided by more than one trait ({names});                              select it explicitly with `Type.Trait.{name}`"
+                        ),
+                    )
+                    .with_primary(span),
+                );
+                TraitSelection::Ambiguous
+            }
         }
     }
 
@@ -3565,6 +3817,195 @@ impl<'a> Checker<'a> {
             })
             .unwrap_or_else(|| self.typed.types.error());
         (ty, PlaceKind::Value)
+    }
+
+    /// The canonical type of a nominal declaration applied to arguments.
+    fn nominal_type_of(
+        &mut self,
+        declaration: DeclarationId,
+        arguments: Option<Vec<TypeId>>,
+    ) -> TypeId {
+        let arguments = arguments.unwrap_or_default();
+        self.typed
+            .instantiate_declaration_type(self.resolved, declaration, &arguments)
+            .unwrap_or_else(|| self.typed.types.error())
+    }
+
+    /// The trait whose `Self` a receiver names, if any.
+    fn self_receiver_trait(&self, ty: TypeId) -> Option<DeclarationId> {
+        let ty = self.typed.types.resolve_inference(ty);
+        let target = match self.typed.types.kind(ty) {
+            TypeKind::Reference { target, .. } => self.typed.types.resolve_inference(*target),
+            _ => ty,
+        };
+        match self.typed.types.kind(target) {
+            TypeKind::SelfType(declaration)
+                if self.resolved.declarations[declaration.index()].kind
+                    == DeclarationKind::Trait =>
+            {
+                Some(*declaration)
+            }
+            _ => None,
+        }
+    }
+
+    /// Checks a `self.method(...)` call inside a trait's default body.
+    fn check_trait_self_call(
+        &mut self,
+        call_span: Span,
+        callee: &SyntaxNode,
+        trait_declaration: DeclarationId,
+        member_name: &str,
+        member_span: Span,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        let slots = crate::traits::vtable_slots(self.resolved, trait_declaration);
+        let Some(method) = slots
+            .iter()
+            .find(|(name, _)| name == member_name)
+            .map(|(_, method)| *method)
+        else {
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "trait `{}` has no method named `{member_name}`",
+                        crate::traits::name_of(self.resolved, trait_declaration)
+                    ),
+                )
+                .with_primary(member_span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let Some(signature) = self.typed.function_signatures.get(&method).cloned() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        self.program
+            .expression_types
+            .insert(callee.span, signature.return_type);
+        self.check_call_arguments(call_span, &signature.parameters, arguments);
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::TraitSelfMethod {
+                trait_declaration,
+                method,
+            },
+        );
+        (signature.return_type, PlaceKind::Value)
+    }
+
+    /// Checks a call through a trait object, recording its vtable slot.
+    fn check_dynamic_call(
+        &mut self,
+        call_span: Span,
+        callee: &SyntaxNode,
+        trait_declaration: DeclarationId,
+        member_name: &str,
+        member_span: Span,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        let slots = crate::traits::vtable_slots(self.resolved, trait_declaration);
+        let Some(slot) = slots.iter().position(|(name, _)| name == member_name) else {
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "trait `{}` has no method named `{member_name}`",
+                        crate::traits::name_of(self.resolved, trait_declaration)
+                    ),
+                )
+                .with_primary(member_span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let method = slots[slot].1;
+        let Some(signature) = self.typed.function_signatures.get(&method).cloned() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        self.program
+            .expression_types
+            .insert(callee.span, signature.return_type);
+        self.check_call_arguments(call_span, &signature.parameters, arguments);
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::DynamicMethod {
+                trait_declaration,
+                method,
+                slot,
+            },
+        );
+        (signature.return_type, PlaceKind::Value)
+    }
+
+    /// Resolves `Type.Trait` to the implementation's method named `name`.
+    ///
+    /// Returns `None` unless `base` is exactly a `Type.Trait` path with an
+    /// implementation of that trait for that type.
+    fn qualified_trait_method(&mut self, base: &SyntaxNode, name: &str) -> Option<DeclarationId> {
+        if base.kind != SyntaxKind::MemberExpression {
+            return None;
+        }
+        let type_node = child_nodes(base).into_iter().next()?;
+        let owner = self.type_declaration_expression(type_node)?;
+        let trait_token = base.children.iter().rev().find_map(|child| match child {
+            SyntaxElement::Token(token) if matches!(token.kind, TokenKind::Identifier(_)) => {
+                Some(token)
+            }
+            _ => None,
+        })?;
+        let trait_name = token_text(trait_token);
+        for block in &self.resolved.impls {
+            let Some(target) = self.typed.impl_target_types.get(&block.id).copied() else {
+                continue;
+            };
+            let target_declaration = match self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(target))
+            {
+                TypeKind::Nominal { identity, .. } | TypeKind::Foreign { identity, .. } => {
+                    identity.declaration
+                }
+                _ => continue,
+            };
+            if target_declaration != owner {
+                continue;
+            }
+            let Some(trait_type) = self.typed.impl_trait_types.get(&block.id).copied() else {
+                continue;
+            };
+            let implemented_trait = match self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(trait_type))
+            {
+                TypeKind::Nominal { identity, .. } => self
+                    .resolved
+                    .symbol_text(self.resolved.declarations[identity.declaration.index()].name)
+                    .to_string(),
+                TypeKind::Builtin { builtin, .. } => {
+                    self.resolved.builtin_name(*builtin).to_string()
+                }
+                _ => continue,
+            };
+            if implemented_trait != trait_name {
+                continue;
+            }
+            if let Some(members) = self.resolved.impl_members.get(&block.id)
+                && let Some((_, declaration)) = members
+                    .iter()
+                    .find(|(symbol, _)| self.resolved.symbol_text(**symbol) == name)
+            {
+                return Some(*declaration);
+            }
+        }
+        None
     }
 
     fn nominal_selection(

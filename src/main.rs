@@ -12,13 +12,10 @@ use codespan_reporting::term::{
     termcolor::{ColorChoice, StandardStream},
 };
 use elamite::backend::Target;
-use elamite::check::check_for_target;
 use elamite::diagnostics::Diagnostic;
-use elamite::driver::{BuildOptions, Optimization, build, run};
+use elamite::driver::{BuildOptions, Optimization, build, check_frontend, run};
 use elamite::package::PackageGraph;
-use elamite::resolution::resolve;
 use elamite::source::SourceManager;
-use elamite::types::resolve_types;
 
 fn main() -> ExitCode {
     let cli = match Cli::parse(std::env::args_os().skip(1)) {
@@ -73,25 +70,13 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             let root = &graph.packages[&graph.root];
-            let resolution = resolve(&graph, &mut sources);
-            if !resolution.diagnostics.is_empty() {
-                render_diagnostics(&sources, &resolution.diagnostics);
-                return ExitCode::FAILURE;
-            }
-            let mut typed = resolve_types(&resolution.program);
-            if !typed.diagnostics.is_empty() {
-                render_diagnostics(&sources, &typed.diagnostics);
-                return ExitCode::FAILURE;
-            }
-            let checked = check_for_target(
-                &resolution.program,
-                &mut typed.program,
-                cli.target.pointer_bits(),
-            );
-            if !checked.diagnostics.is_empty() {
-                render_diagnostics(&sources, &checked.diagnostics);
-                return ExitCode::FAILURE;
-            }
+            let frontend = match check_frontend(&graph, &mut sources, cli.target) {
+                Ok(frontend) => frontend,
+                Err(diagnostics) => {
+                    render_diagnostics(&sources, &diagnostics);
+                    return ExitCode::FAILURE;
+                }
+            };
             let source_module_count = root.modules.len() + 1;
             println!(
                 "elamite {} \u{2014} {} {} ({} source module{}, {} package{}, {} declaration{}, {} canonical types)",
@@ -102,13 +87,13 @@ fn main() -> ExitCode {
                 if source_module_count == 1 { "" } else { "s" },
                 graph.packages.len(),
                 if graph.packages.len() == 1 { "" } else { "s" },
-                resolution.program.declarations.len(),
-                if resolution.program.declarations.len() == 1 {
+                frontend.resolved.declarations.len(),
+                if frontend.resolved.declarations.len() == 1 {
                     ""
                 } else {
                     "s"
                 },
-                typed.program.types.len(),
+                frontend.typed.types.len(),
             );
             ExitCode::SUCCESS
         }
