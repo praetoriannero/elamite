@@ -70,6 +70,15 @@ pub enum Category {
     /// `break`/`continue` appears outside a loop, or a non-unit function has
     /// a reachable path that does not return a value (Milestone 7).
     ControlFlow,
+    /// An unsafe-only operation — raw-pointer dereference, raw-to-reference
+    /// conversion, a pointee-changing cast, or a call to an unsafe or foreign
+    /// function — appears outside an `unsafe:` block (Milestone 16).
+    UnsafeContext,
+    /// A raw-pointer access whose operand is an expression-local compile-time
+    /// constant known to violate the null or alignment requirement
+    /// (Milestone 16). This never propagates facts through bindings,
+    /// assignments, branches, reachability, or calls.
+    PointerValidity,
     /// Checked syntax cannot be represented by the current typed/control-flow
     /// IR boundary (Milestone 8).
     Lowering,

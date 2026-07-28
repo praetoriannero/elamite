@@ -336,6 +336,27 @@ pub struct CheckOutput {
 /// and rejects struct/enum containment cycles across the whole program.
 /// `typed` is extended in place with any composite types that first appear
 /// inside an expression rather than a declared signature.
+/// Whether this expression is the `null` literal, looked at strictly within
+/// the expression itself: grouping changes nothing, and a pointee-changing
+/// cast preserves the address (`SPEC.md` 3.3), so a cast null is still null.
+fn expression_locally_null(node: &SyntaxNode) -> bool {
+    match node.kind {
+        SyntaxKind::LiteralExpression => node.children.iter().any(|child| {
+            matches!(
+                child,
+                SyntaxElement::Token(Token {
+                    kind: TokenKind::Keyword(Keyword::Null),
+                    ..
+                })
+            )
+        }),
+        SyntaxKind::ParenthesizedExpression | SyntaxKind::CastExpression => child_nodes(node)
+            .first()
+            .is_some_and(|inner| expression_locally_null(inner)),
+        _ => false,
+    }
+}
+
 /// The `(ok, err)` payload types of `ty` when it is the *standard*
 /// `Result[T, E]`, looking through aliases and inference.
 ///
@@ -1688,6 +1709,14 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        // Calling an unsafe or foreign function requires an `unsafe:` block
+        // at the call site (`SPEC.md` 10, Milestones 16.3 and 16.4);
+        // referencing one without calling it stays safe. This single gate
+        // covers direct calls, bound and unbound methods, trait dispatch, and
+        // indirect calls through `&unsafe fn` values.
+        if node.kind == SyntaxKind::CallExpression && self.call_is_unsafe(node) {
+            self.require_unsafe_context(node.span, "calling an unsafe or foreign function");
+        }
         self.program.expression_types.insert(node.span, ty);
         self.program.expression_places.insert(node.span, place);
         (ty, place)
@@ -2621,6 +2650,9 @@ impl<'a> Checker<'a> {
                     PlaceKind::Mutable | PlaceKind::CollectionInterior => PlaceKind::Mutable,
                     PlaceKind::Addressable => PlaceKind::Addressable,
                     PlaceKind::Value => PlaceKind::Value,
+                    // A field of a raw dereference stays inside the raw
+                    // target: assignable, never safe-reference-formable.
+                    PlaceKind::RawPointerTarget => PlaceKind::RawPointerTarget,
                 };
                 (field_type, place)
             }
@@ -2834,6 +2866,9 @@ impl<'a> Checker<'a> {
                             Category::Place,
                             if operand_place == PlaceKind::CollectionInterior {
                                 "cannot form a safe reference to a collection interior"
+                            } else if operand_place == PlaceKind::RawPointerTarget {
+                                "cannot form a safe reference to a raw pointer's target; \
+                                 use the explicit `as` conversion"
                             } else if mutable {
                                 "cannot form `&var` from a non-mutable place"
                             } else {
@@ -2858,12 +2893,26 @@ impl<'a> Checker<'a> {
                 let (operand_type, _) = self.check_expr(operand, ExpectedType::None);
                 let resolved = self.typed.types.resolve_inference(operand_type);
                 match self.typed.types.kind(resolved).clone() {
-                    TypeKind::Reference { mutability, target }
-                    | TypeKind::RawPointer { mutability, target } => {
+                    TypeKind::Reference { mutability, target } => {
                         let place = if mutability == Mutability::Mutable {
                             PlaceKind::Mutable
                         } else {
                             PlaceKind::Addressable
+                        };
+                        (target, place)
+                    }
+                    TypeKind::RawPointer { mutability, target } => {
+                        // Raw dereference is unsafe-only (`SPEC.md` 3.3 and
+                        // 10). A `*var T` target is an assignable place; a
+                        // `*T` target is read-only even in unsafe code, and
+                        // neither can form a safe reference — that path is
+                        // the explicit `as` conversion.
+                        self.require_unsafe_context(node.span, "dereferencing a raw pointer");
+                        self.reject_locally_invalid_pointer(operand);
+                        let place = if mutability == Mutability::Mutable {
+                            PlaceKind::RawPointerTarget
+                        } else {
+                            PlaceKind::Value
                         };
                         (target, place)
                     }
@@ -3183,46 +3232,142 @@ impl<'a> Checker<'a> {
         }
         let source_resolved = self.typed.types.resolve_inference(source_type);
         let target_resolved = self.typed.types.resolve_inference(target_type);
-        if let (
-            TypeKind::Reference {
-                mutability: source_mutability,
-                target: source_target,
-            },
-            TypeKind::RawPointer {
-                mutability: target_mutability,
-                target: target_target,
-            },
-        ) = (
-            self.typed.types.kind(source_resolved),
-            self.typed.types.kind(target_resolved),
-        ) && source_mutability == target_mutability
-            && self
-                .typed
-                .types
-                .exactly_equal(*source_target, *target_target)
-        {
-            return (target_type, PlaceKind::Value);
-        }
-        if let (
-            TypeKind::RawPointer {
-                mutability: source_mutability,
-                target: source_target,
-            },
-            TypeKind::Reference {
-                mutability: target_mutability,
-                target: target_target,
-            },
-        ) = (
-            self.typed.types.kind(source_resolved),
-            self.typed.types.kind(target_resolved),
-        ) && self.unsafe_depth > 0
-            && source_mutability == target_mutability
-            && self
-                .typed
-                .types
-                .exactly_equal(*source_target, *target_target)
-        {
-            return (target_type, PlaceKind::Value);
+        // The pointer conversion matrix (`SPEC.md` 3.3, Milestones 16.2 and
+        // 16.5). Every permitted conversion preserves the address and
+        // provenance; none upgrades mutability.
+        match (
+            self.typed.types.kind(source_resolved).clone(),
+            self.typed.types.kind(target_resolved).clone(),
+        ) {
+            // `&T as *T`, `&var T as *var T`, and the `&var T as *T`
+            // downgrade are all safe.
+            (
+                TypeKind::Reference {
+                    mutability: source_mutability,
+                    target: source_target,
+                },
+                TypeKind::RawPointer {
+                    mutability: target_mutability,
+                    target: target_target,
+                },
+            ) => {
+                if !self.typed.types.exactly_equal(source_target, target_target) {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a safe reference converts only to a raw pointer with exactly \
+                             its pointee type",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                if target_mutability == Mutability::Mutable
+                    && source_mutability == Mutability::Shared
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a shared reference cannot convert to a mutable raw pointer",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                return (target_type, PlaceKind::Value);
+            }
+            (TypeKind::RawPointer { .. }, TypeKind::RawPointer { .. })
+                if self
+                    .typed
+                    .types
+                    .exactly_equal(source_resolved, target_resolved) =>
+            {
+                return (target_type, PlaceKind::Value);
+            }
+            (
+                TypeKind::RawPointer {
+                    mutability: source_mutability,
+                    target: source_target,
+                },
+                TypeKind::RawPointer {
+                    mutability: target_mutability,
+                    target: target_target,
+                },
+            ) => {
+                // No cast may upgrade `*T` to any `*var U`.
+                if target_mutability == Mutability::Mutable
+                    && source_mutability == Mutability::Shared
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a `*T` pointer cannot be cast to any `*var U`; the cast \
+                             preserves mutability permission",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                // The `*var T as *T` downgrade with the same pointee is safe;
+                // changing the pointee type requires an `unsafe:` block.
+                if !self.typed.types.exactly_equal(source_target, target_target) {
+                    self.require_unsafe_context(
+                        node.span,
+                        "a cast that changes a raw pointer's pointee type",
+                    );
+                }
+                return (target_type, PlaceKind::Value);
+            }
+            // `pointer as &T` / `as &var T`: unsafe-only, exact mutability
+            // and pointee, checked for null and alignment at runtime.
+            (
+                TypeKind::RawPointer {
+                    mutability: source_mutability,
+                    target: source_target,
+                },
+                TypeKind::Reference {
+                    mutability: target_mutability,
+                    target: target_target,
+                },
+            ) => {
+                // A locally known-null operand is invalid regardless of the
+                // pointee question, so it is diagnosed first — `null` has an
+                // unconstrained pointee that would otherwise misreport as a
+                // type mismatch.
+                if self.expression_locally_null(source) {
+                    self.reject_locally_invalid_pointer(source);
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                if source_mutability != target_mutability
+                    || !self.typed.types.exactly_equal(source_target, target_target)
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a raw pointer converts only to a reference with exactly its \
+                             pointee type and mutability",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                self.require_unsafe_context(node.span, "converting a raw pointer to a reference");
+                return (target_type, PlaceKind::Value);
+            }
+            // The initial language has no pointer/integer conversion in
+            // either direction (`SPEC.md` 3.3).
+            (TypeKind::RawPointer { .. }, _) | (_, TypeKind::RawPointer { .. }) => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "raw pointers do not convert to or from any non-pointer type; \
+                         there is no pointer arithmetic or pointer/integer conversion",
+                    )
+                    .with_primary(node.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+            _ => {}
         }
         if !self.is_numeric_type(source_type) || !self.is_numeric_type(target_type) {
             self.diagnostics.push(
@@ -3301,6 +3446,51 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         }
         (ok_type, PlaceKind::Value)
+    }
+
+    /// Reports an unsafe-only operation used outside an `unsafe:` block
+    /// (`SPEC.md` 10). The lexical block is the only unsafe context: an
+    /// `unsafe` function's body is deliberately *not* one, so each unsafe
+    /// assumption stays locally visible.
+    fn require_unsafe_context(&mut self, span: Span, what: &str) {
+        if self.unsafe_depth == 0 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::UnsafeContext,
+                    format!("{what} requires an `unsafe:` block"),
+                )
+                .with_primary(span),
+            );
+        }
+    }
+
+    /// The mandatory expression-local validity determination (`SPEC.md` 3.3):
+    /// a raw dereference or raw-to-reference conversion is a compile-time
+    /// error only when its pointer operand is an expression-local constant
+    /// known to be null or misaligned.
+    ///
+    /// The determination may evaluate literals, casts, and operators within
+    /// the operand expression, and nothing else: facts never propagate
+    /// through bindings, assignments, branch conditions, reachability, or
+    /// calls. The initial language has no integer-to-pointer conversion or
+    /// pointer arithmetic, so no expression can construct a non-null constant
+    /// address; `null` is therefore the only constant this evaluator can
+    /// prove invalid, and the misalignment half of the rule is vacuously
+    /// satisfied until such an expression exists.
+    fn reject_locally_invalid_pointer(&mut self, operand: &SyntaxNode) {
+        if self.expression_locally_null(operand) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::PointerValidity,
+                    "this pointer operand is known to be null",
+                )
+                .with_primary(operand.span),
+            );
+        }
+    }
+
+    fn expression_locally_null(&self, node: &SyntaxNode) -> bool {
+        expression_locally_null(node)
     }
 
     /// Whether a checked call expression invokes an unsafe or foreign target.

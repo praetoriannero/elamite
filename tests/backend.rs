@@ -2656,3 +2656,204 @@ fn main() -> ():
         );
     }
 }
+
+#[test]
+fn raw_pointers_read_write_and_compare_by_address() {
+    // M16.1/M16.6: the authoritative demonstration's pointer region — null
+    // comparison, safe conversions, unsafe recovery, and writes through
+    // `*var T` observable in the original storage.
+    let source = r#"
+fn main() -> ():
+    var value = 41
+    let edit: &var i32 = &var value
+    let pointer: *var i32 = edit as *var i32
+
+    if pointer != null:
+        unsafe:
+            let recovered: &var i32 = pointer as &var i32
+            *recovered = 42
+    println(value)
+
+    unsafe:
+        *pointer = 43
+        *pointer += 1
+        println(*pointer)
+    println(value)
+
+    // Copies and downgrades preserve the address, so equality holds.
+    let copied = pointer
+    let shared: *i32 = pointer as *i32
+    println(copied == pointer)
+    println(shared == (pointer as *i32))
+
+    var other = 1
+    let elsewhere: *i32 = (&other) as *i32
+    println(elsewhere == shared)
+
+    let absent: *i32 = null
+    println(absent == null)
+    println(shared == null)
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "42\n44\n44\ntrue\ntrue\nfalse\ntrue\nfalse\n");
+    }
+}
+
+#[test]
+fn raw_pointer_null_and_alignment_checks_trap() {
+    // M16.8: every executed raw dereference and raw-to-reference conversion
+    // checks null and alignment first, with stable codes and locations. The
+    // null pointers hide behind a call so the expression-local rule (M16.7)
+    // does not reject the program statically.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn conceal(pointer: *i32) -> *i32:
+    return pointer
+
+fn main() -> ():
+    println("before")
+    let hidden = conceal(null)
+    unsafe:
+        println(*hidden)
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.contains("E-RUN-NULL"), "{stderr}");
+    assert!(stderr.contains("main.elx:9:"), "{stderr}");
+
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn conceal(pointer: *i32) -> *i32:
+    return pointer
+
+fn main() -> ():
+    println("before")
+    let hidden = conceal(null)
+    unsafe:
+        let bad = hidden as &i32
+        println(*bad)
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.contains("E-RUN-NULL"), "{stderr}");
+
+    // A pointee-changing cast preserves the address, so a `*u8` into the
+    // second byte of a managed cell is misaligned for `u16`. The cell comes
+    // from the managed allocator, whose alignment exceeds two.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+struct Bytes:
+    lead: u8
+    trail: u8
+
+fn main() -> ():
+    println("before")
+    var bytes = Bytes { lead: 1, trail: 2 }
+    let trail: *var u8 = (&var bytes.trail) as *var u8
+    unsafe:
+        let wide: *var u16 = trail as *var u16
+        println(*wide)
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.contains("E-RUN-ALIGN"), "{stderr}");
+}
+
+#[test]
+fn raw_to_reference_conversion_restores_a_strong_managed_path() {
+    // M16.9/M16.10: a raw pointer is not a root, but a validly recovered
+    // reference is. The target storage was promoted when its address was
+    // taken, and reading through the recovered reference after the source
+    // frame exits observes the value written through the pointer.
+    let source = r#"
+struct Cell:
+    value: i32
+
+unsafe fn recover(pointer: *var Cell) -> &var Cell:
+    unsafe:
+        return pointer as &var Cell
+
+fn produce() -> &var Cell:
+    var cell = Cell { value: 1 }
+    let pointer: *var Cell = (&var cell) as *var Cell
+    unsafe:
+        let recovered = recover(pointer)
+        recovered.value = 2
+        return recovered
+
+fn main() -> ():
+    let alias = produce()
+    println(alias.value)
+    alias.value += 1
+    println(alias.value)
+"#;
+    let tree = TestTree::new("raw-recover");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    // The address-taken local is promoted to managed storage, and the
+    // conversion site checks the pointer before forming the reference.
+    assert!(compilation.generated_c.contains("GC_MALLOC"));
+    assert!(
+        compilation.generated_c.contains("el_check_ptr_t"),
+        "{}",
+        compilation.generated_c
+    );
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "2\n3\n");
+    }
+}
+
+#[test]
+fn unsafe_methods_and_references_follow_the_demo_region() {
+    // M16.3/M16.4/M16.6: raw-pointer receivers accept only an exactly
+    // matching pointer with no adaptation; selecting an unsafe method
+    // unbound preserves its safety qualifier; both invocation forms need
+    // `unsafe:`; function-reference identity compares by target.
+    let source = r#"
+struct Session:
+    active: bool
+
+    pub fn get_const_self_ptr(self: &Self) -> *Self:
+        return self as *Self
+
+    unsafe pub fn get_self_ptr_unsafe(self: *Self) -> &Self:
+        unsafe:
+            return self as &Self
+
+    fn status(self: &Self) -> str:
+        if self.active:
+            return "active"
+        return "inactive"
+
+fn main() -> ():
+    let observer = Session { active: true }
+    let observer_ptr: *Session = observer.get_const_self_ptr()
+    let recover_observer: &unsafe fn(*Session) -> &Session =
+        Session.get_self_ptr_unsafe
+    unsafe:
+        let recovered_bound = observer_ptr.get_self_ptr_unsafe()
+        let recovered_unbound = recover_observer(observer_ptr)
+        println(f"bound: {recovered_bound.status()}")
+        println(f"unbound: {recovered_unbound.status()}")
+    println(recover_observer == Session.get_self_ptr_unsafe)
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "bound: active\nunbound: active\ntrue\n");
+    }
+}

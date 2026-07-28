@@ -244,6 +244,9 @@ impl<'a> CEmitter<'a> {
         for (operation, operand, result) in self.numeric_alternatives() {
             self.emit_numeric_alternative_helper(operation, operand, result);
         }
+        for pointee in self.checked_pointees() {
+            self.emit_pointer_check_helper(pointee);
+        }
         self.emit_vtable_tables();
         for function in &self.program.functions {
             self.emit_function(function);
@@ -1882,6 +1885,44 @@ impl<'a> CEmitter<'a> {
         })
     }
 
+    /// Every pointee type whose raw pointers are null/alignment-checked.
+    fn checked_pointees(&self) -> BTreeSet<TypeId> {
+        let mut pointees = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::CheckPointer { pointee, .. } = instruction {
+                        pointees.insert(self.resolve_alias(*pointee));
+                    }
+                }
+            }
+        }
+        pointees
+    }
+
+    /// Emits the mandatory null/alignment check helper for one pointee type
+    /// (`SPEC.md` 3.3, Milestone 16.8). The alignment comes from the C99
+    /// `offsetof` probe — a `char` followed by the pointee — because
+    /// `_Alignof` is C11-only and the generated C must stay C99.
+    fn emit_pointer_check_helper(&mut self, pointee: TypeId) {
+        let Some(c_type) = self.c_type(pointee, None) else {
+            return;
+        };
+        let name = pointer_check_name(pointee);
+        let _ = writeln!(
+            self.output,
+            "static void {name}(const void *pointer, const char *path, uint32_t line, \
+             uint32_t column) {{\n\
+             \x20   struct el_align_probe_t{index} {{ char lead; {c_type} value; }};\n\
+             \x20   if (pointer == NULL) el_trap(\"E-RUN-NULL\", path, line, column);\n\
+             \x20   if (((uintptr_t)pointer % \
+             (uintptr_t)offsetof(struct el_align_probe_t{index}, value)) != 0U) \
+             el_trap(\"E-RUN-ALIGN\", path, line, column);\n\
+             }}\n",
+            index = pointee.index()
+        );
+    }
+
     /// Every `(operation, operand type, result type)` a numeric alternative
     /// needs a helper for.
     fn numeric_alternatives(&self) -> BTreeSet<(NumericAlternative, TypeId, TypeId)> {
@@ -2931,6 +2972,19 @@ impl<'a> CEmitter<'a> {
 
     fn emit_instruction(&mut self, function: &ControlFlowFunction, instruction: &Instruction) {
         match instruction {
+            Instruction::CheckPointer {
+                pointer,
+                pointee,
+                span,
+            } => {
+                let arguments = self.trap_arguments(*span);
+                let _ = writeln!(
+                    self.output,
+                    "    {}((const void *){}, {arguments});",
+                    pointer_check_name(self.resolve_alias(*pointee)),
+                    temporary_name(*pointer)
+                );
+            }
             Instruction::Assign {
                 destination,
                 value,
@@ -3431,6 +3485,7 @@ impl<'a> CEmitter<'a> {
             (source_kind, target_kind),
             (TypeKind::Reference { .. }, TypeKind::RawPointer { .. })
                 | (TypeKind::RawPointer { .. }, TypeKind::Reference { .. })
+                | (TypeKind::RawPointer { .. }, TypeKind::RawPointer { .. })
         ) {
             let target_type = self.c_type(target, Some(span))?;
             return Some(format!("({target_type}){}", temporary_name(value)));
@@ -4483,6 +4538,10 @@ fn reachable_blocks(function: &ControlFlowFunction) -> BTreeSet<BlockId> {
         }
     }
     reachable
+}
+
+fn pointer_check_name(pointee: TypeId) -> String {
+    format!("el_check_ptr_t{}", pointee.index())
 }
 
 fn numeric_conversion_name(outcome: NumericOutcome, source: TypeId, result: TypeId) -> String {

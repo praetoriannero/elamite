@@ -1865,6 +1865,11 @@ pub enum PlaceKind {
     Addressable,
     Mutable,
     CollectionInterior,
+    /// The target of a `*var T` dereference: assignable in an `unsafe`
+    /// context, but never the source of a safe reference — the sanctioned
+    /// path from a raw pointer to a reference is the explicit, asserted
+    /// `as &var T` conversion (`SPEC.md` 3.3), not `&var *pointer`.
+    RawPointerTarget,
 }
 
 impl PlaceKind {
@@ -1875,7 +1880,10 @@ impl PlaceKind {
 
     #[must_use]
     pub fn is_mutable(self) -> bool {
-        matches!(self, Self::Mutable | Self::CollectionInterior)
+        matches!(
+            self,
+            Self::Mutable | Self::CollectionInterior | Self::RawPointerTarget
+        )
     }
 
     #[must_use]

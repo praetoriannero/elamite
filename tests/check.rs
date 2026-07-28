@@ -1743,3 +1743,307 @@ fn main() -> ():
         Category::ControlFlow,
     );
 }
+
+#[test]
+fn raw_pointer_conversions_follow_the_exact_matrix() {
+    // M16.2/M16.5: `&T as *T`, `&var T as *var T`/`*T`, and `*var T as *T`
+    // are safe; a pointee-changing raw cast requires `unsafe:`; nothing
+    // upgrades mutability, and pointers never convert to or from integers.
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    var value = 41
+    let shared: *i32 = (&value) as *i32
+    let edit: &var i32 = &var value
+    let mutable: *var i32 = edit as *var i32
+    let downgraded_reference: *i32 = edit as *i32
+    let downgraded_pointer: *i32 = mutable as *i32
+    unsafe:
+        let repointed: *u8 = shared as *u8
+        let repointed_mutable: *var u8 = mutable as *var u8
+        let repointed_downgrade: *u8 = mutable as *u8
+    println(value)
+"#,
+    );
+    // A shared reference or pointer never upgrades to a mutable pointer.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let value = 1
+    let bad = (&value) as *var i32
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let shared: *i32 = (&value) as *i32
+    unsafe:
+        let bad = shared as *var i32
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let shared: *i32 = (&value) as *i32
+    unsafe:
+        let bad = shared as *var u8
+"#,
+        Category::ExpressionType,
+    );
+    // Changing the pointee type requires an `unsafe:` block.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let shared: *i32 = (&value) as *i32
+    let bad = shared as *u8
+"#,
+        Category::UnsafeContext,
+    );
+    // No pointer/integer conversion in either direction.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let shared: *i32 = (&value) as *i32
+    let bad = shared as usize
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let bad = 4096 as *i32
+"#,
+        Category::ExpressionType,
+    );
+    // A raw pointer converts only to a reference with exactly its pointee
+    // type and mutability, and only in an `unsafe:` block.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let mutable: *var i32 = (&var value) as *var i32
+    unsafe:
+        let bad = mutable as &i32
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let shared: *i32 = (&value) as *i32
+    let bad = shared as &i32
+"#,
+        Category::UnsafeContext,
+    );
+}
+
+#[test]
+fn unsafe_only_operations_require_a_lexical_unsafe_block() {
+    // M16.3: the lexical `unsafe:` block is the only unsafe context; an
+    // `unsafe` function's body is deliberately not one.
+    assert_no_diagnostics(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+fn wrapper() -> ():
+    unsafe:
+        danger()
+
+unsafe fn layered() -> ():
+    unsafe:
+        danger()
+
+fn main() -> ():
+    wrapper()
+"#,
+    );
+    // Raw dereference, read or write, requires `unsafe:`.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *i32 = (&value) as *i32
+    println(*pointer)
+"#,
+        Category::UnsafeContext,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    *pointer = 2
+"#,
+        Category::UnsafeContext,
+    );
+    // Calling an unsafe function requires `unsafe:` at the call site, even
+    // inside an unsafe function's own body (M16.3's independence rule).
+    assert_has_category(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+fn main() -> ():
+    danger()
+"#,
+        Category::UnsafeContext,
+    );
+    assert_has_category(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+unsafe fn caller() -> ():
+    danger()
+
+fn main() -> ():
+    pass
+"#,
+        Category::UnsafeContext,
+    );
+    // M16.4: taking and storing an `&unsafe fn` reference is safe; invoking
+    // it requires `unsafe:`, and it never converts to `&fn`.
+    assert_no_diagnostics(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+fn main() -> ():
+    let reference: &unsafe fn() -> () = danger
+    let same = reference == danger
+    unsafe:
+        reference()
+    println(same)
+"#,
+    );
+    assert_has_category(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+fn main() -> ():
+    let reference: &unsafe fn() -> () = danger
+    reference()
+"#,
+        Category::UnsafeContext,
+    );
+    assert_has_category(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+fn main() -> ():
+    let bad: &fn() -> () = danger
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
+fn pointer_validity_is_expression_local() {
+    // M16.7: only an expression-local constant null operand is a compile
+    // error; facts never propagate through bindings, assignments, branch
+    // conditions, reachability, or calls.
+    assert_no_diagnostics(
+        r#"
+fn conceal(pointer: *i32) -> *i32:
+    return pointer
+
+fn main() -> ():
+    let through_binding: *i32 = null
+    let through_call = conceal(null)
+    if through_binding == null:
+        println("null checked")
+    else:
+        unsafe:
+            println(*through_binding)
+    unsafe:
+        println(*through_call)
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    unsafe:
+        println(*null)
+"#,
+        Category::PointerValidity,
+    );
+    // Grouping and casts stay within the operand expression.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    unsafe:
+        println(*(null))
+"#,
+        Category::PointerValidity,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    unsafe:
+        let bad = null as &i32
+"#,
+        Category::PointerValidity,
+    );
+}
+
+#[test]
+fn raw_dereference_places_permit_writes_but_never_safe_references() {
+    // M16.6: a `*var T` target is an assignable place, a `*T` target is
+    // read-only even in unsafe code, and neither forms a safe reference —
+    // that path is the explicit, asserted `as` conversion.
+    assert_no_diagnostics(
+        r#"
+struct Cell:
+    value: i32
+
+fn main() -> ():
+    var cell = Cell { value: 1 }
+    let pointer: *var Cell = (&var cell) as *var Cell
+    unsafe:
+        *pointer = Cell { value: 2 }
+        (*pointer).value = 3
+        (*pointer).value += 1
+    println(cell.value)
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let shared: *i32 = (&value) as *i32
+    unsafe:
+        *shared = 2
+"#,
+        Category::Place,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    unsafe:
+        let bad = &var *pointer
+"#,
+        Category::Place,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *i32 = (&value) as *i32
+    unsafe:
+        let bad = &*pointer
+"#,
+        Category::Place,
+    );
+}

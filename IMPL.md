@@ -1,8 +1,8 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 15 complete, Milestone 16 next
+> Status: Active — Milestones 0 through 16 complete, Milestone 17 next
 >
-> Next work package: M16.1 — pointer values and equality
+> Next work package: M17.1 — foreign declaration validation
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -981,12 +981,37 @@ Validation:
 
 ### Milestone 16: unsafe contexts and raw pointers
 
-> Status: Next.
+> Status: Complete.
 >
-> Boundary: raw-pointer syntax and canonical types already exist, but this
-> milestone is the first point at which pointer access and unsafe invocation
-> become executable. Unsafe blocks relax only the listed operation checks; they
-> do not disable ordinary typing or prove pointer validity.
+> The lexical `unsafe:` depth the checker already tracked is the only unsafe
+> context; an `unsafe` function's body is deliberately not one. One call gate
+> in `check_expr` (via the `call_is_unsafe` query M15.5 introduced) covers
+> direct, bound, unbound, trait-dispatched, and indirect `&unsafe fn` calls.
+> The complete cast matrix lives in `check_cast`: reference-to-pointer and
+> pointer downgrades are safe, pointee-changing raw casts require `unsafe:`,
+> nothing upgrades `*T` to any `*var U`, and pointers never convert to or
+> from integers. A raw dereference is a place with its own classification
+> (`PlaceKind::RawPointerTarget`): assignable through `*var T`, read-only
+> through `*T`, and never the source of a safe reference — the sanctioned
+> raw-to-reference path is the explicit `as` conversion, which requires
+> `unsafe:`, exact pointee and mutability, and the same runtime check as a
+> dereference.
+>
+> Runtime checks are one `Instruction::CheckPointer` per executed dereference
+> or raw-to-reference conversion, emitted as per-pointee helpers that trap
+> `E-RUN-NULL`/`E-RUN-ALIGN` with source locations; alignment comes from a
+> C99 `offsetof` probe because `_Alignof` is C11-only. The mandatory
+> expression-local validity rule is implemented exactly at its specified
+> ceiling: the evaluator looks through grouping and casts within the operand
+> and nothing else — and since the initial language has no integer-to-pointer
+> conversion, `null` is the only provable-invalid constant, making the
+> misalignment half vacuous until such an expression exists. A recovered
+> reference to a promoted managed target restores a strong path
+> (`raw_to_reference_conversion_restores_a_strong_managed_path`); raw
+> pointers themselves are never registered as roots. With this milestone the
+> authoritative demonstration passes the complete frontend check; full
+> execution still awaits M17's foreign declarations and M18's `std`
+> surface.
 
 **Goal:** Isolate unverifiable pointer operations behind the specified lexical
 unsafe boundary.
@@ -995,16 +1020,16 @@ Implementation tasks, in order:
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M16.1 — Pointer values and equality** | Lower `null`, `*T`, and `*var T` values and address-only equality. Preserve exact pointee type and mutability in typed IR and C representations. | Null/non-null equality tests for both pointer mutabilities and both targets. |
-| **M16.2 — Safe pointer conversions** | Implement `&T` to `*T`, `&var T` to `*var T` or `*T`, and `*var T` to `*T`. Preserve address and never infer a pointee-changing or mutability-upgrading conversion. | Compile-pass conversion matrix and compile-fail implicit/upgrade cases. |
-| **M16.3 — Unsafe-context tracking** | Track lexical `unsafe:` depth independently from whether the enclosing function is declared `unsafe`. Require the context for raw access, raw-to-reference conversion, pointee-changing casts, and unsafe calls. | Safe wrapper passes; unsafe function body without a nested block fails; nested blocks recover normally. |
-| **M16.4 — Unsafe function references** | Preserve safety in named and unbound function-reference types. Taking, copying, and comparing `&unsafe fn` remains safe; invocation requires `unsafe:` and never converts to or from `&fn`. | Reference-use run-pass tests and invocation/signature compile-fail tests. |
-| **M16.5 — Pointee-changing casts** | Lower permitted raw-pointer casts while preserving address, source provenance/extent obligations, and mutability permission. Reject every `*T` to `*var U` upgrade and all pointer/integer arithmetic or conversion. | Complete cast matrix with explicit rejection tests. |
-| **M16.6 — Dereference places** | Type-check raw reads and writes as places; writes require `*var T`. Raw-pointer method receivers still require an exact type and receive no implicit borrow, cast, downgrade, or dereference. | Read/write and raw-receiver tests, including immutable-pointer write failure. |
-| **M16.7 — Expression-local validity evaluator** | Evaluate only literals, casts, and operators inside the pointer operand needed to prove null or misalignment. Do not propagate required-error facts through bindings, assignment, branches, reachability, or calls. | Known-invalid expressions fail; equivalent values reached through locals or branches remain accepted. |
-| **M16.8 — Runtime access checks** | Emit mandatory null and target-alignment checks immediately before every executed dereference and raw-to-reference conversion, with stable trap categories and source locations. | Subprocess trap tests for null/misaligned read, write, and conversion. |
-| **M16.9 — Raw-to-reference conversion** | Convert to `&T`/`&var T` only in `unsafe:`, after runtime checks, with exact mutability. A valid managed target becomes strongly reachable through the resulting reference; a foreign/manual target receives no lifetime extension. | Managed-target liveness test and documented foreign-lifetime contract fixture. |
-| **M16.10 — Root and cleanup integration** | Ensure raw pointers alone are not intentionally registered as language roots. Preserve explicit strong paths across operations and finish rejection of unsafe deferred calls without weakening `defer:` restrictions. | Best-effort raw-nonroot test, safe-wrapper keep-alive test, and deferred-unsafe-call compile failure. |
+| **M16.1 — Pointer values and equality** *(complete)* | Lower `null`, `*T`, and `*var T` values and address-only equality. Preserve exact pointee type and mutability in typed IR and C representations. | Null/non-null equality tests for both pointer mutabilities and both targets. |
+| **M16.2 — Safe pointer conversions** *(complete)* | Implement `&T` to `*T`, `&var T` to `*var T` or `*T`, and `*var T` to `*T`. Preserve address and never infer a pointee-changing or mutability-upgrading conversion. | Compile-pass conversion matrix and compile-fail implicit/upgrade cases. |
+| **M16.3 — Unsafe-context tracking** *(complete)* | Track lexical `unsafe:` depth independently from whether the enclosing function is declared `unsafe`. Require the context for raw access, raw-to-reference conversion, pointee-changing casts, and unsafe calls. | Safe wrapper passes; unsafe function body without a nested block fails; nested blocks recover normally. |
+| **M16.4 — Unsafe function references** *(complete)* | Preserve safety in named and unbound function-reference types. Taking, copying, and comparing `&unsafe fn` remains safe; invocation requires `unsafe:` and never converts to or from `&fn`. | Reference-use run-pass tests and invocation/signature compile-fail tests. |
+| **M16.5 — Pointee-changing casts** *(complete)* | Lower permitted raw-pointer casts while preserving address, source provenance/extent obligations, and mutability permission. Reject every `*T` to `*var U` upgrade and all pointer/integer arithmetic or conversion. | Complete cast matrix with explicit rejection tests. |
+| **M16.6 — Dereference places** *(complete)* | Type-check raw reads and writes as places; writes require `*var T`. Raw-pointer method receivers still require an exact type and receive no implicit borrow, cast, downgrade, or dereference. | Read/write and raw-receiver tests, including immutable-pointer write failure. |
+| **M16.7 — Expression-local validity evaluator** *(complete)* | Evaluate only literals, casts, and operators inside the pointer operand needed to prove null or misalignment. Do not propagate required-error facts through bindings, assignment, branches, reachability, or calls. | Known-invalid expressions fail; equivalent values reached through locals or branches remain accepted. |
+| **M16.8 — Runtime access checks** *(complete)* | Emit mandatory null and target-alignment checks immediately before every executed dereference and raw-to-reference conversion, with stable trap categories and source locations. | Subprocess trap tests for null/misaligned read, write, and conversion. |
+| **M16.9 — Raw-to-reference conversion** *(complete)* | Convert to `&T`/`&var T` only in `unsafe:`, after runtime checks, with exact mutability. A valid managed target becomes strongly reachable through the resulting reference; a foreign/manual target receives no lifetime extension. | Managed-target liveness test and documented foreign-lifetime contract fixture. |
+| **M16.10 — Root and cleanup integration** *(complete)* | Ensure raw pointers alone are not intentionally registered as language roots. Preserve explicit strong paths across operations and finish rejection of unsafe deferred calls without weakening `defer:` restrictions. | Best-effort raw-nonroot test, safe-wrapper keep-alive test, and deferred-unsafe-call compile failure. |
 
 Validation:
 
@@ -1018,7 +1043,7 @@ Validation:
 
 ### Milestone 17: C ABI, foreign roots, and callbacks
 
-> Status: Pending Milestone 16.
+> Status: Next.
 >
 > Boundary: the backend remains C99. Elamite's internal calling convention is
 > not the public C ABI, ordinary function references never convert to C

@@ -2618,6 +2618,14 @@ pub enum Instruction {
         value: Rvalue,
         span: Span,
     },
+    /// The mandatory null and alignment check before an executed raw
+    /// dereference or raw-to-reference conversion (`SPEC.md` 3.3, Milestone
+    /// 16.8). Traps `E-RUN-NULL` or `E-RUN-ALIGN` with this source location.
+    CheckPointer {
+        pointer: TemporaryId,
+        pointee: TypeId,
+        span: Span,
+    },
     Store {
         place: ControlFlowPlace,
         value: TemporaryId,
@@ -3377,9 +3385,10 @@ impl<'a> FunctionLowerer<'a> {
                 Rvalue::AllocateManaged { value, value_type }
             }
             TypedExpressionKind::Dereference(operand) => {
-                let operand = self.lower_expression(operand);
+                let base = self.lower_expression(operand);
+                self.check_raw_pointer_access(operand, base, expression.span);
                 Rvalue::Load(ControlFlowPlace::Dereference {
-                    base: Box::new(ControlFlowPlace::Temporary(operand)),
+                    base: Box::new(ControlFlowPlace::Temporary(base)),
                 })
             }
             TypedExpressionKind::DefaultValue(ty) => Rvalue::DefaultValue(*ty),
@@ -3541,7 +3550,19 @@ impl<'a> FunctionLowerer<'a> {
             }
             TypedExpressionKind::Cast { value } => {
                 let source_type = value.ty;
-                let value = self.lower_expression(value);
+                let operand = value;
+                let value = self.lower_expression(operand);
+                // A raw-to-reference conversion asserts validity, so the
+                // null/alignment check precedes it (Milestones 16.8/16.9).
+                if matches!(
+                    expanded_kind(&self.types.types, source_type),
+                    TypeKind::RawPointer { .. }
+                ) && matches!(
+                    expanded_kind(&self.types.types, expression.ty),
+                    TypeKind::Reference { .. }
+                ) {
+                    self.check_raw_pointer_access(operand, value, expression.span);
+                }
                 Rvalue::Cast {
                     value,
                     source_type,
@@ -3913,12 +3934,31 @@ impl<'a> FunctionLowerer<'a> {
                     },
                 }
             }
-            TypedPlace::Dereference { base, .. } => {
-                let base = self.lower_expression(base);
+            TypedPlace::Dereference { base, span, .. } => {
+                let value = self.lower_expression(base);
+                self.check_raw_pointer_access(base, value, *span);
                 ControlFlowPlace::Dereference {
-                    base: Box::new(ControlFlowPlace::Temporary(base)),
+                    base: Box::new(ControlFlowPlace::Temporary(value)),
                 }
             }
+        }
+    }
+
+    /// Emits the mandatory null/alignment check when `base` is a raw pointer
+    /// about to be dereferenced or converted to a reference. Safe references
+    /// are non-null by construction and need no check.
+    fn check_raw_pointer_access(
+        &mut self,
+        base: &TypedExpression,
+        pointer: TemporaryId,
+        span: Span,
+    ) {
+        if let TypeKind::RawPointer { target, .. } = expanded_kind(&self.types.types, base.ty) {
+            self.emit(Instruction::CheckPointer {
+                pointer,
+                pointee: *target,
+                span,
+            });
         }
     }
 
@@ -3963,9 +4003,10 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             TypedExpressionKind::Dereference(operand) => {
-                let operand = self.lower_expression(operand);
+                let value = self.lower_expression(operand);
+                self.check_raw_pointer_access(operand, value, expression.span);
                 ControlFlowPlace::Dereference {
-                    base: Box::new(ControlFlowPlace::Temporary(operand)),
+                    base: Box::new(ControlFlowPlace::Temporary(value)),
                 }
             }
             _ => ControlFlowPlace::Temporary(self.lower_expression(expression)),
