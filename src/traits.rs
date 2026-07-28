@@ -12,7 +12,7 @@ use crate::diagnostics::{Category, Diagnostic};
 use crate::package::PackageId;
 use crate::resolution::{
     DeclarationId, DeclarationKind, GenericParameterId, ImplId, ModuleId, ResolvedProgram,
-    Visibility,
+    VariantId, Visibility,
 };
 use crate::source::Span;
 use crate::types::{FunctionSignature, PrimitiveType, TypeId, TypeKind, TypedProgram};
@@ -765,11 +765,10 @@ pub struct SelectedTraitMethod {
 /// Selects a trait method named `name` for `target`.
 ///
 /// This searches every implementation for the type, including implementations
-/// of compiler-known traits such as `Close`, which are builtins rather than
-/// user declarations. An implementation's own method is preferred over a
-/// trait's default body. `Err` lists the competing trait names when more than
-/// one supplies the name, which the caller reports as an ambiguity rather than
-/// choosing arbitrarily.
+/// of compiler-known traits, which are builtins rather than user declarations.
+/// An implementation's own method is preferred over a trait's default body.
+/// `Err` lists the competing trait names when more than one supplies the name,
+/// which the caller reports as an ambiguity rather than choosing arbitrarily.
 pub fn select_trait_method(
     resolved: &ResolvedProgram,
     typed: &TypedProgram,
@@ -1035,6 +1034,51 @@ pub fn derives(resolved: &ResolvedProgram, declaration: DeclarationId, trait_nam
     })
 }
 
+/// Whether the compiler supplies `trait_name` for `declaration` without a
+/// source derive list, because the specification gives that exact standard
+/// declaration the capability directly.
+///
+/// The only such rule today is `SPEC.md` 4.3: `Option[T]` defaults to
+/// `Option.None` *without* requiring `T` to implement `Default`. That is
+/// unconditional, so unlike a derivation it imposes no obligation on the
+/// declaration's field types. A user enum spelled `Option` is unaffected.
+#[must_use]
+pub fn intrinsic_derivation(
+    resolved: &ResolvedProgram,
+    declaration: DeclarationId,
+    trait_name: &str,
+) -> bool {
+    trait_name == "Default" && resolved.is_standard_declaration(declaration, "Option")
+}
+
+/// Whether `declaration` derives `trait_name` from its source derive list or
+/// receives it intrinsically. Use this wherever a pass asks "can this type
+/// supply the trait", and [`derives`] only where the source list itself is the
+/// question.
+#[must_use]
+pub fn derives_or_intrinsic(
+    resolved: &ResolvedProgram,
+    declaration: DeclarationId,
+    trait_name: &str,
+) -> bool {
+    derives(resolved, declaration, trait_name)
+        || intrinsic_derivation(resolved, declaration, trait_name)
+}
+
+/// The variant an intrinsically `Default` enum defaults to: `Option.None`
+/// (`SPEC.md` 4.3). Ordinary enums derive no default, so this is the complete
+/// list.
+#[must_use]
+pub fn intrinsic_default_variant(
+    resolved: &ResolvedProgram,
+    declaration: DeclarationId,
+) -> Option<VariantId> {
+    resolved
+        .is_standard_declaration(declaration, "Option")
+        .then(|| resolved.standard_variant("Option", "None"))
+        .flatten()
+}
+
 /// Whether a type has a compiler-known capability or an applicable manual
 /// implementation.
 ///
@@ -1143,7 +1187,6 @@ fn provides_inner(
         TypeKind::Builtin { builtin, arguments } => {
             let name = resolved.builtin_name(*builtin);
             match (name, trait_name) {
-                ("Option", "Default") => true,
                 ("Vec" | "Map" | "Set", "Default") => true,
                 ("Vec", "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash") => {
                     arguments.first().is_some_and(|argument| {
@@ -1253,6 +1296,11 @@ fn nominal_provides(
     assume_parameters: bool,
     visiting: &mut BTreeSet<(TypeId, String)>,
 ) -> bool {
+    // An intrinsic capability is unconditional, so it is decided before the
+    // field obligations a derivation would impose (`SPEC.md` 4.3).
+    if intrinsic_derivation(resolved, declaration, trait_name) {
+        return true;
+    }
     let derivation = if trait_name == "StableHash" {
         derives(resolved, declaration, "Eq") && derives(resolved, declaration, "Hash")
     } else {

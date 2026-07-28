@@ -39,7 +39,7 @@ to:
 | M12 | Generics and monomorphization |
 | M13 | Traits, derivation, and dynamic dispatch |
 | M14 | Strings, collections, iteration, and formatting |
-| M15 | `Result`, postfix `?`, `Close`, and `defer` |
+| M15 | `Result`, postfix `?`, and `defer` |
 | M16 | Unsafe contexts and raw pointers |
 | M17 | C ABI, foreign roots, and callbacks |
 | M18 | Prelude, standard library, and developer tooling |
@@ -137,7 +137,7 @@ removed.
 | Assignment/argument passing/return copy the source value; the source remains usable afterward | M6 (record copy op), M9 (lowering) | — | run-pass |
 | Copying is a core value property, not trait-controlled | M5, M6 | — | — |
 | Ordinary copy is recursively and observably independent; COW backing storage permitted if unobservable | M9 | — | run-pass (independence tests) |
-| Explicit-alias types (safe ref, raw ptr, trait-object ref, function ref) retain identity when copied; `Close` follows the shared-resource contract (§8); copying an aggregate preserves these aliases while ordinary fields stay independent | M9, M15 (`Close`) | — | run-pass |
+| Explicit-alias types (safe ref, raw ptr, trait-object ref, function ref) retain identity when copied; copying an aggregate preserves these aliases while ordinary fields stay independent | M9 | — | run-pass |
 
 ### 3.2 References
 
@@ -159,7 +159,7 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| `*T`/`*var T`, nullable; `&T`/`&var T` always non-null; nullable safe ref = `Option[&T]`; conditions require `bool` (no pointer/reference truthiness); explicit `== null` test | M5, M6, M16 | — | compile-pass/fail |
+| `*T`/`*var T`, nullable; `&T`/`&var T` always non-null; nullable safe ref = `Option[&T]`; conditions require `bool` (no pointer/reference truthiness); explicit `== null` test | M5, M6, M14.1 (`Option[&T]` executes), M16 | — | compile-pass/fail, run-pass (`option_of_a_safe_reference_keeps_a_recursive_graph_reachable`) |
 | Provenance model: one storage instance + designated subobject; preserved by safe→raw conversion, copy, `*var T`→`*T`; comparison is address-only; `null` has no provenance; address reuse grants no provenance | M16 | — | doc-contract (largely unenforceable) |
 | No pointer arithmetic or int↔pointer conversion initially; pointee-changing `as` cast only in `unsafe`; cast preserves address/provenance/extent/mutability without validating content; `*T` cannot cast to any `*var U` | M16 | — | compile-fail (upgrade cast), run-pass |
 | `&T`→`*T`, `&var T`→`*var T`/`*T` safe conversions; `*var T`→`*T` safe downgrade; dereference / raw→ref conversion require `unsafe`; write requires `*var T`; raw→ref conversion asserts non-null, aligned, valid, and remains valid for every use; `unsafe` never makes an ordinary reference nullable | M16 | — | compile-fail (op outside `unsafe:`), run-pass |
@@ -180,8 +180,8 @@ removed.
 | Unary `-` is an operator, not part of the literal; range checking includes an immediately applied minus so signed-min is expressible | M6 | — | compile-pass (`i8::MIN`-equivalent literal) |
 | Concrete numeric types never convert implicitly; arithmetic operands need compatible concrete types after materialization; `as` performs explicit numeric conversion | M6 | — | compile-fail (mixed-type arithmetic) |
 | int→int cast traps out of range; float→int truncates toward zero and traps on NaN/inf/out-of-range; int→float/float→float use IEEE rounding; bool/char/enum excluded from numeric casts | M6 (typecheck), M8 (checked-cast codegen) | trap path | run-pass (trap), compile-fail |
-| `Type.try_from`/`wrapping_from`/`saturating_from`; `try_from` returns `Result[Type, NumericError]` | M14, M18 | — | run-pass |
-| Integer arithmetic traps on overflow/div-by-zero/signed-min÷-1/bad shift count in every build; `checked_`/`wrapping_`/`saturating_` alternatives return `Option[T]`; float arithmetic follows IEEE 754; statically evident bad literal/conversion/arithmetic is a compile error; `isize`/`usize` use target pointer width | M8 (checked-arith helpers), M6 (static detection) | trap path | run-pass, compile-fail |
+| `Type.try_from`/`wrapping_from`/`saturating_from`; `try_from` returns `Result[Type, NumericError]` | M14.3, M14.4 (done) | — | run-pass (`checked_numeric_conversion_reports_instead_of_trapping`, `numeric_alternative_conversions_wrap_and_saturate`) |
+| Integer arithmetic traps on overflow/div-by-zero/signed-min÷-1/bad shift count in every build; `checked_`/`wrapping_`/`saturating_` alternatives return `Option[T]`; float arithmetic follows IEEE 754; statically evident bad literal/conversion/arithmetic is a compile error; `isize`/`usize` use target pointer width | M8 (checked-arith helpers), M6 (static detection), M14.4 (alternatives; done) | trap path | run-pass (`numeric_alternatives_replace_the_trapping_operators_at_the_width_boundary`), compile-fail |
 | Tuples via `()`; `()` = unit = empty tuple; `(v)` groups, `(v,)` is one-element | M3, M5, M6 | — | compile-pass |
 | `str` immutable UTF-8; `String` mutable UTF-8, independently copied (COW allowed internally); `str` qualifies `StableHash`, `String` doesn't | M14 | — | run-pass |
 | Double-quoted strings and single-quoted characters contain direct Unicode scalars or `\\`/`\"`/`\'`/`\n`/`\r`/`\t`/`\0`/`\u{HEX}` escapes; character literals decode to exactly one scalar; physical newlines, unsupported escapes, invalid scalars, and unterminated literals are errors | M2 | — | parse, compile-fail |
@@ -217,14 +217,14 @@ removed.
 | Derive list in parens after name+generics; nonempty comma list of compiler-supported traits; duplicate entries invalid; user traits implementable normally but no custom derive; derived impl has no separate visibility modifier | M3 (parse), M13 (derive) | — | compile-fail (dup derive entry) |
 | `Default`: `fn default() -> Self`; struct derive supplies it per-field, valid only when every field implements `Default`; generic struct's derived impl is conditional on used field types and adds no bounds to the declaration; struct-only — enums implement manually, no implicit variant | M13 | — | compile-fail (field without `Default`), run-pass |
 | `new` is an ordinary associated-function name, not a keyword or allocation expression; may call `default()` | M4, M11 | — | compile-pass |
-| Standard defaults: zero numerics, `false`, U+0000 `char`, `()`, empty `str`/`String`/`Vec`/`Map`/`Set`, `null` for both raw-pointer types; tuples default fieldwise; `Option[T]` defaults `None` without requiring `T: Default` | M13, M14 | — | run-pass |
-| Safe references and function references don't implement `Default`; a struct with a direct safe-ref field can't derive it, while `Option[&T]` can (defaults `None`); ordinary enums don't derive `Default` | M13 | — | compile-fail |
+| Standard defaults: zero numerics, `false`, U+0000 `char`, `()`, empty `str`/`String`/`Vec`/`Map`/`Set`, `null` for both raw-pointer types; tuples default fieldwise; `Option[T]` defaults `None` without requiring `T: Default` | M13, M14.1 (`Option` done; collections pending M14.7) | — | run-pass (`option_defaults_to_none_through_an_explicit_discriminant`) |
+| Safe references and function references don't implement `Default`; a struct with a direct safe-ref field can't derive it, while `Option[&T]` can (defaults `None`); ordinary enums don't derive `Default` | M13, M14.1 | — | compile-fail (`option_defaults_to_none_without_a_payload_default`) |
 
 ### 4.4 Enums, optionals, and aliases
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| Enums are tagged unions (unit/tuple/record-like variants); `Option[T]` = possibly-absent; no trailing optional-type syntax; struct+enum containment checked together under the same cross-indirection rule | M3, M5, M6 | — | compile-pass/fail |
+| Enums are tagged unions (unit/tuple/record-like variants); `Option[T]` = possibly-absent; no trailing optional-type syntax; struct+enum containment checked together under the same cross-indirection rule | M3, M5, M6, M14.1 (`Option` is an ordinary generic enum declaration) | — | compile-pass/fail, run-pass (`executes_option_construction_matching_and_payload_copies`) |
 | Record-like variant `Variant{field: Type}`, constructed `Enum.Variant{field: value}`, same field rules as a struct literal | M3, M6 | — | compile-pass |
 | Module-level `type` alias is transparent; generic params/args use `[]`; an alias declares only the parameters that remain variable, may fix others | M4, M5 (alias expansion) | — | compile-pass (`NameMap[V]`) |
 
@@ -265,10 +265,10 @@ removed.
 | A call infers all generic arguments from argument types + expected result type only when unique; otherwise every argument must be explicit (no partial explicit lists); struct/enum literals infer the same way | M12 | — | compile-fail (ambiguous/partial inference), compile-pass |
 | A generic body is type-checked once against its bounds only; constructed generic types have exact identity, no subtype/variance; the C backend monomorphizes per concrete instantiation; finite mutually-recursive instantiation sets are valid, unbounded expansion (`T`, `Vec[T]`, `Vec[Vec[T]]`, …) is rejected | M12 | — | compile-fail (unbounded expansion), run-pass |
 | `trait`/`impl Trait for Type`; bodyless method = required, with-body = default; an impl must supply every required method with the exact signature, may override defaults, may not add extra methods; traits initially have methods only (no associated types/constants) | M13 | — | compile-fail (missing/extra method, signature mismatch) |
-| Concrete/monomorphized calls use static dispatch; a trait object is `&Trait`/`&var Trait` and appears only behind a safe reference; bare trait-object values/raw pointers to trait objects are invalid; a concrete reference becomes a trait-object reference only through the explicit conversion `reference as &Trait` of matching mutability, valid when its target implements the trait; the object is a fat reference (target + vtable) ([I-019](ISSUES.md#i-019-trait-object-syntax-and-the-std-path-root)) | M6 (reference shape + mutability), M13 (implements + object safety) | — | compile-fail (bare trait value, mutability mismatch, non-reference source), run-pass |
+| Concrete/monomorphized calls use static dispatch; a trait object is `&Trait`/`&var Trait` and appears only behind a safe reference; bare trait-object values/raw pointers to trait objects are invalid; where that exact trait-object type is expected, a concrete safe reference of matching mutability converts automatically when its target implements the object-safe trait; `reference as &Trait` remains available explicitly; this conversion introduces no general reference subtyping or variance; the object is a fat reference (target + vtable) ([I-019](ISSUES.md#i-019-trait-object-syntax-and-the-std-path-root)) | M6 (reference shape + mutability), M13 (implements + object safety and coercion) | — | compile-fail (bare trait value, mutability mismatch, non-reference source, missing impl), run-pass |
 | A trait has no value representation: a trait name is a type only as a safe-reference target, a generic/impl bound, or the trait of an `impl Trait for Type`; a bare trait name in a field, parameter, return, local annotation, alias, or generic argument is an error, as is `*Trait` | M5 | — | compile-fail (bare trait in each value position) |
 | Object safety: every object-reachable method needs `&Self`/`&var Self`, no method-level generics, no other `Self` mention; a failing trait remains usable with static dispatch only; a generic trait needs concrete type arguments to form an object; default methods participate in the vtable | M13 | — | compile-fail (non-object-safe trait as a trait object) |
-| Trait-object calls dispatch through the vtable; heterogeneous concrete types coexist in e.g. `Vec[&Trait]`, each element formed by an explicit conversion; no downcasting/runtime-type-inspection/multi-trait objects initially; safe-reference reachability/escape promotion applies to concrete targets | M13 | Boehm GC | run-pass |
+| Trait-object calls dispatch through the vtable; heterogeneous concrete types coexist in e.g. `Vec[&Trait]`, with each concrete reference converted against the expected element type; no downcasting/runtime-type-inspection/multi-trait objects initially; safe-reference reachability/escape promotion applies to concrete targets | M13 | Boehm GC | run-pass |
 | `pub trait` exposes all methods where the trait is accessible; trait method declarations and impl methods carry no separate `pub` modifiers | M4, M13 | — | compile-fail (`pub` on a trait method) |
 | Bound-call lookup considers inherent methods + in-scope-trait methods; inherent wins over a same-named trait method; multiple matching in-scope traits are ambiguous | M11, M13 | — | compile-fail (ambiguity) |
 | `Type.Trait.method` unconditionally selects the named impl member, bypassing field selection, inherent-method lookup, and bound trait lookup; valid only when accessible and the trait is implemented for the type; unbound, retains its receiver parameter; selecting without calling yields an unbound function reference; also selects receiverless trait functions | M11, M13 | — | run-pass (`Session.Toggle.status`), compile-fail (trait not implemented) |
@@ -308,14 +308,13 @@ removed.
 | --- | --- | --- | --- |
 | `Result[T, E]`; postfix `?` valid only in a function returning `Result[U, E]` with the *exact* same error type; operand evaluates once; `Ok(value)` copies value as the postfix expression's value; `Err(error)` copies error and immediately returns `Result.Err(error)` | M15 | — | compile-fail (mismatched error type), run-pass |
 | `?` is the explicit exception to "return uses `return`"; no implicit error conversion (caller converts explicitly, e.g. via `match`); `Option[T]` uses `match`, not `?` | M15 | — | compile-fail (`Option` with `?`) |
-| No implicit destruction protocol; GC manages memory only; deterministic external cleanup = `Close` trait + lexical `defer` | M15 | — | — |
-| `Close`: `fn close(self: &Self) -> ()`; callable explicitly; must be idempotent; returns unit, handles recoverable cleanup errors internally; fallible flush/commit/finalize is a separate `Result`-returning operation, not part of `Close` | M15 | — | compile-pass (idempotence itself is a manual-impl law, not statically checked) |
-| A `Close`-implementing type is an identity-bearing shared resource handle, an explicit exception to independent copying: copying retains one shared managed resource state; closing through any copy closes it for every handle; ops on a closed resource return an appropriate error; manual impls are responsible for these laws | M15 (shared-state copy semantics) | — | run-pass (`DemoResource` shared-state demo) |
+| No implicit destruction protocol; GC manages memory only; deterministic external cleanup uses lexical `defer` | M15 | — | — |
+| There is no compiler-known cleanup trait or privileged method name; resource types expose ordinary safe unit-returning cleanup methods, and each API specifies its own idempotence, sharing, and error behavior; shared handle identity must be represented explicitly | M15 | — | compile-pass, run-pass (`DemoResource` shared-state demo) |
 | `defer call` registers one safe unit-returning call for block exit; `defer:` defers an indented block of statements as one registration, its body an ordinary lexical scope; both only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block ([I-020](ISSUES.md#i-020-multi-statement-defer-blocks)) | M3 (parse both forms), M15 (registration semantics) | — | compile-fail (non-call `defer` operand, non-unit return), compile-pass (block form), run-pass |
 | The deferred call evaluates at block exit using the callee/receiver/argument values *at that time* (not at registration); referenced bindings stay alive until the call finishes; reassigning a `var` after registration affects the later call | M15 | — | run-pass (reassigned-`var` affects `defer`) |
 | Deferred calls run on fallthrough/`return`/`?`-propagation/`break`/`continue`; one block's calls run in reverse registration order; an inner block's calls run before an enclosing block's; a return value/propagated error is evaluated and copied *before* deferred calls begin (so an unconditionally deferred `close()` on a returned resource closes the returned handle too); no `errdefer` | M15 (cleanup-chain lowering in CFG IR) | — | run-pass (reverse order, nested scopes, return-then-cleanup) |
 | No `errdefer` and no conditional error-only deferral; a deferred block cannot redirect control, so `return`/`break`/`continue`/postfix `?`/nested `defer` are invalid inside it; a `defer` statement is invalid inside an `unsafe` block and an `unsafe` block is invalid inside a `defer:` block; a direct unsafe/foreign call cannot be deferred (wrap it in a safe unit method); an unrecoverable trap (including during deferred execution) or OOM doesn't guarantee remaining deferred statements run | M7 (placement rules), M15, M16 | trap path | compile-fail (each control-flow escape, nested `defer`, `defer` in `unsafe`, `unsafe` in `defer`) |
-| Leaving a scope does not implicitly `close()` a `Close`-implementing value; only an explicit `defer`/direct call runs cleanup; GC never calls `close()`; an un-deferred resource may leak; an implementation may warn on provable local leaks (not required to be complete) | M15 | — | run-pass (leak is not a requirement) |
+| Leaving a scope does not implicitly call a resource-cleanup method; only an explicit `defer`/direct call runs cleanup; GC never calls cleanup methods; an un-deferred resource may leak; an implementation may warn on provable local leaks (not required to be complete) | M15 | — | run-pass (leak is not a requirement) |
 
 ## 9. Garbage collection (§9)
 
@@ -325,8 +324,8 @@ removed.
 | Strong roots: every local binding until scope end, function parameters for the complete call, temporaries until their full expression finishes, module-level values, safe references, managed handles in structs/enums/collections/hidden loop state; assigning a new value to a `var` removes the binding's strong path to the old value (other strong paths remain effective) | M10 (root tracking) | Boehm GC | run-pass (liveness tests) |
 | Reachable safe references are roots for managed targets; a reference constructed from a raw pointer roots the target only if managed; it doesn't extend foreign/manual storage lifetime | M10, M16 | Boehm GC | run-pass, doc-contract |
 | Raw pointers are *not* language roots; code retaining one is responsible for a separate managed path; Boehm may conservatively over-retain via bit-pattern resemblance but a program cannot rely on it | M10, M16 | Boehm GC | doc-contract, best-effort test |
-| Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | untested (pending recursive `Option` payloads) |
-| No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes `Close`; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
+| Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | untested — recursive `Option[&T]` graphs are executable as of M14.1, so a best-effort cycle test is now writable; timing stays outside the conformance requirement |
+| No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes resource-cleanup methods; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
 | Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, then terminates with an OOM diagnostic; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path) | Boehm GC | integration (OOM termination — likely a manually driven test) |
 | No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, M20 | Boehm GC (nonportable extensions) | optional tooling, not required |
 
@@ -353,9 +352,9 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| A raw pointer never owns its target; receiving/passing one never schedules or transfers cleanup by itself; an owning C API is wrapped in an Elamite handle whose idempotent `Close.close` invokes the native release; copies share one resource state (§8); borrowed foreign pointers are valid only per the foreign contract's duration | M17 | — | integration |
+| A raw pointer never owns its target; receiving/passing one never schedules or transfers cleanup by itself; an owning C API is wrapped in an Elamite handle whose ordinary methods enforce the API state and may include an idempotent `close()` that invokes native release; shared copies represent their identity explicitly; borrowed foreign pointers are valid only per the foreign contract's duration | M17 | — | integration |
 | Safe references are not ABI-safe and cross the boundary only as an explicit raw-pointer conversion; a non-retaining foreign call keeps the source binding/reference as a strong root for the call; retained-after-return storage needs `std.ffi.ForeignRoot[T]`/`ForeignRootMut[T]` registration | M17 | Boehm GC | integration |
-| `ForeignRoot.retain`/`ForeignRootMut.retain` promote the target if needed and create a runtime root registration; `.pointer` returns `*T`/`*var T`; copies share one registration and the shared-resource+idempotent-`Close` contract; closing any copy unregisters; `.pointer` on a closed handle errors; unreachable-without-close handles may leak | M17 | Boehm GC (root registration table) | run-pass, integration |
+| `ForeignRoot.retain`/`ForeignRootMut.retain` promote the target if needed and create a runtime root registration; `.pointer` returns `*T`/`*var T`; copies share one explicitly represented registration; `.close()` is idempotent, closing any copy unregisters, and `.pointer` on a closed handle errors; unreachable-without-close handles may leak | M17 | Boehm GC (root registration table) | run-pass, integration |
 | Closing a registration is valid only once the foreign contract says no later access will occur; a raw pointer returned *by* foreign code does not root foreign storage, and converting it to a safe reference does not extend the foreign lifetime | M17 | — | doc-contract, integration |
 
 ### 10.3 Callbacks and foreign control flow
@@ -385,19 +384,18 @@ compiler awareness at all.
 
 | Entity | Role | Why the compiler must know it | Pass |
 | --- | --- | --- | --- |
-| `Option[T]` | possibly-absent value | `Default` special-cases it (§4.3); pattern exhaustiveness treats it structurally | M13, M14 |
-| `Result[T, E]` | recoverable error | postfix `?` and `defer`/return-copy ordering are compiler-level control flow (§8) | M15 |
+| `Option[T]` | possibly-absent value | `Default` special-cases it (§4.3). Otherwise ordinary: M14.1 collects it from compiler-supplied source into the `std` root module, so construction, matching, copying, exhaustiveness, and monomorphization are the generic-enum rules and the only intrinsic left is the unconditional `Default` | M13, M14.1 (done) |
+| `Result[T, E]` | recoverable error | postfix `?` and `defer`/return-copy ordering are compiler-level control flow (§8). Otherwise ordinary: M14.2 collects it from compiler-supplied source, so construction, matching, and copying are the generic-enum rules and it carries no intrinsic trait capability | M14.2 (values, done), M15 (`?` role) |
 | `Vec[T]`, `Map[K, V]`, `Set[T]` | standard collections | `@vec`/`@map`/`@set` macro lowering, `StableHash` enforcement, mutable-place vs. reference rules (§3.2, §4.1) | M14 |
 | `String`, `str` | text types | literal contextual materialization, `StableHash` asymmetry, ABI-unsafety | M14 |
 | `Default` | derivable trait | derive-list special case (§4.3), per-type standard defaults | M13 |
 | `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash` | comparison traits | operator desugaring (`==`, `<`, …), structural derivation | M13 |
 | `StableHash` | compiler-controlled capability | structurally inferred, not implementable via ordinary `impl` (§4.1, §4.5) | M13 |
 | `Display`, `Formatter` | formatting | `f"..."` string lowering, `print`/`println` bound | M13, M14 |
-| `Close` | resource cleanup contract | shared-handle copy-semantics exception (§3.1, §8), `defer` integration | M15 |
 | `Identity[&T]`, `Identity[&var T]` | identity-keyed wrapper | compiler-known `StableHash` exception via managed address (§4.1, §4.5) | M14 |
-| `std.ffi.ForeignRoot[T]`, `ForeignRootMut[T]` | GC root registration | runtime root-table integration, shared-resource+`Close` contract (§10.2) | M17 |
+| `std.ffi.ForeignRoot[T]`, `ForeignRootMut[T]` | GC root registration | runtime root-table integration and explicit shared registration state (§10.2) | M17 |
 | `std.ffi.CVoid` | opaque FFI type | fixed correspondence to C `void`, raw-pointer-only usage (§10.1) | M17 |
-| `NumericError` | checked-conversion error | return type of `Type.try_from` (§4.1) | M14 |
+| `NumericError` | checked-conversion error | return type of `Type.try_from` (§4.1). An ordinary compiler-supplied enum since M14.3; `OutOfRange`/`NotANumber` are chosen by the implementation, since the specification fixes the role but not the variants | M14.3 (done) |
 
 ## 13. Target assumptions
 
@@ -454,7 +452,7 @@ Every construct in `examples/spec_demo.elx` maps to a section of this ledger:
 | --- | --- |
 | `import`, `mod`, `pub`, re-exports, `type` alias | §2.3, §4.4 |
 | `Point(Default, PartialEq)`, `MyType`/`MyBetterType` derive examples | §4.2, §4.3 |
-| `Session` — five `self` receiver forms, `Close`, `Toggle` trait | §4.2, §6, §8 |
+| `Session` — five `self` receiver forms and `Toggle` trait | §4.2, §6 |
 | `Packet`, `DemoResourceState`, `DemoResource`, `use_demo_resource` (`defer call`), `use_demo_resource_block` (`defer:` block) | §4.2, §8 |
 | `Address`, `Account` — reference into an aggregate observing container replacement and caller-visible mutation | §3.2, §19 |
 | `IntTransform`, `apply_offset`, `increment`, `Transform`/`AddOffset`, `apply_transform` | §5, §6 |

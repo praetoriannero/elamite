@@ -1536,8 +1536,8 @@ impl<'a> TypeBuilder<'a> {
             return self.types.primitive(primitive);
         }
         let arity = match name {
-            "Option" | "Vec" | "Set" | "Identity" | "ForeignRoot" | "ForeignRootMut" => 1,
-            "Result" | "Map" => 2,
+            "Vec" | "Set" | "Identity" | "ForeignRoot" | "ForeignRootMut" => 1,
+            "Map" => 2,
             "print" | "println" => {
                 self.diagnostics.push(
                     Diagnostic::new(Category::TypeSystem, "this builtin name is not a type")
@@ -1825,7 +1825,6 @@ impl<'a> TypeBuilder<'a> {
                     | "Hash"
                     | "StableHash"
                     | "Display"
-                    | "Close"
             ),
             _ => false,
         }
@@ -2183,14 +2182,11 @@ pub(crate) fn primitive_from_name(name: &str) -> Option<PrimitiveType> {
 fn builtin_has_layout(name: &str) -> bool {
     matches!(
         name,
-        "Option"
-            | "Result"
-            | "Vec"
+        "Vec"
             | "Map"
             | "Set"
             | "Formatter"
             | "Identity"
-            | "NumericError"
             | "IoError"
             | "ForeignRoot"
             | "ForeignRootMut"
@@ -2235,7 +2231,15 @@ fn numeric_suffix_text(suffix: NumericSuffix) -> &'static str {
     }
 }
 
-fn primitive_name(primitive: PrimitiveType) -> &'static str {
+/// The suffix the generated runtime helpers use for a primitive integer type
+/// (`i8`, `usize`, …), or `None` for a type with no such helpers.
+#[must_use]
+pub(crate) fn primitive_name_for_symbol(primitive: PrimitiveType) -> Option<&'static str> {
+    primitive.is_integer().then(|| primitive_name(primitive))
+}
+
+/// The source spelling of a primitive type, for diagnostics.
+pub(crate) fn primitive_name(primitive: PrimitiveType) -> &'static str {
     match primitive {
         PrimitiveType::Unit => "()",
         PrimitiveType::Bool => "bool",

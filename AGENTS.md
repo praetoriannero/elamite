@@ -9,7 +9,14 @@
   library so it can be exercised directly by tests and other tools.
 - `src/resolution.rs` owns stable module, declaration, member, generic, impl,
   import, and lexical-binding identities. Keep type-dependent member selection
-  in later semantic passes rather than folding it into name lookup.
+  in later semantic passes rather than folding it into name lookup. It also
+  owns `STANDARD_PRELUDE_SOURCE`, the compiler-supplied Elamite source for the
+  standard types `SPEC.md` writes as ordinary declarations (`Option[T]` today).
+  Prefer adding a standard type there over adding a compiler-known builtin:
+  source declarations reach every later pass through the ordinary path, so no
+  pass needs a parallel representation. A type belongs in the builtin list only
+  while it still needs a representation or lowering hook that Elamite source
+  cannot express.
 - `src/traits.rs` validates trait implementations: conformance, coherence, and
   object safety. It checks declarations, not bodies — bound-call selection and
   dispatch belong to `src/check.rs` and `src/backend.rs`.
@@ -82,8 +89,9 @@ active.
 The language uses a **minimal function model**: function values are safe or
 unsafe function references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), with no
 closures, no anonymous `fn` literals, no capture, and no `move`. Callbacks that
-carry data use `&Trait`, formed by an explicit `reference as &Trait`
-conversion, and recursion uses named functions. Keep `SPEC.md`,
+carry data use `&Trait`, formed automatically from a concrete safe reference
+when that exact trait-object type is expected (or explicitly with `as &Trait`),
+and recursion uses named functions. Keep `SPEC.md`,
 `examples/spec_demo.elx`, and `ISSUES.md` consistent with this direction, and
 do not reintroduce closures, capture, anonymous function literals, or `move`
 unless the design decision is explicitly reopened. When this direction
@@ -94,6 +102,11 @@ forms: `defer call` defers one safe unit-returning call, and `defer:` defers an
 indented block of statements as a single registration. The language has no
 `with` and no `errdefer`. Deferred code is evaluated at scope exit and is not a
 closure or first-class value.
+
+There is no compiler-known cleanup trait or protocol. Resource types expose
+ordinary safe unit-returning methods such as `close` or `release`, and each
+type's API defines its own idempotence, sharing, and error behavior. `defer`
+does not privilege any method name or trait.
 
 Because a deferred block runs while its scope is already exiting, it cannot
 redirect control: `return`, `break`, `continue`, postfix `?`, and a nested

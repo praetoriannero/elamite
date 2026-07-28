@@ -123,15 +123,14 @@ struct DemoResourceState:
     closed: bool
 
 struct DemoResource:
-    // Copies of a closable value share their logical resource state.
+    // Copies share state because the handle explicitly contains a reference.
     state: &var DemoResourceState
 
     fn is_closed(self: &Self) -> bool:
         return self.state.closed
 
-impl Close for DemoResource:
     fn close(self: &Self) -> ():
-        // `Close.close` is explicitly callable and must be idempotent.
+        // This resource's API defines `close` as idempotent.
         self.state.closed = true
 
 struct IntTransform:
@@ -335,10 +334,10 @@ pub fn main() -> Result[(), io.IoError]:
     // Fully qualified trait selection bypasses the same-named inherent method.
     let trait_status = Session.Toggle.status(&observer)
     let toggle_category = observer.category()
-    // A trait object is formed by an explicit conversion; a concrete
-    // reference never becomes a trait-object reference implicitly.
+    // An exact expected trait-object type automatically converts a concrete
+    // safe reference when its target implements the trait.
     let observer_ref = &observer
-    let dynamic_toggle: &Toggle = observer_ref as &Toggle
+    let dynamic_toggle: &Toggle = observer_ref
     let dynamic_status = dynamic_toggle.status()
     println(
         f"{inherent_status} / {trait_status} / {toggle_category} / {dynamic_status}"
@@ -361,9 +360,7 @@ pub fn main() -> Result[(), io.IoError]:
     // reference, since a function reference has no captured environment.
     let adder = AddOffset { offset: 1 }
     let adder_ref = &adder
-    println(
-        f"transform result: {apply_transform(adder_ref as &Transform, 41)}"
-    ) // 42
+    println(f"transform result: {apply_transform(adder_ref, 41)}") // 42
 
     // Direct and mutual recursion use named functions.
     println(f"is_even(4): {is_even(4)}") // true

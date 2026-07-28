@@ -1,2 +1,6 @@
 fn main():
     println("Hello, Elamite!")
+
+
+pub fn main2():
+    let x = 0

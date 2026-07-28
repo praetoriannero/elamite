@@ -27,7 +27,7 @@
 //! left unchecked here rather than approximated unsoundly: trait-bound method
 //! dispatch and full concrete `PartialEq`/`PartialOrd`/`Display` selection
 //! (Milestone 13),
-//! `for`-binding element typing (Milestone 14), and `?`/`Close`/`defer`
+//! `for`-binding element typing (Milestone 14), and `?`/`defer`
 //! propagation semantics (Milestone 15). Expressions that fall into those
 //! areas are still walked (so nested diagnostics and copies are not lost)
 //! but resolve to the type-system error type without an additional
@@ -67,6 +67,10 @@ enum Rebindable {
 pub struct CheckedProgram {
     pub expression_types: BTreeMap<Span, TypeId>,
     pub expression_places: BTreeMap<Span, PlaceKind>,
+    /// Validated implicit conversions from concrete safe references to
+    /// trait-object references. Lowering consumes these facts to construct the
+    /// target-plus-vtable fat reference at the contextual conversion point.
+    pub trait_object_coercions: BTreeMap<Span, TraitObjectCoercion>,
     /// Spans of expressions that produce an explicit logical-value copy:
     /// binding initializers, assignment sources, return values, call
     /// arguments, and aggregate-literal field/element values.
@@ -86,6 +90,16 @@ pub struct CheckedProgram {
     pub calls: BTreeMap<Span, CheckedCall>,
 }
 
+/// One validated contextual conversion from `&Concrete`/`&var Concrete` to a
+/// matching trait-object reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraitObjectCoercion {
+    pub source: TypeId,
+    pub target: TypeId,
+    pub trait_declaration: DeclarationId,
+    pub concrete: TypeId,
+}
+
 /// The callable selected for one checked call expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckedCall {
@@ -99,6 +113,24 @@ pub enum CheckedCall {
     /// declaration to call.
     DerivedDefault {
         ty: TypeId,
+    },
+    /// `Target.try_from(value)`, `Target.wrapping_from(value)`, or
+    /// `Target.saturating_from(value)` (`SPEC.md` 4.1). A primitive has no
+    /// declaration, so this records the selection instead. `result` is
+    /// `Result[Target, NumericError]` for the checked form and `Target`
+    /// otherwise.
+    NumericConversion {
+        outcome: NumericOutcome,
+        source: TypeId,
+        target: TypeId,
+        result: TypeId,
+    },
+    /// `value.checked_add(other)` and the other standard alternatives to the
+    /// trapping arithmetic operators (`SPEC.md` 4.1).
+    NumericAlternative {
+        operation: NumericAlternative,
+        operand_type: TypeId,
+        result: TypeId,
     },
     /// A call on `self` inside a trait's default body. `Self` is unknown when
     /// the body is checked, so the concrete implementation is selected when the
@@ -120,8 +152,128 @@ pub enum CheckedCall {
     },
 }
 
-/// The only implicit adaptation permitted by Elamite: adaptation of a bound
-/// method receiver.
+/// One standard alternative to a trapping arithmetic operator (`SPEC.md` 4.1).
+///
+/// The trapping operators remain the default in every build; these are the
+/// explicit opt-outs. `name` is retained so a diagnostic can quote the exact
+/// spelling the source used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NumericAlternative {
+    pub name: &'static str,
+    pub outcome: NumericOutcome,
+    pub operator: NumericOperator,
+}
+
+/// What an alternative does instead of trapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NumericOutcome {
+    /// Reports failure as `Option[T]`: `Option.None` where the operator would
+    /// have trapped.
+    Checked,
+    /// Wraps modulo the type's range; a shift wraps its amount.
+    Wrapping,
+    /// Clamps to the type's nearest representable bound.
+    Saturating,
+}
+
+/// The arithmetic operation an alternative performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NumericOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    Negate,
+    ShiftLeft,
+    ShiftRight,
+}
+
+impl NumericOperator {
+    #[must_use]
+    pub fn is_shift(self) -> bool {
+        matches!(
+            self,
+            NumericOperator::ShiftLeft | NumericOperator::ShiftRight
+        )
+    }
+}
+
+impl NumericAlternative {
+    /// Recognizes a standard alternative by its exact method name.
+    ///
+    /// The list is deliberately closed. `SPEC.md` 4.1 says corresponding
+    /// operations exist "where meaningful": division and remainder cannot
+    /// saturate — their only failures are division by zero and the signed
+    /// minimum divided by `-1`, neither of which has a nearest representable
+    /// answer — and a shift has no saturating form either, so those
+    /// combinations are absent rather than invented.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        use NumericOperator::{
+            Add, Divide, Multiply, Negate, Remainder, ShiftLeft, ShiftRight, Subtract,
+        };
+        use NumericOutcome::{Checked, Saturating, Wrapping};
+        let (outcome, operator) = match name {
+            "checked_add" => (Checked, Add),
+            "checked_sub" => (Checked, Subtract),
+            "checked_mul" => (Checked, Multiply),
+            "checked_div" => (Checked, Divide),
+            "checked_rem" => (Checked, Remainder),
+            "checked_neg" => (Checked, Negate),
+            "checked_shl" => (Checked, ShiftLeft),
+            "checked_shr" => (Checked, ShiftRight),
+            "wrapping_add" => (Wrapping, Add),
+            "wrapping_sub" => (Wrapping, Subtract),
+            "wrapping_mul" => (Wrapping, Multiply),
+            "wrapping_div" => (Wrapping, Divide),
+            "wrapping_rem" => (Wrapping, Remainder),
+            "wrapping_neg" => (Wrapping, Negate),
+            "wrapping_shl" => (Wrapping, ShiftLeft),
+            "wrapping_shr" => (Wrapping, ShiftRight),
+            "saturating_add" => (Saturating, Add),
+            "saturating_sub" => (Saturating, Subtract),
+            "saturating_mul" => (Saturating, Multiply),
+            _ => return None,
+        };
+        // `name` is a `&'static str` chosen from this function's own literals,
+        // not the caller's borrowed text.
+        let name = match outcome {
+            Checked => match operator {
+                Add => "checked_add",
+                Subtract => "checked_sub",
+                Multiply => "checked_mul",
+                Divide => "checked_div",
+                Remainder => "checked_rem",
+                Negate => "checked_neg",
+                ShiftLeft => "checked_shl",
+                ShiftRight => "checked_shr",
+            },
+            Wrapping => match operator {
+                Add => "wrapping_add",
+                Subtract => "wrapping_sub",
+                Multiply => "wrapping_mul",
+                Divide => "wrapping_div",
+                Remainder => "wrapping_rem",
+                Negate => "wrapping_neg",
+                ShiftLeft => "wrapping_shl",
+                ShiftRight => "wrapping_shr",
+            },
+            Saturating => match operator {
+                Add => "saturating_add",
+                Subtract => "saturating_sub",
+                _ => "saturating_mul",
+            },
+        };
+        Some(Self {
+            name,
+            outcome,
+            operator,
+        })
+    }
+}
+
+/// An implicit adaptation of a bound method receiver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiverAdjustment {
     /// Pass the receiver expression unchanged.
@@ -791,16 +943,6 @@ impl<'a> Checker<'a> {
                 }
             }
             Coverage::Bools(values) => values.len() >= 2,
-            Coverage::BuiltinVariants(variants) => {
-                let resolved = self.typed.types.resolve_inference(scrutinee_type);
-                matches!(
-                    self.typed.types.kind(resolved),
-                    TypeKind::Builtin { builtin, .. }
-                        if self.resolved.builtin_name(*builtin) == "Option"
-                            && variants.contains("Some")
-                            && variants.contains("None")
-                )
-            }
             Coverage::Variants(variants) => {
                 let resolved = self.typed.types.resolve_inference(scrutinee_type);
                 match self.typed.types.kind(resolved) {
@@ -867,30 +1009,6 @@ impl<'a> Checker<'a> {
                         missing.join(", ")
                     ))
                 }
-            }
-            TypeKind::Builtin { builtin, .. }
-                if self.resolved.builtin_name(*builtin) == "Option" =>
-            {
-                let covered = match coverage {
-                    Coverage::BuiltinVariants(variants) => variants,
-                    _ => {
-                        return Some(
-                            "this match is not exhaustive; cover `Option.Some` and \
-                             `Option.None`, or add a catch-all `_` arm"
-                                .to_string(),
-                        );
-                    }
-                };
-                let missing = ["Some", "None"]
-                    .into_iter()
-                    .filter(|variant| !covered.contains(*variant))
-                    .collect::<Vec<_>>();
-                (!missing.is_empty()).then(|| {
-                    format!(
-                        "this match is not exhaustive; unmatched variant(s): {}",
-                        missing.join(", ")
-                    )
-                })
             }
             TypeKind::Error => None,
             _ => Some("this match is not exhaustive; add a catch-all `_` arm".to_string()),
@@ -1062,11 +1180,6 @@ impl<'a> Checker<'a> {
             let (Some(&first), Some(&last)) = (identifiers.first(), identifiers.last()) else {
                 return Coverage::Other;
             };
-            if let Some(coverage) =
-                self.check_builtin_variant_pattern(first, last, pattern, scrutinee_type, false)
-            {
-                return coverage;
-            }
             let Some((enum_declaration, variant)) = self.resolve_pattern_variant(first, last)
             else {
                 return Coverage::Other;
@@ -1122,77 +1235,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_builtin_variant_pattern(
-        &mut self,
-        first: &Token,
-        last: &Token,
-        pattern: &SyntaxNode,
-        scrutinee_type: TypeId,
-        positional: bool,
-    ) -> Option<Coverage> {
-        let NameTarget::Item(crate::resolution::ItemId::Builtin(builtin)) =
-            self.resolved.reference_at(first.span)?.target
-        else {
-            return None;
-        };
-        if self.resolved.builtin_name(builtin) != "Option" {
-            return None;
-        }
-        let variant = token_text(last);
-        if !matches!(variant.as_str(), "Some" | "None") {
-            return None;
-        }
-        let resolved = self.typed.types.resolve_inference(scrutinee_type);
-        let argument = match self.typed.types.kind(resolved).clone() {
-            TypeKind::Builtin {
-                builtin: actual,
-                arguments,
-            } if actual == builtin && arguments.len() == 1 => Some(arguments[0]),
-            TypeKind::Error => Some(self.typed.types.error()),
-            _ => None,
-        };
-        if argument.is_none() {
-            self.diagnostics.push(
-                Diagnostic::new(
-                    Category::Pattern,
-                    "this pattern's type does not match the scrutinee's type",
-                )
-                .with_primary(pattern.span),
-            );
-        }
-        let children = child_nodes(pattern);
-        let required = usize::from(variant == "Some");
-        if positional {
-            if children.len() != required {
-                self.diagnostics.push(
-                    Diagnostic::new(
-                        Category::Pattern,
-                        format!(
-                            "`Option.{variant}` has {required} field{}, but the pattern supplies {}",
-                            if required == 1 { "" } else { "s" },
-                            children.len()
-                        ),
-                    )
-                    .with_primary(pattern.span),
-                );
-            }
-            if variant == "Some"
-                && let (Some(child), Some(argument)) = (children.first(), argument)
-            {
-                self.check_pattern(child, argument);
-            }
-        } else if required != 0 {
-            self.diagnostics.push(
-                Diagnostic::new(
-                    Category::Pattern,
-                    "`Option.Some` has a field and must be matched with `(...)`",
-                )
-                .with_primary(pattern.span),
-            );
-        }
-        Some(Coverage::BuiltinVariants(BTreeSet::from([variant])))
-    }
-
     fn nominal_arguments_for_type(
         &self,
         mut ty: TypeId,
@@ -1232,11 +1274,6 @@ impl<'a> Checker<'a> {
             else {
                 return Coverage::Other;
             };
-            if let Some(coverage) =
-                self.check_builtin_variant_pattern(first, last, pattern, scrutinee_type, true)
-            {
-                return coverage;
-            }
             let Some((enum_declaration, variant)) = self.resolve_pattern_variant(first, last)
             else {
                 return Coverage::Other;
@@ -1467,7 +1504,7 @@ impl<'a> Checker<'a> {
     // ---------------------------------------------------------------
 
     fn check_expr(&mut self, node: &SyntaxNode, expected: ExpectedType) -> (TypeId, PlaceKind) {
-        let (ty, place) = match node.kind {
+        let (mut ty, mut place) = match node.kind {
             SyntaxKind::LiteralExpression => self.check_literal(node, expected),
             SyntaxKind::FormattedStringExpression => self.check_formatted_string(node),
             SyntaxKind::NameExpression => self.check_name_expression(node, expected),
@@ -1485,6 +1522,26 @@ impl<'a> Checker<'a> {
             SyntaxKind::RecordExpression => self.check_record_expression(node, expected),
             _ => (self.typed.types.error(), PlaceKind::Value),
         };
+        if let ExpectedType::Exact(target) = expected
+            && ty != self.typed.types.error()
+            && target != self.typed.types.error()
+            && !self.typed.types.exactly_equal(ty, target)
+            && self.is_trait_object_reference(target)
+        {
+            match self.record_trait_object_coercion(node.span, ty, target) {
+                Some(coercion) => {
+                    self.program
+                        .trait_object_coercions
+                        .insert(node.span, coercion);
+                    ty = target;
+                    place = PlaceKind::Value;
+                }
+                None => {
+                    ty = self.typed.types.error();
+                    place = PlaceKind::Value;
+                }
+            }
+        }
         self.program.expression_types.insert(node.span, ty);
         self.program.expression_places.insert(node.span, place);
         (ty, place)
@@ -2028,6 +2085,7 @@ impl<'a> Checker<'a> {
             }
             self.check_call_arguments(call_span, &parameters, arguments);
             if let ExpectedType::Exact(expected) = expected
+                && !self.is_trait_object_reference(expected)
                 && !self.types_compatible(signature.return_type, expected)
             {
                 self.diagnostics.push(
@@ -2173,6 +2231,7 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         if let ExpectedType::Exact(expected) = expected
+            && !self.is_trait_object_reference(expected)
             && !self.types_compatible(signature.return_type, expected)
         {
             self.diagnostics.push(
@@ -2517,17 +2576,68 @@ impl<'a> Checker<'a> {
         matches!(self.typed.types.kind(target), TypeKind::TraitObject { .. })
     }
 
+    /// Validates and records the contextual, mutability-preserving conversion
+    /// from a concrete safe reference to a trait-object reference.
+    fn record_trait_object_coercion(
+        &mut self,
+        span: Span,
+        source_type: TypeId,
+        target_type: TypeId,
+    ) -> Option<TraitObjectCoercion> {
+        let source = self.typed.types.resolve_inference(source_type);
+        let TypeKind::Reference {
+            mutability: source_mutability,
+            target: concrete,
+        } = self.typed.types.kind(source).clone()
+        else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "an implicit trait-object conversion requires a safe reference",
+                )
+                .with_primary(span),
+            );
+            return None;
+        };
+        let target = self.typed.types.resolve_inference(target_type);
+        let TypeKind::Reference {
+            mutability: target_mutability,
+            ..
+        } = self.typed.types.kind(target)
+        else {
+            return None;
+        };
+        if source_mutability != *target_mutability {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "a trait-object conversion must preserve reference mutability",
+                )
+                .with_primary(span),
+            );
+            return None;
+        }
+        if !self.check_trait_object_formation(target_type, concrete, span) {
+            return None;
+        }
+        let trait_declaration =
+            crate::traits::object_trait(self.resolved, self.typed, target_type)?;
+        Some(TraitObjectCoercion {
+            source: source_type,
+            target: target_type,
+            trait_declaration,
+            concrete,
+        })
+    }
+
     /// Whether an expression of type `actual` may be used where `expected`
-    /// is required. Milestone 6 requires exact type equality (`SPEC.md` has
-    /// no implicit conversion), with one deliberate exception: coercing a
-    /// concrete reference to a matching `&Trait`/`&var Trait` is Milestone 13
-    /// territory, so it is accepted here rather than misdiagnosed as a type
-    /// mismatch.
+    /// is required. Contextual trait-object conversion is performed and
+    /// recorded by `check_expr`, so compatible checked expressions already
+    /// carry the expected trait-object type here.
     fn types_compatible(&self, actual: TypeId, expected: TypeId) -> bool {
         actual == self.typed.types.error()
             || expected == self.typed.types.error()
             || self.typed.types.exactly_equal(actual, expected)
-            || self.is_trait_object_reference(expected)
     }
 
     fn check_unary(&mut self, node: &SyntaxNode, expected: ExpectedType) -> (TypeId, PlaceKind) {
@@ -2866,10 +2976,9 @@ impl<'a> Checker<'a> {
         if source_type == self.typed.types.error() || target_type == self.typed.types.error() {
             return (target_type, PlaceKind::Value);
         }
-        // Forming a trait object is an explicit conversion (`SPEC.md` 6):
-        // `reference as &Trait` / `as &var Trait`. The source must be a safe
-        // reference of matching mutability whose target implements an
-        // object-safe trait.
+        // Explicit `reference as &Trait` / `as &var Trait` remains available
+        // alongside contextual coercion. The source must be a safe reference
+        // of matching mutability whose target implements an object-safe trait.
         if self.is_trait_object_reference(target_type) {
             let source = self.typed.types.resolve_inference(source_type);
             match self.typed.types.kind(source) {
@@ -2989,8 +3098,16 @@ impl<'a> Checker<'a> {
         let (operand_type, _) = self.check_expr(operand, ExpectedType::None);
         let resolved = self.typed.types.resolve_inference(operand_type);
         match self.typed.types.kind(resolved).clone() {
-            TypeKind::Builtin { builtin, arguments }
-                if self.resolved.builtin_name(builtin) == "Result" && arguments.len() == 2 =>
+            // Only the *standard* `Result` propagates; a user type that merely
+            // shares the spelling is an ordinary value (`SPEC.md` 8, and
+            // Milestone 15.1, which owns the full propagation role).
+            TypeKind::Nominal {
+                identity,
+                arguments,
+            } if self
+                .resolved
+                .is_standard_declaration(identity.declaration, "Result")
+                && arguments.len() == 2 =>
             {
                 (arguments[0], PlaceKind::Value)
             }
@@ -3400,6 +3517,48 @@ impl<'a> Checker<'a> {
             );
         }
 
+        // `Type.try_from(value)` is a standard associated function on a
+        // concrete numeric type (`SPEC.md` 4.1). A primitive has no
+        // declaration to select a member from, so it is recognized here, and
+        // an unrecognized member on a primitive is reported here too rather
+        // than falling through to nominal selection, which cannot see it.
+        // Only the numeric associated-function surface is complete, so only a
+        // numeric primitive rejects an unrecognized member here. `str` and
+        // `String` gain theirs in Milestones 14.5 and 14.6.
+        if let Some(primitive) = self
+            .primitive_selection(base)
+            .filter(|primitive| primitive.is_integer() || primitive.is_float())
+        {
+            if let Some(outcome) = match member_name.as_str() {
+                "try_from" => Some(NumericOutcome::Checked),
+                "wrapping_from" => Some(NumericOutcome::Wrapping),
+                "saturating_from" => Some(NumericOutcome::Saturating),
+                _ => None,
+            } {
+                return Some(self.check_numeric_conversion(
+                    call_span,
+                    primitive,
+                    outcome,
+                    &member_name,
+                    arguments,
+                ));
+            }
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "`{}` has no associated function named `{member_name}`",
+                        types::primitive_name(primitive)
+                    ),
+                )
+                .with_primary(member_token.span),
+            );
+            return Some((self.typed.types.error(), PlaceKind::Value));
+        }
+
         // `Type.member(...)` is an ordinary call of the selected associated
         // function or unbound method. A receiver-bearing method therefore
         // expects its receiver as the first explicit argument.
@@ -3408,7 +3567,7 @@ impl<'a> Checker<'a> {
             // declaration to select (`SPEC.md` 4.3).
             if member_name == "default"
                 && self.find_member(owner, &member_name).is_none()
-                && crate::traits::derives(self.resolved, owner, "Default")
+                && crate::traits::derives_or_intrinsic(self.resolved, owner, "Default")
             {
                 for argument in arguments {
                     self.check_expr(argument, ExpectedType::None);
@@ -3542,6 +3701,21 @@ impl<'a> Checker<'a> {
                 &member_name,
                 member_token.span,
                 arguments,
+            ));
+        }
+        // `value.checked_add(other)` and friends are standard methods on the
+        // integer types (`SPEC.md` 4.1). An integer has no declaration, so
+        // they are recognized here rather than through member lookup.
+        if let Some(operation) = self
+            .integer_receiver(base_type)
+            .and_then(|_| NumericAlternative::from_name(&member_name))
+        {
+            return Some(self.check_numeric_alternative(
+                call_span,
+                base_type,
+                operation,
+                arguments,
+                member_token.span,
             ));
         }
         let (owner, self_type) = self.receiver_owner(base_type)?;
@@ -4102,6 +4276,216 @@ impl<'a> Checker<'a> {
         })?;
         let trait_name = token_text(trait_token);
         crate::traits::qualified_trait_method(self.resolved, self.typed, target, &trait_name, name)
+    }
+
+    /// The primitive `node` names as a type, if any.
+    ///
+    /// `SPEC.md` 4.1 puts `try_from` (and, from Milestone 14.4, the wrapping
+    /// and saturating conversions) on the numeric types themselves. Those have
+    /// no declaration, so they are not reachable through
+    /// [`Self::nominal_selection`].
+    fn primitive_selection(&mut self, node: &SyntaxNode) -> Option<PrimitiveType> {
+        let span = Self::callee_target_span(node)?;
+        let NameTarget::Item(crate::resolution::ItemId::Builtin(builtin)) =
+            self.resolved.reference_at(span)?.target
+        else {
+            return None;
+        };
+        types::primitive_from_name(self.resolved.builtin_name(builtin))
+    }
+
+    /// The integer primitive `ty` is, after alias and inference resolution.
+    fn integer_receiver(&mut self, ty: TypeId) -> Option<PrimitiveType> {
+        self.typed
+            .types
+            .expanded_primitive(ty)
+            .filter(|primitive| primitive.is_integer())
+    }
+
+    /// Checks one standard arithmetic alternative (`SPEC.md` 4.1).
+    ///
+    /// These share the trapping operators' operand rules — the same operand
+    /// type for a binary operation, an integer shift amount for a shift — so
+    /// only the *result* differs: a checked operation reports failure as
+    /// `Option[T]`, while a wrapping or saturating operation always produces a
+    /// `T`.
+    fn check_numeric_alternative(
+        &mut self,
+        call_span: Span,
+        receiver: TypeId,
+        operation: NumericAlternative,
+        arguments: &[&SyntaxNode],
+        member_span: Span,
+    ) -> (TypeId, PlaceKind) {
+        let result = match operation.outcome {
+            NumericOutcome::Checked => self.option_type(call_span, receiver),
+            NumericOutcome::Wrapping | NumericOutcome::Saturating => receiver,
+        };
+        let expected_arity = usize::from(operation.operator != NumericOperator::Negate);
+        // Every operand, including a shift amount, has the receiver's exact
+        // type — the same rule the trapping operator applies.
+        for argument in arguments {
+            let (ty, _) = self.check_expr(argument, ExpectedType::Exact(receiver));
+            self.program.copies.insert(argument.span);
+            if ty != self.typed.types.error() && !self.typed.types.exactly_equal(ty, receiver) {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        "this operand must have the receiver's exact type",
+                    )
+                    .with_primary(argument.span),
+                );
+            }
+        }
+        if arguments.len() != expected_arity {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "`{}` expects exactly {expected_arity} argument{}, but {} were supplied",
+                        operation.name,
+                        if expected_arity == 1 { "" } else { "s" },
+                        arguments.len()
+                    ),
+                )
+                .with_primary(member_span),
+            );
+            return (result, PlaceKind::Value);
+        }
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::NumericAlternative {
+                operation,
+                operand_type: self.typed.types.resolve_inference(receiver),
+                result,
+            },
+        );
+        (result, PlaceKind::Value)
+    }
+
+    /// `Option[payload]`, or the error type when the standard declaration is
+    /// unavailable.
+    fn option_type(&mut self, span: Span, payload: TypeId) -> TypeId {
+        let Some(option) = self.resolved.standard_declaration("Option") else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "the standard `Option` declaration is unavailable",
+                )
+                .with_primary(span),
+            );
+            return self.typed.types.error();
+        };
+        self.typed
+            .instantiate_declaration_type(self.resolved, option, &[payload])
+            .unwrap_or_else(|| self.typed.types.error())
+    }
+
+    /// Checks `Target.try_from(value)`: a nontrapping numeric conversion whose
+    /// result is `Result[Target, NumericError]` (`SPEC.md` 4.1). The source
+    /// must already be a concrete numeric type — `try_from` is a conversion,
+    /// not a way to avoid literal materialization — so the argument is checked
+    /// against no expected type and then required to be numeric.
+    fn check_numeric_conversion(
+        &mut self,
+        call_span: Span,
+        target: PrimitiveType,
+        outcome: NumericOutcome,
+        member_name: &str,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        let target_type = self.typed.types.primitive(target);
+        let result_type = match outcome {
+            NumericOutcome::Checked => self.numeric_conversion_result_type(call_span, target_type),
+            NumericOutcome::Wrapping | NumericOutcome::Saturating => target_type,
+        };
+        let mut source_type = self.typed.types.error();
+        for (index, argument) in arguments.iter().enumerate() {
+            let (ty, _) = self.check_expr(argument, ExpectedType::None);
+            self.program.copies.insert(argument.span);
+            if index == 0 {
+                source_type = ty;
+            }
+        }
+        if arguments.len() != 1 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "`{member_name}` expects exactly 1 argument, but {} were supplied",
+                        arguments.len()
+                    ),
+                )
+                .with_primary(call_span),
+            );
+            return (result_type, PlaceKind::Value);
+        }
+        if source_type == self.typed.types.error() {
+            return (result_type, PlaceKind::Value);
+        }
+        if !self.is_numeric_type(source_type) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!("`{member_name}` converts only between numeric types"),
+                )
+                .with_primary(arguments[0].span),
+            );
+            return (result_type, PlaceKind::Value);
+        }
+        // Wrapping and saturating conversions are defined by the target's
+        // integer range, so both ends must be integers (`SPEC.md` 4.1 offers
+        // them only "where those behaviors are meaningful"). A checked
+        // conversion has an answer for every numeric pair.
+        if outcome != NumericOutcome::Checked
+            && !(target.is_integer() && self.integer_receiver(source_type).is_some())
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!("`{member_name}` converts only between integer types"),
+                )
+                .with_primary(call_span),
+            );
+            return (result_type, PlaceKind::Value);
+        }
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::NumericConversion {
+                outcome,
+                source: self.typed.types.resolve_inference(source_type),
+                target: target_type,
+                result: result_type,
+            },
+        );
+        (result_type, PlaceKind::Value)
+    }
+
+    /// `Result[target, NumericError]`, or the error type when the standard
+    /// declarations that name it are unavailable.
+    fn numeric_conversion_result_type(&mut self, span: Span, target: TypeId) -> TypeId {
+        let (Some(result), Some(error)) = (
+            self.resolved.standard_declaration("Result"),
+            self.resolved.standard_declaration("NumericError"),
+        ) else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "the standard `Result` and `NumericError` declarations are unavailable",
+                )
+                .with_primary(span),
+            );
+            return self.typed.types.error();
+        };
+        let Some(error_type) = self
+            .typed
+            .instantiate_declaration_type(self.resolved, error, &[])
+        else {
+            return self.typed.types.error();
+        };
+        self.typed
+            .instantiate_declaration_type(self.resolved, result, &[target, error_type])
+            .unwrap_or_else(|| self.typed.types.error())
     }
 
     fn nominal_selection(
@@ -4970,8 +5354,6 @@ enum Coverage {
     /// Matches exactly these enum variants, unconditionally on their field
     /// values.
     Variants(BTreeSet<VariantId>),
-    /// Matches named constructors of a compiler builtin ADT.
-    BuiltinVariants(BTreeSet<String>),
     /// Matches exactly these `bool` literals.
     Bools(BTreeSet<bool>),
     /// Coverage after explicitly dereferencing one non-null safe reference.
@@ -4991,10 +5373,6 @@ impl Coverage {
             (Coverage::Variants(mut a), Coverage::Variants(b)) => {
                 a.extend(b);
                 Coverage::Variants(a)
-            }
-            (Coverage::BuiltinVariants(mut a), Coverage::BuiltinVariants(b)) => {
-                a.extend(b);
-                Coverage::BuiltinVariants(a)
             }
             (Coverage::Bools(mut a), Coverage::Bools(b)) => {
                 a.extend(b);
@@ -5031,23 +5409,12 @@ impl Coverage {
         }
     }
 
-    fn covers_builtin_variants(&self, variants: &BTreeSet<String>) -> bool {
-        match self {
-            Coverage::BuiltinVariants(covered) => variants.is_subset(covered),
-            Coverage::Dereferenced(inner) => inner.covers_builtin_variants(variants),
-            _ => false,
-        }
-    }
-
     fn is_covered_by(&self, previous: &Coverage) -> bool {
         match self {
             Coverage::Variants(variants) => {
                 !variants.is_empty() && previous.covers_variants(variants)
             }
             Coverage::Bools(values) => !values.is_empty() && previous.covers_bools(values),
-            Coverage::BuiltinVariants(variants) => {
-                !variants.is_empty() && previous.covers_builtin_variants(variants)
-            }
             Coverage::Dereferenced(inner) => match previous {
                 Coverage::Dereferenced(previous_inner) => inner.is_covered_by(previous_inner),
                 _ => false,

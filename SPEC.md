@@ -242,10 +242,9 @@ storage, but such sharing cannot be observed through language operations.
 
 Types that explicitly carry aliasing or identity retain that meaning when
 copied. Safe references, raw pointers, trait-object references, and function
-references continue to identify the same target. A type
-implementing `Close` follows the shared-resource-handle contract in Section 8.
-Copying a containing aggregate preserves these explicit aliases while all of
-its ordinary value fields remain independent.
+references continue to identify the same target. Copying a containing aggregate
+preserves these explicit aliases while all of its ordinary value fields remain
+independent.
 
 ~~~elx
 struct Address:
@@ -1059,10 +1058,10 @@ methods absent from the trait. Traits initially contain methods only, with no
 associated types or constants.
 
 Calls through concrete types and monomorphized generics use static dispatch.
-Explicit trait objects provide dynamic dispatch. A trait object is written as a
-safe reference to the trait itself, `&Trait` or `&var Trait`, and initially
-appears only in that form. The object is a fat reference containing the managed
-target reference and a static vtable.
+Trait objects provide dynamic dispatch. A trait object is written as a safe
+reference to the trait itself, `&Trait` or `&var Trait`, and initially appears
+only in that form. The object is a fat reference containing the managed target
+reference and a static vtable.
 
 A trait has no value representation, so a trait name denotes a type only as the
 target of a safe reference, as a generic or implementation bound, or as the
@@ -1081,17 +1080,23 @@ fn dispatch(toggle: &Toggle) -> String: // valid
 // fn by_pointer(toggle: *Toggle) -> ()
 ~~~
 
-A concrete reference does not implicitly become a trait-object reference.
-Forming the object is an explicit conversion, `reference as &Trait` or
-`reference as &var Trait`, valid when the source reference's target type
-implements the trait and the mutability matches. This keeps the language free
-of subtype and variance conversions on references, and makes every point where
-a fat reference is constructed visible in the source.
+A concrete safe reference automatically becomes a trait-object reference when
+an exact `&Trait` or `&var Trait` type is contextually expected, the reference's
+target type implements the trait, and the mutability matches. Contextual
+conversion applies to annotated binding initializers, assignment sources,
+return values, call arguments, and aggregate field or element values. The
+equivalent explicit conversion, `reference as &Trait` or
+`reference as &var Trait`, remains valid.
+
+This is a targeted trait-object conversion, not a subtype or variance relation:
+an uncontextualized concrete reference keeps its concrete type, reference
+mutability is never upgraded or weakened by the conversion, and other reference
+types still require exact equality.
 
 ~~~elx
 let session = Session.new("demo")
 let session_ref = &session
-let toggle: &Toggle = session_ref as &Toggle
+let toggle: &Toggle = session_ref
 println(toggle.status()) // dynamically dispatched
 ~~~
 
@@ -1104,7 +1109,7 @@ trait type arguments are concrete. Default methods participate in the vtable.
 
 Trait-object calls dispatch through the vtable, and different concrete target
 types may coexist in a homogeneous collection such as `Vec[&Trait]`, whose
-elements are each formed by an explicit conversion.
+elements are converted against the collection's expected element type.
 Trait objects initially provide no downcasting, runtime concrete-type
 inspection, or multi-trait object composition. Safe-reference reachability and
 escape promotion apply to their concrete targets.
@@ -1297,29 +1302,21 @@ fn increment_result[E](result: Result[i32, E]) -> Result[i32, E]:
 ~~~
 
 Elamite has no implicit destruction protocol. Garbage collection manages memory
-only. Deterministic external-resource cleanup uses the compiler-known prelude
-trait `Close` together with a lexical `defer` statement.
+only. Deterministic external-resource cleanup uses the lexical `defer`
+statement.
 
-`Close` is an ordinary implementable trait with this method:
+There is no compiler-known cleanup trait or privileged cleanup method name.
+Resource types expose ordinary safe unit-returning methods such as `close`,
+`release`, or `unlock`, and `defer` may register any such call. Each resource
+API defines whether its cleanup is idempotent and whether copied handles share
+state. Shared identity must be represented explicitly by the handle's value,
+such as through a safe reference, rather than being introduced by a trait
+implementation.
 
-~~~elx
-trait Close:
-    fn close(self: &Self) -> ()
-~~~
-
-`close()` may be called explicitly. It must be idempotent: calling it on an
-already closed resource has no effect. It returns unit and must handle any
-recoverable cleanup errors internally. A resource that needs fallible flushing,
-committing, or finalization provides a separate explicit operation returning
-`Result`; that operation is not part of `Close`.
-
-A type implementing `Close` represents an identity-bearing shared resource
-handle and is an explicit exception to independent ordinary-value copying.
-Copying the handle must retain one shared managed resource state. Closing
-through any copy closes that resource for every handle. Operations that require
-an open standard resource return an appropriate error after it is closed. Manual
-`Close` implementations are responsible for obeying these laws, just as manual
-comparison implementations are responsible for their trait laws.
+A resource that needs fallible flushing, committing, or finalization provides a
+separate explicit operation returning `Result`. Callers perform that operation
+before scope exit when they need to handle its error; an infallible release
+method may still be deferred.
 
 `defer call` registers one safe function or method call to execute when control
 leaves the current lexical block. The call must return unit. A `defer`
@@ -1379,12 +1376,12 @@ a safe unit-returning method. An unrecoverable trap, including a trap during
 deferred execution, and out-of-memory termination do not guarantee that that
 block's remaining deferred statements will run.
 
-Leaving a scope does not implicitly call `close()` merely because a reachable
-value implements `Close`; only an explicitly registered deferred call runs.
-Garbage collection likewise never calls `close()`. A resource that is neither
-explicitly closed nor registered with `defer` may therefore leak its external
-resource. An implementation may warn about leaks it can prove locally, but such
-diagnostics are not required to be complete.
+Leaving a scope does not implicitly call a resource-cleanup method; only an
+explicitly registered deferred call runs. Garbage collection likewise never
+calls resource-cleanup methods. A resource that is neither explicitly released
+nor registered with `defer` may therefore leak its external resource. An
+implementation may warn about leaks it can prove locally, but such diagnostics
+are not required to be complete.
 
 ## 9. Garbage collection
 
@@ -1426,9 +1423,9 @@ Collection timing and memory usage are not deterministic program behavior.
 
 The initial language has no `Weak` type or other weak-reference facility. It
 also has no GC finalizers, implicit destruction protocol, or user-defined
-collection callbacks. Garbage collection never invokes `Close`. The runtime
-may perform internal reclamation work only when it invokes no user code and
-creates no observable external-resource cleanup behavior.
+collection callbacks. Garbage collection never invokes resource-cleanup
+methods. The runtime may perform internal reclamation work only when it invokes
+no user code and creates no observable external-resource cleanup behavior.
 
 Managed allocation failure is unrecoverable because ordinary copying,
 copy-on-write mutation, and escape promotion may allocate implicitly.
@@ -1551,11 +1548,11 @@ a C header.
 A raw pointer never owns its target. Receiving an owning native handle through
 a raw pointer does not schedule cleanup, and passing a raw pointer never
 transfers ownership by itself. An owning C API is wrapped in an ordinary
-Elamite handle type whose methods enforce the API's state rules and whose
-idempotent `Close.close` implementation invokes the native release operation.
-Copies of that wrapper share one resource state under Section 8. Borrowed
-foreign pointers remain valid only for the duration promised by their foreign
-contract.
+Elamite handle type whose methods enforce the API's state rules. Such a wrapper
+may provide an idempotent `close()` method that invokes the native release
+operation. If wrapper copies share one resource state, the wrapper represents
+that identity explicitly, such as with a safe reference. Borrowed foreign
+pointers remain valid only for the duration promised by their foreign contract.
 
 Safe references are not ABI-safe and cannot cross the C boundary directly.
 Code explicitly converts one to a raw pointer. When a foreign call does not
@@ -1568,11 +1565,11 @@ runtime through `std.ffi.ForeignRoot[T]` or
 `ForeignRoot.retain(&value)` and `ForeignRootMut.retain(&var value)` promote the
 target when necessary and create a runtime root registration. Their `pointer`
 methods return `*T` and `*var T`, respectively. Copies of a foreign-root handle
-share one registration, and the handle implements the shared resource and
-idempotent `Close` contract from Section 8. Closing any copy unregisters the
-root. Calling `pointer` on a closed handle returns an appropriate closed-handle
-error. If every handle becomes unreachable without being closed, the
-registration and target may leak; garbage collection never unregisters it.
+share one registration, represented by explicit shared state. Their `close()`
+method is idempotent, and closing any copy unregisters the root. Calling
+`pointer` on a closed handle returns an appropriate closed-handle error. If
+every handle becomes unreachable without being closed, the registration and
+target may leak; garbage collection never unregisters it.
 
 Closing a registration is valid only after the foreign contract says that no
 later access will occur. Once it is closed, some other strong path may happen

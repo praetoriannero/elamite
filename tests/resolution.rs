@@ -64,6 +64,33 @@ fn resolve_package(package: &Path) -> (SourceManager, elamite::resolution::Resol
     (sources, output)
 }
 
+/// The declarations collected from the package under test, excluding the
+/// compiler-supplied standard declarations (`Option`, …) that live in the
+/// package-less `std` module tree. Counting only package declarations keeps a
+/// test independent of how many standard types exist.
+fn package_declarations(
+    program: &elamite::resolution::ResolvedProgram,
+) -> impl Iterator<Item = &elamite::resolution::Declaration> {
+    program.declarations.iter().filter(|declaration| {
+        program.modules[declaration.module.index()]
+            .package
+            .is_some()
+    })
+}
+
+/// The enum variants declared by the package under test, on the same basis as
+/// [`package_declarations`].
+fn package_variants(
+    program: &elamite::resolution::ResolvedProgram,
+) -> impl Iterator<Item = &elamite::resolution::Variant> {
+    program.variants.iter().filter(|variant| {
+        let declaration = &program.declarations[variant.parent.index()];
+        program.modules[declaration.module.index()]
+            .package
+            .is_some()
+    })
+}
+
 fn diagnostic_text(sources: &SourceManager, diagnostics: &[Diagnostic]) -> String {
     diagnostics
         .iter()
@@ -114,10 +141,7 @@ fn predeclares_functions_and_allows_local_shadowing() {
         diagnostic_text(&sources, &output.diagnostics)
     );
     assert_eq!(
-        output
-            .program
-            .declarations
-            .iter()
+        package_declarations(&output.program)
             .filter(|declaration| declaration.parent_declaration.is_none())
             .count(),
         3
@@ -413,12 +437,9 @@ fn retains_member_namespaces_and_reports_member_conflicts() {
             .values()
             .any(|members| members.len() >= 2)
     );
-    assert_eq!(output.program.variants.len(), 2);
+    assert_eq!(package_variants(&output.program).count(), 2);
     assert_eq!(
-        output
-            .program
-            .variants
-            .iter()
+        package_variants(&output.program)
             .map(|variant| variant.fields.len())
             .sum::<usize>(),
         2
@@ -645,4 +666,82 @@ fn a_deferred_block_binding_is_local_to_that_block() {
     let (sources, output) = resolve_package(&package);
     let text = diagnostic_text(&sources, &output.diagnostics);
     assert!(text.contains("cannot resolve `inner`"), "{text}");
+}
+
+#[test]
+fn option_is_a_standard_declaration_that_a_user_type_can_shadow() {
+    // Milestone 14.1: the standard `Option[T]` is collected from
+    // compiler-supplied source into the `std` root module, so it carries real
+    // declaration, variant, and generic-parameter identities.
+    let tree = TestTree::new("standard-option");
+    let package = tree.package(
+        "app",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn main() -> ():\n\
+                 \x20\x20\x20\x20let value: Option[i32] = Option.None\n\
+                 \x20\x20\x20\x20pass\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    let option = output
+        .program
+        .standard_declaration("Option")
+        .expect("the standard `Option` declaration exists");
+    let declaration = &output.program.declarations[option.index()];
+    assert_eq!(declaration.kind, elamite::resolution::DeclarationKind::Enum);
+    assert_eq!(declaration.generic_parameters.len(), 1);
+    assert!(
+        output.program.modules[declaration.module.index()]
+            .package
+            .is_none(),
+        "standard declarations live outside every package instance"
+    );
+    let variants = output
+        .program
+        .variants
+        .iter()
+        .filter(|variant| variant.parent == option)
+        .map(|variant| output.program.symbol_text(variant.name))
+        .collect::<Vec<_>>();
+    // `SPEC.md` 4.4 declares `Some` before `None`; the order is observable
+    // through derived comparison, so it is part of the declaration.
+    assert_eq!(variants, vec!["Some", "None"]);
+    assert!(output.program.standard_variant("Option", "None").is_some());
+
+    // A user declaration shadows the prelude name and is a different identity.
+    let shadowing = tree.package(
+        "shadow",
+        "executable",
+        &[],
+        &[(
+            "src/main.elx",
+            "enum Option[T]:\n\
+                 \x20\x20\x20\x20Some(T)\n\
+                 \x20\x20\x20\x20None\n\
+             fn main() -> ():\n\
+                 \x20\x20\x20\x20let value: Option[i32] = Option.None\n\
+                 \x20\x20\x20\x20pass\n",
+        )],
+    );
+    let (_, shadowed) = resolve_package(&shadowing);
+    let user = shadowed
+        .program
+        .declarations
+        .iter()
+        .find(|declaration| {
+            shadowed.program.modules[declaration.module.index()]
+                .package
+                .is_some()
+                && shadowed.program.symbol_text(declaration.name) == "Option"
+        })
+        .expect("the user declaration is collected");
+    assert!(!shadowed.program.is_standard_declaration(user.id, "Option"));
 }

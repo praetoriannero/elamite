@@ -15,6 +15,40 @@ use crate::package::{PackageGraph, PackageId};
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode, parse};
 use crate::source::{FileId, SourceManager, Span};
 
+/// The standard declarations the specification writes as ordinary Elamite
+/// source. They are collected into the `std` root module and reach every later
+/// pass as real declarations, so no pass needs a parallel representation for
+/// them.
+///
+/// `Option[T]` and `Result[T, E]` are spelled exactly as `SPEC.md` 4.4
+/// declares them, including variant order: `Some` precedes `None` and `Ok`
+/// precedes `Err`, so derived comparison would order them that way.
+///
+/// Neither carries a derive list. `Option`'s one compiler-supplied capability
+/// — defaulting to `Option.None` without a `T: Default` obligation — is stated
+/// by `SPEC.md` 4.3 as a rule about `Default` rather than as a derivation; see
+/// [`crate::traits::intrinsic_derivation`]. `Result` has no such capability:
+/// its compiler-known role is postfix `?` propagation (`SPEC.md` 8), which is
+/// control flow rather than a trait, and Milestone 15 owns it.
+///
+/// `NumericError` is the error of a checked numeric conversion (`SPEC.md`
+/// 4.1). The specification fixes its role but not its variants; these two
+/// distinguish the two ways `Type.try_from` can fail — a finite value outside
+/// the target's range, and a source that is not a finite number at all.
+const STANDARD_PRELUDE_SOURCE: &str = "\
+pub enum Option[T]:
+    Some(T)
+    None
+
+pub enum Result[T, E]:
+    Ok(T)
+    Err(E)
+
+pub enum NumericError:
+    OutOfRange
+    NotANumber
+";
+
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -273,7 +307,8 @@ pub struct ResolvedProgram {
     pub declaration_members: BTreeMap<DeclarationId, BTreeMap<Symbol, MemberId>>,
     pub impl_members: BTreeMap<ImplId, BTreeMap<Symbol, DeclarationId>>,
     builtins: Vec<Builtin>,
-    prelude: BTreeMap<Symbol, BuiltinId>,
+    prelude: BTreeMap<Symbol, ItemId>,
+    standard_declarations: BTreeMap<Symbol, DeclarationId>,
     package_roots: BTreeMap<PackageId, ModuleId>,
     module_keys: BTreeMap<(PackageId, Vec<String>), ModuleId>,
     std_root: ModuleId,
@@ -317,6 +352,41 @@ impl ResolvedProgram {
             .iter()
             .position(|builtin| self.symbol_text(builtin.name) == name)
             .map(|index| BuiltinId(index as u32))
+    }
+
+    /// Finds the standard-library declaration with this exact spelling.
+    ///
+    /// Standard types that the specification writes as ordinary declarations
+    /// (`enum Option[T]`, `SPEC.md` 4.4) are collected from compiler-supplied
+    /// source into the `std` root module, so they carry real declaration,
+    /// variant, field, and generic-parameter identities and travel the same
+    /// generic-enum path as user code. A pass needs this lookup only where the
+    /// specification gives that exact type extra behavior, such as `Option[T]`
+    /// defaulting to `Option.None` without a `T: Default` obligation
+    /// (`SPEC.md` 4.3).
+    #[must_use]
+    pub fn standard_declaration(&self, name: &str) -> Option<DeclarationId> {
+        self.standard_declarations
+            .iter()
+            .find(|(symbol, _)| self.symbol_text(**symbol) == name)
+            .map(|(_, declaration)| *declaration)
+    }
+
+    /// Whether `declaration` is the standard declaration spelled `name`. A
+    /// user type that merely shares the spelling is not the standard one.
+    #[must_use]
+    pub fn is_standard_declaration(&self, declaration: DeclarationId, name: &str) -> bool {
+        self.standard_declaration(name) == Some(declaration)
+    }
+
+    /// The variant `name` of the standard declaration `owner`.
+    #[must_use]
+    pub fn standard_variant(&self, owner: &str, name: &str) -> Option<VariantId> {
+        let declaration = self.standard_declaration(owner)?;
+        self.variants
+            .iter()
+            .find(|variant| variant.parent == declaration && self.symbol_text(variant.name) == name)
+            .map(|variant| variant.id)
     }
 
     /// Finds the identity previously recorded for an exact source path.
@@ -487,6 +557,7 @@ impl<'a> Resolver<'a> {
             impl_members: BTreeMap::new(),
             builtins: Vec::new(),
             prelude: BTreeMap::new(),
+            standard_declarations: BTreeMap::new(),
             package_roots: BTreeMap::new(),
             module_keys: BTreeMap::new(),
             std_root,
@@ -503,10 +574,12 @@ impl<'a> Resolver<'a> {
 
     fn run(mut self) -> ResolutionOutput {
         self.install_standard_library_names();
+        self.parse_standard_library_source();
         self.create_file_module_graph();
         self.parse_source_files();
         self.discover_inline_modules();
         self.collect_all_declarations();
+        self.register_standard_declarations();
         self.resolve_all_imports();
         self.resolve_all_declaration_contents();
         self.compute_external_reachability();
@@ -593,8 +666,6 @@ impl<'a> Resolver<'a> {
             "f64",
             "str",
             "String",
-            "Option",
-            "Result",
             "Vec",
             "Map",
             "Set",
@@ -607,15 +678,13 @@ impl<'a> Resolver<'a> {
             "StableHash",
             "Display",
             "Formatter",
-            "Close",
             "Identity",
-            "NumericError",
             "print",
             "println",
         ] {
             let symbol = self.intern(name);
             let id = self.push_builtin(symbol);
-            self.program.prelude.insert(symbol, id);
+            self.program.prelude.insert(symbol, ItemId::Builtin(id));
         }
         for (module, names) in [
             (io_module, &["IoError", "print", "println"][..]),
@@ -639,6 +708,60 @@ impl<'a> Resolver<'a> {
         let id = BuiltinId(self.program.builtins.len() as u32);
         self.program.builtins.push(Builtin { name });
         id
+    }
+
+    /// Lexes and parses the compiler-supplied source of the standard types the
+    /// specification writes as ordinary declarations, into the `std` root
+    /// module. These are not a `std` *package* — Milestone 18 owns that — but
+    /// they are ordinary declarations from here on, so every later pass sees
+    /// `Option[T]` as the generic enum `SPEC.md` 4.4 declares it to be.
+    ///
+    /// This source is compiler input, not user input: a diagnostic in it is an
+    /// internal defect, so it is reported through the ordinary diagnostic list
+    /// rather than silently dropped.
+    fn parse_standard_library_source(&mut self) {
+        let file = self.sources.add_text(
+            PathBuf::from("<std>/prelude.elx"),
+            STANDARD_PRELUDE_SOURCE.to_string(),
+        );
+        let root = self.program.std_root;
+        self.program.modules[root.index()].source_file = Some(file);
+        self.program.modules[root.index()].span = Some(Span::new(
+            file,
+            0,
+            u32::try_from(self.sources.text(file).len()).unwrap_or(u32::MAX),
+        ));
+        let lexed = lex(file, self.sources.text(file));
+        self.diagnostics.extend(lexed.diagnostics);
+        let parsed = parse(&lexed.tokens);
+        self.diagnostics.extend(parsed.diagnostics);
+        self.parsed_units.push(ParsedUnit {
+            module: root,
+            tree: parsed.tree,
+        });
+    }
+
+    /// Records the declarations collected from [`STANDARD_PRELUDE_SOURCE`] as
+    /// both the compiler-known standard identities and prelude names, so an
+    /// unqualified `Option` resolves after lexical, module, import, and
+    /// dependency-alias lookup exactly like the builtin names beside it.
+    fn register_standard_declarations(&mut self) {
+        let entries = self.program.modules[self.program.std_root.index()]
+            .namespace
+            .iter()
+            .filter_map(|(name, entry)| match entry.target {
+                NamespaceTarget::Item(ItemId::Declaration(declaration)) => {
+                    Some((*name, declaration))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (name, declaration) in entries {
+            self.program.standard_declarations.insert(name, declaration);
+            self.program
+                .prelude
+                .insert(name, ItemId::Declaration(declaration));
+        }
     }
 
     fn create_file_module_graph(&mut self) {
@@ -1411,10 +1534,10 @@ impl<'a> Resolver<'a> {
                         self.lookup_module_name(from_module, name, false, use_span)
                     {
                         (found, 1, false)
-                    } else if let Some(builtin) = self.program.prelude.get(&name).copied() {
+                    } else if let Some(item) = self.program.prelude.get(&name).copied() {
                         (
                             LookupResult {
-                                item: ItemId::Builtin(builtin),
+                                item,
                                 provenance: Vec::new(),
                             },
                             1,
@@ -2412,8 +2535,8 @@ impl<'a> Resolver<'a> {
                             .prelude
                             .get(&name)
                             .copied()
-                            .map(|builtin| LookupResult {
-                                item: ItemId::Builtin(builtin),
+                            .map(|item| LookupResult {
+                                item,
                                 provenance: Vec::new(),
                             })
                             .or_else(|| self.standard_package_root(name))

@@ -8,16 +8,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use crate::check::{NumericAlternative, NumericOperator, NumericOutcome};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{
-    AggregateValue, BinaryOperator, ControlFlowFunction, ControlFlowPlace, ControlFlowProgram,
-    Instruction, LogicalCopyStrategy, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator,
-    logical_copy_strategy,
+    AggregateValue, BinaryOperator, BlockId, ControlFlowFunction, ControlFlowPlace,
+    ControlFlowProgram, Instruction, LogicalCopyStrategy, Rvalue, TemporaryId, Terminator,
+    TypedEnum, UnaryOperator, logical_copy_strategy,
 };
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
 };
-use crate::resolution::{DeclarationId, ResolvedProgram, VariantId};
+use crate::resolution::{DeclarationId, FieldId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};
 use crate::types::{FunctionInstance, PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram};
 
@@ -224,6 +225,13 @@ impl<'a> CEmitter<'a> {
             if self.needs_default_helper(ty) {
                 self.emit_default_helper(ty, None);
             }
+        }
+        for (outcome, source, result) in self.checked_conversions() {
+            self.emit_numeric_conversion_helper(outcome, source, result);
+        }
+        self.emit_numeric_alternative_instances();
+        for (operation, operand, result) in self.numeric_alternatives() {
+            self.emit_numeric_alternative_helper(operation, operand, result);
         }
         self.emit_vtable_tables();
         for function in &self.program.functions {
@@ -507,6 +515,69 @@ impl<'a> CEmitter<'a> {
              EL_UNSIGNED_ARITH(u64, uint64_t, UINT64_MAX, 64)\n\
              EL_UNSIGNED_ARITH(usize, uintptr_t, UINTPTR_MAX, (sizeof(uintptr_t) * CHAR_BIT))\n\n",
         );
+        self.emit_numeric_alternative_macros();
+    }
+
+    /// Defines the standard alternatives to the trapping arithmetic operators
+    /// (`SPEC.md` 4.1) as two macros, instantiated per used integer type.
+    ///
+    /// Each operation is expressed as an overflow *predicate* plus a wrapping
+    /// result, so `checked_X` is exactly `ovf_X ? None : Some(wrap_X)` and the
+    /// predicate mirrors the trapping helper's own condition. The two can
+    /// therefore never disagree about which operations overflow.
+    ///
+    /// Wrapping arithmetic is performed in the unsigned counterpart type and
+    /// converted back, which is well defined in C99 (modular in, and
+    /// implementation-defined out — two's complement on both supported
+    /// targets) rather than the signed-overflow undefined behavior that the
+    /// direct expression would have.
+    ///
+    /// Division and remainder have no wrapped answer for a zero divisor, so
+    /// `wrapping_div`/`wrapping_rem` still trap there exactly as `/` and `%`
+    /// do; their wrapping behavior covers only the signed-minimum overflow.
+    fn emit_numeric_alternative_macros(&mut self) {
+        self.output.push_str(
+            "#define EL_SIGNED_ALT(NAME, TYPE, UTYPE, MINIMUM, MAXIMUM, BITS) \\\n\
+             bool el_ovf_add_##NAME(TYPE a, TYPE b) { return (b > 0 && a > (TYPE)(MAXIMUM - b)) || (b < 0 && a < (TYPE)(MINIMUM - b)); } \\\n\
+             TYPE el_wrap_add_##NAME(TYPE a, TYPE b) { return (TYPE)(UTYPE)((UTYPE)a + (UTYPE)b); } \\\n\
+             TYPE el_sat_add_##NAME(TYPE a, TYPE b) { if (!el_ovf_add_##NAME(a, b)) return (TYPE)(a + b); return b > 0 ? (TYPE)(MAXIMUM) : (TYPE)(MINIMUM); } \\\n\
+             bool el_ovf_sub_##NAME(TYPE a, TYPE b) { return (b < 0 && a > (TYPE)(MAXIMUM + b)) || (b > 0 && a < (TYPE)(MINIMUM + b)); } \\\n\
+             TYPE el_wrap_sub_##NAME(TYPE a, TYPE b) { return (TYPE)(UTYPE)((UTYPE)a - (UTYPE)b); } \\\n\
+             TYPE el_sat_sub_##NAME(TYPE a, TYPE b) { if (!el_ovf_sub_##NAME(a, b)) return (TYPE)(a - b); return b < 0 ? (TYPE)(MAXIMUM) : (TYPE)(MINIMUM); } \\\n\
+             bool el_ovf_mul_##NAME(TYPE a, TYPE b) { if (a == 0 || b == 0) return false; if ((a == -1 && b == (TYPE)(MINIMUM)) || (b == -1 && a == (TYPE)(MINIMUM))) return true; return a > 0 ? (b > 0 ? a > (TYPE)(MAXIMUM) / b : b < (TYPE)(MINIMUM) / a) : (b > 0 ? a < (TYPE)(MINIMUM) / b : b < (TYPE)(MAXIMUM) / a); } \\\n\
+             TYPE el_wrap_mul_##NAME(TYPE a, TYPE b) { return (TYPE)(UTYPE)((UTYPE)a * (UTYPE)b); } \\\n\
+             TYPE el_sat_mul_##NAME(TYPE a, TYPE b) { if (!el_ovf_mul_##NAME(a, b)) return (TYPE)(a * b); return ((a > 0) == (b > 0)) ? (TYPE)(MAXIMUM) : (TYPE)(MINIMUM); } \\\n\
+             bool el_ovf_div_##NAME(TYPE a, TYPE b) { return b == 0 || (a == (TYPE)(MINIMUM) && b == -1); } \\\n\
+             TYPE el_wrap_div_##NAME(TYPE a, TYPE b) { if (b == 0) return 0; if (a == (TYPE)(MINIMUM) && b == -1) return (TYPE)(MINIMUM); return (TYPE)(a / b); } \\\n\
+             bool el_ovf_rem_##NAME(TYPE a, TYPE b) { (void)a; return b == 0; } \\\n\
+             TYPE el_wrap_rem_##NAME(TYPE a, TYPE b) { if (b == 0) return 0; if (a == (TYPE)(MINIMUM) && b == -1) return 0; return (TYPE)(a % b); } \\\n\
+             bool el_ovf_neg_##NAME(TYPE a) { return a == (TYPE)(MINIMUM); } \\\n\
+             TYPE el_wrap_neg_##NAME(TYPE a) { return (TYPE)(UTYPE)(0U - (UTYPE)a); } \\\n\
+             bool el_ovf_shl_##NAME(TYPE a, TYPE b) { uint32_t n; if (b < 0 || (uintmax_t)b >= (BITS)) return true; n = (uint32_t)b; while (n-- != 0U) { if (a > (TYPE)(MAXIMUM) / 2 || a < (TYPE)(MINIMUM) / 2) return true; a = (TYPE)(a * 2); } return false; } \\\n\
+             TYPE el_wrap_shl_##NAME(TYPE a, TYPE b) { uint32_t n = (uint32_t)((uintmax_t)b & (uintmax_t)((BITS) - 1U)); return (TYPE)(UTYPE)((UTYPE)a << n); } \\\n\
+             bool el_ovf_shr_##NAME(TYPE a, TYPE b) { (void)a; return b < 0 || (uintmax_t)b >= (BITS); } \\\n\
+             TYPE el_wrap_shr_##NAME(TYPE a, TYPE b) { uint32_t n = (uint32_t)((uintmax_t)b & (uintmax_t)((BITS) - 1U)); while (n-- != 0U) a = a >= 0 ? (TYPE)(a / 2) : (TYPE)(-1 - ((-1 - a) / 2)); return a; }\n\
+             #define EL_UNSIGNED_ALT(NAME, TYPE, MAXIMUM, BITS) \\\n\
+             bool el_ovf_add_##NAME(TYPE a, TYPE b) { return a > (TYPE)(MAXIMUM - b); } \\\n\
+             TYPE el_wrap_add_##NAME(TYPE a, TYPE b) { return (TYPE)(a + b); } \\\n\
+             TYPE el_sat_add_##NAME(TYPE a, TYPE b) { return el_ovf_add_##NAME(a, b) ? (TYPE)(MAXIMUM) : (TYPE)(a + b); } \\\n\
+             bool el_ovf_sub_##NAME(TYPE a, TYPE b) { return a < b; } \\\n\
+             TYPE el_wrap_sub_##NAME(TYPE a, TYPE b) { return (TYPE)(a - b); } \\\n\
+             TYPE el_sat_sub_##NAME(TYPE a, TYPE b) { return a < b ? (TYPE)0 : (TYPE)(a - b); } \\\n\
+             bool el_ovf_mul_##NAME(TYPE a, TYPE b) { return b != 0 && a > (TYPE)(MAXIMUM) / b; } \\\n\
+             TYPE el_wrap_mul_##NAME(TYPE a, TYPE b) { return (TYPE)(a * b); } \\\n\
+             TYPE el_sat_mul_##NAME(TYPE a, TYPE b) { return el_ovf_mul_##NAME(a, b) ? (TYPE)(MAXIMUM) : (TYPE)(a * b); } \\\n\
+             bool el_ovf_div_##NAME(TYPE a, TYPE b) { (void)a; return b == 0; } \\\n\
+             TYPE el_wrap_div_##NAME(TYPE a, TYPE b) { if (b == 0) return 0; return (TYPE)(a / b); } \\\n\
+             bool el_ovf_rem_##NAME(TYPE a, TYPE b) { (void)a; return b == 0; } \\\n\
+             TYPE el_wrap_rem_##NAME(TYPE a, TYPE b) { if (b == 0) return 0; return (TYPE)(a % b); } \\\n\
+             bool el_ovf_neg_##NAME(TYPE a) { return a != 0; } \\\n\
+             TYPE el_wrap_neg_##NAME(TYPE a) { return (TYPE)(0U - a); } \\\n\
+             bool el_ovf_shl_##NAME(TYPE a, TYPE b) { if ((uintmax_t)b >= (BITS)) return true; return a > (TYPE)((TYPE)(MAXIMUM) >> b); } \\\n\
+             TYPE el_wrap_shl_##NAME(TYPE a, TYPE b) { uint32_t n = (uint32_t)((uintmax_t)b & (uintmax_t)((BITS) - 1U)); return (TYPE)(a << n); } \\\n\
+             bool el_ovf_shr_##NAME(TYPE a, TYPE b) { (void)a; return (uintmax_t)b >= (BITS); } \\\n\
+             TYPE el_wrap_shr_##NAME(TYPE a, TYPE b) { uint32_t n = (uint32_t)((uintmax_t)b & (uintmax_t)((BITS) - 1U)); return (TYPE)(a >> n); }\n\n",
+        );
     }
 
     fn emit_forward_structs(&mut self) {
@@ -775,6 +846,352 @@ impl<'a> CEmitter<'a> {
             }
         }
         types
+    }
+
+    /// Every `(source type, result type)` pair a `Target.try_from(value)` call
+    /// needs a helper for. The result type carries the target, so the pair is
+    /// the helper's complete identity.
+    fn checked_conversions(&self) -> BTreeSet<(NumericOutcome, TypeId, TypeId)> {
+        let mut pairs = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        destination,
+                        value:
+                            Rvalue::NumericConversion {
+                                outcome,
+                                source_type,
+                                ..
+                            },
+                        ..
+                    } = instruction
+                    {
+                        pairs.insert((
+                            *outcome,
+                            *source_type,
+                            function.temporary_types[destination.index()],
+                        ));
+                    }
+                }
+            }
+        }
+        pairs
+    }
+
+    /// Emits one standard numeric conversion helper (`SPEC.md` 4.1).
+    ///
+    /// The checked form's range test uses the same boundaries as the trapping
+    /// `as` conversion, so `value as Target` and `Target.try_from(value)`
+    /// never disagree about which values are representable — the only
+    /// difference is that one traps and the other reports. A non-finite source
+    /// is separated out: NaN is `NotANumber`, an infinity is `OutOfRange`.
+    ///
+    /// The wrapping form converts modulo the target's range, and the
+    /// saturating form clamps to its nearest bound. Both are integer-only, so
+    /// neither has a non-finite case.
+    fn emit_numeric_conversion_helper(
+        &mut self,
+        outcome: NumericOutcome,
+        source: TypeId,
+        result: TypeId,
+    ) {
+        let (Some(source_c_type), Some(result_c_type)) =
+            (self.c_type(source, None), self.c_type(result, None))
+        else {
+            return;
+        };
+        let Some(source_primitive) = self.typed.types.expanded_primitive(source) else {
+            return;
+        };
+        let name = numeric_conversion_name(outcome, source, result);
+
+        if outcome != NumericOutcome::Checked {
+            let Some(target_primitive) = self.typed.types.expanded_primitive(result) else {
+                return;
+            };
+            let Some((minimum, maximum)) = primitive_bounds(target_primitive, self.options.target)
+            else {
+                self.type_error(
+                    result,
+                    None,
+                    "this target has no conversion range in the Milestone 8 backend",
+                );
+                return;
+            };
+            let body = if outcome == NumericOutcome::Wrapping {
+                // Converting through the widest unsigned type is modular in
+                // C99, so a narrowing wrap needs no explicit arithmetic.
+                format!("    return ({result_c_type})(uintmax_t)value;\n")
+            } else {
+                let _ = source_primitive;
+                format!(
+                    "    if ((long double)value < (long double)({minimum})) \
+                     return ({result_c_type})({minimum});\n\
+                     \x20   if ((long double)value > (long double)({maximum})) \
+                     return ({result_c_type})({maximum});\n\
+                     \x20   return ({result_c_type})value;\n"
+                )
+            };
+            let _ = writeln!(
+                self.output,
+                "static {result_c_type} {name}({source_c_type} value) {{\n{body}}}\n"
+            );
+            return;
+        }
+
+        let Some(parts) = self.checked_conversion_parts(result) else {
+            return;
+        };
+        let Some(target_primitive) = self.typed.types.expanded_primitive(parts.target) else {
+            return;
+        };
+        let Some(target_c_type) = self.c_type(parts.target, None) else {
+            return;
+        };
+        let ok = format!(
+            "({result_c_type}){{ .tag = UINT32_C({}), .payload.{}\
+             = {{ .{} = ({target_c_type})value }} }}",
+            parts.ok_variant.index(),
+            variant_member_name(parts.ok_variant),
+            field_name(parts.ok_field),
+        );
+        let Some(error_c_type) = self.c_type(parts.error, None) else {
+            return;
+        };
+        let error = |variant: VariantId| {
+            format!(
+                "({result_c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = \
+                 ({error_c_type}){{ .tag = UINT32_C({}), .payload._empty = 0 }} }} }}",
+                parts.err_variant.index(),
+                variant_member_name(parts.err_variant),
+                field_name(parts.err_field),
+                variant.index(),
+            )
+        };
+        let out_of_range = error(parts.out_of_range);
+        let not_a_number = error(parts.not_a_number);
+
+        let mut body = String::new();
+        if target_primitive.is_float() {
+            // Integer-to-float and float-to-float conversions use IEEE
+            // rounding and cannot fail (`SPEC.md` 4.1).
+            let _ = writeln!(body, "    return {ok};");
+        } else {
+            let Some((minimum, maximum)) = primitive_bounds(target_primitive, self.options.target)
+            else {
+                self.type_error(
+                    parts.target,
+                    None,
+                    "this target has no checked-conversion range in the Milestone 8 backend",
+                );
+                return;
+            };
+            if source_primitive.is_float() {
+                let _ = writeln!(body, "    if (value != value) return {not_a_number};");
+                let _ = writeln!(
+                    body,
+                    "    if (!isfinite((double)value)) return {out_of_range};"
+                );
+            }
+            let _ = writeln!(
+                body,
+                "    if ((long double)value < (long double)({minimum}) || \
+                 (long double)value > (long double)({maximum})) return {out_of_range};"
+            );
+            let _ = writeln!(body, "    return {ok};");
+        }
+        let _ = writeln!(
+            self.output,
+            "static {result_c_type} {name}({source_c_type} value) {{\n{body}}}\n"
+        );
+    }
+
+    /// The variant and field identities a checked conversion's result value is
+    /// built from, or `None` when the standard declarations are unavailable.
+    fn checked_conversion_parts(&self, result: TypeId) -> Option<CheckedConversionParts> {
+        let TypeKind::Nominal { arguments, .. } = self.typed.types.kind(self.resolve_alias(result))
+        else {
+            return None;
+        };
+        let [target, error] = arguments.as_slice() else {
+            return None;
+        };
+        let ok_variant = self.resolved.standard_variant("Result", "Ok")?;
+        let err_variant = self.resolved.standard_variant("Result", "Err")?;
+        Some(CheckedConversionParts {
+            target: *target,
+            error: *error,
+            ok_variant,
+            ok_field: *self.resolved.variants[ok_variant.index()].fields.first()?,
+            err_variant,
+            err_field: *self.resolved.variants[err_variant.index()].fields.first()?,
+            out_of_range: self
+                .resolved
+                .standard_variant("NumericError", "OutOfRange")?,
+            not_a_number: self
+                .resolved
+                .standard_variant("NumericError", "NotANumber")?,
+        })
+    }
+
+    /// Every `(operation, operand type, result type)` a numeric alternative
+    /// needs a helper for.
+    fn numeric_alternatives(&self) -> BTreeSet<(NumericAlternative, TypeId, TypeId)> {
+        let mut used = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        destination,
+                        value:
+                            Rvalue::NumericAlternative {
+                                operation,
+                                operand_type,
+                                ..
+                            },
+                        ..
+                    } = instruction
+                    {
+                        used.insert((
+                            *operation,
+                            *operand_type,
+                            function.temporary_types[destination.index()],
+                        ));
+                    }
+                }
+            }
+        }
+        used
+    }
+
+    /// Instantiates `EL_SIGNED_ALT`/`EL_UNSIGNED_ALT` for exactly the integer
+    /// types the program uses an alternative on, so an unused type contributes
+    /// no code.
+    fn emit_numeric_alternative_instances(&mut self) {
+        let primitives = self
+            .numeric_alternatives()
+            .into_iter()
+            .filter_map(|(_, operand, _)| self.typed.types.expanded_primitive(operand))
+            .collect::<BTreeSet<_>>();
+        for primitive in primitives {
+            let Some(name) = crate::types::primitive_name_for_symbol(primitive) else {
+                continue;
+            };
+            let line = match primitive {
+                PrimitiveType::I8 => "EL_SIGNED_ALT(i8, int8_t, uint8_t, INT8_MIN, INT8_MAX, 8)",
+                PrimitiveType::I16 => {
+                    "EL_SIGNED_ALT(i16, int16_t, uint16_t, INT16_MIN, INT16_MAX, 16)"
+                }
+                PrimitiveType::I32 => {
+                    "EL_SIGNED_ALT(i32, int32_t, uint32_t, INT32_MIN, INT32_MAX, 32)"
+                }
+                PrimitiveType::I64 => {
+                    "EL_SIGNED_ALT(i64, int64_t, uint64_t, INT64_MIN, INT64_MAX, 64)"
+                }
+                PrimitiveType::Isize => {
+                    "EL_SIGNED_ALT(isize, intptr_t, uintptr_t, INTPTR_MIN, INTPTR_MAX, \
+                     (sizeof(intptr_t) * CHAR_BIT))"
+                }
+                PrimitiveType::U8 => "EL_UNSIGNED_ALT(u8, uint8_t, UINT8_MAX, 8)",
+                PrimitiveType::U16 => "EL_UNSIGNED_ALT(u16, uint16_t, UINT16_MAX, 16)",
+                PrimitiveType::U32 => "EL_UNSIGNED_ALT(u32, uint32_t, UINT32_MAX, 32)",
+                PrimitiveType::U64 => "EL_UNSIGNED_ALT(u64, uint64_t, UINT64_MAX, 64)",
+                PrimitiveType::Usize => {
+                    "EL_UNSIGNED_ALT(usize, uintptr_t, UINTPTR_MAX, (sizeof(uintptr_t) * CHAR_BIT))"
+                }
+                _ => continue,
+            };
+            let _ = name;
+            let _ = writeln!(self.output, "{line}");
+        }
+        self.output.push('\n');
+    }
+
+    /// Emits one alternative helper. A checked operation pairs the overflow
+    /// predicate with the wrapping result to build `Option[T]`; a wrapping or
+    /// saturating operation forwards directly to its runtime helper.
+    fn emit_numeric_alternative_helper(
+        &mut self,
+        operation: NumericAlternative,
+        operand: TypeId,
+        result: TypeId,
+    ) {
+        let Some(primitive) = self.typed.types.expanded_primitive(operand) else {
+            return;
+        };
+        let Some(suffix) = crate::types::primitive_name_for_symbol(primitive) else {
+            return;
+        };
+        let Some(operand_c_type) = self.c_type(operand, None) else {
+            return;
+        };
+        let Some(result_c_type) = self.c_type(result, None) else {
+            return;
+        };
+        let binary = operation.operator != NumericOperator::Negate;
+        let stem = numeric_operator_stem(operation.operator);
+        let traps = numeric_alternative_traps(operation);
+        let mut parameters = format!("{operand_c_type} a");
+        let mut forwarded = "a".to_string();
+        if binary {
+            let _ = write!(parameters, ", {operand_c_type} b");
+            forwarded.push_str(", b");
+        }
+        if traps {
+            parameters.push_str(", const char *p, uint32_t l, uint32_t c");
+        }
+        let name = numeric_alternative_name(operation, operand, result);
+        let body = match operation.outcome {
+            NumericOutcome::Checked => {
+                let Some(parts) = self.option_parts(result) else {
+                    return;
+                };
+                let none = format!(
+                    "({result_c_type}){{ .tag = UINT32_C({}), .payload.{} = {{0}} }}",
+                    parts.none_variant.index(),
+                    variant_member_name(parts.some_variant),
+                );
+                let some = format!(
+                    "({result_c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = \
+                     el_wrap_{stem}_{suffix}({forwarded}) }} }}",
+                    parts.some_variant.index(),
+                    variant_member_name(parts.some_variant),
+                    field_name(parts.some_field),
+                );
+                format!(
+                    "    if (el_ovf_{stem}_{suffix}({}))\n        return {none};\n    return {some};\n",
+                    if binary { "a, b" } else { "a" },
+                )
+            }
+            NumericOutcome::Wrapping if traps => format!(
+                "    if (b == 0) el_trap(\"E-RUN-DIVZERO\", p, l, c);\n    \
+                 return el_wrap_{stem}_{suffix}(a, b);\n"
+            ),
+            NumericOutcome::Wrapping => {
+                format!("    return el_wrap_{stem}_{suffix}({forwarded});\n")
+            }
+            NumericOutcome::Saturating => {
+                format!("    return el_sat_{stem}_{suffix}({forwarded});\n")
+            }
+        };
+        let _ = writeln!(
+            self.output,
+            "static {result_c_type} {name}({parameters}) {{\n{body}}}\n"
+        );
+    }
+
+    /// The variant and field identities an `Option[T]` value is built from.
+    fn option_parts(&self, option: TypeId) -> Option<OptionParts> {
+        let some_variant = self.resolved.standard_variant("Option", "Some")?;
+        Some(OptionParts {
+            some_variant,
+            some_field: *self.resolved.variants[some_variant.index()]
+                .fields
+                .first()?,
+            none_variant: self.resolved.standard_variant("Option", "None")?,
+        })
+        .filter(|_| self.enums.contains_key(&self.resolve_alias(option)))
     }
 
     /// Emits `bool el_eq_T(T, T)` for an aggregate, comparing structurally.
@@ -1268,25 +1685,15 @@ impl<'a> CEmitter<'a> {
             }
         }
         let _ = writeln!(self.output, "    goto b{};", function.entry.index());
-        let mut referenced_blocks = BTreeSet::from([function.entry]);
+        // Only blocks reachable from the entry are emitted. Reachability must
+        // be transitive: a block reached solely from an unreachable block
+        // would otherwise emit a label with no `goto` naming it, which C
+        // compilers reject under `-Werror=unused-label`. Lowering produces
+        // unreachable blocks routinely — a `match` whose every arm returns
+        // leaves its join block with no live predecessor.
+        let reachable_blocks = reachable_blocks(function);
         for block in &function.blocks {
-            match block.terminator {
-                Terminator::Goto(target) => {
-                    referenced_blocks.insert(target);
-                }
-                Terminator::Branch {
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    referenced_blocks.insert(then_block);
-                    referenced_blocks.insert(else_block);
-                }
-                Terminator::Return(_) | Terminator::Trap { .. } | Terminator::Unreachable => {}
-            }
-        }
-        for block in &function.blocks {
-            if !referenced_blocks.contains(&block.id) {
+            if !reachable_blocks.contains(&block.id) {
                 continue;
             }
             let _ = writeln!(self.output, "b{}:", block.id.index());
@@ -1369,6 +1776,38 @@ impl<'a> CEmitter<'a> {
             Rvalue::Load(place) => self.place_expression(place),
             Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
             Rvalue::DefaultValue(ty) => self.default_expression(*ty, span)?,
+            Rvalue::NumericConversion {
+                outcome,
+                value,
+                source_type,
+                ..
+            } => format!(
+                "{}({})",
+                numeric_conversion_name(*outcome, *source_type, destination_type),
+                temporary_name(*value)
+            ),
+            Rvalue::NumericAlternative {
+                operation,
+                receiver,
+                operand,
+                operand_type,
+            } => {
+                let mut call = format!(
+                    "{}({}",
+                    numeric_alternative_name(*operation, *operand_type, destination_type),
+                    temporary_name(*receiver)
+                );
+                if let Some(operand) = operand {
+                    let _ = write!(call, ", {}", temporary_name(*operand));
+                }
+                // Only the wrapping division and remainder helpers can trap,
+                // and only on a zero divisor, so only they need a location.
+                if numeric_alternative_traps(*operation) {
+                    let _ = write!(call, ", {}", self.trap_arguments(span));
+                }
+                call.push(')');
+                call
+            }
             Rvalue::MakeTraitObject {
                 trait_declaration,
                 concrete,
@@ -2015,7 +2454,7 @@ impl<'a> CEmitter<'a> {
                     );
                 }
             }
-            TypeKind::Nominal { .. } => {
+            TypeKind::Nominal { identity, .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
                     let fields = structure.fields.clone();
                     for (field, _, field_type) in fields {
@@ -2023,6 +2462,13 @@ impl<'a> CEmitter<'a> {
                             let _ = writeln!(body, "    value.{} = {value};", field_name(field));
                         }
                     }
+                } else if let Some(variant) =
+                    crate::traits::intrinsic_default_variant(self.resolved, identity.declaration)
+                {
+                    // The discriminant is the variant's own identity, not its
+                    // ordinal, so a zero-initialized value is not the default
+                    // variant and the tag must be written explicitly.
+                    let _ = writeln!(body, "    value.tag = UINT32_C({});", variant.index());
                 }
             }
             _ => {}
@@ -2040,8 +2486,14 @@ impl<'a> CEmitter<'a> {
             TypeKind::Tuple(_) | TypeKind::Array { .. }
         ) || match self.typed.types.kind(resolved) {
             TypeKind::Nominal { identity, .. } => {
-                self.structs.contains_key(&resolved)
-                    && crate::traits::derives(self.resolved, identity.declaration, "Default")
+                (self.structs.contains_key(&resolved)
+                    && crate::traits::derives(self.resolved, identity.declaration, "Default"))
+                    || (self.enums.contains_key(&resolved)
+                        && crate::traits::intrinsic_derivation(
+                            self.resolved,
+                            identity.declaration,
+                            "Default",
+                        ))
             }
             _ => false,
         }
@@ -2293,6 +2745,103 @@ fn slice_name(ty: TypeId) -> String {
 
 fn function_type_name(ty: TypeId) -> String {
     format!("el_fn_t{}", ty.index())
+}
+
+/// The identities an `Option[T]` value is built from.
+struct OptionParts {
+    some_variant: VariantId,
+    some_field: FieldId,
+    none_variant: VariantId,
+}
+
+fn numeric_operator_stem(operator: NumericOperator) -> &'static str {
+    match operator {
+        NumericOperator::Add => "add",
+        NumericOperator::Subtract => "sub",
+        NumericOperator::Multiply => "mul",
+        NumericOperator::Divide => "div",
+        NumericOperator::Remainder => "rem",
+        NumericOperator::Negate => "neg",
+        NumericOperator::ShiftLeft => "shl",
+        NumericOperator::ShiftRight => "shr",
+    }
+}
+
+/// Whether an alternative can still trap. Only the wrapping division and
+/// remainder can, and only on a zero divisor, which has no wrapped answer.
+fn numeric_alternative_traps(operation: NumericAlternative) -> bool {
+    operation.outcome == NumericOutcome::Wrapping
+        && matches!(
+            operation.operator,
+            NumericOperator::Divide | NumericOperator::Remainder
+        )
+}
+
+fn numeric_alternative_name(
+    operation: NumericAlternative,
+    operand: TypeId,
+    result: TypeId,
+) -> String {
+    format!(
+        "el_{}_t{}_t{}",
+        operation.name,
+        operand.index(),
+        result.index()
+    )
+}
+
+/// The identities a checked numeric conversion's `Result` value is built from.
+struct CheckedConversionParts {
+    target: TypeId,
+    error: TypeId,
+    ok_variant: VariantId,
+    ok_field: FieldId,
+    err_variant: VariantId,
+    err_field: FieldId,
+    out_of_range: VariantId,
+    not_a_number: VariantId,
+}
+
+/// The blocks reachable from `function`'s entry, as a fixpoint over
+/// terminators. Unreachable blocks are not emitted at all, so no label
+/// survives without a `goto` naming it.
+fn reachable_blocks(function: &ControlFlowFunction) -> BTreeSet<BlockId> {
+    let mut reachable = BTreeSet::new();
+    let mut pending = vec![function.entry];
+    while let Some(block_id) = pending.pop() {
+        if !reachable.insert(block_id) {
+            continue;
+        }
+        let Some(block) = function
+            .blocks
+            .iter()
+            .find(|candidate| candidate.id == block_id)
+        else {
+            continue;
+        };
+        match block.terminator {
+            Terminator::Goto(target) => pending.push(target),
+            Terminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                pending.push(then_block);
+                pending.push(else_block);
+            }
+            Terminator::Return(_) | Terminator::Trap { .. } | Terminator::Unreachable => {}
+        }
+    }
+    reachable
+}
+
+fn numeric_conversion_name(outcome: NumericOutcome, source: TypeId, result: TypeId) -> String {
+    let stem = match outcome {
+        NumericOutcome::Checked => "try_from",
+        NumericOutcome::Wrapping => "wrapping_from",
+        NumericOutcome::Saturating => "saturating_from",
+    };
+    format!("el_{stem}_t{}_t{}", source.index(), result.index())
 }
 
 fn variant_member_name(variant: VariantId) -> String {

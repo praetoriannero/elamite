@@ -7,10 +7,10 @@
 ## Issues to resolve before initial implementation begins
 
 These issues determine the initial parser, type checker, and core runtime
-model. None are currently open: `I-017`, `I-018`, `I-019`, and `I-020` are all
-resolved (below). Two implementation/tooling decisions surfaced while resolving
-`I-017` — the minimum C compiler requirement and the supported OS/architecture
-matrix — are not
+model. None are currently open: `I-017` through `I-021` are all resolved
+(below). Two implementation/tooling decisions surfaced while resolving `I-017`
+— the minimum C compiler requirement and the supported OS/architecture matrix —
+are not
 language-design questions and are tracked in [`LEDGER.md`](LEDGER.md#13-target-assumptions)
 instead of here.
 
@@ -123,6 +123,25 @@ foreign call cannot be deferred.
 A `defer:` body is an ordinary lexical scope, so a binding declared inside it
 is local to the deferred block. Deferred *execution* remains Milestone 15;
 Milestone 3 parses both forms and Milestone 7 enforces the placement rules.
+
+## I-021: Remove the compiler-known `Close` trait
+
+**Resolved.** Deterministic cleanup uses `defer` alone. The compiler-known
+`Close` trait is removed because it neither caused cleanup nor let the compiler
+prove that cleanup was registered. `defer` already accepts any safe
+unit-returning call and does not need a distinguished method or trait.
+
+The former trait also attached idempotence, shared-resource state, and
+closed-handle behavior to an implementation that could not enforce any of
+those laws. Resource types now expose ordinary methods such as `close` or
+`release`; the concrete type's API specifies whether those methods are
+idempotent, fallible, or shared across copied handles. Shared identity must be
+represented explicitly, such as through a safe reference in the handle, rather
+than being introduced by implementing a trait.
+
+Libraries remain free to declare an ordinary `Close` trait when generic cleanup
+polymorphism is useful. Such a trait has no compiler integration and no special
+relationship with `defer`.
 
 ## Issues to refine after initial implementation begins
 

@@ -1,6 +1,8 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 13 complete, Milestone 14 next
+> Status: Active — Milestones 0 through 13 complete, Milestone 14 in progress
+>
+> Next work package: M14.5 — immutable `str`
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -135,6 +137,29 @@ A milestone is complete only when:
 - temporary limitations are recorded explicitly rather than silently accepted;
 - the next milestone does not need to bypass the established layer boundary.
 
+### 2.6 Work-package format
+
+Completed Milestones 0 through 13 retain concise implementation summaries
+because they describe established layer boundaries rather than active backlog.
+Starting with Milestone 14, remaining work is divided into ordered work packages
+named `M<N>.<task>`.
+
+Each work package should normally fit in one focused change and must:
+
+- leave the compiler building with all earlier tests passing;
+- add the smallest representation, semantic rule, or runtime hook needed by
+  that package, without partially enabling later syntax;
+- include focused positive and negative tests, plus a runtime test when it can
+  trap or has observable ordering;
+- update `LEDGER.md` when completing it changes the recorded implementation or
+  test status of a normative rule; and
+- record any deliberately temporary boundary in the milestone status note.
+
+Task order within a milestone is significant unless a task explicitly says it
+may proceed in parallel. A work package is not a new language-design authority:
+`SPEC.md` remains normative, and splitting work must not create observable
+intermediate semantics that contradict it.
+
 ## 3. Stage A: establish the language contract
 
 ### Milestone 0: specification migration and feature ledger
@@ -151,7 +176,7 @@ Implementation work:
   `examples/spec_demo.elx` as authoritative when behavior differs.
 - Record all compiler-known entities in one catalog: primitive types, numeric
   operations, `Option`, `Result`, collections, `Default`, comparison traits,
-  `StableHash`, `Display`, `Close`, `Identity`, `ForeignRoot`, and `CVoid`.
+  `StableHash`, `Display`, `Identity`, `ForeignRoot`, and `CVoid`.
 - Define the initial supported target assumptions, including pointer width,
   integer representations, C compiler requirements, Boehm GC availability,
   and how native libraries are supplied.
@@ -262,8 +287,8 @@ Implementation work:
   arrays, slices, safe references, raw pointers, function references, unsafe
   function references, foreign function pointers, and trait objects.
 - Define statements for bindings, assignment, expression statements, control
-  flow, `return`, `break`, `continue`, `pass`, `unsafe`, and single-call
-  `defer`.
+  flow, `return`, `break`, `continue`, `pass`, `unsafe`, single-call
+  `defer call`, and block-form `defer:`.
 - Implement expression precedence and associativity exactly as specified,
   including postfix calls, fields, indexing, `?`, unary operators, `as`, and
   assignment separation.
@@ -304,8 +329,10 @@ Implementation work:
   declaration collection.
 - Maintain the shared module-item namespace and reject duplicate declarations
   or imports even if duplicate imports identify the same target.
-- Resolve absolute package/dependency paths and `root`, `self`, `super`, and
-  `std` paths. Keep lexical lookup separate from module-path lookup.
+- Resolve absolute package/dependency paths and `root`, `self`, and `super`
+  paths. Resolve `std` as the ordinary standard-package name after lexical,
+  module, import, and dependency-alias lookup, so a user declaration may shadow
+  it. Keep lexical lookup separate from module-path lookup.
 - Implement imports, aliases, public re-exports, externally reachable module
   paths, and package-private versus public access.
 - Build lexical scopes for parameters, local bindings, pattern bindings, and
@@ -441,6 +468,9 @@ Implementation work:
 - Implement pattern usefulness, source-order reachability, and exhaustiveness.
   Guarded arms do not contribute to exhaustiveness.
 - Enforce identical binding names and types across alternative patterns.
+- Enforce the structural placement rules for deferred blocks: no `return`,
+  `break`, `continue`, postfix `?`, nested `defer`, or `unsafe:` inside
+  `defer:`, and no `defer` inside `unsafe:`.
 - Preserve the type, place, copy, and source-span metadata needed for
   Milestone 8 to record left-to-right evaluation explicitly.
 
@@ -527,8 +557,10 @@ Implementation work:
 
 - Define generated or runtime copy operations for every value representation.
   Ordinary nested values copy recursively; explicit references, raw pointers,
-  function references, trait-object references, and shared resource state
-  retain identity.
+  function references, and trait-object references retain identity. A resource
+  handle shares state only when its representation contains an explicit alias
+  or another compiler-known identity-bearing value; implementing a trait never
+  changes copy behavior.
 - Initially use eager deep copies for mutable strings and collections if that
   reduces implementation risk. Add copy-on-write only behind the same copy
   interface and only after independence tests exist.
@@ -718,8 +750,10 @@ Validation:
 > struct; each implementing type emits a static table whose slots are filled by
 > `void *`-receiver thunks, so no function pointer is cast between incompatible
 > types. Slots are ordered by method name for deterministic layout. Default
-> methods participate and may be overridden. Forming an object requires an
-> object-safe trait the source type implements.
+> methods participate and may be overridden. An exact expected trait-object
+> reference context automatically converts a concrete safe reference of
+> matching mutability when its target implements the object-safe trait;
+> explicit `as &Trait` conversion remains available.
 >
 > Compiler-supported derivations are conditional on their instantiated field
 > capabilities. `Default` is synthesized fieldwise; equality and ordering use
@@ -731,7 +765,7 @@ Validation:
 > Milestone 14 consumers of these completed Milestone 13 facilities.
 
 **Goal:** Implement static trait selection, coherence, compiler capabilities,
-and explicit trait objects.
+and contextual trait-object conversion and dispatch.
 
 Implementation work:
 
@@ -769,111 +803,178 @@ Validation:
 
 ### Milestone 14: strings, collections, iteration, and formatting
 
+> Status: In progress — M14.1 through M14.4 complete, M14.5 next.
+>
+> Boundary: generic enums and structural `StableHash` capability inference
+> already exist. This milestone makes the standard `Option[T]` and
+> `Result[T, E]` declarations executable as ordinary generic enum values before
+> APIs that return them. Milestone 15 still owns the compiler-recognized
+> `Result` propagation role, postfix `?`, and its interaction with cleanup.
+>
+> M14.1 resolved how a standard type that the specification writes as ordinary
+> Elamite source becomes executable. `Option[T]` is no longer a name-only
+> builtin: `src/resolution.rs` lexes, parses, and collects a compiler-supplied
+> source unit into the `std` root module, so `Option` carries real declaration,
+> variant, field, and generic-parameter identities and reaches typing,
+> monomorphization, and the C backend through the unmodified generic-enum path.
+> Construction, inference, matching, exhaustiveness, payload copying, and
+> recursive `Option[&T]` graphs therefore needed no `Option`-specific code, and
+> the builtin-`Option` pattern and coverage special cases were removed.
+>
+> Exactly one intrinsic remains, and it is the one `SPEC.md` 4.3 states:
+> `Option[T]` defaults to `Option.None` without a `T: Default` obligation.
+> `crate::traits::intrinsic_derivation` names it, keyed on the standard
+> declaration's identity rather than the spelling, so a user enum spelled
+> `Option` shadows the prelude name and receives nothing. Because an enum's C
+> discriminant is the variant's identity and not its ordinal, the backend's
+> default helper writes the `None` tag explicitly instead of relying on
+> zero-initialization.
+>
+> M14.2 gave `Result[T, E]` and M14.3 gave `NumericError` the same treatment.
+> `Result`'s compiler-known role is postfix `?` propagation, which is control
+> flow rather than a trait, so it carries no intrinsic capability at all; only
+> the *standard* `Result` propagates, and Milestone 15.1 still owns that role.
+> These declarations are not a `std` *package*; Milestone 18.2 still owns that,
+> and M18.1's intrinsic-inventory audit should confirm the list has not grown.
+>
+> M14.3 and M14.4 added the numeric associated functions and methods. A
+> primitive has no declaration, so `Target.try_from`/`wrapping_from`/
+> `saturating_from` and the `checked_`/`wrapping_`/`saturating_` operator
+> alternatives are recognized in `src/check.rs` beside nominal member
+> selection rather than through it. Each alternative is emitted as an overflow
+> *predicate* plus a wrapping result, so `checked_X` is exactly
+> `ovf_X ? None : Some(wrap_X)` and the predicate mirrors the trapping
+> helper's own condition — the two cannot disagree about which operations
+> overflow. Wrapping arithmetic goes through the unsigned counterpart type,
+> avoiding C's signed-overflow undefined behavior. `wrapping_div`/
+> `wrapping_rem` still trap on a zero divisor, which has no wrapped answer;
+> every other alternative leaves the trapping path entirely. Division,
+> remainder, and shifts have no saturating form, because their failures have
+> no nearest representable answer.
+>
+> A numeric primitive's associated-function surface is now complete, so an
+> unrecognized member on one is reported. `str` and `String` deliberately are
+> not: their surfaces arrive in M14.5 and M14.6, so an unknown member there
+> still falls through silently until those packages close it.
+>
+> One pre-existing defect became visible here and is deliberately left where it
+> belongs: selecting an unknown enum member (`Option.Nope`, `Choice.Nope`)
+> yields the error type with no diagnostic. It is common to every enum, not
+> specific to `Option`, and belongs to enum member selection in `src/check.rs`;
+> Milestone 19.9's diagnostic review owns closing it.
+
 **Goal:** Supply the compiler-known standard value types needed by ordinary
 programs and the authoritative demonstration.
 
-Implementation work:
+Implementation tasks, in order:
 
-- Implement immutable UTF-8 `str`, mutable independently copied `String`, and
-  explicit conversion between them.
-- Implement fixed arrays, `Vec`, `Map`, and `Set` with the specified APIs and
-  trap behavior.
-- Lower `@vec`, `@map`, and `@set` as compiler-known construction forms. Do not
-  create a general user macro system.
-- Enforce exact homogeneous element types, contextual typing of empty literals,
-  left-to-right construction, duplicate map replacement, and duplicate set
-  collapse.
-- Enforce `StableHash` on map keys and set elements. Implement
-  `Identity[&T]` and `Identity[&var T]` with managed target identity.
-- Implement value-context indexed copies and mutable collection places without
-  making interiors addressable.
-- Lower `for` by copying its iterable once into hidden state and copying each
-  yielded element. Preserve index order for arrays and vectors while leaving
-  map/set order unspecified.
-- Implement `Display`, `Formatter`, formatted-string left-to-right evaluation,
-  and the single-value `print` and `println` functions.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M14.1 — Executable `Option`** *(complete)* | Lower `Option.Some`/`Option.None` through the existing generic-enum path; support construction, matching, payload copying, and `Default` to `None` without a `T: Default` obligation. | Run-pass construction/match/default tests, including `Option[&T]`; recursive `Option` graphs exercise the existing GC path. |
+| **M14.2 — Ordinary `Result` values** *(complete)* | Make standard `Result.Ok`/`Result.Err` construction, matching, and copying use the existing generic-enum path without giving `Result` its postfix `?` role yet. | Generic `Ok`/`Err` construction and match tests pass while `?` remains rejected. |
+| **M14.3 — Checked numeric conversions** *(complete)* | Add `NumericError` and the specified `Type.try_from` methods on concrete numeric types, reusing the exact M6/M8 conversion boundaries. | Successful/failing conversions cover every source/target family and both pointer widths without trapping. |
+| **M14.4 — Numeric arithmetic alternatives** *(complete)* | Add the specified checked arithmetic methods returning `Option[T]` and wrapping/saturating arithmetic and conversions. Reuse M8 helpers rather than duplicating arithmetic rules. | Integer-width boundary tests prove checked failure returns `None` and wrapping/saturating operations never take the trapping path. |
+| **M14.5 — Immutable `str`** | Finish immutable UTF-8 storage, literal default/contextual materialization, default/equality/order/hash/`StableHash`, and immutable copy behavior. | Unicode and escape run-pass tests, exact codepoint comparison, stable hashing, and rejected content mutation. |
+| **M14.6 — Mutable `String`** | Finish mutable UTF-8 storage, `String.from(str)`, independent logical copying, and default/equality/order/hash. Do not provide `StableHash` or an implicit conversion from an existing `str` value. | Copy-independence, explicit-conversion, comparison, and `StableHash` rejection tests. |
+| **M14.7 — Collection runtime boundary** | Define target-independent layouts and helper interfaces for `Vec`, `Map`, and `Set`; integrate allocation, empty defaults, and recursive copy hooks with `ManagedMemoryStrategy`; invoke no user cleanup. | Default/empty construction and nested-copy tests for all three collections with deterministic generated C. |
+| **M14.8 — Array APIs** | Complete fixed-array `len` and `get`, exact `usize` indexing, static and runtime bounds behavior, and conditional `StableHash`. Arrays remain fixed-size ordinary aggregates. | Length/get/index tests, statically known and runtime OOB cases, and conditional stable hashing. |
+| **M14.9 — `Vec` APIs** | Implement `Vec.new`, `len`, `is_empty`, `get`, `append`, `insert`, `remove`, and `clear`; add conditional lexicographic equality, ordering, and hashing. Do not introduce a `Vector` alias. | API-by-API run-pass tests, insert/remove trap boundaries, copied return values, comparisons, and rejection of `Vector`. |
+| **M14.10 — Runtime stable-key hashing** | Connect M13 `StableHash` capability proofs to matching equality/hash helpers used by hashed collections. Reject floats, mutable values, ordinary safe references, and manually claimed stability without promising map/set iteration order or cross-process hash values. | Equal stable values hash equally within a collection; each forbidden key category has a compile-fail test. |
+| **M14.11 — `Map` APIs** | Implement `Map.new`, `len`, `is_empty`, `contains_key`, `get`, `insert`, `remove`, `clear`, and trapping value indexing. Keys and values copy normally; conditional equality/hash ignore iteration order, and maps have no relational order. | Replacement/removal results, absent-key behavior, copy independence, stable keys, and order-independent equality/hash. |
+| **M14.12 — `Set` APIs** | Implement `Set.new`, `len`, `is_empty`, `contains`, `insert`, `remove`, and `clear`, plus conditional order-independent equality/hash. Sets have no indexing or relational order. | Duplicate collapse, boolean insert/remove results, copy independence, and order-independent equality/hash. |
+| **M14.13 — Identity-key wrappers** | Implement `Identity[&T]` and `Identity[&var T]` equality, hashing, and `StableHash` using managed target identity rather than pointee contents. | Aliases to one target compare/hash equally and work as map keys/set elements despite pointee mutation. |
+| **M14.14 — Collection literal typing** | Type-check `@vec`, `@map`, and `@set` without introducing general macros; require exact homogeneous types, contextual typing for empty literals, and `StableHash` where required. | Compile-pass contextual literals and compile-fail heterogeneous, ambiguous-empty, and unstable-key cases. |
+| **M14.15 — Collection literal lowering** | Evaluate entries left-to-right into explicit temporaries, then build the collection; later duplicate map keys replace values and duplicate set entries collapse. | Side-effect ordering and duplicate tests use independently copied inputs. |
+| **M14.16 — Collection places** | Lower value-context indexing as a copy and mutable array/`Vec`/`Map` paths as assignable, non-addressable places. Evaluate a compound-assignment destination once and expose no safe interior reference. | Replacement, compound assignment, nested-field mutation, absent-key traps, and reference-formation rejection. |
+| **M14.17 — Collection iteration** | Lower `for` over arrays, `Vec`, `Map`, and `Set`: evaluate and copy the iterable once, keep hidden state rooted, and copy each yielded binding. Arrays/vectors preserve index order; map/set order remains unspecified. | Source-mutation independence, yielded-copy independence, early `break`/`continue`, and pair typing for maps. |
+| **M14.18 — Formatter runtime** | Define the mutable `Formatter` representation and primitive append/write operations used by `Display` lowering. Keep sequencing explicit and allocation behind managed runtime hooks. | Direct formatter tests cover text growth, Unicode, allocation, and left-to-right writes. |
+| **M14.19 — `Display` implementations** | Add built-in `Display` for primitives, text, references to displayable values, and displayable collections; connect ordinary user impls through M13 static and dynamic dispatch. | One focused test per family plus user static/trait-object impls; map/set tests assume no order. |
+| **M14.20 — Formatted strings** | Lower formatted literals to left-to-right formatter operations with exactly-once interpolation, `{{`/`}}` escapes, immutable `str` results, and no width/precision/debug extensions. | Evaluation-order, escape, unmatched-brace, non-`Display`, and nested-formatting tests. |
+| **M14.21 — `print` and `println`** | Replace the early output skeleton with the single-value generic `Display` functions, keeping `std.io` and prelude entry points consistent. | Primitive, string, user-display, formatted-string, and newline behavior. |
+| **M14.22 — Standard-value integration** | Run the complete value/copy/place/formatting matrix through generic instantiation and C emission; remove M8 boundary diagnostics only for completed constructs. | Collection, `for`, numeric-alternative, and formatting regions of `spec_demo.elx` run without enabling M15 behavior. |
 
 Validation:
 
-- Full API tests, empty and duplicate literals, bounds/key traps, and nested
-  mutation through mutable collection paths.
-- Copy independence after every structural collection operation.
-- Rejection of unstable keys, floating keys, and collection-interior
-  references.
-- Formatting escapes, unmatched braces, evaluation order, and user `Display`
-  impls.
+- Every specified array, string, numeric-alternative, `Vec`, `Map`, and `Set`
+  API has a focused run-pass test and every documented trap has a runtime test.
+- Copy independence holds after construction, lookup, insertion, removal,
+  iteration, assignment, argument passing, and return.
+- Empty and duplicate literals, unstable keys, floating keys, and
+  collection-interior reference attempts have focused coverage.
+- Formatting covers escapes, unmatched braces, left-to-right exactly-once
+  evaluation, built-in values, and user `Display` impls.
 
-### Milestone 15: `Result`, postfix `?`, `Close`, and `defer`
+### Milestone 15: `Result`, postfix `?`, and `defer`
+
+> Status: Pending Milestone 14.
+>
+> Boundary: standard `Result[T, E]` values already construct, match, and copy
+> through M14's ordinary generic-enum path. This milestone gives that exact
+> compiler-known type its propagation role. `defer call` and `defer:` syntax,
+> name resolution, lexical scoping, and control-flow placement restrictions
+> already exist from M3, M4, and M7. Cleanup remains explicit: there is no
+> compiler-known cleanup trait, privileged method name, implicit destruction,
+> GC finalizer, `with`, or `errdefer`.
 
 **Goal:** Complete recoverable error propagation and deterministic explicit
 resource cleanup.
 
-Implementation work:
+Implementation tasks, in order:
 
-- Implement `Result[T, E]` and `Option[T]` as standard generic enums with their
-  compiler-recognized roles.
-- Type-check postfix `?` only in a function returning `Result[U, E]` with the
-  exact same error type. Evaluate its operand once and copy either payload.
-- Lower `?` into explicit branching and early return in control-flow IR.
-- Validate the compiler-known `Close.close(self: &Self) -> ()` signature while
-  leaving its idempotence and shared-state laws as implementation contracts for
-  manually written impls.
-- Accept only a safe, unit-returning single call after `defer`; reject multiline
-  bodies, `errdefer`, direct unsafe or foreign calls, and deferred expressions
-  containing postfix `?`.
-- Retain a deferred call expression tied to its lexical bindings rather than
-  evaluating or capturing its values at registration. Evaluate its callee,
-  receiver, and arguments at scope exit using their then-current values.
-- Lower every fallthrough, `return`, `?`, `break`, and `continue` edge through
-  the appropriate cleanup chain. Run inner-scope calls before outer-scope calls
-  and calls in one scope in reverse registration order.
-- Evaluate and copy a return value or propagated error before entering cleanup
-  blocks.
-- Keep bindings referenced by a deferred expression live until that call
-  completes.
-- Do not implement unwinding after traps, OOM, or a trap in a deferred call.
-  Remaining deferred calls are not guaranteed in those cases.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M15.1 — Compiler-known `Result` role** | Resolve the exact standard `Result[T, E]` identity for propagation and expose typed/IR queries for its tag and payloads. Do not recognize a user type merely because it is also named `Result`. | The standard type is recognized under aliases/imports; a shadowing user type receives no special behavior. |
+| **M15.2 — Postfix `?` typing** | Accept `?` only for `Result[T, E]` inside a function returning `Result[U, E]` with exactly the same `E`; reject `Option`, differing errors, and non-result operands without implicit conversion. | One compile-pass case and focused compile-fail cases for every rejected shape. |
+| **M15.3 — Postfix `?` control flow** | Evaluate the operand once, branch explicitly on its tag, copy an `Ok` payload into the expression result, and copy an `Err` payload into an early `Result.Err` return. | Side-effect-counting and copy-independence tests for both branches. |
+| **M15.4 — Deferred-registration IR** | Represent each reached `defer call` or `defer:` as one registration owned by its lexical scope. Retain syntax/typed IR tied to lexical binding identities; do not create a closure, capture values, or evaluate deferred expressions at registration. | IR tests distinguish registration from execution and show no callable/environment value is constructed. |
+| **M15.5 — Deferred-body checking** | Require the single-call form to be a safe unit-returning call with no postfix `?`. Type-check a block form as its existing lexical scope while preserving the M7 bans on control redirection, nested `defer`, and `unsafe:`. Reject a deferred call whose existing function signature is unsafe; M17 applies the same recorded rule to foreign calls. | Compile-fail tests for non-call, non-unit, `?`, each forbidden statement, and a direct unsafe call. |
+| **M15.6 — Scope cleanup plans** | Build one cleanup plan per lexical scope. Preserve source registration order in IR and execute registrations in reverse order; execute a `defer:` body forward as one registration. | IR and run-pass tests for multiple calls, multiple blocks, and mixed call/block registration. |
+| **M15.7 — Fallthrough and return edges** | Route normal block fallthrough and explicit `return` through the required inner-to-outer cleanup chain. Evaluate and independently copy the return value before cleanup begins. | Nested-scope ordering tests and a returned shared handle whose deferred mutation is observable in the returned copy. |
+| **M15.8 — Loop-exit edges** | Route `break` and `continue` through exactly the scopes exited by that edge, without running cleanup for scopes that remain active. | Nested loop/block tests for both exits and repeated registrations across iterations. |
+| **M15.9 — Propagation edges** | Compose M15.3 with cleanup plans so an `Err` propagation copies its error before running every exited scope's cleanup. | Nested-scope `?` tests proving exactly-once evaluation, copy-before-cleanup, and ordering. |
+| **M15.10 — Deferred-value liveness** | Keep bindings and managed targets referenced by deferred syntax alive until that registration finishes. Rebinding a `var` changes the value observed at exit; a `let` continues to identify the original value. | Reassigned-variable, managed-allocation, and nested aggregate liveness tests. |
+| **M15.11 — Non-unwinding termination boundary** | Ensure traps, OOM, and traps during deferred execution terminate through the existing runtime path without promising remaining cleanup. Do not synthesize exception unwinding. | Subprocess tests confirm termination and avoid asserting execution of remaining registrations. |
+| **M15.12 — Error/cleanup integration** | Remove lowering diagnostics only for completed `Result`, `?`, and `defer` forms; run them together with methods, generics, traits, collections, and formatting. | The error and resource-cleanup regions of `spec_demo.elx` build and run. |
 
 Validation:
 
 - Exact error-type propagation and explicit conversion of differing errors.
 - Exactly-once `Result` evaluation and payload copying.
-- Deferred calls on fallthrough and every non-trap exit edge.
-- Reverse ordering, nested scopes, reassigned `var` bindings, and return-value
-  copying before cleanup.
-- A returned resource handle is observed closed when its close was
-  unconditionally deferred in the returning scope.
+- Deferred calls and blocks on fallthrough and every non-trap exit edge.
+- Reverse registration order, forward execution within one deferred block,
+  nested scopes, reassigned `var` bindings, and return-value copying before
+  cleanup.
+- A returned explicitly shared resource handle is observed closed when its
+  ordinary `close()` call was unconditionally deferred in the returning scope.
 
 ## 9. Stage G: unsafe code and C interoperability
 
 ### Milestone 16: unsafe contexts and raw pointers
 
+> Status: Pending Milestone 15.
+>
+> Boundary: raw-pointer syntax and canonical types already exist, but this
+> milestone is the first point at which pointer access and unsafe invocation
+> become executable. Unsafe blocks relax only the listed operation checks; they
+> do not disable ordinary typing or prove pointer validity.
+
 **Goal:** Isolate unverifiable pointer operations behind the specified lexical
 unsafe boundary.
 
-Implementation work:
+Implementation tasks, in order:
 
-- Type-check `*T`, `*var T`, `null`, raw dereference, safe-to-raw conversion,
-  mutability downgrade, pointee casts, and raw-to-safe-reference conversion.
-- Require explicit `unsafe:` context for dereference, raw-to-reference
-  conversion, pointee-changing raw casts, and unsafe calls.
-- Keep unsafe function caller contracts separate from unsafe operations in the
-  body. An unsafe function body still needs nested `unsafe:` blocks.
-- Preserve safety in unbound unsafe method and named unsafe function references.
-- Permit writes only through `*var T` and forbid casts that upgrade a read-only
-  raw pointer to any mutable raw pointer.
-- Preserve pointer address, provenance metadata assumed by the language model,
-  designated extent, and mutability permission through permitted conversions.
-  Most provenance obligations remain an unsafe source contract rather than
-  runtime metadata.
-- Emit mandatory null and alignment checks for every executed raw dereference
-  and raw-to-reference conversion.
-- Implement the narrow expression-local constant evaluator used to reject a
-  statically known null or misaligned operand. Do not propagate required
-  pointer-validity errors through bindings, assignments, branches,
-  reachability, or calls.
-- Ensure a raw pointer alone does not keep managed storage alive and document
-  the keep-alive patterns expected of safe wrappers.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M16.1 — Pointer values and equality** | Lower `null`, `*T`, and `*var T` values and address-only equality. Preserve exact pointee type and mutability in typed IR and C representations. | Null/non-null equality tests for both pointer mutabilities and both targets. |
+| **M16.2 — Safe pointer conversions** | Implement `&T` to `*T`, `&var T` to `*var T` or `*T`, and `*var T` to `*T`. Preserve address and never infer a pointee-changing or mutability-upgrading conversion. | Compile-pass conversion matrix and compile-fail implicit/upgrade cases. |
+| **M16.3 — Unsafe-context tracking** | Track lexical `unsafe:` depth independently from whether the enclosing function is declared `unsafe`. Require the context for raw access, raw-to-reference conversion, pointee-changing casts, and unsafe calls. | Safe wrapper passes; unsafe function body without a nested block fails; nested blocks recover normally. |
+| **M16.4 — Unsafe function references** | Preserve safety in named and unbound function-reference types. Taking, copying, and comparing `&unsafe fn` remains safe; invocation requires `unsafe:` and never converts to or from `&fn`. | Reference-use run-pass tests and invocation/signature compile-fail tests. |
+| **M16.5 — Pointee-changing casts** | Lower permitted raw-pointer casts while preserving address, source provenance/extent obligations, and mutability permission. Reject every `*T` to `*var U` upgrade and all pointer/integer arithmetic or conversion. | Complete cast matrix with explicit rejection tests. |
+| **M16.6 — Dereference places** | Type-check raw reads and writes as places; writes require `*var T`. Raw-pointer method receivers still require an exact type and receive no implicit borrow, cast, downgrade, or dereference. | Read/write and raw-receiver tests, including immutable-pointer write failure. |
+| **M16.7 — Expression-local validity evaluator** | Evaluate only literals, casts, and operators inside the pointer operand needed to prove null or misalignment. Do not propagate required-error facts through bindings, assignment, branches, reachability, or calls. | Known-invalid expressions fail; equivalent values reached through locals or branches remain accepted. |
+| **M16.8 — Runtime access checks** | Emit mandatory null and target-alignment checks immediately before every executed dereference and raw-to-reference conversion, with stable trap categories and source locations. | Subprocess trap tests for null/misaligned read, write, and conversion. |
+| **M16.9 — Raw-to-reference conversion** | Convert to `&T`/`&var T` only in `unsafe:`, after runtime checks, with exact mutability. A valid managed target becomes strongly reachable through the resulting reference; a foreign/manual target receives no lifetime extension. | Managed-target liveness test and documented foreign-lifetime contract fixture. |
+| **M16.10 — Root and cleanup integration** | Ensure raw pointers alone are not intentionally registered as language roots. Preserve explicit strong paths across operations and finish rejection of unsafe deferred calls without weakening `defer:` restrictions. | Best-effort raw-nonroot test, safe-wrapper keep-alive test, and deferred-unsafe-call compile failure. |
 
 Validation:
 
@@ -887,39 +988,31 @@ Validation:
 
 ### Milestone 17: C ABI, foreign roots, and callbacks
 
+> Status: Pending Milestone 16.
+>
+> Boundary: the backend remains C99. Elamite's internal calling convention is
+> not the public C ABI, ordinary function references never convert to C
+> function pointers, and safe references never cross the boundary directly.
+
 **Goal:** Interoperate with C without weakening Elamite's ordinary type and
 reachability rules.
 
-Implementation work:
+Implementation tasks, in order:
 
-- Parse and validate module-level `extern "C"` declarations, opaque types,
-  foreign structs, imported functions, and exported module-level C-callable
-  functions.
-- Compute or obtain target C layout for foreign structs and validate the exact
-  initial ABI-safe type set. Reject safe references, ordinary aggregates,
-  `bool`, `char`, strings, trait objects, ordinary function references,
-  collections, and 128-bit integers at the boundary.
-- Map fixed-width integers, pointer-sized integers, floating types, C `void`,
-  raw pointers, foreign structs, and `extern "C" fn` pointers to exact C ABI
-  declarations.
-- Treat every imported foreign function as unsafe and bodyless. Do not support C
-  variadics or implicit marshalling.
-- Consume native library and link options from the package graph without making
-  source `import` execute code.
-- Emit exported callback symbols with stable process-lifetime addresses and
-  prevent ordinary Elamite function references from converting to C function
-  pointers.
-- Implement `ForeignRoot[T]` and `ForeignRootMut[T]` registrations, shared
-  handle state, idempotent close, pointer access errors after close, and explicit
-  unregistering. GC must never unregister them automatically.
-- Preserve a strong source path across a non-retaining foreign call. Require an
-  open foreign-root registration for managed storage retained after return.
-- Define the runtime trap boundary so traps terminate rather than unwind through
-  C. Document C++ exceptions, `longjmp`, and other foreign unwinding across
-  Elamite frames as unsupported contract violations.
-- Enforce the initial callback thread restriction: direct or nested reentry on
-  an OS thread already executing Elamite is supported; foreign-created or
-  concurrent callback threads are not.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M17.1 — Foreign declaration validation** | Validate parsed module-level `extern "C"` blocks, bodyless imports, opaque types, foreign structs, and exported module-level C-callable functions. Reject generics, derive lists, methods, bodies where forbidden, and C variadics. | One compile-pass declaration of each kind and focused compile-fail cases for every structural restriction. |
+| **M17.2 — ABI-safety query** | Centralize the exact recursive ABI-safe type query. Accept the specified scalars, raw pointers, foreign structs, `std.ffi.CVoid` behind a pointer, and exact `extern "C" fn` signatures; reject every listed Elamite-only representation. | Table-driven tests for all accepted/rejected types on x86 and x86-64. |
+| **M17.3 — Foreign layout and declarations** | Emit named C99 declarations for opaque and foreign-struct types, preserving field order and target layout assumptions without C11 anonymous members or `_Static_assert`. | C harness confirms size/alignment/field offsets for nested ABI-safe foreign structs. |
+| **M17.4 — Imported functions** | Emit exact unmangled C symbol declarations and unsafe call sites. Map fixed-width/pointer-sized integers, floats, unit return, raw pointers, foreign structs, and C function pointers without implicit marshalling. | Scalar/pointer/struct calls link and run; unsafe-context, deferred-direct-call, and non-ABI-safe signatures fail. |
+| **M17.5 — Native link inputs** | Feed manifest native libraries and link options from the resolved package graph into deterministic build commands. Source `import` remains compile-time lookup only and never executes initialization. | Fake-toolchain argument test and a real small-library link test. |
+| **M17.6 — Exported C entry points** | Emit stable process-lifetime callback symbols for module-level `extern "C" fn`; keep their identity and type distinct from ordinary Elamite functions. | C calls exported safe and unsafe-signature functions; ordinary-function conversion is rejected. |
+| **M17.7 — Non-retaining call liveness** | Keep each source binding/reference strongly reachable for the complete foreign call when a raw pointer is not retained. Document borrowed foreign-pointer duration without inventing runtime ownership. | A C harness triggers collection during a call and still reads the live buffer. |
+| **M17.8 — Foreign-root registration core** | Implement runtime registration/unregistration and `ForeignRoot[T]`/`ForeignRootMut[T]` construction and pointer access. Retaining promotes storage when needed. | Retained buffers survive collection and yield exact raw pointer mutability. |
+| **M17.9 — Foreign-root shared handle API** | Represent one registration as explicit shared handle state. Make `.close()` idempotent, close through any copy, return a closed-handle error from later pointer access, and never unregister from GC reachability alone. | Copy/close/error tests and a best-effort leak test that asserts no finalizer behavior. |
+| **M17.10 — Callback context pattern** | Support a retained raw context pointer backed by an open foreign-root registration; recover a temporary safe reference only inside `unsafe:` and keep it within the foreign contract. | Stateful callback round trip with explicit registration lifetime. |
+| **M17.11 — Error and trap boundary** | Require wrappers to translate `Result`, `errno`, status codes, and out-parameters explicitly. Make traps terminate rather than unwind through C and document C++ exceptions/`longjmp` across Elamite frames as contract violations. | Status-translation tests and trap-in-foreign/callback subprocess tests. |
+| **M17.12 — Callback thread restriction** | Track enough runtime entry state to support direct/nested reentry on an OS thread already executing Elamite and reject or terminate checkable foreign-thread entry. Document unchecked foreign-created or concurrent invocation as undefined behavior pending I-015. | Same-thread nested reentry harness and a separately isolated forbidden-thread test. |
 
 Validation:
 
@@ -936,25 +1029,29 @@ Validation:
 
 ### Milestone 18: prelude, standard library, and developer tooling
 
+> Status: Pending Milestone 17.
+>
+> Boundary: compiler-known names are ordinary declarations from the user's
+> perspective. Keep the intrinsic list identical to `LEDGER.md` §12; in
+> particular, there is no compiler-known cleanup trait and `std` remains an
+> ordinary, shadowable package name.
+
 **Goal:** Turn compiler mechanisms into a coherent, usable initial toolchain.
 
-Implementation work:
+Implementation tasks, in order:
 
-- Provide the `std` package and prelude declarations corresponding exactly to
-  compiler-known types, traits, functions, and capabilities.
-- Keep compiler knowledge minimal and explicit. Prefer ordinary Elamite
-  declarations and implementations when the semantics do not require an
-  intrinsic.
-- Complete executable and library artifact workflows, dependency compilation,
-  native link configuration, and useful package diagnostics.
-- Add commands or options to dump tokens, syntax, resolved declarations, typed
-  IR, control-flow IR, monomorphization results, and generated C.
-- Add a reproducible conformance-test runner and a way to retain temporary build
-  artifacts after failures.
-- Generate or expose documentation comments without making documentation
-  generation a prerequisite for semantic analysis.
-- Document supported targets, required C and GC toolchain components, unstable
-  compiler interfaces, and known limitations.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M18.1 — Intrinsic inventory audit** | Compare compiler-known IDs, lowering hooks, prelude entries, and `LEDGER.md` §12. Remove accidental intrinsics and document why each remaining entity cannot yet be ordinary Elamite code. | A single inventory test fails on missing, extra, or multiply defined compiler-known entities. |
+| **M18.2 — Standard package skeleton** | Create the ordinary `std` package/module tree, including `std.io` and `std.ffi`, with source declarations for every non-intrinsic public API. Keep module initialization nonexistent. | The package resolves and type-checks through the ordinary package graph. |
+| **M18.3 — Prelude assembly** | Re-export exactly the specified prelude surface from `std`; preserve normal lookup and allow local/module/dependency declarations to shadow the name `std`. | Positive lookup tests and negative tests for non-prelude standard APIs. |
+| **M18.4 — Standard implementations** | Move trait impls, associated functions, and wrappers that need no intrinsic behavior into Elamite source. Keep compiler hooks behind the smallest reviewed declarations. | The standard library compiles as ordinary source except for the recorded intrinsic boundary. |
+| **M18.5 — Dependency artifact workflow** | Complete deterministic library compilation, dependency ordering, artifact reuse within one build, public metadata consumption, and native link propagation. | Multi-package executable links against a built Elamite library and uses re-exported generic APIs. |
+| **M18.6 — CLI surface** | Stabilize `check`, `build`, and `run` argument parsing for target, release mode, output directory, C compiler, native inputs, and generated-C retention; provide consistent exit statuses and diagnostics. | Command-level golden tests cover valid combinations, invalid options, and tool failures. |
+| **M18.7 — Intermediate dumps** | Add deterministic dumps for tokens, syntax, resolution, typed IR, control-flow IR, monomorphized instances, and generated C. Every entry retains useful source identity/span information. | Snapshot each dump twice and compare byte-for-byte. |
+| **M18.8 — Test-runner support** | Provide a reproducible conformance runner, temporary-directory isolation, artifact retention after failure, target/optimization selection, and stable expected-output handling. | The runner can select one fixture, one target, or the full matrix and preserves a failing build. |
+| **M18.9 — Documentation extraction** | Expose attached documentation comments and public API signatures without coupling documentation generation to semantic success of unrelated private bodies. | Public/private filtering and source-link tests. |
+| **M18.10 — Toolchain documentation** | Document supported Linux targets, C99 compiler requirements, Boehm installation/linking, unstable compiler interfaces, foreign-thread limits, and all deliberate language limitations. | Documentation commands and examples match the implemented CLI and CI matrix. |
 
 Validation:
 
@@ -965,28 +1062,29 @@ Validation:
 
 ### Milestone 19: conformance, hardening, and initial release gate
 
+> Status: Pending Milestone 18.
+>
+> Boundary: this milestone adds no language features. A failing normative rule
+> returns ownership to the milestone named in `LEDGER.md`; it is not patched
+> around in the conformance harness.
+
 **Goal:** Demonstrate that the entire specified initial language works together.
 
-Implementation work:
+Implementation tasks, in order:
 
-- Turn `examples/spec_demo.elx` into an end-to-end run-pass conformance test.
-- Add one focused conformance file per specification section rather than relying
-  on the large demonstration to localize regressions.
-- Audit the feature ledger from Milestone 0. Every item must be implemented,
-  deliberately deferred by the specification, or represented by a required
-  diagnostic.
-- Fuzz the lexer and parser, and fuzz semantic inputs through the compiler with
-  the invariant that malformed source never crashes the compiler.
-- Run generated C with strong C warnings and available memory/undefined-behavior
-  instrumentation. Investigate compiler-generated warnings as backend defects.
-- Test multiple optimization levels and supported pointer widths. Pay special
-  attention to integer boundaries, root liveness, left-to-right evaluation,
-  function identity, and C ABI layout.
-- Measure compile time, generated C size, native code size, and runtime behavior
-  on representative programs. Optimize only after establishing a regression
-  benchmark.
-- Review diagnostics for common mistakes and ensure errors identify Elamite
-  source rather than exposing internal IR failures.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M19.1 — Authoritative demo fixture** | Turn `examples/spec_demo.elx` and its package files into a deterministic end-to-end fixture with explicit expected output on both supported targets. | Debug and release builds produce the same specified behavior. |
+| **M19.2 — Section conformance fixtures** | Add focused positive, negative, trap, and interaction fixtures for each `SPEC.md` section so failures localize without the large demo. | Every section has an owned fixture directory and a documented test layer. |
+| **M19.3 — Ledger closure audit** | Review every normative `LEDGER.md` row against implementation code and a named test. Mark it implemented, specified as unsupported, or return it to its owning milestone. | No row remains with an ambiguous pass, runtime dependency, or test status. |
+| **M19.4 — Target/optimization matrix** | Run x86 and x86-64 across debug/release C optimization. Concentrate explicit cases on integer width, layout, root liveness, evaluation order, and function identity. | All supported matrix cells pass or the target claim is revised before release. |
+| **M19.5 — Strict generated-C gate** | Compile generated C99 with strong warnings treated as errors. Exercise available undefined-behavior and memory instrumentation without allowing backend-generated suppressions to hide defects. | The conformance suite is warning-clean and sanitizer-clean in supported configurations. |
+| **M19.6 — Lexer/parser robustness** | Add seeded property/fuzz corpora for indentation, delimiters, escapes, formatted strings, recovery, and arbitrary malformed token streams. | No panic, hang, or unbounded diagnostic cascade across the retained corpus. |
+| **M19.7 — Semantic robustness** | Feed parsed malformed and type-invalid programs through resolution, checking, lowering boundaries, and diagnostic rendering with explicit error symbols/types. | No user input reaches an internal-invariant panic or malformed C emission. |
+| **M19.8 — Runtime stress** | Stress recursive copying, generic instantiation, collection churn, cycles, reference promotion, cleanup chains, traps, and callback reentry. | Stable output/status and no sanitizer failures under repeated runs. |
+| **M19.9 — Diagnostic review** | Curate common mistakes for modules, types, traits, generics, collections, unsafe code, and FFI. Ensure primary/related spans point to Elamite source and categories remain stable. | Snapshot review contains no raw internal IDs or unexplained IR/backend failures. |
+| **M19.10 — Performance baseline** | Record compile time, peak memory, generated-C size, native size, and runtime for representative programs without changing semantics to meet arbitrary targets. | Reproducible benchmark inputs and baseline results are checked in or published with the release process. |
+| **M19.11 — Release audit** | Verify version/spec reporting, supported-toolchain documentation, license/notices, known limitations, unsupported concurrency, and foreign-thread restrictions. | Every initial release criterion below has linked evidence. |
 
 Initial release criteria:
 
@@ -1001,26 +1099,32 @@ Initial release criteria:
 
 ### Milestone 20: post-conformance optimization
 
+> Status: Candidate work after Milestone 19.
+
 **Goal:** Improve implementation quality without changing language behavior.
 
-Candidate work:
+Candidate work packages are independent proposals, not a promise to implement
+all of them in numeric order:
 
-- Precise escape analysis to keep nonescaping referenced storage on the stack.
-- Copy elision and move-like backend optimizations that remain unobservable at
-  the source level.
-- Copy-on-write storage for `String`, arrays where useful, and standard
-  collections.
-- Specialized monomorphized layouts and devirtualization of statically known
-  trait-object calls.
-- Incremental queries, dependency artifact caching, parallel package
-  compilation, and deterministic cache keys.
-- Better source maps, editor-facing diagnostics, and language-server support.
-- Optional warnings for provable resource leaks and suspicious raw-pointer
-  contracts.
+| Task | Candidate change | Required semantic guard |
+| --- | --- | --- |
+| **M20.1 — Optimization benchmark gate** | Choose a measured problem, record a reproducible before-state, and define the expected improvement before changing lowering. | Full M19 conformance baseline remains available for comparison. |
+| **M20.2 — Precise escape analysis** | Keep proven nonescaping address-taken storage on the stack while retaining conservative promotion as the fallback. | Escaping, interior, returned, trait-object, and deferred references preserve root lifetime and identity. |
+| **M20.3 — Copy elision** | Elide backend copies or reuse storage when independence cannot become observable. This is not a source-level move operation. | Mutation, alias, evaluation-order, return, pattern, and cleanup tests remain unchanged. |
+| **M20.4 — Copy-on-write text** | Replace eager `String` copies with COW storage behind the existing logical-copy interface. | First mutation detaches exactly once; independent copies, explicit aliases, and evaluation order retain specified behavior. |
+| **M20.5 — Copy-on-write collections** | Add COW independently for `Vec`, `Map`, and `Set`, one collection at a time. | Mutation, indexing places, iteration snapshots, hashes, and returned removed values remain independent. |
+| **M20.6 — Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and copy semantics do not change. |
+| **M20.7 — Devirtualization** | Replace a trait-object call with static dispatch only when the concrete target is proven and evaluation is unchanged. | Vtable-visible behavior, target identity, object safety, and source-order evaluation remain intact. |
+| **M20.8 — Incremental queries** | Introduce stable query boundaries for parsing, resolution, typing, and lowering. | Cache keys include all semantic inputs and clean/incremental outputs are byte-identical. |
+| **M20.9 — Dependency artifact cache** | Reuse built package artifacts by deterministic package identity, target, options, compiler/spec revision, and dependency keys. | Stale artifacts cannot cross package instances or target widths. |
+| **M20.10 — Parallel package compilation** | Schedule independent package nodes concurrently after deterministic dependency resolution. | Diagnostics, symbols, artifacts, and link-input ordering remain deterministic. |
+| **M20.11 — Source maps and editor diagnostics** | Improve generated-source mapping and expose machine-readable diagnostics suitable for editor tooling. | CLI diagnostics retain stable categories/spans and no language-server dependency enters semantic layers. |
+| **M20.12 — Optional analyses** | Add warnings for locally provable resource leaks and suspicious raw-pointer contracts. | Warnings are conservative, independently suppressible, and never become required compile errors. |
 
-Each optimization needs before-and-after conformance runs and targeted tests
-that would expose a change in copy independence, evaluation order, identity,
-root lifetime, or trap behavior.
+Every selected package requires before-and-after measurements, a full
+conformance run, and targeted tests that would expose a change in copy
+independence, evaluation order, identity, root lifetime, trap behavior, or
+deterministic output.
 
 ## 11. Deferred concurrency design gate
 
@@ -1030,7 +1134,7 @@ cross-thread callbacks until `I-015` defines:
 - whether execution is only cooperative or may be parallel;
 - which values may cross a task boundary;
 - how safe references, mutable aliases, raw pointers, trait objects, function
-  references, and `Close` handles behave across that boundary;
+  references, and resource handles behave across that boundary;
 - the data-race and memory-ordering model;
 - structured task lifetime, cancellation, and the cleanup behavior of `defer`;
 - task failure and recoverable error propagation;

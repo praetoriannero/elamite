@@ -10,7 +10,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::check::{CheckedCall, CheckedProgram, ReceiverAdjustment};
+use crate::check::{
+    CheckedCall, CheckedProgram, NumericAlternative, NumericOutcome, ReceiverAdjustment,
+    TraitObjectCoercion,
+};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::lexer::{FormattedSegmentKind, Keyword, Token, TokenKind};
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -228,6 +231,23 @@ pub enum TypedExpressionKind {
     /// `Type.default()` from a `Default` derivation: the type's structural
     /// default value.
     DefaultValue(TypeId),
+    /// A standard nontrapping numeric conversion (`SPEC.md` 4.1). The operand
+    /// is evaluated once; the checked form's range test uses the same
+    /// boundaries as the trapping `as` conversion, so the two never disagree
+    /// about which values are representable.
+    NumericConversion {
+        outcome: NumericOutcome,
+        value: Box<TypedExpression>,
+        target: TypeId,
+    },
+    /// `value.checked_add(other)` and the other standard alternatives to the
+    /// trapping arithmetic operators (`SPEC.md` 4.1). The receiver and any
+    /// operand are evaluated left to right, exactly as for the operator.
+    NumericAlternative {
+        operation: NumericAlternative,
+        receiver: Box<TypedExpression>,
+        operand: Option<Box<TypedExpression>>,
+    },
     /// `reference as &Trait`: pairs a concrete reference with the vtable of
     /// its implementing type.
     MakeTraitObject {
@@ -703,6 +723,14 @@ impl<'a> TypedLowerer<'a> {
             TypeKind::Array { element, .. } => {
                 self.enqueue_default_dependencies(element, span, visiting);
             }
+            // An intrinsic default (`Option.None`) selects a variant with no
+            // payload, so it depends on no other type's default.
+            TypeKind::Nominal { identity, .. }
+                if crate::traits::intrinsic_derivation(
+                    self.resolved,
+                    identity.declaration,
+                    "Default",
+                ) => {}
             TypeKind::Nominal {
                 identity,
                 arguments,
@@ -1341,12 +1369,14 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn lower_expression(&mut self, node: &SyntaxNode) -> Option<TypedExpression> {
-        let template = self
+        let result_template = self
             .checked
             .expression_types
             .get(&node.span)
             .copied()
             .unwrap_or_else(|| self.typed.types.error());
+        let coercion = self.checked.trait_object_coercions.get(&node.span).copied();
+        let template = coercion.map_or(result_template, |coercion| coercion.source);
         let ty = self.concrete_type(template);
         if ty == self.typed.types.error() {
             self.unsupported(
@@ -1390,35 +1420,44 @@ impl<'a> TypedLowerer<'a> {
                     // it allocates a managed cell of its own (SPEC 3.2).
                     if operand_node.kind == SyntaxKind::RecordExpression {
                         let value = self.lower_expression(operand_node)?;
-                        return Some(TypedExpression {
-                            kind: TypedExpressionKind::AddressOfTemporary(Box::new(value)),
-                            ty,
-                            place,
-                            copy: false,
-                            span: node.span,
-                        });
+                        return self.finish_expression(
+                            node,
+                            TypedExpression {
+                                kind: TypedExpressionKind::AddressOfTemporary(Box::new(value)),
+                                ty,
+                                place,
+                                copy: false,
+                                span: node.span,
+                            },
+                        );
                     }
                     let Some(target) = self.lower_place(operand_node) else {
                         self.unsupported(node.span, "a reference to this place");
                         return None;
                     };
-                    return Some(TypedExpression {
-                        kind: TypedExpressionKind::AddressOf(Box::new(target)),
-                        ty,
-                        place,
-                        copy: false,
-                        span: node.span,
-                    });
+                    return self.finish_expression(
+                        node,
+                        TypedExpression {
+                            kind: TypedExpressionKind::AddressOf(Box::new(target)),
+                            ty,
+                            place,
+                            copy: false,
+                            span: node.span,
+                        },
+                    );
                 }
                 if matches!(token.kind, TokenKind::Star) {
                     let operand = self.lower_expression(operand_node)?;
-                    return Some(TypedExpression {
-                        kind: TypedExpressionKind::Dereference(Box::new(operand)),
-                        ty,
-                        place,
-                        copy: self.checked.copies.contains(&node.span),
-                        span: node.span,
-                    });
+                    return self.finish_expression(
+                        node,
+                        TypedExpression {
+                            kind: TypedExpressionKind::Dereference(Box::new(operand)),
+                            ty,
+                            place,
+                            copy: self.checked.copies.contains(&node.span),
+                            span: node.span,
+                        },
+                    );
                 }
                 let operator = unary_operator(&token.kind)?;
                 let negative_literal = operator == UnaryOperator::Negative
@@ -1544,12 +1583,47 @@ impl<'a> TypedLowerer<'a> {
             }
             _ => return None,
         };
+        self.finish_expression(
+            node,
+            TypedExpression {
+                ty,
+                place,
+                copy: self.checked.copies.contains(&node.span),
+                span: node.span,
+                kind,
+            },
+        )
+    }
+
+    fn finish_expression(
+        &mut self,
+        node: &SyntaxNode,
+        mut expression: TypedExpression,
+    ) -> Option<TypedExpression> {
+        let Some(coercion) = self.checked.trait_object_coercions.get(&node.span).copied() else {
+            return Some(expression);
+        };
+        let TraitObjectCoercion {
+            target,
+            trait_declaration,
+            concrete,
+            ..
+        } = coercion;
+        let target = self.concrete_type(target);
+        let concrete = self.concrete_type(concrete);
+        self.register_vtable(trait_declaration, concrete, node.span);
+        let copy = self.checked.copies.contains(&node.span);
+        expression.copy = false;
         Some(TypedExpression {
-            ty,
-            place,
-            copy: self.checked.copies.contains(&node.span),
+            ty: target,
+            place: PlaceKind::Value,
+            copy,
             span: node.span,
-            kind,
+            kind: TypedExpressionKind::MakeTraitObject {
+                value: Box::new(expression),
+                trait_declaration,
+                concrete,
+            },
         })
     }
 
@@ -1613,6 +1687,29 @@ impl<'a> TypedLowerer<'a> {
                 let ty = self.concrete_type(ty);
                 self.enqueue_default_dependencies(ty, node.span, &mut BTreeSet::new());
                 return Some(TypedExpressionKind::DefaultValue(ty));
+            }
+            CheckedCall::NumericConversion {
+                outcome, target, ..
+            } => {
+                let value = self.lower_expression(*nodes.get(1)?)?;
+                return Some(TypedExpressionKind::NumericConversion {
+                    outcome,
+                    value: Box::new(value),
+                    target: self.concrete_type(target),
+                });
+            }
+            CheckedCall::NumericAlternative { operation, .. } => {
+                let base = child_nodes(callee_node).into_iter().next()?;
+                let receiver = self.lower_expression(base)?;
+                let operand = match nodes.get(1) {
+                    Some(argument) => Some(Box::new(self.lower_expression(argument)?)),
+                    None => None,
+                };
+                return Some(TypedExpressionKind::NumericAlternative {
+                    operation,
+                    receiver: Box::new(receiver),
+                    operand,
+                });
             }
             CheckedCall::TraitSelfMethod {
                 trait_declaration,
@@ -2152,6 +2249,24 @@ pub enum Rvalue {
     AddressOf(ControlFlowPlace),
     /// The structural default of a type, from a `Default` derivation.
     DefaultValue(TypeId),
+    /// A standard nontrapping numeric conversion. The destination temporary
+    /// carries the result type: `Result[target, NumericError]` for the checked
+    /// form, and the target itself otherwise.
+    NumericConversion {
+        outcome: NumericOutcome,
+        value: TemporaryId,
+        source_type: TypeId,
+        target_type: TypeId,
+    },
+    /// One standard alternative to a trapping arithmetic operator. The
+    /// destination temporary carries the result type, which is `Option[T]` for
+    /// a checked operation and `T` otherwise.
+    NumericAlternative {
+        operation: NumericAlternative,
+        receiver: TemporaryId,
+        operand: Option<TemporaryId>,
+        operand_type: TypeId,
+    },
     /// Pairs a concrete reference with a vtable to form a trait object.
     MakeTraitObject {
         value: TemporaryId,
@@ -2773,6 +2888,37 @@ impl<'a> FunctionLowerer<'a> {
                 })
             }
             TypedExpressionKind::DefaultValue(ty) => Rvalue::DefaultValue(*ty),
+            TypedExpressionKind::NumericConversion {
+                outcome,
+                value,
+                target,
+            } => {
+                let source_type = value.ty;
+                let value = self.lower_expression(value);
+                Rvalue::NumericConversion {
+                    outcome: *outcome,
+                    value,
+                    source_type,
+                    target_type: *target,
+                }
+            }
+            TypedExpressionKind::NumericAlternative {
+                operation,
+                receiver,
+                operand,
+            } => {
+                let operand_type = receiver.ty;
+                let receiver = self.lower_expression(receiver);
+                let operand = operand
+                    .as_ref()
+                    .map(|operand| self.lower_expression(operand));
+                Rvalue::NumericAlternative {
+                    operation: *operation,
+                    receiver,
+                    operand,
+                    operand_type,
+                }
+            }
             TypedExpressionKind::MakeTraitObject {
                 value,
                 trait_declaration,

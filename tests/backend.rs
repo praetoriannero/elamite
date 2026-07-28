@@ -476,7 +476,13 @@ fn main() -> ():
             .generated_c
             .contains("return el_copy_string(value);")
     );
-    assert!(compilation.generated_c.contains("result.f0 = el_copy_t"));
+    // The struct's copy helper copies its field through that field type's own
+    // helper. The field's C name carries its `FieldId`, which is not a stable
+    // part of the contract, so match the shape rather than one index.
+    assert!(compilation.generated_c.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("result.f") && line.contains("= el_copy_t")
+    }));
 
     let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
     assert_eq!(stdout, "copied\n");
@@ -1332,8 +1338,8 @@ fn main() -> ():
     let rect = Rect { width: 2, height: 5 }
     let sq = &square
     let rc = &rect
-    println(f"{measure(sq as &Shape)},{measure(rc as &Shape)}")
-    println(f"{describe(sq as &Shape)},{describe(rc as &Shape)}")
+    println(f"{measure(&square)},{measure(&rect)}")
+    println(f"{describe(sq)},{describe(rc)}")
 "#;
     for optimization in [Optimization::Debug, Optimization::Release] {
         let (stdout, stderr, status) = build_and_run(source, optimization);
@@ -1354,7 +1360,7 @@ fn a_trait_object_uses_a_fat_reference_and_thunked_vtable() {
          impl Shape for Square:\n    fn area(self: &Self) -> i32:\n        return self.side\n\n\
          fn measure(shape: &Shape) -> i32:\n    return shape.area()\n\n\
          fn main() -> ():\n    let square = Square { side: 2 }\n    let reference = &square\n\
-         \x20\x20\x20\x20println(measure(reference as &Shape))\n",
+         \x20\x20\x20\x20println(measure(reference))\n",
     );
     let mut sources = SourceManager::new();
     let graph = tree.graph(&mut sources);
@@ -1496,7 +1502,7 @@ fn main() -> ():
     println(wrapped.label())
     println(Wrapper[i32].Label.label(&wrapped))
     let reference = &wrapped
-    let object: &Label = reference as &Label
+    let object: &Label = reference
     println(object.label())
 "#,
         Optimization::Release,
@@ -1504,4 +1510,487 @@ fn main() -> ():
     assert_eq!(stdout, "generic\ngeneric\ngeneric\n");
     assert_eq!(stderr, "");
     assert_eq!(status, 0);
+}
+
+#[test]
+fn executes_option_construction_matching_and_payload_copies() {
+    // Milestone 14.1: `Option[T]` reaches C through the same generic-enum
+    // path as a user enum, so its payload copies independently of its source.
+    let source = r#"
+struct Counter:
+    value: i32
+
+fn describe(value: Option[i32]) -> i32:
+    match value:
+        Option.Some(inner):
+            return inner
+        Option.None:
+            return -1
+
+fn main() -> ():
+    let some: Option[i32] = Option.Some(7)
+    let none: Option[i32] = Option.None
+    println(describe(some))
+    println(describe(none))
+    println(describe(Option.Some(8)))
+
+    var source = Counter { value: 1 }
+    let wrapped = Option.Some(source)
+    source.value = 2
+    match wrapped:
+        Option.Some(copied):
+            println(copied.value)
+        Option.None:
+            println(0)
+    println(source.value)
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "7\n-1\n8\n1\n2\n");
+    }
+}
+
+#[test]
+fn option_defaults_to_none_through_an_explicit_discriminant() {
+    // The enum discriminant is the variant's identity rather than its ordinal,
+    // so a zero-initialized value is not `Option.None` and the default helper
+    // must write the tag explicitly (`SPEC.md` 4.3).
+    let source = r#"
+struct Undefaultable:
+    value: i32
+
+struct Holder(Default):
+    counted: Option[i32]
+    referenced: Option[&i32]
+    nested: Option[Undefaultable]
+
+fn main() -> ():
+    let holder = Holder.default()
+    match holder.counted:
+        Option.Some(inner):
+            println(inner)
+        Option.None:
+            println(1)
+    match holder.referenced:
+        Option.Some(target):
+            println(*target)
+        Option.None:
+            println(2)
+    match holder.nested:
+        Option.Some(inner):
+            println(inner.value)
+        Option.None:
+            println(3)
+"#;
+    let tree = TestTree::new("option-default");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(
+        compilation
+            .generated_c
+            .lines()
+            .any(|line| line.trim_start().starts_with("value.tag = UINT32_C(")),
+        "the default helper must select `None` explicitly:\n{}",
+        compilation.generated_c
+    );
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "1\n2\n3\n");
+    }
+}
+
+#[test]
+fn option_of_a_safe_reference_keeps_a_recursive_graph_reachable() {
+    // `Option[&T]` is the nullable safe reference (`SPEC.md` 4.2). Its payload
+    // retains identity rather than copying, and the referenced links stay
+    // reachable through the collector's interior-pointer scan.
+    let source = r#"
+struct Chain:
+    value: i32
+    next: Option[&Chain]
+
+fn total(node: &Chain) -> i32:
+    match node.next:
+        Option.Some(following):
+            return node.value + total(following)
+        Option.None:
+            return node.value
+
+fn main() -> ():
+    let leaf = Chain { value: 1, next: Option.None }
+    let middle = Chain { value: 2, next: Option.Some(&leaf) }
+    let head = Chain { value: 4, next: Option.Some(&middle) }
+    println(total(&head))
+
+    var mutated = Chain { value: 8, next: Option.None }
+    let alias: Option[&var Chain] = Option.Some(&var mutated)
+    match alias:
+        Option.Some(target):
+            target.value = 9
+        Option.None:
+            pass
+    println(mutated.value)
+"#;
+    let tree = TestTree::new("option-reference");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(
+        compilation.generated_c.contains("GC_MALLOC"),
+        "a referenced link must live in managed storage:\n{}",
+        compilation.generated_c
+    );
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "7\n9\n");
+    }
+}
+
+#[test]
+fn executes_result_construction_matching_and_payload_copies() {
+    // Milestone 14.2: standard `Result[T, E]` values construct, match, and copy
+    // through the same generic-enum path as `Option`. Milestone 15 still owns
+    // its postfix `?` propagation role.
+    let source = r#"
+struct Payload:
+    value: i32
+
+fn parse(flag: bool) -> Result[i32, str]:
+    if flag:
+        return Result.Ok(7)
+    return Result.Err("failed")
+
+fn main() -> ():
+    match parse(true):
+        Result.Ok(value):
+            println(value)
+        Result.Err(message):
+            println(message)
+    match parse(false):
+        Result.Ok(value):
+            println(value)
+        Result.Err(message):
+            println(message)
+
+    var source = Payload { value: 1 }
+    let wrapped: Result[Payload, str] = Result.Ok(source)
+    source.value = 2
+    match wrapped:
+        Result.Ok(copied):
+            println(copied.value)
+        Result.Err(message):
+            println(message)
+    println(source.value)
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "7\nfailed\n1\n2\n");
+    }
+}
+
+#[test]
+fn checked_numeric_conversion_reports_instead_of_trapping() {
+    // Milestone 14.3: `Target.try_from(value)` is the nontrapping counterpart
+    // of `value as Target` (`SPEC.md` 4.1). It reuses the same range
+    // boundaries, so the two never disagree about representability.
+    let source = r#"
+fn tag_i8(value: Result[i8, NumericError]) -> str:
+    match value:
+        Result.Ok(inner):
+            return "ok"
+        Result.Err(reason):
+            match reason:
+                NumericError.OutOfRange:
+                    return "range"
+                NumericError.NotANumber:
+                    return "nan"
+
+fn tag_u16(value: Result[u16, NumericError]) -> str:
+    match value:
+        Result.Ok(inner):
+            return "ok"
+        Result.Err(reason):
+            return "err"
+
+fn tag_f32(value: Result[f32, NumericError]) -> str:
+    match value:
+        Result.Ok(inner):
+            return "ok"
+        Result.Err(reason):
+            return "err"
+
+fn tag_usize(value: Result[usize, NumericError]) -> str:
+    match value:
+        Result.Ok(inner):
+            return "ok"
+        Result.Err(reason):
+            return "err"
+
+fn main() -> ():
+    // signed integer source
+    println(tag_i8(i8.try_from(127)))
+    println(tag_i8(i8.try_from(128)))
+    println(tag_i8(i8.try_from(-129)))
+    // unsigned integer source
+    println(tag_i8(i8.try_from(200u32)))
+    println(tag_u16(u16.try_from(65535u32)))
+    println(tag_u16(u16.try_from(65536u32)))
+    // an unsigned target rejects a negative source rather than wrapping
+    println(tag_u16(u16.try_from(-1)))
+    // floating source: truncation, range, and NaN are distinguished
+    println(tag_i8(i8.try_from(12.75)))
+    println(tag_i8(i8.try_from(1.0e10)))
+    println(tag_i8(i8.try_from(0.0 / 0.0)))
+    // floating target: IEEE rounding never fails
+    println(tag_f32(f32.try_from(9u64)))
+    println(tag_f32(f32.try_from(1.5)))
+    // pointer-width target
+    println(tag_usize(usize.try_from(8)))
+    println(tag_usize(usize.try_from(-8)))
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "ok\nrange\nrange\nrange\nok\nerr\nerr\n\
+             ok\nrange\nnan\nok\nok\nok\nerr\n"
+        );
+    }
+
+    // The conversion must not reach the trapping cast path at all.
+    let tree = TestTree::new("try-from-nontrapping");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    for helper in compilation
+        .generated_c
+        .split("static ")
+        .filter(|chunk| chunk.contains("el_try_from_"))
+    {
+        let body = &helper[..helper.find("\n}").unwrap_or(helper.len())];
+        assert!(
+            !body.contains("el_trap") && !body.contains("el_cast_integer"),
+            "a checked conversion must not trap:\n{body}"
+        );
+    }
+}
+
+#[test]
+fn checked_conversion_bounds_follow_the_selected_pointer_width() {
+    let source = "fn main() -> ():\n\
+                  \x20\x20\x20\x20let converted = isize.try_from(1u64)\n\
+                  \x20\x20\x20\x20pass\n";
+    let tree = TestTree::new("try-from-width");
+    tree.executable(source);
+
+    // The shared prelude mentions every width, so inspect the conversion
+    // helper itself rather than the whole translation unit.
+    let helper = |generated: &str| {
+        let start = generated
+            .find("el_try_from_")
+            .expect("the conversion emits a helper");
+        let body = &generated[start..];
+        body[..body.find("\n}").unwrap_or(body.len())].to_string()
+    };
+
+    let mut x86_sources = SourceManager::new();
+    let x86_graph = tree.graph(&mut x86_sources);
+    let x86 = compile(&x86_graph, &mut x86_sources, Target::X86)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&x86_sources, &diagnostics)));
+    let x86_helper = helper(&x86.generated_c);
+    assert!(x86_helper.contains("INT32_MAX"), "{x86_helper}");
+    assert!(!x86_helper.contains("INT64_MAX"), "{x86_helper}");
+
+    let mut x64_sources = SourceManager::new();
+    let x64_graph = tree.graph(&mut x64_sources);
+    let x64 = compile(&x64_graph, &mut x64_sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&x64_sources, &diagnostics)));
+    let x64_helper = helper(&x64.generated_c);
+    assert!(x64_helper.contains("INT64_MAX"), "{x64_helper}");
+    assert!(!x64_helper.contains("INT32_MAX"), "{x64_helper}");
+}
+
+#[test]
+fn an_unreachable_block_emits_neither_a_label_nor_a_goto() {
+    // A `match` whose every arm returns leaves its join block with no live
+    // predecessor. Emitting that block's label anyway leaves a label no `goto`
+    // names, which C rejects under `-Werror=unused-label`.
+    let source = r#"
+enum Inner:
+    A
+    B
+
+enum Outer:
+    One(i32)
+    Two(Inner)
+
+fn tag(value: Outer) -> str:
+    match value:
+        Outer.One(count):
+            return "one"
+        Outer.Two(inner):
+            match inner:
+                Inner.A:
+                    return "a"
+                Inner.B:
+                    return "b"
+
+fn main() -> ():
+    println(tag(Outer.One(1)))
+    println(tag(Outer.Two(Inner.A)))
+    println(tag(Outer.Two(Inner.B)))
+"#;
+    let tree = TestTree::new("unreachable-block");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    for label in compilation
+        .generated_c
+        .lines()
+        .filter_map(|line| line.strip_suffix(':'))
+        .filter(|label| label.starts_with('b'))
+    {
+        assert!(
+            compilation.generated_c.contains(&format!("goto {label};")),
+            "label `{label}` has no `goto` naming it:\n{}",
+            compilation.generated_c
+        );
+    }
+
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "one\na\nb\n");
+}
+
+#[test]
+fn numeric_alternatives_replace_the_trapping_operators_at_the_width_boundary() {
+    // Milestone 14.4: the trapping operators stay the default; these are the
+    // explicit opt-outs (`SPEC.md` 4.1). Checked reports `Option.None`,
+    // wrapping wraps modulo the range, saturating clamps.
+    let source = r#"
+fn show(value: Option[i8]) -> ():
+    match value:
+        Option.Some(inner):
+            println(inner)
+        Option.None:
+            println("none")
+
+fn show_u8(value: Option[u8]) -> ():
+    match value:
+        Option.Some(inner):
+            println(inner)
+        Option.None:
+            println("none")
+
+fn main() -> ():
+    // Postfix binds tighter than unary minus, so a negative receiver needs a
+    // binding (or parentheses) for the literal to reach its signed minimum.
+    let low: i8 = -128
+    let high: i8 = 127
+    let zero: u8 = 0
+
+    // checked: the exact boundary succeeds, one past it reports
+    show(100i8.checked_add(27i8))
+    show(100i8.checked_add(28i8))
+    show(low.checked_sub(1i8))
+    show(63i8.checked_mul(2i8))
+    show(64i8.checked_mul(2i8))
+    show(1i8.checked_div(0i8))
+    show(low.checked_div(-1i8))
+    show(low.checked_rem(-1i8))
+    show(low.checked_neg())
+    show(1i8.checked_shl(6i8))
+    show(1i8.checked_shl(7i8))
+    show(1i8.checked_shr(8i8))
+    show_u8(zero.checked_sub(1u8))
+    show_u8(zero.checked_neg())
+
+    // wrapping
+    println(100i8.wrapping_add(28i8))
+    println(low.wrapping_sub(1i8))
+    println(64i8.wrapping_mul(2i8))
+    println(low.wrapping_div(-1i8))
+    println(low.wrapping_rem(-1i8))
+    println(low.wrapping_neg())
+    println(1i8.wrapping_shl(7i8))
+    println(low.wrapping_shr(1i8))
+    println(zero.wrapping_sub(1u8))
+
+    // saturating
+    println(high.saturating_add(28i8))
+    println(low.saturating_sub(1i8))
+    println(64i8.saturating_mul(2i8))
+    println((0i8 - 64i8).saturating_mul(4i8))
+    println(zero.saturating_sub(1u8))
+    println(200u8.saturating_mul(2u8))
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "127\nnone\nnone\n126\nnone\nnone\nnone\n0\nnone\n64\nnone\nnone\nnone\n0\n\
+             -128\n127\n-128\n-128\n0\n-128\n-128\n-64\n255\n\
+             127\n-128\n127\n-128\n0\n255\n"
+        );
+    }
+}
+
+#[test]
+fn numeric_alternative_conversions_wrap_and_saturate() {
+    let source = r#"
+fn main() -> ():
+    println(u8.wrapping_from(300))
+    println(u8.wrapping_from(-1))
+    println(i8.wrapping_from(200))
+    println(u8.saturating_from(300))
+    println(u8.saturating_from(-1))
+    println(i8.saturating_from(200))
+    println(i8.saturating_from(-200))
+    println(i64.wrapping_from(7u8))
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "44\n255\n-56\n255\n0\n127\n-128\n7\n");
+    }
+}
+
+#[test]
+fn only_wrapping_division_can_still_trap() {
+    // Every alternative avoids the trapping path except division and
+    // remainder by zero, which have no wrapped answer.
+    let tree = TestTree::new("alternative-traps");
+    tree.executable(
+        "fn main() -> ():\n\
+         \x20\x20\x20\x20println(1i32.wrapping_add(2i32))\n\
+         \x20\x20\x20\x20println(1i32.saturating_mul(2i32))\n\
+         \x20\x20\x20\x20println(1i32.wrapping_shl(2i32))\n",
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    for helper in compilation.generated_c.split("\nstatic ").filter(|chunk| {
+        chunk.starts_with("int32_t el_wrapping_") || chunk.contains("el_saturating_")
+    }) {
+        let body = &helper[..helper.find("\n}").unwrap_or(helper.len())];
+        assert!(!body.contains("el_trap"), "must not trap:\n{body}");
+    }
 }

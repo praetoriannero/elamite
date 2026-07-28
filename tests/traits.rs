@@ -310,7 +310,7 @@ impl Toggle for Session:
 fn main() -> ():
     let stranger = Stranger {{ value: 1 }}
     let reference = &stranger
-    let object = reference as &Toggle
+    let object: &Toggle = reference
     pass
 "#
         ),
@@ -338,7 +338,7 @@ impl Duplicate for Point:
 fn main() -> ():
     let point = Point { x: 1 }
     let reference = &point
-    let object = reference as &Duplicate
+    let object: &Duplicate = reference
     pass
 "#,
         "cannot form a trait object because method `duplicate` returns `Self`",
@@ -358,7 +358,7 @@ impl ByValue for Point:
 fn main() -> ():
     let point = Point { x: 1 }
     let reference = &point
-    let object = reference as &ByValue
+    let object: &ByValue = reference
     pass
 "#,
         "does not take an `&Self` or `&var Self` receiver",
@@ -473,11 +473,14 @@ fn main() -> ():
 }
 
 #[test]
-fn a_builtin_trait_implementation_is_selectable() {
-    // `Close` is compiler-known rather than a user declaration, so selection
-    // must search builtin-trait implementations too.
+fn close_is_not_builtin_but_can_be_user_declared() {
+    // Cleanup protocols are ordinary library abstractions when a program wants
+    // generic cleanup polymorphism; `defer` does not require this trait.
     assert_clean(
         r#"
+trait Close:
+    fn close(self: &Self) -> ()
+
 struct State:
     closed: bool
 
@@ -493,6 +496,25 @@ fn main() -> ():
     let resource = Resource { state: &var state }
     resource.close()
 "#,
+    );
+
+    let (sources, diagnostics) = frontend_diagnostics(
+        r#"
+struct Resource:
+    fn close(self: &Self) -> ():
+        pass
+
+impl Close for Resource:
+    fn close(self: &Self) -> ():
+        pass
+"#,
+    );
+    let text = render(&sources, &diagnostics);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("cannot resolve `Close`")),
+        "expected undeclared `Close` to be absent from the prelude, got:\n{text}"
     );
 }
 
@@ -748,5 +770,58 @@ fn main() -> ():
     let session = Session { value: 1 }
     println(session.secret())
 "#,
+    );
+}
+
+#[test]
+fn option_defaults_to_none_without_a_payload_default() {
+    // `SPEC.md` 4.3: `Option[T]` defaults to `Option.None` without requiring
+    // `T` to implement `Default`, so neither a safe reference nor an
+    // underivable struct blocks the enclosing derivation.
+    assert_clean(
+        r#"
+struct Undefaultable:
+    value: i32
+
+struct Holder(Default):
+    referenced: Option[&i32]
+    nested: Option[Undefaultable]
+
+fn main() -> ():
+    let holder = Holder.default()
+    match holder.nested:
+        Option.Some(inner):
+            println(inner.value)
+        Option.None:
+            println(0)
+"#,
+    );
+    // A direct safe-reference field still has no default, so the rule is about
+    // `Option` and not about references generally.
+    assert_reports(
+        r#"
+struct Direct(Default):
+    value: &i32
+
+fn main() -> ():
+    pass
+"#,
+        "cannot be derived",
+    );
+    // The rule names the standard declaration, not the spelling: a user enum
+    // shadowing `Option` receives no intrinsic capability.
+    assert_reports(
+        r#"
+enum Option[T]:
+    Some(T)
+    None
+
+struct Holder(Default):
+    slot: Option[i32]
+
+fn main() -> ():
+    pass
+"#,
+        "cannot be derived",
     );
 }

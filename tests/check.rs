@@ -1067,9 +1067,9 @@ fn describe(pair: (i32, i32)) -> str:
 }
 
 #[test]
-fn forms_trait_objects_only_through_an_explicit_conversion() {
-    // SPEC 6: `&Trait`/`&var Trait` denote a trait object, and a concrete
-    // reference becomes one only through an explicit `as` conversion.
+fn coerces_concrete_references_to_implemented_trait_objects() {
+    // SPEC 6: an exact expected `&Trait` type context forms a trait object
+    // automatically when the concrete reference target implements the trait.
     assert_no_diagnostics(
         r#"
 trait Toggle:
@@ -1085,13 +1085,24 @@ impl Toggle for Session:
 fn describe(toggle: &Toggle) -> str:
     return toggle.status()
 
+fn as_toggle(session: &Session) -> &Toggle:
+    return session
+
 fn main() -> ():
     let session = Session { active: true }
     let session_ref = &session
-    println(describe(session_ref as &Toggle))
+    let toggle: &Toggle = session_ref
+    var assigned: &Toggle = session_ref
+    assigned = session_ref
+    println(describe(session_ref))
+    println(as_toggle(session_ref).status())
+    println(toggle.status())
+    println(assigned.status())
+    let explicit = session_ref as &Toggle
+    println(explicit.status())
 "#,
     );
-    // Mutability must be preserved across the conversion.
+    // Mutability must be preserved across implicit and explicit conversions.
     assert_has_category(
         r#"
 trait Toggle:
@@ -1107,23 +1118,44 @@ impl Toggle for Session:
 fn main() -> ():
     var session = Session { active: true }
     let session_ref = &session
-    let toggle = session_ref as &var Toggle
+    let toggle: &var Toggle = session_ref
     println(toggle.status())
 "#,
         Category::ExpressionType,
     );
-    // A trait object is formed only from a safe reference.
+    // An implicit trait object is formed only from a safe reference.
     assert_has_category(
         r#"
 trait Toggle:
     fn status(self: &Self) -> str
 
+fn describe(toggle: &Toggle) -> str:
+    return toggle.status()
+
 fn main() -> ():
     let value = 1
-    let toggle = value as &Toggle
+    println(describe(value))
     println(f"{value}")
 "#,
         Category::ExpressionType,
+    );
+    // The concrete target must implement the expected trait.
+    assert_has_category(
+        r#"
+trait Toggle:
+    fn status(self: &Self) -> str
+
+struct Stone:
+    value: i32
+
+fn describe(toggle: &Toggle) -> str:
+    return toggle.status()
+
+fn main() -> ():
+    let stone = Stone { value: 1 }
+    println(describe(&stone))
+"#,
+        Category::TypeSystem,
     );
 }
 
@@ -1254,5 +1286,215 @@ fn invalid[T](left: &T, right: &T) -> bool:
     return *left == *right
 "#,
         Category::TypeSystem,
+    );
+}
+
+#[test]
+fn checks_standard_option_as_an_ordinary_generic_enum() {
+    // Milestone 14.1: `Option[T]` is the generic enum `SPEC.md` 4.4 declares,
+    // so construction, inference, and matching are the ordinary enum rules
+    // rather than a parallel builtin path.
+    assert_no_diagnostics(
+        r#"
+fn describe(value: Option[i32]) -> i32:
+    match value:
+        Option.Some(inner):
+            return inner
+        Option.None:
+            return 0
+
+fn main() -> ():
+    let some: Option[i32] = Option.Some(7)
+    let none: Option[i32] = Option.None
+    let inferred = Option.Some(1u32)
+    println(describe(some) + describe(none))
+    match inferred:
+        Option.Some(inner):
+            println(inner)
+        Option.None:
+            pass
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let mismatched: Option[i32] = Option.Some(true)
+    println(1)
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let extra: Option[i32] = Option.Some(1, 2)
+    println(1)
+"#,
+        Category::Construction,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let value: Option[i32] = Option.Some(1)
+    match value:
+        Option.Some(inner):
+            println(inner)
+"#,
+        Category::Pattern,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let value: Option[i32] = Option.Some(1)
+    match value:
+        Option.Some:
+            println(0)
+        Option.None:
+            println(1)
+"#,
+        Category::Pattern,
+    );
+}
+
+#[test]
+fn checks_standard_result_as_an_ordinary_generic_enum() {
+    // Milestone 14.2: `Result[T, E]` is the generic enum `SPEC.md` 4.4
+    // declares. Its propagation role stays with Milestone 15.
+    assert_no_diagnostics(
+        r#"
+fn parse(flag: bool) -> Result[i32, str]:
+    if flag:
+        return Result.Ok(7)
+    return Result.Err("failed")
+
+fn main() -> ():
+    match parse(true):
+        Result.Ok(value):
+            println(value)
+        Result.Err(message):
+            println(message)
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let mismatched: Result[i32, str] = Result.Ok(true)
+    println(1)
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let value: Result[i32, str] = Result.Ok(1)
+    match value:
+        Result.Ok(inner):
+            println(inner)
+"#,
+        Category::Pattern,
+    );
+}
+
+#[test]
+fn checks_checked_numeric_conversion_selection() {
+    // Milestone 14.3: `Target.try_from(value)` is an associated function on a
+    // concrete numeric type (`SPEC.md` 4.1).
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    let narrowed: Result[i8, NumericError] = i8.try_from(300)
+    let widened: Result[i64, NumericError] = i64.try_from(1u8)
+    let rounded: Result[f32, NumericError] = f32.try_from(1.5)
+    match narrowed:
+        Result.Ok(value):
+            println(value)
+        Result.Err(reason):
+            println(1)
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let missing = i8.try_from()
+    println(1)
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let extra = i8.try_from(1, 2)
+    println(1)
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let text = i8.try_from("nope")
+    println(1)
+"#,
+        Category::Call,
+    );
+    // A numeric type's associated-function surface is complete, so an
+    // unrecognized member on one is reported rather than silently typed.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let nonsense = i8.absent(1)
+    println(1)
+"#,
+        Category::Call,
+    );
+}
+
+#[test]
+fn checks_numeric_alternative_selection() {
+    // Milestone 14.4: the standard alternatives take the receiver's exact
+    // operand type and are integer-only (`SPEC.md` 4.1).
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    let checked: Option[i32] = 1.checked_add(2)
+    let wrapped: i32 = 1.wrapping_sub(2)
+    let clamped: i32 = 1.saturating_mul(2)
+    let negated: Option[i32] = 1.checked_neg()
+    let shifted: i32 = 1.wrapping_shl(2)
+    let converted: u8 = u8.wrapping_from(300)
+    println(wrapped + clamped + shifted)
+"#,
+    );
+    // An operand takes the receiver's exact type, exactly as the operator does.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let mixed = 1i32.checked_add(2u8)
+    println(1)
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let extra = 1i32.checked_neg(2i32)
+    println(1)
+"#,
+        Category::Call,
+    );
+    // Wrapping and saturating conversions are defined by an integer range.
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let rounded = i32.wrapping_from(1.5)
+    println(1)
+"#,
+        Category::Call,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let float_target = f32.saturating_from(1)
+    println(1)
+"#,
+        Category::Call,
     );
 }
