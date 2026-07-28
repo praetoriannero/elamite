@@ -1498,3 +1498,248 @@ fn main() -> ():
         Category::Call,
     );
 }
+
+#[test]
+fn checks_standard_collection_and_display_surfaces() {
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    let empty_vec: Vec[i32] = @vec[]
+    let empty_map: Map[str, i32] = @map{}
+    let empty_set: Set[str] = @set{}
+    let values = @vec[1, 2, 3]
+    let names = @map{"one": 1}
+    let tags = @set{"a", "b"}
+    let text = f"{values} {names} {tags}"
+    println(text)
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let values = @vec[1, true]
+    println(values.len())
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let values = @vec[]
+    println(1)
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let values = @set{1.0}
+    println(values.len())
+"#,
+        Category::TypeSystem,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let key: String = "mutable"
+    let values = @map{key: 1}
+    println(values.len())
+"#,
+        Category::TypeSystem,
+    );
+    assert_has_category(
+        r#"
+struct Hidden:
+    value: i32
+
+fn main() -> ():
+    let hidden = Hidden { value: 1 }
+    println(f"{hidden}")
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let values = [1, 2]
+    println(values[2])
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
+fn postfix_propagation_requires_matching_standard_result_types() {
+    // M15.2: `?` accepts only the standard `Result[T, E]` inside a function
+    // returning `Result[U, E]` with exactly the same `E` (`SPEC.md` 8).
+    assert_no_diagnostics(
+        r#"
+fn source(flag: bool) -> Result[i32, str]:
+    if flag:
+        return Result.Ok(1)
+    return Result.Err("failed")
+
+fn widen(flag: bool) -> Result[u32, str]:
+    let value = source(flag)?
+    return Result.Ok(2u32)
+
+fn increment_result[E](result: Result[i32, E]) -> Result[i32, E]:
+    let value = result?
+    return Result.Ok(value + 1)
+
+fn main() -> ():
+    pass
+"#,
+    );
+    // The standard identity is recognized through a transparent alias.
+    assert_no_diagnostics(
+        r#"
+type Fallible[T] = Result[T, str]
+
+fn source() -> Fallible[i32]:
+    return Result.Ok(1)
+
+fn chain() -> Fallible[i32]:
+    let value = source()?
+    return Result.Ok(value)
+
+fn main() -> ():
+    pass
+"#,
+    );
+    // `Option` is handled with `match`, never `?`.
+    assert_has_category(
+        r#"
+fn reject() -> Result[i32, str]:
+    let value: Option[i32] = Option.Some(1)
+    let bad = value?
+    return Result.Ok(1)
+
+fn main() -> ():
+    pass
+"#,
+        Category::ExpressionType,
+    );
+    // A non-`Result` operand cannot propagate.
+    assert_has_category(
+        r#"
+fn reject() -> Result[i32, str]:
+    let bad = 7?
+    return Result.Ok(bad)
+
+fn main() -> ():
+    pass
+"#,
+        Category::ExpressionType,
+    );
+    // Differing error types receive no implicit conversion.
+    assert_has_category(
+        r#"
+fn reject(source: Result[i32, u32]) -> Result[i32, str]:
+    let bad = source?
+    return Result.Ok(bad)
+
+fn main() -> ():
+    pass
+"#,
+        Category::ExpressionType,
+    );
+    // The enclosing function must itself return the standard `Result`.
+    assert_has_category(
+        r#"
+fn reject(source: Result[i32, str]) -> i32:
+    return source?
+
+fn main() -> ():
+    pass
+"#,
+        Category::ExpressionType,
+    );
+    // A user enum that merely shares the spelling receives no propagation
+    // role (M15.1), on either side of the rule.
+    assert_has_category(
+        r#"
+enum Result[T, E]:
+    Ok(T)
+    Err(E)
+
+fn reject(source: Result[i32, str]) -> Result[i32, str]:
+    let bad = source?
+    return Result.Ok(bad)
+
+fn main() -> ():
+    pass
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
+fn deferred_calls_must_be_safe_and_unit_returning() {
+    // M15.5: the single-call form defers one safe unit-returning call; a
+    // fallible or unsafe operation is handled before scope exit instead.
+    assert_no_diagnostics(
+        r#"
+struct Resource:
+    open: bool
+
+    fn close(self: &Self) -> ():
+        pass
+
+fn release() -> ():
+    pass
+
+fn main() -> ():
+    let resource = Resource { open: true }
+    defer resource.close()
+    defer release()
+"#,
+    );
+    assert_has_category(
+        r#"
+fn value() -> i32:
+    return 7
+
+fn main() -> ():
+    defer value()
+"#,
+        Category::ControlFlow,
+    );
+    assert_has_category(
+        r#"
+unsafe fn danger() -> ():
+    pass
+
+fn main() -> ():
+    defer danger()
+"#,
+        Category::ControlFlow,
+    );
+    // A fallible call's `Result` must be handled, not deferred.
+    assert_has_category(
+        r#"
+fn flush() -> Result[i32, str]:
+    return Result.Ok(1)
+
+fn main() -> ():
+    defer flush()
+"#,
+        Category::ControlFlow,
+    );
+    // Postfix `?` cannot appear anywhere inside deferred syntax.
+    assert_has_category(
+        r#"
+fn flush() -> Result[i32, str]:
+    return Result.Ok(1)
+
+fn cleanup() -> Result[i32, str]:
+    defer:
+        let value = flush()?
+    return Result.Ok(1)
+
+fn main() -> ():
+    pass
+"#,
+        Category::ControlFlow,
+    );
+}

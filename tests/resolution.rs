@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use elamite::diagnostics::{Category, Diagnostic};
 use elamite::package::PackageGraph;
-use elamite::resolution::{NameTarget, Visibility, resolve};
+use elamite::resolution::{LocalBindingKind, NameTarget, Visibility, resolve};
 use elamite::source::SourceManager;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
@@ -146,7 +146,15 @@ fn predeclares_functions_and_allows_local_shadowing() {
             .count(),
         3
     );
-    assert_eq!(output.program.local_bindings.len(), 1);
+    assert_eq!(
+        output
+            .program
+            .local_bindings
+            .iter()
+            .filter(|binding| binding.kind == LocalBindingKind::Local)
+            .count(),
+        1
+    );
     assert!(
         output
             .program

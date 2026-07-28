@@ -132,6 +132,11 @@ pub enum CheckedCall {
         operand_type: TypeId,
         result: TypeId,
     },
+    /// A compiler-supplied operation on text, arrays, or standard
+    /// collections. These types intentionally have no source declarations;
+    /// recording the exact operation here keeps their surface in semantic
+    /// checking rather than teaching name resolution about synthetic methods.
+    Standard(StandardCall),
     /// A call on `self` inside a trait's default body. `Self` is unknown when
     /// the body is checked, so the concrete implementation is selected when the
     /// body is specialized for an implementing type.
@@ -150,6 +155,40 @@ pub enum CheckedCall {
     Print {
         newline: bool,
     },
+}
+
+/// Compiler-supplied calls whose signatures are selected from canonical
+/// receiver/owner types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StandardCall {
+    StringFrom,
+    IdentityFrom { wrapper: TypeId },
+    FormatterWrite { formatter: TypeId },
+    ArrayLen { collection: TypeId },
+    ArrayGet { collection: TypeId },
+    VecNew { collection: TypeId },
+    VecLen { collection: TypeId },
+    VecIsEmpty { collection: TypeId },
+    VecGet { collection: TypeId },
+    VecAppend { collection: TypeId },
+    VecInsert { collection: TypeId },
+    VecRemove { collection: TypeId },
+    VecClear { collection: TypeId },
+    MapNew { collection: TypeId },
+    MapLen { collection: TypeId },
+    MapIsEmpty { collection: TypeId },
+    MapContainsKey { collection: TypeId },
+    MapGet { collection: TypeId },
+    MapInsert { collection: TypeId },
+    MapRemove { collection: TypeId },
+    MapClear { collection: TypeId },
+    SetNew { collection: TypeId },
+    SetLen { collection: TypeId },
+    SetIsEmpty { collection: TypeId },
+    SetContains { collection: TypeId },
+    SetInsert { collection: TypeId },
+    SetRemove { collection: TypeId },
+    SetClear { collection: TypeId },
 }
 
 /// One standard alternative to a trapping arithmetic operator (`SPEC.md` 4.1).
@@ -297,6 +336,35 @@ pub struct CheckOutput {
 /// and rejects struct/enum containment cycles across the whole program.
 /// `typed` is extended in place with any composite types that first appear
 /// inside an expression rather than a declared signature.
+/// The `(ok, err)` payload types of `ty` when it is the *standard*
+/// `Result[T, E]`, looking through aliases and inference.
+///
+/// This is the Milestone 15.1 identity query for `?` propagation: only the
+/// standard declaration qualifies, so a user enum that merely shares the
+/// spelling `Result` receives no propagation behavior.
+#[must_use]
+pub fn standard_result_payloads(
+    resolved: &ResolvedProgram,
+    types: &crate::types::TypeContext,
+    ty: TypeId,
+) -> Option<(TypeId, TypeId)> {
+    let mut ty = types.resolve_inference(ty);
+    loop {
+        match types.kind(ty) {
+            TypeKind::Alias { target, .. } => ty = types.resolve_inference(*target),
+            TypeKind::Nominal {
+                identity,
+                arguments,
+            } if resolved.is_standard_declaration(identity.declaration, "Result")
+                && arguments.len() == 2 =>
+            {
+                return Some((arguments[0], arguments[1]));
+            }
+            _ => return None,
+        }
+    }
+}
+
 #[must_use]
 pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutput {
     check_for_target(resolved, typed, 64)
@@ -326,6 +394,9 @@ struct Checker<'a> {
     /// Nesting depth of `defer` statements being checked. A deferred body runs
     /// while its scope is already exiting, so it may not redirect control.
     defer_depth: u32,
+    /// The enclosing function's declared return type, for postfix `?`
+    /// propagation-target checking (`SPEC.md` 8).
+    current_return_type: Option<TypeId>,
     /// Nesting depth of `unsafe` blocks being checked.
     unsafe_depth: u32,
     pointer_bits: u8,
@@ -357,6 +428,7 @@ impl<'a> Checker<'a> {
             pending_self_type: None,
             loop_depth: 0,
             defer_depth: 0,
+            current_return_type: None,
             unsafe_depth: 0,
             pointer_bits,
             current_self_declaration: None,
@@ -444,7 +516,12 @@ impl<'a> Checker<'a> {
             }
         }
         if let Some(block) = types::direct_child(&syntax, SyntaxKind::Block) {
+            // Postfix `?` needs the enclosing function's return type to
+            // validate its propagation target (`SPEC.md` 8), and expressions
+            // are checked without threading `return_type` through every call.
+            self.current_return_type = Some(signature.return_type);
             let definitely_returns = self.check_block(block, signature.return_type);
+            self.current_return_type = None;
             let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
             if !definitely_returns
                 && !self
@@ -524,14 +601,41 @@ impl<'a> Checker<'a> {
                     .into_iter()
                     .find(|child| child.kind == SyntaxKind::Block)
                 {
-                    // `defer:` block form.
+                    // `defer:` block form: an ordinary lexical scope; the M7
+                    // control-redirection bans apply through `defer_depth`.
                     Some(block) => {
                         self.check_block(block, return_type);
                     }
-                    // `defer call` single-call form.
+                    // `defer call` single-call form: exactly one safe
+                    // unit-returning call (`SPEC.md` 8). The parser already
+                    // rejects a non-call expression.
                     None => {
                         if let Some(call) = child_nodes(node).into_iter().next() {
-                            self.check_expr(call, ExpectedType::None);
+                            let (ty, _) = self.check_expr(call, ExpectedType::None);
+                            let unit = self.typed.types.primitive(PrimitiveType::Unit);
+                            if ty != self.typed.types.error()
+                                && !self.typed.types.exactly_equal(ty, unit)
+                            {
+                                self.diagnostics.push(
+                                    Diagnostic::new(
+                                        Category::ControlFlow,
+                                        "a deferred call must return `()`; handle a fallible \
+                                         operation before scope exit instead",
+                                    )
+                                    .with_primary(call.span),
+                                );
+                            }
+                            if call.kind == SyntaxKind::CallExpression && self.call_is_unsafe(call)
+                            {
+                                self.diagnostics.push(
+                                    Diagnostic::new(
+                                        Category::ControlFlow,
+                                        "an unsafe or foreign call cannot be deferred; wrap it \
+                                         in a safe unit-returning function",
+                                    )
+                                    .with_primary(call.span),
+                                );
+                            }
                         }
                     }
                 }
@@ -559,14 +663,56 @@ impl<'a> Checker<'a> {
             }
             SyntaxKind::ForStatement => {
                 let children = child_nodes(node);
-                for child in &children {
-                    if child.kind != SyntaxKind::Block {
-                        self.check_expr(child, ExpectedType::None);
+                let iterable = children
+                    .iter()
+                    .copied()
+                    .find(|child| child.kind != SyntaxKind::Block);
+                let iterable_type = iterable
+                    .map(|iterable| {
+                        let (ty, _) = self.check_expr(iterable, ExpectedType::None);
+                        self.program.copies.insert(iterable.span);
+                        ty
+                    })
+                    .unwrap_or_else(|| self.typed.types.error());
+                let element_type = match self
+                    .typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(iterable_type))
+                    .clone()
+                {
+                    TypeKind::Array { element, .. } => Some(element),
+                    TypeKind::Builtin { builtin, arguments } => {
+                        match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
+                            ("Vec" | "Set", [element]) => Some(*element),
+                            ("Map", [key, value]) => {
+                                Some(self.typed.types.intern(TypeKind::Tuple(vec![*key, *value])))
+                            }
+                            _ => None,
+                        }
                     }
+                    TypeKind::Error => Some(self.typed.types.error()),
+                    _ => None,
+                };
+                let binding = node.children.iter().find_map(|child| match child {
+                    SyntaxElement::Token(token)
+                        if matches!(token.kind, TokenKind::Identifier(_)) =>
+                    {
+                        self.span_to_local.get(&token.span).copied()
+                    }
+                    _ => None,
+                });
+                if let (Some(binding), Some(element_type)) = (binding, element_type) {
+                    self.local_types.insert(binding, element_type);
+                    self.local_rebindable.insert(binding, Rebindable::Let);
+                } else if iterable_type != self.typed.types.error() {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "`for` supports only arrays, `Vec`, `Map`, and `Set`",
+                        )
+                        .with_primary(node.span),
+                    );
                 }
-                // The loop binding's element type depends on the iterable's
-                // collection kind, which Milestone 14 lowers; its uses are
-                // left untyped here rather than approximated.
                 if let Some(block) = children
                     .into_iter()
                     .find(|child| child.kind == SyntaxKind::Block)
@@ -1518,7 +1664,7 @@ impl<'a> Checker<'a> {
             SyntaxKind::ParenthesizedExpression => self.check_parenthesized(node, expected),
             SyntaxKind::TupleExpression => self.check_tuple(node, expected),
             SyntaxKind::ArrayExpression => self.check_array(node, expected),
-            SyntaxKind::MacroExpression => self.check_macro(node),
+            SyntaxKind::MacroExpression => self.check_macro(node, expected),
             SyntaxKind::RecordExpression => self.check_record_expression(node, expected),
             _ => (self.typed.types.error(), PlaceKind::Value),
         };
@@ -1625,7 +1771,19 @@ impl<'a> Checker<'a> {
 
     fn check_formatted_string(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
         for expression in child_nodes(node) {
-            self.check_expr(expression, ExpectedType::None);
+            let (ty, _) = self.check_expr(expression, ExpectedType::None);
+            self.program.copies.insert(expression.span);
+            if ty != self.typed.types.error()
+                && !crate::traits::provides(self.resolved, self.typed, ty, "Display")
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "formatted-string interpolation requires `Display`",
+                    )
+                    .with_primary(expression.span),
+                );
+            }
         }
         (
             self.typed.types.primitive(PrimitiveType::Str),
@@ -3080,9 +3238,11 @@ impl<'a> Checker<'a> {
     }
 
     fn check_try(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
-        // Full `?` propagation-target checking is Milestone 15; here the
-        // operand is still checked and, when it is visibly `Result[T, E]`,
-        // its success payload type is threaded through.
+        // Postfix `?` propagation (`SPEC.md` 8): the operand must be the
+        // *standard* `Result[T, E]` — a user type that merely shares the
+        // spelling is an ordinary value — and the enclosing function must
+        // return `Result[U, E]` with exactly the same `E`. There is no
+        // implicit error conversion.
         if self.defer_depth > 0 {
             self.diagnostics.push(
                 Diagnostic::new(
@@ -3096,22 +3256,121 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         let (operand_type, _) = self.check_expr(operand, ExpectedType::None);
-        let resolved = self.typed.types.resolve_inference(operand_type);
-        match self.typed.types.kind(resolved).clone() {
-            // Only the *standard* `Result` propagates; a user type that merely
-            // shares the spelling is an ordinary value (`SPEC.md` 8, and
-            // Milestone 15.1, which owns the full propagation role).
-            TypeKind::Nominal {
-                identity,
-                arguments,
-            } if self
-                .resolved
-                .is_standard_declaration(identity.declaration, "Result")
-                && arguments.len() == 2 =>
+        if operand_type == self.typed.types.error() {
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
+        let Some((ok_type, err_type)) =
+            standard_result_payloads(self.resolved, &self.typed.types, operand_type)
+        else {
+            let message = if self
+                .standard_nominal_arguments(operand_type, "Option")
+                .is_some()
             {
-                (arguments[0], PlaceKind::Value)
+                "postfix `?` does not apply to `Option`; handle it with `match`"
+            } else {
+                "postfix `?` requires an operand of the standard `Result[T, E]` type"
+            };
+            self.diagnostics
+                .push(Diagnostic::new(Category::ExpressionType, message).with_primary(node.span));
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let return_error = self.current_return_type.and_then(|return_type| {
+            standard_result_payloads(self.resolved, &self.typed.types, return_type)
+                .map(|(_, err)| err)
+        });
+        let Some(return_error) = return_error else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "postfix `?` is valid only inside a function returning the standard \
+                     `Result[U, E]` type",
+                )
+                .with_primary(node.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        if !self.typed.types.exactly_equal(err_type, return_error) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "the operand's error type must exactly match the enclosing function's \
+                     error type; convert a different error explicitly, such as with `match`",
+                )
+                .with_primary(node.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
+        (ok_type, PlaceKind::Value)
+    }
+
+    /// Whether a checked call expression invokes an unsafe or foreign target.
+    ///
+    /// `SPEC.md` 8: a direct unsafe or foreign call cannot be deferred;
+    /// native cleanup is wrapped in a safe unit-returning method. Milestone
+    /// 17 applies this same recorded rule when foreign calls become
+    /// executable.
+    fn call_is_unsafe(&self, call: &SyntaxNode) -> bool {
+        match self.program.calls.get(&call.span) {
+            Some(CheckedCall::Direct(instance) | CheckedCall::BoundMethod { instance, .. }) => {
+                self.declaration_signature_is_unsafe(instance.declaration)
             }
-            _ => (self.typed.types.error(), PlaceKind::Value),
+            Some(
+                CheckedCall::TraitSelfMethod { method, .. }
+                | CheckedCall::DynamicMethod { method, .. },
+            ) => self.declaration_signature_is_unsafe(*method),
+            Some(CheckedCall::Indirect) => child_nodes(call)
+                .first()
+                .and_then(|callee| self.program.expression_types.get(&callee.span))
+                .is_some_and(|&ty| self.function_value_is_unsafe(ty)),
+            _ => false,
+        }
+    }
+
+    fn declaration_signature_is_unsafe(&self, declaration: DeclarationId) -> bool {
+        if self.resolved.declarations[declaration.index()].kind == DeclarationKind::ForeignFunction
+        {
+            return true;
+        }
+        self.typed
+            .function_signatures
+            .get(&declaration)
+            .is_some_and(|signature| self.function_value_is_unsafe(signature.ty))
+    }
+
+    /// Whether `ty` is (or refers to) an unsafe function type.
+    fn function_value_is_unsafe(&self, ty: TypeId) -> bool {
+        let mut ty = self.typed.types.resolve_inference(ty);
+        loop {
+            match self.typed.types.kind(ty) {
+                TypeKind::Alias { target, .. } | TypeKind::Reference { target, .. } => {
+                    ty = self.typed.types.resolve_inference(*target);
+                }
+                TypeKind::Function { safety, .. } => return *safety == Safety::Unsafe,
+                _ => return false,
+            }
+        }
+    }
+
+    /// The canonical type arguments of `ty` when it is the standard
+    /// declaration named `name`, looking through aliases.
+    fn standard_nominal_arguments(&self, ty: TypeId, name: &str) -> Option<Vec<TypeId>> {
+        let mut ty = self.typed.types.resolve_inference(ty);
+        loop {
+            match self.typed.types.kind(ty) {
+                TypeKind::Alias { target, .. } => {
+                    ty = self.typed.types.resolve_inference(*target);
+                }
+                TypeKind::Nominal {
+                    identity,
+                    arguments,
+                } if self
+                    .resolved
+                    .is_standard_declaration(identity.declaration, name) =>
+                {
+                    return Some(arguments.clone());
+                }
+                _ => return None,
+            }
         }
     }
 
@@ -3235,7 +3494,7 @@ impl<'a> Checker<'a> {
         )
     }
 
-    fn check_macro(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+    fn check_macro(&mut self, node: &SyntaxNode, expected: ExpectedType) -> (TypeId, PlaceKind) {
         let Some(name_token) = node.children.iter().find_map(|child| match child {
             SyntaxElement::Token(token) if matches!(token.kind, TokenKind::Identifier(_)) => {
                 Some(token)
@@ -3246,6 +3505,20 @@ impl<'a> Checker<'a> {
         };
         let name = token_text(name_token);
         let elements = child_nodes(node);
+        let expected_arguments = match expected {
+            ExpectedType::Exact(expected) => {
+                let expected = self.typed.types.resolve_inference(expected);
+                match self.typed.types.kind(expected) {
+                    TypeKind::Builtin { builtin, arguments }
+                        if self.resolved.builtin_name(*builtin) == name.to_uppercase_first() =>
+                    {
+                        Some(arguments.clone())
+                    }
+                    _ => None,
+                }
+            }
+            ExpectedType::None => None,
+        };
         match name.as_str() {
             "vec" | "set" => {
                 let Some(builtin) = self.resolved.builtin_named(&name.to_uppercase_first()) else {
@@ -3254,15 +3527,54 @@ impl<'a> Checker<'a> {
                     }
                     return (self.typed.types.error(), PlaceKind::Value);
                 };
-                let mut element_type = None;
+                let mut element_type = expected_arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.first())
+                    .copied();
                 for element in &elements {
-                    let (ty, _) = self.check_expr(element, ExpectedType::None);
+                    let element_expected =
+                        element_type.map_or(ExpectedType::None, ExpectedType::Exact);
+                    let (ty, _) = self.check_expr(element, element_expected);
                     self.program.copies.insert(element.span);
-                    if element_type.is_none() && ty != self.typed.types.error() {
-                        element_type = Some(ty);
+                    match element_type {
+                        None if ty != self.typed.types.error() => element_type = Some(ty),
+                        Some(previous)
+                            if ty != self.typed.types.error()
+                                && !self.typed.types.exactly_equal(previous, ty) =>
+                        {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::ExpressionType,
+                                    format!("every `{name}` element must have the same exact type"),
+                                )
+                                .with_primary(element.span),
+                            );
+                        }
+                        _ => {}
                     }
                 }
-                let argument = element_type.unwrap_or_else(|| self.typed.types.error());
+                let argument = element_type.unwrap_or_else(|| {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            format!("an empty `@{name}` literal requires an expected type"),
+                        )
+                        .with_primary(node.span),
+                    );
+                    self.typed.types.error()
+                });
+                if name == "set"
+                    && argument != self.typed.types.error()
+                    && !crate::traits::provides(self.resolved, self.typed, argument, "StableHash")
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "`Set` elements must provide `StableHash`",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
                 (
                     self.typed.types.intern(TypeKind::Builtin {
                         builtin,
@@ -3278,24 +3590,77 @@ impl<'a> Checker<'a> {
                     }
                     return (self.typed.types.error(), PlaceKind::Value);
                 };
-                let mut key_type = None;
-                let mut value_type = None;
+                let mut key_type = expected_arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.first())
+                    .copied();
+                let mut value_type = expected_arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.get(1))
+                    .copied();
                 for pair in elements.chunks(2) {
                     if let [key, value] = pair {
-                        let (kt, _) = self.check_expr(key, ExpectedType::None);
+                        let key_expected = key_type.map_or(ExpectedType::None, ExpectedType::Exact);
+                        let (kt, _) = self.check_expr(key, key_expected);
                         self.program.copies.insert(key.span);
-                        let (vt, _) = self.check_expr(value, ExpectedType::None);
+                        let value_expected =
+                            value_type.map_or(ExpectedType::None, ExpectedType::Exact);
+                        let (vt, _) = self.check_expr(value, value_expected);
                         self.program.copies.insert(value.span);
-                        if key_type.is_none() && kt != self.typed.types.error() {
+                        if let Some(previous) = key_type {
+                            if kt != self.typed.types.error()
+                                && !self.typed.types.exactly_equal(previous, kt)
+                            {
+                                self.diagnostics.push(
+                                    Diagnostic::new(
+                                        Category::ExpressionType,
+                                        "every `@map` key must have the same exact type",
+                                    )
+                                    .with_primary(key.span),
+                                );
+                            }
+                        } else if kt != self.typed.types.error() {
                             key_type = Some(kt);
                         }
-                        if value_type.is_none() && vt != self.typed.types.error() {
+                        if let Some(previous) = value_type {
+                            if vt != self.typed.types.error()
+                                && !self.typed.types.exactly_equal(previous, vt)
+                            {
+                                self.diagnostics.push(
+                                    Diagnostic::new(
+                                        Category::ExpressionType,
+                                        "every `@map` value must have the same exact type",
+                                    )
+                                    .with_primary(value.span),
+                                );
+                            }
+                        } else if vt != self.typed.types.error() {
                             value_type = Some(vt);
                         }
                     }
                 }
+                if elements.is_empty() && (key_type.is_none() || value_type.is_none()) {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "an empty `@map` literal requires an expected type",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
                 let key = key_type.unwrap_or_else(|| self.typed.types.error());
                 let value = value_type.unwrap_or_else(|| self.typed.types.error());
+                if key != self.typed.types.error()
+                    && !crate::traits::provides(self.resolved, self.typed, key, "StableHash")
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "`Map` keys must provide `StableHash`",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
                 (
                     self.typed.types.intern(TypeKind::Builtin {
                         builtin,
@@ -3327,7 +3692,26 @@ impl<'a> Checker<'a> {
         let resolved_base = self.typed.types.resolve_inference(base_type);
         let usize_type = self.typed.types.primitive(PrimitiveType::Usize);
         let result = match self.typed.types.kind(resolved_base).clone() {
-            TypeKind::Array { element, .. } | TypeKind::Slice(element) => {
+            TypeKind::Array { element, length } => {
+                self.check_expr(index, ExpectedType::Exact(usize_type));
+                if let Some(token) = index.children.iter().find_map(|child| match child {
+                    SyntaxElement::Token(token) => Some(token),
+                    SyntaxElement::Node(_) => None,
+                }) && let TokenKind::IntegerLiteral { raw, radix, suffix } = &token.kind
+                    && crate::types::parse_integer_magnitude(raw, *radix, *suffix)
+                        .is_ok_and(|magnitude| magnitude >= length)
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "this constant array index is out of bounds",
+                        )
+                        .with_primary(index.span),
+                    );
+                }
+                Some(element)
+            }
+            TypeKind::Slice(element) => {
                 self.check_expr(index, ExpectedType::Exact(usize_type));
                 Some(element)
             }
@@ -3338,6 +3722,7 @@ impl<'a> Checker<'a> {
                 }
                 "Map" if arguments.len() == 2 => {
                     self.check_expr(index, ExpectedType::Exact(arguments[0]));
+                    self.program.copies.insert(index.span);
                     Some(arguments[1])
                 }
                 "Set" => {
@@ -3461,8 +3846,19 @@ impl<'a> Checker<'a> {
                         );
                     }
                     for argument in arguments {
-                        self.check_expr(argument, ExpectedType::None);
+                        let (ty, _) = self.check_expr(argument, ExpectedType::None);
                         self.program.copies.insert(argument.span);
+                        if ty != self.typed.types.error()
+                            && !crate::traits::provides(self.resolved, self.typed, ty, "Display")
+                        {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::Call,
+                                    "`print` and `println` require a `Display` value",
+                                )
+                                .with_primary(argument.span),
+                            );
+                        }
                     }
                     return (
                         self.typed.types.primitive(PrimitiveType::Unit),
@@ -3515,6 +3911,145 @@ impl<'a> Checker<'a> {
             return Some(
                 self.check_function_call(call_span, method, None, arguments, expected, true),
             );
+        }
+
+        // Primitive defaults are compiler-supplied `Default` implementations,
+        // just like structural defaults for derived nominal types. Recognize
+        // them before the closed numeric and text associated-function
+        // surfaces below.
+        if member_name == "default"
+            && let Some(primitive) = self.primitive_selection(base)
+        {
+            let ty = self.typed.types.primitive(primitive);
+            self.check_standard_arguments(call_span, "default", arguments, &[]);
+            self.program
+                .calls
+                .insert(call_span, CheckedCall::DerivedDefault { ty });
+            return Some((ty, PlaceKind::Value));
+        }
+
+        // `String.from(text)` is the sole text conversion. A string literal
+        // can materialize contextually as either text type, but an existing
+        // `str` value never converts implicitly.
+        if self.primitive_selection(base) == Some(PrimitiveType::String) {
+            if member_name == "from" {
+                let str_type = self.typed.types.primitive(PrimitiveType::Str);
+                let string_type = self.typed.types.primitive(PrimitiveType::String);
+                self.check_standard_arguments(call_span, "String.from", arguments, &[str_type]);
+                self.program
+                    .calls
+                    .insert(call_span, CheckedCall::Standard(StandardCall::StringFrom));
+                return Some((string_type, PlaceKind::Value));
+            }
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!("`String` has no associated function named `{member_name}`"),
+                )
+                .with_primary(member_token.span),
+            );
+            return Some((self.typed.types.error(), PlaceKind::Value));
+        }
+
+        if member_name == "from"
+            && let Some(wrapper) = self.type_from_expression(base)
+            && let TypeKind::Builtin {
+                builtin,
+                arguments: type_arguments,
+            } = self.typed.types.kind(wrapper).clone()
+            && self.resolved.builtin_name(builtin) == "Identity"
+            && let [reference] = type_arguments.as_slice()
+        {
+            if !matches!(
+                self.typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(*reference)),
+                TypeKind::Reference { .. }
+            ) {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "`Identity` wraps only a safe reference type",
+                    )
+                    .with_primary(call_span),
+                );
+            }
+            self.check_standard_arguments(call_span, "Identity.from", arguments, &[*reference]);
+            self.program.calls.insert(
+                call_span,
+                CheckedCall::Standard(StandardCall::IdentityFrom { wrapper }),
+            );
+            return Some((wrapper, PlaceKind::Value));
+        }
+
+        // Empty collection constructors are associated functions. Their
+        // element types come from explicit generic arguments or from the
+        // expected result type.
+        if matches!(member_name.as_str(), "new" | "default")
+            && let Some(collection) = self.standard_collection_selection(base, expected)
+        {
+            let TypeKind::Builtin {
+                builtin,
+                arguments: type_arguments,
+            } = self.typed.types.kind(collection).clone()
+            else {
+                unreachable!("collection selection must produce a builtin type");
+            };
+            let operation = match self.resolved.builtin_name(builtin) {
+                "Vec" if type_arguments.len() == 1 => StandardCall::VecNew { collection },
+                "Map" if type_arguments.len() == 2 => {
+                    if !crate::traits::provides(
+                        self.resolved,
+                        self.typed,
+                        type_arguments[0],
+                        "StableHash",
+                    ) {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "`Map` keys must provide `StableHash`",
+                            )
+                            .with_primary(call_span),
+                        );
+                    }
+                    StandardCall::MapNew { collection }
+                }
+                "Set" if type_arguments.len() == 1 => {
+                    if !crate::traits::provides(
+                        self.resolved,
+                        self.typed,
+                        type_arguments[0],
+                        "StableHash",
+                    ) {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "`Set` elements must provide `StableHash`",
+                            )
+                            .with_primary(call_span),
+                        );
+                    }
+                    StandardCall::SetNew { collection }
+                }
+                _ => {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            "collection `new` requires complete element type arguments",
+                        )
+                        .with_primary(call_span),
+                    );
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                }
+            };
+            self.check_standard_arguments(call_span, &member_name, arguments, &[]);
+            self.program
+                .calls
+                .insert(call_span, CheckedCall::Standard(operation));
+            return Some((collection, PlaceKind::Value));
         }
 
         // `Type.try_from(value)` is a standard associated function on a
@@ -3677,6 +4212,24 @@ impl<'a> Checker<'a> {
         }
 
         let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
+        if let Some((operation, parameters, result, mutable)) =
+            self.standard_receiver_call(base_type, &member_name, call_span)
+        {
+            if mutable && !base_place.is_mutable() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Place,
+                        format!("`{member_name}` requires a mutable collection receiver"),
+                    )
+                    .with_primary(base.span),
+                );
+            }
+            self.check_standard_arguments(call_span, &member_name, arguments, &parameters);
+            self.program
+                .calls
+                .insert(call_span, CheckedCall::Standard(operation));
+            return Some((result, PlaceKind::Value));
+        }
         // A call on a trait object dispatches through its vtable rather than
         // selecting a concrete implementation (`SPEC.md` 6).
         if let Some(trait_declaration) =
@@ -3906,6 +4459,299 @@ impl<'a> Checker<'a> {
             return Some((self.typed.types.error(), PlaceKind::Value));
         }
         result
+    }
+
+    fn check_standard_arguments(
+        &mut self,
+        call_span: Span,
+        name: &str,
+        arguments: &[&SyntaxNode],
+        parameters: &[TypeId],
+    ) {
+        for (index, argument) in arguments.iter().enumerate() {
+            let expected = parameters
+                .get(index)
+                .copied()
+                .map_or(ExpectedType::None, ExpectedType::Exact);
+            self.check_expr(argument, expected);
+            self.program.copies.insert(argument.span);
+        }
+        if arguments.len() != parameters.len() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "`{name}` expects exactly {} argument{}, but {} were supplied",
+                        parameters.len(),
+                        if parameters.len() == 1 { "" } else { "s" },
+                        arguments.len()
+                    ),
+                )
+                .with_primary(call_span),
+            );
+        }
+    }
+
+    fn standard_collection_selection(
+        &mut self,
+        base: &SyntaxNode,
+        expected: ExpectedType,
+    ) -> Option<TypeId> {
+        let selected = self.type_from_expression(base)?;
+        let TypeKind::Builtin { builtin, arguments } = self.typed.types.kind(selected).clone()
+        else {
+            return None;
+        };
+        if !matches!(self.resolved.builtin_name(builtin), "Vec" | "Map" | "Set") {
+            return None;
+        }
+        let arity = if self.resolved.builtin_name(builtin) == "Map" {
+            2
+        } else {
+            1
+        };
+        if arguments.len() == arity
+            && arguments
+                .iter()
+                .all(|argument| *argument != self.typed.types.error())
+        {
+            return Some(selected);
+        }
+        let ExpectedType::Exact(expected) = expected else {
+            return Some(selected);
+        };
+        let expected = self.typed.types.resolve_inference(expected);
+        match self.typed.types.kind(expected) {
+            TypeKind::Builtin {
+                builtin: expected_builtin,
+                arguments: expected_arguments,
+            } if *expected_builtin == builtin && expected_arguments.len() == arity => {
+                Some(expected)
+            }
+            _ => Some(selected),
+        }
+    }
+
+    fn standard_receiver_call(
+        &mut self,
+        receiver: TypeId,
+        name: &str,
+        span: Span,
+    ) -> Option<(StandardCall, Vec<TypeId>, TypeId, bool)> {
+        let receiver = self.typed.types.resolve_inference(receiver);
+        let usize_type = self.typed.types.primitive(PrimitiveType::Usize);
+        let bool_type = self.typed.types.primitive(PrimitiveType::Bool);
+        let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
+        if let TypeKind::Reference {
+            mutability: Mutability::Mutable,
+            target,
+        } = self.typed.types.kind(receiver).clone()
+            && let TypeKind::Builtin { builtin, arguments } = self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(target))
+            && self.resolved.builtin_name(*builtin) == "Formatter"
+            && arguments.is_empty()
+            && name == "write"
+        {
+            return Some((
+                StandardCall::FormatterWrite { formatter: target },
+                vec![self.typed.types.primitive(PrimitiveType::Str)],
+                unit_type,
+                false,
+            ));
+        }
+        match self.typed.types.kind(receiver).clone() {
+            TypeKind::Array { element, .. } => match name {
+                "len" => Some((
+                    StandardCall::ArrayLen {
+                        collection: receiver,
+                    },
+                    Vec::new(),
+                    usize_type,
+                    false,
+                )),
+                "get" => Some((
+                    StandardCall::ArrayGet {
+                        collection: receiver,
+                    },
+                    vec![usize_type],
+                    self.option_type(span, element),
+                    false,
+                )),
+                _ => None,
+            },
+            TypeKind::Builtin { builtin, arguments } => {
+                match (
+                    self.resolved.builtin_name(builtin),
+                    name,
+                    arguments.as_slice(),
+                ) {
+                    ("Vec", "len", [_]) => Some((
+                        StandardCall::VecLen {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        usize_type,
+                        false,
+                    )),
+                    ("Vec", "is_empty", [_]) => Some((
+                        StandardCall::VecIsEmpty {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        bool_type,
+                        false,
+                    )),
+                    ("Vec", "get", [element]) => Some((
+                        StandardCall::VecGet {
+                            collection: receiver,
+                        },
+                        vec![usize_type],
+                        self.option_type(span, *element),
+                        false,
+                    )),
+                    ("Vec", "append", [element]) => Some((
+                        StandardCall::VecAppend {
+                            collection: receiver,
+                        },
+                        vec![*element],
+                        unit_type,
+                        true,
+                    )),
+                    ("Vec", "insert", [element]) => Some((
+                        StandardCall::VecInsert {
+                            collection: receiver,
+                        },
+                        vec![usize_type, *element],
+                        unit_type,
+                        true,
+                    )),
+                    ("Vec", "remove", [element]) => Some((
+                        StandardCall::VecRemove {
+                            collection: receiver,
+                        },
+                        vec![usize_type],
+                        *element,
+                        true,
+                    )),
+                    ("Vec", "clear", [_]) => Some((
+                        StandardCall::VecClear {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        true,
+                    )),
+                    ("Map", "len", [_, _]) => Some((
+                        StandardCall::MapLen {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        usize_type,
+                        false,
+                    )),
+                    ("Map", "is_empty", [_, _]) => Some((
+                        StandardCall::MapIsEmpty {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        bool_type,
+                        false,
+                    )),
+                    ("Map", "contains_key", [key, _]) => Some((
+                        StandardCall::MapContainsKey {
+                            collection: receiver,
+                        },
+                        vec![*key],
+                        bool_type,
+                        false,
+                    )),
+                    ("Map", "get", [key, value]) => Some((
+                        StandardCall::MapGet {
+                            collection: receiver,
+                        },
+                        vec![*key],
+                        self.option_type(span, *value),
+                        false,
+                    )),
+                    ("Map", "insert", [key, value]) => Some((
+                        StandardCall::MapInsert {
+                            collection: receiver,
+                        },
+                        vec![*key, *value],
+                        self.option_type(span, *value),
+                        true,
+                    )),
+                    ("Map", "remove", [key, value]) => Some((
+                        StandardCall::MapRemove {
+                            collection: receiver,
+                        },
+                        vec![*key],
+                        self.option_type(span, *value),
+                        true,
+                    )),
+                    ("Map", "clear", [_, _]) => Some((
+                        StandardCall::MapClear {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        true,
+                    )),
+                    ("Set", "len", [_]) => Some((
+                        StandardCall::SetLen {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        usize_type,
+                        false,
+                    )),
+                    ("Set", "is_empty", [_]) => Some((
+                        StandardCall::SetIsEmpty {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        bool_type,
+                        false,
+                    )),
+                    ("Set", "contains", [element]) => Some((
+                        StandardCall::SetContains {
+                            collection: receiver,
+                        },
+                        vec![*element],
+                        bool_type,
+                        false,
+                    )),
+                    ("Set", "insert", [element]) => Some((
+                        StandardCall::SetInsert {
+                            collection: receiver,
+                        },
+                        vec![*element],
+                        bool_type,
+                        true,
+                    )),
+                    ("Set", "remove", [element]) => Some((
+                        StandardCall::SetRemove {
+                            collection: receiver,
+                        },
+                        vec![*element],
+                        bool_type,
+                        true,
+                    )),
+                    ("Set", "clear", [_]) => Some((
+                        StandardCall::SetClear {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        true,
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Selects a trait method for a receiver, reporting ambiguity when more

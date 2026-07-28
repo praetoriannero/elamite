@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::check::{
     CheckedCall, CheckedProgram, NumericAlternative, NumericOutcome, ReceiverAdjustment,
-    TraitObjectCoercion,
+    StandardCall, TraitObjectCoercion,
 };
 use crate::diagnostics::{Category, Diagnostic};
 use crate::lexer::{FormattedSegmentKind, Keyword, Token, TokenKind};
@@ -152,6 +152,7 @@ pub enum TrapKind {
     DivisionByZero,
     InvalidShift,
     IndexOutOfBounds,
+    MissingMapKey,
     InvalidNumericConversion,
 }
 
@@ -163,6 +164,7 @@ impl TrapKind {
             Self::DivisionByZero => "E-RUN-DIVZERO",
             Self::InvalidShift => "E-RUN-SHIFT",
             Self::IndexOutOfBounds => "E-RUN-INDEX",
+            Self::MissingMapKey => "E-RUN-KEY",
             Self::InvalidNumericConversion => "E-RUN-CAST",
         }
     }
@@ -187,6 +189,19 @@ pub enum TypedCallee {
 pub enum FormattedPart {
     Text(String),
     Expression(TypedExpression),
+}
+
+#[derive(Debug, Clone)]
+pub enum RuntimeFormattedPart {
+    Text(String),
+    Value { value: TemporaryId, ty: TypeId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CollectionLiteralKind {
+    Vec,
+    Map,
+    Set,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +246,25 @@ pub enum TypedExpressionKind {
     /// `Type.default()` from a `Default` derivation: the type's structural
     /// default value.
     DefaultValue(TypeId),
+    /// Postfix `?` on a standard `Result[T, E]` operand (`SPEC.md` 8).
+    ///
+    /// The operand is evaluated exactly once. An `Ok` payload is copied into
+    /// this expression's value; an `Err` payload is copied into an early
+    /// `Result.Err` return of the enclosing function's return type, running
+    /// every exited scope's deferred registrations after the copy. The
+    /// standard `Result` identities are recorded here so control-flow
+    /// lowering needs no name lookup.
+    Propagate {
+        operand: Box<TypedExpression>,
+        result_declaration: DeclarationId,
+        ok_variant: VariantId,
+        ok_field: FieldId,
+        err_variant: VariantId,
+        err_field: FieldId,
+        /// The concrete error payload type `E`, shared by the operand and the
+        /// enclosing function's return type.
+        error_type: TypeId,
+    },
     /// A standard nontrapping numeric conversion (`SPEC.md` 4.1). The operand
     /// is evaluated once; the checked form's range test uses the same
     /// boundaries as the trapping `as` conversion, so the two never disagree
@@ -247,6 +281,17 @@ pub enum TypedExpressionKind {
         operation: NumericAlternative,
         receiver: Box<TypedExpression>,
         operand: Option<Box<TypedExpression>>,
+    },
+    /// A compiler-supplied text/array/collection operation. For bound
+    /// operations the receiver is the first argument; associated constructors
+    /// and `String.from` contain only their explicit source arguments.
+    StandardCall {
+        operation: StandardCall,
+        arguments: Vec<TypedExpression>,
+    },
+    CollectionLiteral {
+        kind: CollectionLiteralKind,
+        elements: Vec<TypedExpression>,
     },
     /// `reference as &Trait`: pairs a concrete reference with the vtable of
     /// its implementing type.
@@ -331,7 +376,7 @@ pub enum TypedPlace {
         base: Box<TypedPlace>,
         index: TypedExpression,
         ty: TypeId,
-        length: u128,
+        kind: IndexKind,
         span: Span,
     },
     /// `*reference` as an assignable place. Its base is a reference *value*,
@@ -389,14 +434,51 @@ pub enum TypedStatementKind {
         condition: TypedExpression,
         body: Vec<TypedStatement>,
     },
+    For {
+        binding: LocalBindingId,
+        iterable: TypedExpression,
+        kind: IterationKind,
+        body: Vec<TypedStatement>,
+    },
     Match {
         scrutinee: TypedExpression,
         arms: Vec<TypedMatchArm>,
     },
     Block(Vec<TypedStatement>),
+    /// One deferred registration owned by its lexical scope (`SPEC.md` 8).
+    ///
+    /// The single-call form is a body holding that one call statement; the
+    /// `defer:` block form is its statements in source order. Registration
+    /// occurs when control reaches the statement and evaluates nothing: the
+    /// body is retained as ordinary typed statements over the same lexical
+    /// binding identities, so execution at scope exit reads the values those
+    /// bindings have *then*. No callable or environment value exists.
+    Defer(Vec<TypedStatement>),
     Break,
     Continue,
     Pass,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IterationKind {
+    Array {
+        length: u128,
+        element: TypeId,
+    },
+    Vec {
+        collection: TypeId,
+        element: TypeId,
+    },
+    Map {
+        collection: TypeId,
+        key: TypeId,
+        value: TypeId,
+        pair: TypeId,
+    },
+    Set {
+        collection: TypeId,
+        element: TypeId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1050,6 +1132,86 @@ impl<'a> TypedLowerer<'a> {
                     .unwrap_or_default();
                 TypedStatementKind::While { condition, body }
             }
+            SyntaxKind::ForStatement => {
+                let children = child_nodes(node);
+                let iterable_node = children
+                    .iter()
+                    .copied()
+                    .find(|child| child.kind != SyntaxKind::Block)?;
+                let iterable = self.lower_expression(iterable_node)?;
+                let binding_span = node.children.iter().find_map(|child| match child {
+                    SyntaxElement::Token(token)
+                        if matches!(token.kind, TokenKind::Identifier(_)) =>
+                    {
+                        Some(token.span)
+                    }
+                    _ => None,
+                })?;
+                let binding = self
+                    .resolved
+                    .local_bindings
+                    .iter()
+                    .find(|binding| {
+                        binding.kind == LocalBindingKind::Loop && binding.span == binding_span
+                    })?
+                    .id;
+                let (kind, binding_type) = match self.expanded_kind(iterable.ty) {
+                    TypeKind::Array { element, length } => (
+                        IterationKind::Array {
+                            length: *length,
+                            element: *element,
+                        },
+                        *element,
+                    ),
+                    TypeKind::Builtin { builtin, arguments } => {
+                        match (self.resolved.builtin_name(*builtin), arguments.as_slice()) {
+                            ("Vec", [element]) => (
+                                IterationKind::Vec {
+                                    collection: iterable.ty,
+                                    element: *element,
+                                },
+                                *element,
+                            ),
+                            ("Set", [element]) => (
+                                IterationKind::Set {
+                                    collection: iterable.ty,
+                                    element: *element,
+                                },
+                                *element,
+                            ),
+                            ("Map", [key, value]) => {
+                                let pair = self
+                                    .typed
+                                    .types
+                                    .id_for_kind(&TypeKind::Tuple(vec![*key, *value]))?;
+                                (
+                                    IterationKind::Map {
+                                        collection: iterable.ty,
+                                        key: *key,
+                                        value: *value,
+                                        pair,
+                                    },
+                                    pair,
+                                )
+                            }
+                            _ => return None,
+                        }
+                    }
+                    _ => return None,
+                };
+                local_types.insert(binding, binding_type);
+                let body = children
+                    .into_iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                    .map(|block| self.lower_block(block, local_types))
+                    .unwrap_or_default();
+                TypedStatementKind::For {
+                    binding,
+                    iterable,
+                    kind,
+                    body,
+                }
+            }
             SyntaxKind::MatchStatement => {
                 let nodes = child_nodes(node);
                 let scrutinee_node = nodes
@@ -1103,16 +1265,25 @@ impl<'a> TypedLowerer<'a> {
             SyntaxKind::BreakStatement => TypedStatementKind::Break,
             SyntaxKind::ContinueStatement => TypedStatementKind::Continue,
             SyntaxKind::PassStatement => TypedStatementKind::Pass,
-            SyntaxKind::ForStatement | SyntaxKind::DeferStatement => {
-                self.unsupported(
-                    node.span,
-                    match node.kind {
-                        SyntaxKind::ForStatement => "`for` lowering",
-                        SyntaxKind::DeferStatement => "`defer` lowering",
-                        _ => unreachable!(),
-                    },
-                );
-                return None;
+            SyntaxKind::DeferStatement => {
+                let body = match child_nodes(node)
+                    .into_iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                {
+                    // `defer:` block form: one registration holding the
+                    // block's statements in source order.
+                    Some(block) => self.lower_block(block, local_types),
+                    // `defer call` single-call form: a body holding exactly
+                    // that call statement.
+                    None => {
+                        let call = child_nodes(node).into_iter().next()?;
+                        vec![TypedStatement {
+                            span: call.span,
+                            kind: TypedStatementKind::Expression(self.lower_expression(call)?),
+                        }]
+                    }
+                };
+                TypedStatementKind::Defer(body)
             }
             _ => return None,
         };
@@ -1566,20 +1737,50 @@ impl<'a> TypedLowerer<'a> {
                     .collect::<Option<Vec<_>>>()?,
             ),
             SyntaxKind::RecordExpression => self.lower_record(node)?,
-            SyntaxKind::FormattedStringExpression => {
-                self.unsupported(node.span, "a formatted string outside `print` or `println`");
-                return None;
+            SyntaxKind::FormattedStringExpression => self.lower_formatted(node)?,
+            SyntaxKind::MacroExpression => {
+                let TypeKind::Builtin { builtin, .. } = self.expanded_kind(ty) else {
+                    return None;
+                };
+                let kind = match self.resolved.builtin_name(*builtin) {
+                    "Vec" => CollectionLiteralKind::Vec,
+                    "Map" => CollectionLiteralKind::Map,
+                    "Set" => CollectionLiteralKind::Set,
+                    _ => return None,
+                };
+                TypedExpressionKind::CollectionLiteral {
+                    kind,
+                    elements: child_nodes(node)
+                        .into_iter()
+                        .map(|element| self.lower_expression(element))
+                        .collect::<Option<Vec<_>>>()?,
+                }
             }
-            SyntaxKind::TryExpression | SyntaxKind::MacroExpression => {
-                self.unsupported(
-                    node.span,
-                    if node.kind == SyntaxKind::TryExpression {
-                        "postfix `?` lowering"
-                    } else {
-                        "collection macro lowering"
-                    },
-                );
-                return None;
+            SyntaxKind::TryExpression => {
+                let operand_node = child_nodes(node).into_iter().next()?;
+                let operand = self.lower_expression(operand_node)?;
+                // The checker validated the operand as the standard
+                // `Result[T, E]`; re-derive `E` from the *concrete* operand
+                // type so generic instances carry their substituted error.
+                let (_, error_type) = crate::check::standard_result_payloads(
+                    self.resolved,
+                    &self.typed.types,
+                    operand.ty,
+                )?;
+                let result_declaration = self.resolved.standard_declaration("Result")?;
+                let ok_variant = self.resolved.standard_variant("Result", "Ok")?;
+                let err_variant = self.resolved.standard_variant("Result", "Err")?;
+                let ok_field = *self.resolved.variants[ok_variant.index()].fields.first()?;
+                let err_field = *self.resolved.variants[err_variant.index()].fields.first()?;
+                TypedExpressionKind::Propagate {
+                    operand: Box::new(operand),
+                    result_declaration,
+                    ok_variant,
+                    ok_field,
+                    err_variant,
+                    err_field,
+                    error_type,
+                }
             }
             _ => return None,
         };
@@ -1711,6 +1912,31 @@ impl<'a> TypedLowerer<'a> {
                     operand,
                 });
             }
+            CheckedCall::Standard(operation) => {
+                let mut arguments = Vec::new();
+                let has_receiver = !matches!(
+                    operation,
+                    StandardCall::StringFrom
+                        | StandardCall::IdentityFrom { .. }
+                        | StandardCall::VecNew { .. }
+                        | StandardCall::MapNew { .. }
+                        | StandardCall::SetNew { .. }
+                );
+                if has_receiver {
+                    let base = child_nodes(callee_node).into_iter().next()?;
+                    arguments.push(self.lower_expression(base)?);
+                }
+                arguments.extend(
+                    source_arguments
+                        .drain(..)
+                        .map(|argument| self.lower_expression(argument))
+                        .collect::<Option<Vec<_>>>()?,
+                );
+                return Some(TypedExpressionKind::StandardCall {
+                    operation,
+                    arguments,
+                });
+            }
             CheckedCall::TraitSelfMethod {
                 trait_declaration,
                 method,
@@ -1772,17 +1998,16 @@ impl<'a> TypedLowerer<'a> {
         let mut arguments = if is_print {
             source_arguments
                 .drain(..)
-                .map(|argument| {
-                    if is_print && argument.kind == SyntaxKind::FormattedStringExpression {
-                        self.lower_print_formatted(argument)
-                    } else {
-                        self.lower_expression(argument)
-                    }
-                })
+                .map(|argument| self.lower_expression(argument))
                 .collect::<Option<Vec<_>>>()?
         } else {
             self.lower_call_arguments(node.span, &source_arguments, &parameters)?
         };
+        if is_print {
+            for argument in &arguments {
+                self.enqueue_display_dependencies(argument.ty, argument.span);
+            }
+        }
         if let Some(receiver) = receiver {
             arguments.insert(0, receiver);
         }
@@ -1873,26 +2098,6 @@ impl<'a> TypedLowerer<'a> {
                 })
             }
         }
-    }
-
-    fn lower_print_formatted(&mut self, node: &SyntaxNode) -> Option<TypedExpression> {
-        let template = self.checked.expression_types.get(&node.span).copied()?;
-        let ty = self.concrete_type(template);
-        if ty == self.typed.types.error() {
-            return None;
-        }
-        Some(TypedExpression {
-            ty,
-            place: self
-                .checked
-                .expression_places
-                .get(&node.span)
-                .copied()
-                .unwrap_or(PlaceKind::Value),
-            copy: self.checked.copies.contains(&node.span),
-            span: node.span,
-            kind: self.lower_formatted(node)?,
-        })
     }
 
     fn lower_record(&mut self, node: &SyntaxNode) -> Option<TypedExpressionKind> {
@@ -1989,13 +2194,50 @@ impl<'a> TypedLowerer<'a> {
                     }
                 }
                 FormattedSegmentKind::Expression { .. } => {
-                    parts.push(FormattedPart::Expression(
-                        self.lower_expression(expressions.next()?)?,
-                    ));
+                    let expression = self.lower_expression(expressions.next()?)?;
+                    self.enqueue_display_dependencies(expression.ty, expression.span);
+                    parts.push(FormattedPart::Expression(expression));
                 }
             }
         }
         Some(TypedExpressionKind::FormattedString(parts))
+    }
+
+    fn enqueue_display_dependencies(&mut self, ty: TypeId, span: Span) {
+        let ty = self.concrete_type(ty);
+        match self.expanded_kind(ty).clone() {
+            TypeKind::Reference { target, .. } => {
+                self.enqueue_display_dependencies(target, span);
+            }
+            TypeKind::Tuple(elements) => {
+                for element in elements {
+                    self.enqueue_display_dependencies(element, span);
+                }
+            }
+            TypeKind::Array { element, .. } => {
+                self.enqueue_display_dependencies(element, span);
+            }
+            TypeKind::Builtin { arguments, .. } => {
+                for argument in arguments {
+                    self.enqueue_display_dependencies(argument, span);
+                }
+            }
+            TypeKind::Nominal { .. } => {
+                if let Ok(Some(selected)) =
+                    crate::traits::select_trait_method(self.resolved, self.typed, ty, "fmt", None)
+                {
+                    self.enqueue_reachable(
+                        FunctionInstance {
+                            declaration: selected.declaration,
+                            arguments: selected.arguments,
+                            self_type: selected.self_type,
+                        },
+                        span,
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     fn lower_place(&mut self, node: &SyntaxNode) -> Option<TypedPlace> {
@@ -2033,18 +2275,30 @@ impl<'a> TypedLowerer<'a> {
                     .expression_types
                     .get(&base_node.span)
                     .copied()?;
-                let length = match self.expanded_kind(base_type) {
-                    TypeKind::Array { length, .. } => *length,
-                    _ => {
-                        self.unsupported(node.span, "non-array indexed assignment");
-                        return None;
+                let kind = match self.expanded_kind(base_type) {
+                    TypeKind::Array { length, .. } => IndexKind::Array { length: *length },
+                    TypeKind::Slice(_) => IndexKind::Slice,
+                    TypeKind::Builtin { builtin, .. }
+                        if self.resolved.builtin_name(*builtin) == "Vec" =>
+                    {
+                        IndexKind::Vec {
+                            collection: base_type,
+                        }
                     }
+                    TypeKind::Builtin { builtin, .. }
+                        if self.resolved.builtin_name(*builtin) == "Map" =>
+                    {
+                        IndexKind::Map {
+                            collection: base_type,
+                        }
+                    }
+                    _ => return None,
                 };
                 Some(TypedPlace::Index {
                     base: Box::new(self.lower_place(base_node)?),
                     index,
                     ty,
-                    length,
+                    kind,
                     span: node.span,
                 })
             }
@@ -2217,11 +2471,17 @@ pub enum ControlFlowPlace {
     Index {
         base: Box<ControlFlowPlace>,
         index: TemporaryId,
-        /// Fixed arrays carry a constant bound; slices read `.length` from
-        /// their evaluated base.
-        length: Option<u128>,
+        kind: IndexKind,
         trap: TrapKind,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IndexKind {
+    Array { length: u128 },
+    Slice,
+    Vec { collection: TypeId },
+    Map { collection: TypeId },
 }
 
 #[derive(Debug, Clone)]
@@ -2267,6 +2527,24 @@ pub enum Rvalue {
         operand: Option<TemporaryId>,
         operand_type: TypeId,
     },
+    StandardCall {
+        operation: StandardCall,
+        arguments: Vec<TemporaryId>,
+    },
+    CollectionLiteral {
+        kind: CollectionLiteralKind,
+        elements: Vec<TemporaryId>,
+    },
+    CollectionLength {
+        collection: TemporaryId,
+        kind: IterationKind,
+    },
+    IterationElement {
+        collection: TemporaryId,
+        index: TemporaryId,
+        kind: IterationKind,
+    },
+    FormattedString(Vec<RuntimeFormattedPart>),
     /// Pairs a concrete reference with a vtable to form a trait object.
     MakeTraitObject {
         value: TemporaryId,
@@ -2345,10 +2623,6 @@ pub enum Instruction {
         value: TemporaryId,
         span: Span,
     },
-    PrintText {
-        text: String,
-        span: Span,
-    },
     PrintValue {
         value: TemporaryId,
         ty: TypeId,
@@ -2417,20 +2691,62 @@ pub struct ControlFlowProgram {
 
 #[must_use]
 pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> ControlFlowProgram {
+    let functions = program
+        .functions
+        .iter()
+        .map(|function| FunctionLowerer::new(types, function).run())
+        .collect::<Vec<_>>();
+    let formats_text = functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::FormattedString(_),
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    let materializes_managed_values = functions.iter().any(|function| {
+        !function.promoted_locals.is_empty()
+            || function.allocates_managed
+            || std::iter::once(&function.return_type)
+                .chain(function.local_types.values())
+                .chain(function.parameters.iter().map(|parameter| &parameter.ty))
+                .chain(function.temporary_types.iter())
+                .any(|ty| type_contains_runtime_managed(&types.types, *ty, 32))
+    });
     ControlFlowProgram {
-        functions: program
-            .functions
-            .iter()
-            .map(|function| FunctionLowerer::new(types, function).run())
-            .collect(),
+        functions,
         structs: program.structs.clone(),
         enums: program.enums.clone(),
         vtables: program.vtables.clone(),
-        // Managed storage is needed exactly when some local was promoted.
-        requires_managed_memory: program
-            .functions
+        // Managed storage is needed when promotion requests it or any
+        // materialized value can allocate managed backing storage. Include
+        // temporaries and return values: `println(String.from(text))`, for
+        // example, need not introduce a source local.
+        requires_managed_memory: formats_text || materializes_managed_values,
+    }
+}
+
+fn type_contains_runtime_managed(types: &TypeContext, ty: TypeId, depth: u32) -> bool {
+    if depth == 0 {
+        return true;
+    }
+    match types.kind(types.resolve_inference(ty)) {
+        TypeKind::Primitive(PrimitiveType::String) | TypeKind::Builtin { .. } => true,
+        TypeKind::Tuple(elements) => elements
             .iter()
-            .any(|function| !function.promoted_locals.is_empty() || function.allocates_managed),
+            .any(|element| type_contains_runtime_managed(types, *element, depth - 1)),
+        TypeKind::Array { element, .. } | TypeKind::Slice(element) => {
+            type_contains_runtime_managed(types, *element, depth - 1)
+        }
+        TypeKind::Nominal { arguments, .. } | TypeKind::Alias { arguments, .. } => arguments
+            .iter()
+            .any(|argument| type_contains_runtime_managed(types, *argument, depth - 1)),
+        _ => false,
     }
 }
 
@@ -2439,13 +2755,31 @@ struct OpenBlock {
     terminator: Option<Terminator>,
 }
 
+/// One lexical scope's cleanup plan: the deferred registrations control has
+/// reached, in registration order (`SPEC.md` 8, Milestone 15.6).
+///
+/// Registration is purely static. A block's statement list is straight-line
+/// at the statement level, so at any exit edge the reached registrations are
+/// exactly the `defer` statements lexically preceding that edge in each
+/// exited scope — no runtime registration list, callable, or environment
+/// value exists. Each exit edge re-lowers the registered bodies in place,
+/// which also gives deferred expressions their execution-time values
+/// (Milestone 15.10): the bodies read their bindings when the edge runs, not
+/// when the registration was reached.
+type CleanupScope = Vec<Vec<TypedStatement>>;
+
 struct FunctionLowerer<'a> {
     types: &'a TypedProgram,
     function: &'a TypedFunction,
     blocks: Vec<OpenBlock>,
     current: BlockId,
     temporary_types: Vec<TypeId>,
-    loops: Vec<(BlockId, BlockId)>,
+    /// Break target, continue target, and the cleanup-scope depth of the
+    /// loop's body: `break`/`continue` run cleanup for every scope deeper
+    /// than that base and no other (Milestone 15.8).
+    loops: Vec<(BlockId, BlockId, usize)>,
+    /// Open lexical scopes, outermost first; the function body is index 0.
+    scopes: Vec<CleanupScope>,
 }
 
 impl<'a> FunctionLowerer<'a> {
@@ -2460,11 +2794,12 @@ impl<'a> FunctionLowerer<'a> {
             current: BlockId(0),
             temporary_types: Vec::new(),
             loops: Vec::new(),
+            scopes: Vec::new(),
         }
     }
 
     fn run(mut self) -> ControlFlowFunction {
-        self.lower_statements(&self.function.body);
+        self.lower_scope(&self.function.body);
         if self.is_open(self.current) {
             self.terminate(Terminator::Return(None));
         }
@@ -2500,6 +2835,37 @@ impl<'a> FunctionLowerer<'a> {
                 self.current = self.new_block();
             }
             self.lower_statement(statement);
+        }
+    }
+
+    /// Lowers one lexical scope's statements: pushes its cleanup plan, and on
+    /// normal fallthrough runs that scope's deferred registrations before
+    /// control continues past the block (Milestone 15.7).
+    fn lower_scope(&mut self, statements: &[TypedStatement]) {
+        self.scopes.push(CleanupScope::new());
+        self.lower_statements(statements);
+        if self.is_open(self.current) {
+            self.emit_cleanup(self.scopes.len() - 1);
+        }
+        self.scopes.pop();
+    }
+
+    /// Emits the deferred registrations of every scope at depth `from` or
+    /// deeper, innermost scope first and within one scope in reverse
+    /// registration order; a `defer:` body executes forward as one unit
+    /// (`SPEC.md` 8).
+    ///
+    /// The registration lists are snapshotted before lowering because a
+    /// deferred body may itself open nested (necessarily registration-free)
+    /// scopes while it is lowered.
+    fn emit_cleanup(&mut self, from: usize) {
+        let pending: Vec<Vec<TypedStatement>> = self.scopes[from..]
+            .iter()
+            .rev()
+            .flat_map(|scope| scope.iter().rev().cloned())
+            .collect();
+        for registration in &pending {
+            self.lower_statements(registration);
         }
     }
 
@@ -2559,9 +2925,15 @@ impl<'a> FunctionLowerer<'a> {
                 self.lower_expression(expression);
             }
             TypedStatementKind::Return(value) => {
+                // The return value is evaluated and independently copied into
+                // its temporary *before* any deferred registration runs
+                // (`SPEC.md` 8, Milestone 15.7); cleanup then cannot change
+                // the returned value, though a shared handle inside it may
+                // still observe deferred mutation through its alias.
                 let value = value
                     .as_ref()
                     .map(|expression| self.lower_expression(expression));
+                self.emit_cleanup(0);
                 self.terminate(Terminator::Return(value));
             }
             TypedStatementKind::If {
@@ -2570,15 +2942,33 @@ impl<'a> FunctionLowerer<'a> {
                 else_body,
             } => self.lower_if(condition, then_body, else_body),
             TypedStatementKind::While { condition, body } => self.lower_while(condition, body),
+            TypedStatementKind::For {
+                binding,
+                iterable,
+                kind,
+                body,
+            } => self.lower_for(*binding, iterable, *kind, body, statement.span),
             TypedStatementKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms),
-            TypedStatementKind::Block(body) => self.lower_statements(body),
+            TypedStatementKind::Block(body) => self.lower_scope(body),
+            TypedStatementKind::Defer(body) => {
+                // Registration only: control reaching this statement adds the
+                // body to the innermost scope's cleanup plan and evaluates
+                // nothing (Milestone 15.4).
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.push(body.clone());
+                }
+            }
             TypedStatementKind::Break => {
-                if let Some((break_block, _)) = self.loops.last().copied() {
+                if let Some((break_block, _, base)) = self.loops.last().copied() {
+                    // `break` exits every scope down to the loop body and no
+                    // enclosing one (Milestone 15.8).
+                    self.emit_cleanup(base);
                     self.terminate(Terminator::Goto(break_block));
                 }
             }
             TypedStatementKind::Continue => {
-                if let Some((_, continue_block)) = self.loops.last().copied() {
+                if let Some((_, continue_block, base)) = self.loops.last().copied() {
+                    self.emit_cleanup(base);
                     self.terminate(Terminator::Goto(continue_block));
                 }
             }
@@ -2602,12 +2992,12 @@ impl<'a> FunctionLowerer<'a> {
             else_block,
         });
         self.current = then_block;
-        self.lower_statements(then_body);
+        self.lower_scope(then_body);
         if self.is_open(self.current) {
             self.terminate(Terminator::Goto(join_block));
         }
         self.current = else_block;
-        self.lower_statements(else_body);
+        self.lower_scope(else_body);
         if self.is_open(self.current) {
             self.terminate(Terminator::Goto(join_block));
         }
@@ -2627,12 +3017,117 @@ impl<'a> FunctionLowerer<'a> {
             else_block: exit_block,
         });
         self.current = body_block;
-        self.loops.push((exit_block, condition_block));
-        self.lower_statements(body);
+        self.loops
+            .push((exit_block, condition_block, self.scopes.len()));
+        self.lower_scope(body);
         self.loops.pop();
         if self.is_open(self.current) {
             self.terminate(Terminator::Goto(condition_block));
         }
+        self.current = exit_block;
+    }
+
+    fn lower_for(
+        &mut self,
+        binding: LocalBindingId,
+        iterable: &TypedExpression,
+        kind: IterationKind,
+        body: &[TypedStatement],
+        span: Span,
+    ) {
+        let collection = self.lower_expression(iterable);
+        let usize_type = self.types.types.primitive_id(PrimitiveType::Usize);
+        let bool_type = self.types.types.primitive_id(PrimitiveType::Bool);
+        let index = self.temp(usize_type);
+        self.emit(Instruction::Assign {
+            destination: index,
+            value: Rvalue::Constant(Constant::Integer {
+                magnitude: 0,
+                negative: false,
+            }),
+            span,
+        });
+        let condition_block = self.new_block();
+        let body_block = self.new_block();
+        let increment_block = self.new_block();
+        let exit_block = self.new_block();
+        self.terminate(Terminator::Goto(condition_block));
+
+        self.current = condition_block;
+        let length = self.temp(usize_type);
+        self.emit(Instruction::Assign {
+            destination: length,
+            value: Rvalue::CollectionLength { collection, kind },
+            span,
+        });
+        let condition = self.temp(bool_type);
+        self.emit(Instruction::Assign {
+            destination: condition,
+            value: Rvalue::Binary {
+                operator: BinaryOperator::Less,
+                left: index,
+                right: length,
+                trap: None,
+            },
+            span,
+        });
+        self.terminate(Terminator::Branch {
+            condition,
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        self.current = body_block;
+        let element_type = self
+            .function
+            .local_types
+            .get(&binding)
+            .copied()
+            .unwrap_or_else(|| self.types.types.error());
+        let element = self.temp(element_type);
+        self.emit(Instruction::Assign {
+            destination: element,
+            value: Rvalue::IterationElement {
+                collection,
+                index,
+                kind,
+            },
+            span,
+        });
+        self.emit(Instruction::Store {
+            place: ControlFlowPlace::Local(binding),
+            value: element,
+            span,
+        });
+        self.loops
+            .push((exit_block, increment_block, self.scopes.len()));
+        self.lower_scope(body);
+        self.loops.pop();
+        if self.is_open(self.current) {
+            self.terminate(Terminator::Goto(increment_block));
+        }
+
+        self.current = increment_block;
+        let one = self.temp(usize_type);
+        self.emit(Instruction::Assign {
+            destination: one,
+            value: Rvalue::Constant(Constant::Integer {
+                magnitude: 1,
+                negative: false,
+            }),
+            span,
+        });
+        self.emit(Instruction::Assign {
+            destination: index,
+            value: Rvalue::Binary {
+                operator: BinaryOperator::Add,
+                left: index,
+                right: one,
+                trap: None,
+            },
+            span,
+        });
+        self.terminate(Terminator::Goto(condition_block));
         self.current = exit_block;
     }
 
@@ -2657,7 +3152,7 @@ impl<'a> FunctionLowerer<'a> {
                 matched_block
             };
             self.current = body_block;
-            self.lower_statements(&arm.body);
+            self.lower_scope(&arm.body);
             if self.is_open(self.current) {
                 self.terminate(Terminator::Goto(exit_block));
             }
@@ -2919,6 +3414,25 @@ impl<'a> FunctionLowerer<'a> {
                     operand_type,
                 }
             }
+            TypedExpressionKind::StandardCall {
+                operation,
+                arguments,
+            } => Rvalue::StandardCall {
+                operation: *operation,
+                arguments: arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect(),
+            },
+            TypedExpressionKind::CollectionLiteral { kind, elements } => {
+                Rvalue::CollectionLiteral {
+                    kind: *kind,
+                    elements: elements
+                        .iter()
+                        .map(|element| self.lower_expression(element))
+                        .collect(),
+                }
+            }
             TypedExpressionKind::MakeTraitObject {
                 value,
                 trait_declaration,
@@ -2938,6 +3452,26 @@ impl<'a> FunctionLowerer<'a> {
                     operand,
                     trap: unary_trap(*operator, expression.ty, self.types),
                 }
+            }
+            TypedExpressionKind::Propagate {
+                operand,
+                result_declaration,
+                ok_variant,
+                ok_field,
+                err_variant,
+                err_field,
+                error_type,
+            } => {
+                return self.lower_propagate(
+                    expression,
+                    operand,
+                    *result_declaration,
+                    *ok_variant,
+                    *ok_field,
+                    *err_variant,
+                    *err_field,
+                    *error_type,
+                );
             }
             TypedExpressionKind::Binary {
                 operator,
@@ -3084,16 +3618,39 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Index { base, index } => {
                 let base_place = self.expression_place(base);
                 let index = self.lower_expression(index);
-                let length = match expanded_kind(&self.types.types, base.ty) {
-                    TypeKind::Array { length, .. } => Some(*length),
-                    TypeKind::Slice(_) => None,
-                    _ => Some(0),
+                let (kind, trap) = match expanded_kind(&self.types.types, base.ty) {
+                    TypeKind::Array { length, .. } => (
+                        IndexKind::Array { length: *length },
+                        TrapKind::IndexOutOfBounds,
+                    ),
+                    TypeKind::Slice(_) => (IndexKind::Slice, TrapKind::IndexOutOfBounds),
+                    TypeKind::Builtin { arguments, .. } => {
+                        // Of the initial builtin collections only `Vec[T]`
+                        // (one argument) and `Map[K, V]` (two arguments) are
+                        // indexable; `Set[T]` was rejected by checking.
+                        if arguments.len() == 1 {
+                            (
+                                IndexKind::Vec {
+                                    collection: base.ty,
+                                },
+                                TrapKind::IndexOutOfBounds,
+                            )
+                        } else {
+                            (
+                                IndexKind::Map {
+                                    collection: base.ty,
+                                },
+                                TrapKind::MissingMapKey,
+                            )
+                        }
+                    }
+                    _ => (IndexKind::Array { length: 0 }, TrapKind::IndexOutOfBounds),
                 };
                 Rvalue::Load(ControlFlowPlace::Index {
                     base: Box::new(base_place),
                     index,
-                    length,
-                    trap: TrapKind::IndexOutOfBounds,
+                    kind,
+                    trap,
                 })
             }
             TypedExpressionKind::Tuple(elements) => Rvalue::Aggregate(AggregateValue::Tuple(
@@ -3143,10 +3700,18 @@ impl<'a> FunctionLowerer<'a> {
                     element_type,
                 }
             }
-            TypedExpressionKind::FormattedString(_) => {
-                self.lower_print(expression);
-                Rvalue::Constant(Constant::String(String::new()))
-            }
+            TypedExpressionKind::FormattedString(parts) => Rvalue::FormattedString(
+                parts
+                    .iter()
+                    .map(|part| match part {
+                        FormattedPart::Text(text) => RuntimeFormattedPart::Text(text.clone()),
+                        FormattedPart::Expression(value) => RuntimeFormattedPart::Value {
+                            value: self.lower_expression(value),
+                            ty: value.ty,
+                        },
+                    })
+                    .collect(),
+            ),
         };
         let raw = self.temp(expression.ty);
         self.emit(Instruction::Assign {
@@ -3208,32 +3773,121 @@ impl<'a> FunctionLowerer<'a> {
         result
     }
 
+    /// Lowers postfix `?` (`SPEC.md` 8, Milestones 15.3 and 15.9).
+    ///
+    /// The operand is evaluated exactly once into a temporary. Its tag is
+    /// branched on explicitly: the `Ok` payload is copied into this
+    /// expression's value, while the `Err` path copies the error payload,
+    /// builds the enclosing function's `Result.Err` return value from that
+    /// copy, *then* runs every open scope's deferred registrations, and
+    /// returns. The error is copied before cleanup, so deferred mutation
+    /// cannot change the propagated error.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_propagate(
+        &mut self,
+        expression: &TypedExpression,
+        operand: &TypedExpression,
+        result_declaration: DeclarationId,
+        ok_variant: VariantId,
+        ok_field: FieldId,
+        err_variant: VariantId,
+        err_field: FieldId,
+        error_type: TypeId,
+    ) -> TemporaryId {
+        let span = expression.span;
+        let value = self.lower_expression(operand);
+        let u32_type = self.types.types.primitive_id(PrimitiveType::U32);
+        let bool_type = self.types.types.primitive_id(PrimitiveType::Bool);
+        let discriminant = self.temp(u32_type);
+        self.emit(Instruction::Assign {
+            destination: discriminant,
+            value: Rvalue::Discriminant(value),
+            span,
+        });
+        let expected = self.temp(u32_type);
+        self.emit(Instruction::Assign {
+            destination: expected,
+            value: Rvalue::Constant(Constant::Integer {
+                magnitude: ok_variant.index() as u128,
+                negative: false,
+            }),
+            span,
+        });
+        let condition = self.temp(bool_type);
+        self.emit(Instruction::Assign {
+            destination: condition,
+            value: Rvalue::CompareEqual {
+                left: discriminant,
+                right: expected,
+                operand_type: u32_type,
+            },
+            span,
+        });
+        let ok_block = self.new_block();
+        let err_block = self.new_block();
+        self.terminate(Terminator::Branch {
+            condition,
+            then_block: ok_block,
+            else_block: err_block,
+        });
+
+        self.current = err_block;
+        let error_raw = self.temp(error_type);
+        self.emit(Instruction::Assign {
+            destination: error_raw,
+            value: Rvalue::Load(ControlFlowPlace::VariantField {
+                base: Box::new(ControlFlowPlace::Temporary(value)),
+                variant: err_variant,
+                field: err_field,
+            }),
+            span,
+        });
+        let error = self.temp(error_type);
+        self.emit(Instruction::Assign {
+            destination: error,
+            value: Rvalue::Copy(error_raw),
+            span,
+        });
+        let propagated = self.temp(self.function.return_type);
+        self.emit(Instruction::Assign {
+            destination: propagated,
+            value: Rvalue::Aggregate(AggregateValue::Enum {
+                declaration: result_declaration,
+                variant: err_variant,
+                fields: vec![(err_field, error)],
+            }),
+            span,
+        });
+        self.emit_cleanup(0);
+        self.terminate(Terminator::Return(Some(propagated)));
+
+        self.current = ok_block;
+        let payload_raw = self.temp(expression.ty);
+        self.emit(Instruction::Assign {
+            destination: payload_raw,
+            value: Rvalue::Load(ControlFlowPlace::VariantField {
+                base: Box::new(ControlFlowPlace::Temporary(value)),
+                variant: ok_variant,
+                field: ok_field,
+            }),
+            span,
+        });
+        let payload = self.temp(expression.ty);
+        self.emit(Instruction::Assign {
+            destination: payload,
+            value: Rvalue::Copy(payload_raw),
+            span,
+        });
+        payload
+    }
+
     fn lower_print(&mut self, expression: &TypedExpression) {
-        if let TypedExpressionKind::FormattedString(parts) = &expression.kind {
-            for part in parts {
-                match part {
-                    FormattedPart::Text(text) => self.emit(Instruction::PrintText {
-                        text: text.clone(),
-                        span: expression.span,
-                    }),
-                    FormattedPart::Expression(value) => {
-                        let temporary = self.lower_expression(value);
-                        self.emit(Instruction::PrintValue {
-                            value: temporary,
-                            ty: value.ty,
-                            span: value.span,
-                        });
-                    }
-                }
-            }
-        } else {
-            let temporary = self.lower_expression(expression);
-            self.emit(Instruction::PrintValue {
-                value: temporary,
-                ty: expression.ty,
-                span: expression.span,
-            });
-        }
+        let temporary = self.lower_expression(expression);
+        self.emit(Instruction::PrintValue {
+            value: temporary,
+            ty: expression.ty,
+            span: expression.span,
+        });
     }
 
     fn lower_place(&mut self, place: &TypedPlace) -> ControlFlowPlace {
@@ -3244,18 +3898,19 @@ impl<'a> FunctionLowerer<'a> {
                 field: *field,
             },
             TypedPlace::Index {
-                base,
-                index,
-                length,
-                ..
+                base, index, kind, ..
             } => {
                 let base = self.lower_place(base);
                 let index = self.lower_expression(index);
                 ControlFlowPlace::Index {
                     base: Box::new(base),
                     index,
-                    length: Some(*length),
-                    trap: TrapKind::IndexOutOfBounds,
+                    kind: *kind,
+                    trap: if matches!(kind, IndexKind::Map { .. }) {
+                        TrapKind::MissingMapKey
+                    } else {
+                        TrapKind::IndexOutOfBounds
+                    },
                 }
             }
             TypedPlace::Dereference { base, .. } => {
@@ -3277,19 +3932,34 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Index { base, index } => {
                 let base = self.expression_place(base);
                 let index = self.lower_expression(index);
-                let length = match expanded_kind(
+                let (kind, trap) = match expanded_kind(
                     &self.types.types,
                     base_expression_type(&expression.kind),
                 ) {
-                    TypeKind::Array { length, .. } => Some(*length),
-                    TypeKind::Slice(_) => None,
-                    _ => Some(0),
+                    TypeKind::Array { length, .. } => (
+                        IndexKind::Array { length: *length },
+                        TrapKind::IndexOutOfBounds,
+                    ),
+                    TypeKind::Slice(_) => (IndexKind::Slice, TrapKind::IndexOutOfBounds),
+                    TypeKind::Builtin { arguments, .. } if arguments.len() == 1 => (
+                        IndexKind::Vec {
+                            collection: base_expression_type(&expression.kind),
+                        },
+                        TrapKind::IndexOutOfBounds,
+                    ),
+                    TypeKind::Builtin { .. } => (
+                        IndexKind::Map {
+                            collection: base_expression_type(&expression.kind),
+                        },
+                        TrapKind::MissingMapKey,
+                    ),
+                    _ => (IndexKind::Array { length: 0 }, TrapKind::IndexOutOfBounds),
                 };
                 ControlFlowPlace::Index {
                     base: Box::new(base),
                     index,
-                    length,
-                    trap: TrapKind::IndexOutOfBounds,
+                    kind,
+                    trap,
                 }
             }
             TypedExpressionKind::Dereference(operand) => {
@@ -3351,7 +4021,10 @@ fn structural_equality(types: &TypeContext, ty: TypeId) -> bool {
     }
     matches!(
         types.kind(ty),
-        TypeKind::Tuple(_) | TypeKind::Array { .. } | TypeKind::Nominal { .. }
+        TypeKind::Tuple(_)
+            | TypeKind::Array { .. }
+            | TypeKind::Nominal { .. }
+            | TypeKind::Builtin { .. }
     ) || matches!(
         types.expanded_primitive(ty),
         Some(PrimitiveType::Str | PrimitiveType::String)

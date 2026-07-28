@@ -1177,8 +1177,30 @@ fn provides_inner(
             assume_parameters,
             visiting,
         ),
-        TypeKind::Reference { .. } | TypeKind::TraitObject { .. } => {
+        TypeKind::Reference { target, .. } => {
             matches!(trait_name, "PartialEq" | "Eq" | "Hash")
+                || (trait_name == "Display"
+                    && provides_inner(
+                        resolved,
+                        typed,
+                        *target,
+                        trait_name,
+                        substitution,
+                        assume_parameters,
+                        visiting,
+                    ))
+        }
+        TypeKind::TraitObject { trait_type } => {
+            matches!(trait_name, "PartialEq" | "Eq" | "Hash")
+                || (trait_name == "Display"
+                    && matches!(
+                        typed.types.kind(typed.types.resolve_inference(*trait_type)),
+                        TypeKind::Nominal { identity, .. }
+                            if resolved.is_standard_declaration(
+                                identity.declaration,
+                                "Display"
+                            )
+                    ))
         }
         TypeKind::RawPointer { .. } => {
             matches!(trait_name, "Default" | "PartialEq" | "Eq" | "Hash")
@@ -1188,6 +1210,17 @@ fn provides_inner(
             let name = resolved.builtin_name(*builtin);
             match (name, trait_name) {
                 ("Vec" | "Map" | "Set", "Default") => true,
+                ("Vec" | "Map" | "Set", "Display") => arguments.iter().all(|argument| {
+                    provides_inner(
+                        resolved,
+                        typed,
+                        *argument,
+                        trait_name,
+                        substitution,
+                        assume_parameters,
+                        visiting,
+                    )
+                }),
                 ("Vec", "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash") => {
                     arguments.first().is_some_and(|argument| {
                         provides_inner(
@@ -1278,7 +1311,7 @@ fn provides_inner(
 
 fn primitive_provides(primitive: PrimitiveType, trait_name: &str) -> bool {
     match trait_name {
-        "Default" | "PartialEq" | "PartialOrd" => true,
+        "Default" | "PartialEq" | "PartialOrd" | "Display" => true,
         "Eq" | "Ord" | "Hash" => !primitive.is_float(),
         "StableHash" => !primitive.is_float() && primitive != PrimitiveType::String,
         _ => false,

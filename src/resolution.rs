@@ -47,6 +47,21 @@ pub enum Result[T, E]:
 pub enum NumericError:
     OutOfRange
     NotANumber
+
+pub trait Display:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ()
+";
+
+/// The compiler-supplied source of the `std.io` module's ordinary
+/// declarations. The authoritative demonstration passes `io.IoError` through
+/// `Result` propagation but never constructs or matches it, so its variants
+/// are implementation-chosen the same way `NumericError`'s are; Milestone
+/// 18.2's standard-package skeleton owns refining this surface.
+const STANDARD_IO_SOURCE: &str = "\
+pub enum IoError:
+    NotFound
+    PermissionDenied
+    Other
 ";
 
 macro_rules! id_type {
@@ -573,8 +588,8 @@ impl<'a> Resolver<'a> {
     }
 
     fn run(mut self) -> ResolutionOutput {
-        self.install_standard_library_names();
-        self.parse_standard_library_source();
+        let io_module = self.install_standard_library_names();
+        self.parse_standard_library_source(io_module);
         self.create_file_module_graph();
         self.parse_source_files();
         self.discover_inline_modules();
@@ -616,7 +631,7 @@ impl<'a> Resolver<'a> {
         id
     }
 
-    fn install_standard_library_names(&mut self) {
+    fn install_standard_library_names(&mut self) -> ModuleId {
         let io = self.intern("io");
         let ffi = self.intern("ffi");
         let std = self.intern("std");
@@ -685,9 +700,18 @@ impl<'a> Resolver<'a> {
             let symbol = self.intern(name);
             let id = self.push_builtin(symbol);
             self.program.prelude.insert(symbol, ItemId::Builtin(id));
+            if name == "Formatter" {
+                self.insert_namespace(
+                    self.program.std_root,
+                    symbol,
+                    NamespaceTarget::Item(ItemId::Builtin(id)),
+                    Visibility::Public,
+                    None,
+                );
+            }
         }
         for (module, names) in [
-            (io_module, &["IoError", "print", "println"][..]),
+            (io_module, &["print", "println"][..]),
             (ffi_module, &["ForeignRoot", "ForeignRootMut", "CVoid"][..]),
         ] {
             for name in names {
@@ -702,6 +726,7 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
+        io_module
     }
 
     fn push_builtin(&mut self, name: Symbol) -> BuiltinId {
@@ -719,26 +744,30 @@ impl<'a> Resolver<'a> {
     /// This source is compiler input, not user input: a diagnostic in it is an
     /// internal defect, so it is reported through the ordinary diagnostic list
     /// rather than silently dropped.
-    fn parse_standard_library_source(&mut self) {
-        let file = self.sources.add_text(
-            PathBuf::from("<std>/prelude.elx"),
-            STANDARD_PRELUDE_SOURCE.to_string(),
-        );
+    fn parse_standard_library_source(&mut self, io_module: ModuleId) {
         let root = self.program.std_root;
-        self.program.modules[root.index()].source_file = Some(file);
-        self.program.modules[root.index()].span = Some(Span::new(
-            file,
-            0,
-            u32::try_from(self.sources.text(file).len()).unwrap_or(u32::MAX),
-        ));
-        let lexed = lex(file, self.sources.text(file));
-        self.diagnostics.extend(lexed.diagnostics);
-        let parsed = parse(&lexed.tokens);
-        self.diagnostics.extend(parsed.diagnostics);
-        self.parsed_units.push(ParsedUnit {
-            module: root,
-            tree: parsed.tree,
-        });
+        for (module, path, source) in [
+            (root, "<std>/prelude.elx", STANDARD_PRELUDE_SOURCE),
+            (io_module, "<std>/io.elx", STANDARD_IO_SOURCE),
+        ] {
+            let file = self
+                .sources
+                .add_text(PathBuf::from(path), source.to_string());
+            self.program.modules[module.index()].source_file = Some(file);
+            self.program.modules[module.index()].span = Some(Span::new(
+                file,
+                0,
+                u32::try_from(self.sources.text(file).len()).unwrap_or(u32::MAX),
+            ));
+            let lexed = lex(file, self.sources.text(file));
+            self.diagnostics.extend(lexed.diagnostics);
+            let parsed = parse(&lexed.tokens);
+            self.diagnostics.extend(parsed.diagnostics);
+            self.parsed_units.push(ParsedUnit {
+                module,
+                tree: parsed.tree,
+            });
+        }
     }
 
     /// Records the declarations collected from [`STANDARD_PRELUDE_SOURCE`] as

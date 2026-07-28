@@ -642,7 +642,7 @@ fn checked_integer_index_and_conversion_operations_trap() {
             "E-RUN-OVERFLOW",
         ),
         (
-            "fn main() -> ():\n    let values = [1, 2]\n    println(values[2])\n",
+            "fn main() -> ():\n    let values = [1, 2]\n    let index: usize = 2\n    println(values[index])\n",
             "E-RUN-INDEX",
         ),
         (
@@ -658,6 +658,30 @@ fn checked_integer_index_and_conversion_operations_trap() {
         let (_, stderr, status) = build_and_run(source, Optimization::Debug);
         assert_eq!(status, 101, "{stderr}");
         assert!(stderr.contains(code), "{stderr}");
+    }
+}
+
+#[test]
+fn collection_traps_have_stable_codes_and_source_locations() {
+    let cases = [
+        (
+            "fn main() -> ():\n    var values = @vec[1, 2]\n    values.insert(3, 9)\n",
+            "E-RUN-INDEX",
+        ),
+        (
+            "fn main() -> ():\n    var values = @vec[1, 2]\n    println(values.remove(2))\n",
+            "E-RUN-INDEX",
+        ),
+        (
+            "fn main() -> ():\n    let values = @map{\"present\": 1}\n    println(values[\"missing\"])\n",
+            "E-RUN-KEY",
+        ),
+    ];
+    for (source, code) in cases {
+        let (_, stderr, status) = build_and_run(source, Optimization::Debug);
+        assert_eq!(status, 101, "{stderr}");
+        assert!(stderr.contains(code), "{stderr}");
+        assert!(stderr.contains("main.elx:3:"), "{stderr}");
     }
 }
 
@@ -803,23 +827,14 @@ fn main() -> ():
 }
 
 #[test]
-fn executable_subset_rejects_for_at_the_lowering_boundary() {
-    let tree = TestTree::new("unsupported-lowering");
-    tree.executable("fn main() -> ():\n    for value in [1, 2]:\n        println(value)\n");
-    let mut sources = SourceManager::new();
-    let graph = tree.graph(&mut sources);
-    let diagnostics = compile(&graph, &mut sources, Target::X86_64)
-        .err()
-        .expect("`for` must remain outside the executable subset until Milestone 14");
-    assert!(
-        diagnostics.iter().any(|diagnostic| {
-            diagnostic.category == Category::Lowering
-                && diagnostic.message.contains("`for` lowering")
-                && diagnostic.primary.is_some()
-        }),
-        "{}",
-        render(&sources, &diagnostics)
+fn executable_subset_lowers_for_after_milestone_fourteen() {
+    let (stdout, stderr, status) = build_and_run(
+        "fn main() -> ():\n    for value in [1, 2]:\n        println(value)\n",
+        Optimization::Debug,
     );
+    assert_eq!(stdout, "1\n2\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
 }
 
 #[test]
@@ -1953,6 +1968,272 @@ fn main() -> ():
 }
 
 #[test]
+fn standard_collections_construct_copy_mutate_and_query() {
+    let source = r#"
+fn main() -> ():
+    var values = @vec[1, 2, 3]
+    values.append(4)
+    values.insert(1, 9)
+    let removed = values.remove(2)
+    var copied = values
+    copied[0] = 7
+    println(f"{values.len()} {values[0]} {copied[0]} {removed}")
+
+    var names = @map{"one": 1, "two": 2, "one": 3}
+    let replaced = names.insert("two", 8)
+    let absent = names.remove("missing")
+    names["one"] += 1
+    println(f"{names.len()} {names["one"]} {names.contains_key("two")}")
+    match replaced:
+        Option.Some(value):
+            println(f"{value}")
+        Option.None:
+            println("none")
+    match absent:
+        Option.Some(value):
+            println(f"{value}")
+        Option.None:
+            println("none")
+
+    var tags = @set{"a", "b", "a"}
+    println(f"{tags.len()} {tags.insert("c")} {tags.insert("c")} {tags.remove("a")}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "4 1 7 2\n2 4 true\n2\nnone\n2 true false true\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn collection_iteration_copies_the_iterable_and_yielded_values() {
+    let source = r#"
+fn main() -> ():
+    var values = @vec[1, 2, 3]
+    var total = 0
+    for value in values:
+        total += value
+        values[0] = 9
+    println(f"{total} {values[0]}")
+
+    let entries = @map{"a": 1, "b": 2}
+    var map_total = 0
+    for entry in entries:
+        match entry:
+            (key, value):
+                map_total += value
+    println(f"{map_total}")
+
+    let tags = @set{1, 2, 2}
+    var set_total = 0
+    for tag in tags:
+        set_total += tag
+    println(f"{set_total}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "6 9\n3\n3\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn collection_comparison_and_copying_follow_value_semantics() {
+    let source = r#"
+fn copy_map(values: Map[str, i32]) -> Map[str, i32]:
+    var result = values
+    result["a"] = 9
+    return result
+
+fn main() -> ():
+    let ascending = @vec[1, 2, 3]
+    let later = @vec[1, 2, 4]
+    println(f"{ascending == @vec[1, 2, 3]} {ascending < later}")
+
+    var original_map = @map{"a": 1, "b": 2}
+    let reordered_map = @map{"b": 2, "a": 1}
+    let changed_map = copy_map(original_map)
+    println(f"{original_map == reordered_map} {original_map["a"]} {changed_map["a"]}")
+
+    var original_set = @set{"a", "b"}
+    var copied_set = original_set
+    copied_set.remove("a")
+    println(f"{original_set == @set{"b", "a"}} {original_set.contains("a")} {copied_set.contains("a")}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "true true\ntrue 1 9\ntrue true false\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn collection_iteration_honors_break_and_continue() {
+    let source = r#"
+fn main() -> ():
+    var values = @vec[1, 2, 3, 4, 5]
+    var total = 0
+    for value in values:
+        if value == 2:
+            continue
+        if value == 4:
+            break
+        total += value
+        values[0] = 9
+    println(f"{total} {values[0]}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "4 9\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn formatted_strings_are_values_and_display_builtin_collections() {
+    let source = r#"
+struct Counter:
+    value: i32
+
+    fn observe(self: &var Self, value: i32) -> i32:
+        self.value += 1
+        print(value)
+        return value
+
+fn make(value: i32) -> str:
+    return f"value={value}, ok={true}"
+
+fn main() -> ():
+    let text = make(7)
+    println(text)
+    let values = @vec[1, 2, 3]
+    let rendered = f"values={values}"
+    println(rendered)
+    let nested = @vec[@vec[1, 2], @vec[3]]
+    println(f"{nested}")
+    var counter = Counter { value: 0 }
+    println(f"={counter.observe(4)}:{counter.observe(5)}:{counter.value}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(
+        stdout,
+        "value=7, ok=true\nvalues=[1, 2, 3]\n[[1, 2], [3]]\n45=4:5:2\n"
+    );
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn identity_wrappers_are_stable_collection_keys() {
+    let source = r#"
+fn main() -> ():
+    var first = 1
+    var second = 1
+    let first_ref = &var first
+    let alias = &var first
+    let second_ref = &var second
+    let first_key = Identity[&var i32].from(first_ref)
+    let alias_key = Identity[&var i32].from(alias)
+    let second_key = Identity[&var i32].from(second_ref)
+    var values = @map{first_key: 7}
+    first = 9
+    println(f"{values[alias_key]} {values.contains_key(second_key)}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "7 false\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn user_display_implementations_write_through_formatter() {
+    let source = r#"
+struct Point:
+    x: i32
+    y: i32
+
+impl Display for Point:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ():
+        formatter.write(f"Point({self.x}, {self.y})")
+
+fn main() -> ():
+    let point = Point { x: 3, y: 4 }
+    println(point)
+    let text = f"wrapped {point}"
+    println(text)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "Point(3, 4)\nwrapped Point(3, 4)\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn display_trait_objects_dispatch_through_the_formatter() {
+    let source = r#"
+struct Label:
+    value: i32
+
+impl Display for Label:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ():
+        formatter.write(f"label={self.value}")
+
+fn render(value: &Display) -> str:
+    return f"<{value}>"
+
+fn main() -> ():
+    let label = Label { value: 8 }
+    println(render(&label))
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "<label=8>\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn text_preserves_unicode_and_embedded_nul_bytes() {
+    let source = r#"
+fn main() -> ():
+    let first = "α\0β"
+    let same = "α\0β"
+    let later = "α\0γ"
+    let owned = String.from(first)
+    println(f"{first == same} {first < later} {owned == String.from(same)}")
+    print(first)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout.as_bytes(), "true true true\nα\0β".as_bytes());
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn array_and_collection_empty_apis_return_typed_values() {
+    let source = r#"
+fn main() -> ():
+    let array = [4, 5]
+    println(f"{array.len()}")
+    match array.get(1):
+        Option.Some(value):
+            println(f"{value}")
+        Option.None:
+            println("none")
+    match array.get(9):
+        Option.Some(value):
+            println(f"{value}")
+        Option.None:
+            println("none")
+
+    let values: Vec[i32] = Vec.new()
+    let names: Map[str, i32] = Map.default()
+    let tags: Set[str] = Set.new()
+    println(f"{values.is_empty()} {names.is_empty()} {tags.is_empty()}")
+    println(f"{i32.default()}:{bool.default()}:{str.default()}:{String.default()}")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "2\n5\nnone\ntrue true true\n0:false::\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
 fn numeric_alternative_conversions_wrap_and_saturate() {
     let source = r#"
 fn main() -> ():
@@ -1992,5 +2273,386 @@ fn only_wrapping_division_can_still_trap() {
     }) {
         let body = &helper[..helper.find("\n}").unwrap_or(helper.len())];
         assert!(!body.contains("el_trap"), "must not trap:\n{body}");
+    }
+}
+
+#[test]
+fn propagation_branches_evaluate_once_and_copy_payloads() {
+    // M15.3: the `?` operand is evaluated exactly once; an `Ok` payload is
+    // copied into the expression's value and an `Err` payload is copied into
+    // an early `Result.Err` return (`SPEC.md` 8).
+    let source = r#"
+struct Counter:
+    value: i32
+
+fn tick(label: str, fail: bool) -> Result[Counter, str]:
+    println(f"eval {label}")
+    if fail:
+        return Result.Err("failed")
+    return Result.Ok(Counter { value: 1 })
+
+fn probe(fail: bool) -> Result[i32, str]:
+    let source = tick("operand", fail)
+    var copied = source?
+    copied.value = 99
+    match source:
+        Result.Ok(counter):
+            println(f"original {counter.value}")
+        Result.Err(message):
+            println(f"original err {message}")
+    return Result.Ok(copied.value)
+
+fn describe(value: Result[i32, str]) -> ():
+    match value:
+        Result.Ok(inner):
+            println(f"ok {inner}")
+        Result.Err(message):
+            println(f"err {message}")
+
+fn main() -> ():
+    describe(probe(false))
+    describe(probe(true))
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        // The mutated `?` copy never leaks back into the source `Result`,
+        // and each operand evaluates exactly once per call.
+        assert_eq!(
+            stdout,
+            "eval operand\noriginal 1\nok 99\neval operand\nerr failed\n"
+        );
+    }
+}
+
+#[test]
+fn deferred_registrations_run_in_reverse_on_every_exit_edge() {
+    // M15.6-15.8: registrations execute in reverse order at scope exit, a
+    // `defer:` body runs forward as one unit, inner scopes run before outer
+    // ones, and `break`/`continue` exit exactly the loop-body scopes.
+    let source = r#"
+fn fallthrough_and_blocks() -> ():
+    defer println("outer call")
+    defer:
+        println("block first")
+        println("block second")
+    if true:
+        defer println("inner scope")
+        println("inner body")
+    println("outer body")
+
+fn return_edge(early: bool) -> i32:
+    defer println("return cleanup")
+    if early:
+        defer println("branch cleanup")
+        return 1
+    return 2
+
+fn loop_edges() -> ():
+    var index = 0
+    while index < 3:
+        index += 1
+        defer println(f"iter {index} cleanup")
+        if index == 2:
+            continue
+        if index == 3:
+            break
+        println(f"iter {index} body")
+    println("after loop")
+
+fn main() -> ():
+    fallthrough_and_blocks()
+    println(f"returned {return_edge(true)}")
+    println(f"returned {return_edge(false)}")
+    loop_edges()
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "inner body\ninner scope\nouter body\nblock first\nblock second\nouter call\n\
+             branch cleanup\nreturn cleanup\nreturned 1\n\
+             return cleanup\nreturned 2\n\
+             iter 1 body\niter 1 cleanup\niter 2 cleanup\niter 3 cleanup\nafter loop\n"
+        );
+    }
+}
+
+#[test]
+fn a_returned_shared_handle_observes_its_deferred_close() {
+    // M15.7: the return value is copied before cleanup begins, so
+    // unconditionally deferring `close()` on a returned shared handle closes
+    // the returned copy too (`SPEC.md` 8): the copy shares the handle's
+    // explicit alias even though the copy itself happened first.
+    let source = r#"
+struct Handle:
+    state: &var i32
+
+    fn close(self: &Self) -> ():
+        *self.state = 0
+
+fn open_and_return() -> Handle:
+    var cell = 1
+    let handle = Handle { state: &var cell }
+    defer handle.close()
+    return handle
+
+fn main() -> ():
+    let handle = open_and_return()
+    println(*handle.state)
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "0\n");
+    }
+}
+
+#[test]
+fn propagation_runs_cleanup_for_every_exited_scope() {
+    // M15.9: an `Err` propagation copies its error, then runs every exited
+    // scope's registrations inner-to-outer before returning.
+    let source = r#"
+fn source(fail: bool) -> Result[i32, str]:
+    if fail:
+        return Result.Err("inner failure")
+    return Result.Ok(1)
+
+fn run(fail: bool) -> Result[i32, str]:
+    defer println("outer cleanup")
+    if true:
+        defer println("inner cleanup")
+        let value = source(fail)?
+        println(f"inner value {value}")
+    println("after inner scope")
+    return Result.Ok(0)
+
+fn main() -> ():
+    match run(false):
+        Result.Ok(value):
+            println(f"ok {value}")
+        Result.Err(message):
+            println(f"err {message}")
+    match run(true):
+        Result.Ok(value):
+            println(f"ok {value}")
+        Result.Err(message):
+            println(f"err {message}")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "inner value 1\ninner cleanup\nafter inner scope\nouter cleanup\nok 0\n\
+             inner cleanup\nouter cleanup\nerr inner failure\n"
+        );
+    }
+}
+
+#[test]
+fn deferred_bodies_read_execution_time_values() {
+    // M15.10: a deferred expression reads the values its bindings have when
+    // the registration executes. Rebinding a `var` after registration changes
+    // the later call; a `let` continues to identify the original value, and a
+    // managed target named by deferred syntax stays alive until it runs.
+    let source = r#"
+fn report(label: str, value: i32) -> ():
+    println(f"{label} {value}")
+
+fn main() -> ():
+    var counter = 1
+    let snapshot = counter
+    defer report("var", counter)
+    defer report("let", snapshot)
+    counter = 2
+    var cell = 10
+    let alias = &var cell
+    defer report("managed", *alias)
+    cell = 11
+    println("body done")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "body done\nmanaged 11\nlet 1\nvar 2\n");
+    }
+}
+
+#[test]
+fn deferred_execution_is_static_and_constructs_no_callable() {
+    // M15.4: registration is a static cleanup plan, not a runtime list. Each
+    // exit edge re-lowers the registered bodies in place, so the deferred
+    // call's C appears once per exit edge and no callable or environment
+    // value is ever constructed.
+    let source = r#"
+fn helper() -> ():
+    println("cleanup")
+
+fn probe(flag: bool) -> ():
+    defer helper()
+    if flag:
+        return
+    println("body")
+
+fn main() -> ():
+    probe(true)
+    probe(false)
+"#;
+    let tree = TestTree::new("static-defer");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    let helper_symbol = compilation
+        .generated_c
+        .lines()
+        .find_map(|line| {
+            let start = line.find("el_p")?;
+            let rest = &line[start..];
+            let end = rest.find('(')?;
+            rest[..end]
+                .contains("helper")
+                .then(|| rest[..end].to_string())
+        })
+        .expect("the deferred helper is emitted");
+    let calls = compilation
+        .generated_c
+        .matches(&format!("{helper_symbol}()"))
+        .count();
+    // Two exit edges (the early return and the fallthrough), no more: nothing
+    // is emitted at the registration point itself.
+    assert_eq!(calls, 2, "{}", compilation.generated_c);
+    // No function pointer to the helper is ever stored, so no callable value
+    // backs the registration.
+    assert!(
+        !compilation
+            .generated_c
+            .contains(&format!("= {helper_symbol};")),
+        "{}",
+        compilation.generated_c
+    );
+
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "cleanup\nbody\ncleanup\n");
+}
+
+#[test]
+fn traps_terminate_without_promising_remaining_cleanup() {
+    // M15.11: a trap terminates through the existing runtime path. Deferred
+    // registrations are not an unwinding mechanism, so this asserts only
+    // termination and the output that provably preceded the trap.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn main() -> ():
+    defer println("unreached cleanup promise")
+    println("before trap")
+    var zero = 0
+    println(10 / zero)
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert!(stderr.contains("E-RUN-DIVZERO"), "{stderr}");
+    assert!(stdout.starts_with("before trap\n"), "{stdout}");
+
+    // A trap *during* deferred execution also terminates; the remaining
+    // registration's execution is deliberately not asserted either way.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn main() -> ():
+    defer println("earlier registration")
+    defer:
+        println("later registration runs first")
+        var zero = 0
+        println(10 / zero)
+    println("body")
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert!(stderr.contains("E-RUN-DIVZERO"), "{stderr}");
+    assert!(
+        stdout.starts_with("body\nlater registration runs first\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn spec_demo_error_and_cleanup_regions_build_and_run() {
+    // M15.12: the error and resource-cleanup regions of the authoritative
+    // demonstration, together with methods, shared handles, formatting, and
+    // `io.IoError` propagation. The full demonstration remains Milestone
+    // 19.1's fixture.
+    let source = r#"
+import std.io
+
+struct DemoResourceState:
+    closed: bool
+
+struct DemoResource:
+    // Copies share state because the handle explicitly contains a reference.
+    state: &var DemoResourceState
+
+    fn is_closed(self: &Self) -> bool:
+        return self.state.closed
+
+    fn close(self: &Self) -> ():
+        self.state.closed = true
+
+fn make_demo_resource() -> DemoResource:
+    var state = DemoResourceState{closed: false}
+    return DemoResource{state: &var state}
+
+fn use_demo_resource(resource: DemoResource):
+    defer resource.close()
+    println(f"resource closed: {resource.is_closed()}") // false
+
+fn use_demo_resource_block(resource: DemoResource):
+    defer:
+        let closing = "closing demo resource"
+        println(closing)
+        resource.close()
+    println(f"resource closed: {resource.is_closed()}") // false
+
+fn propagate_io(result: Result[i32, io.IoError]) -> Result[i32, io.IoError]:
+    // `?` propagates only the exact enclosing error type.
+    let value = result?
+    return Result.Ok(value)
+
+fn run() -> Result[(), io.IoError]:
+    let resource = make_demo_resource()
+    use_demo_resource(resource)
+    println(f"after call closed: {resource.is_closed()}")
+
+    let second = make_demo_resource()
+    use_demo_resource_block(second)
+    println(f"after block closed: {second.is_closed()}")
+
+    let propagated = propagate_io(Result.Ok(42))?
+    println(f"propagated value: {propagated}")
+    let failed = propagate_io(Result.Err(io.IoError.Other))?
+    println(f"unreached: {failed}")
+    return Result.Ok(())
+
+fn main() -> ():
+    match run():
+        Result.Ok(unit):
+            println("demo ok")
+        Result.Err(error):
+            println("demo err propagated")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "resource closed: false\nafter call closed: true\n\
+             resource closed: false\nclosing demo resource\nafter block closed: true\n\
+             propagated value: 42\ndemo err propagated\n"
+        );
     }
 }

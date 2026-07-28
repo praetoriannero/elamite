@@ -1,8 +1,8 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 13 complete, Milestone 14 in progress
+> Status: Active — Milestones 0 through 15 complete, Milestone 16 next
 >
-> Next work package: M14.5 — immutable `str`
+> Next work package: M16.1 — pointer values and equality
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -803,7 +803,7 @@ Validation:
 
 ### Milestone 14: strings, collections, iteration, and formatting
 
-> Status: In progress — M14.1 through M14.4 complete, M14.5 next.
+> Status: Complete.
 >
 > Boundary: generic enums and structural `StableHash` capability inference
 > already exist. This milestone makes the standard `Option[T]` and
@@ -874,24 +874,24 @@ Implementation tasks, in order:
 | **M14.2 — Ordinary `Result` values** *(complete)* | Make standard `Result.Ok`/`Result.Err` construction, matching, and copying use the existing generic-enum path without giving `Result` its postfix `?` role yet. | Generic `Ok`/`Err` construction and match tests pass while `?` remains rejected. |
 | **M14.3 — Checked numeric conversions** *(complete)* | Add `NumericError` and the specified `Type.try_from` methods on concrete numeric types, reusing the exact M6/M8 conversion boundaries. | Successful/failing conversions cover every source/target family and both pointer widths without trapping. |
 | **M14.4 — Numeric arithmetic alternatives** *(complete)* | Add the specified checked arithmetic methods returning `Option[T]` and wrapping/saturating arithmetic and conversions. Reuse M8 helpers rather than duplicating arithmetic rules. | Integer-width boundary tests prove checked failure returns `None` and wrapping/saturating operations never take the trapping path. |
-| **M14.5 — Immutable `str`** | Finish immutable UTF-8 storage, literal default/contextual materialization, default/equality/order/hash/`StableHash`, and immutable copy behavior. | Unicode and escape run-pass tests, exact codepoint comparison, stable hashing, and rejected content mutation. |
-| **M14.6 — Mutable `String`** | Finish mutable UTF-8 storage, `String.from(str)`, independent logical copying, and default/equality/order/hash. Do not provide `StableHash` or an implicit conversion from an existing `str` value. | Copy-independence, explicit-conversion, comparison, and `StableHash` rejection tests. |
-| **M14.7 — Collection runtime boundary** | Define target-independent layouts and helper interfaces for `Vec`, `Map`, and `Set`; integrate allocation, empty defaults, and recursive copy hooks with `ManagedMemoryStrategy`; invoke no user cleanup. | Default/empty construction and nested-copy tests for all three collections with deterministic generated C. |
-| **M14.8 — Array APIs** | Complete fixed-array `len` and `get`, exact `usize` indexing, static and runtime bounds behavior, and conditional `StableHash`. Arrays remain fixed-size ordinary aggregates. | Length/get/index tests, statically known and runtime OOB cases, and conditional stable hashing. |
-| **M14.9 — `Vec` APIs** | Implement `Vec.new`, `len`, `is_empty`, `get`, `append`, `insert`, `remove`, and `clear`; add conditional lexicographic equality, ordering, and hashing. Do not introduce a `Vector` alias. | API-by-API run-pass tests, insert/remove trap boundaries, copied return values, comparisons, and rejection of `Vector`. |
-| **M14.10 — Runtime stable-key hashing** | Connect M13 `StableHash` capability proofs to matching equality/hash helpers used by hashed collections. Reject floats, mutable values, ordinary safe references, and manually claimed stability without promising map/set iteration order or cross-process hash values. | Equal stable values hash equally within a collection; each forbidden key category has a compile-fail test. |
-| **M14.11 — `Map` APIs** | Implement `Map.new`, `len`, `is_empty`, `contains_key`, `get`, `insert`, `remove`, `clear`, and trapping value indexing. Keys and values copy normally; conditional equality/hash ignore iteration order, and maps have no relational order. | Replacement/removal results, absent-key behavior, copy independence, stable keys, and order-independent equality/hash. |
-| **M14.12 — `Set` APIs** | Implement `Set.new`, `len`, `is_empty`, `contains`, `insert`, `remove`, and `clear`, plus conditional order-independent equality/hash. Sets have no indexing or relational order. | Duplicate collapse, boolean insert/remove results, copy independence, and order-independent equality/hash. |
-| **M14.13 — Identity-key wrappers** | Implement `Identity[&T]` and `Identity[&var T]` equality, hashing, and `StableHash` using managed target identity rather than pointee contents. | Aliases to one target compare/hash equally and work as map keys/set elements despite pointee mutation. |
-| **M14.14 — Collection literal typing** | Type-check `@vec`, `@map`, and `@set` without introducing general macros; require exact homogeneous types, contextual typing for empty literals, and `StableHash` where required. | Compile-pass contextual literals and compile-fail heterogeneous, ambiguous-empty, and unstable-key cases. |
-| **M14.15 — Collection literal lowering** | Evaluate entries left-to-right into explicit temporaries, then build the collection; later duplicate map keys replace values and duplicate set entries collapse. | Side-effect ordering and duplicate tests use independently copied inputs. |
-| **M14.16 — Collection places** | Lower value-context indexing as a copy and mutable array/`Vec`/`Map` paths as assignable, non-addressable places. Evaluate a compound-assignment destination once and expose no safe interior reference. | Replacement, compound assignment, nested-field mutation, absent-key traps, and reference-formation rejection. |
-| **M14.17 — Collection iteration** | Lower `for` over arrays, `Vec`, `Map`, and `Set`: evaluate and copy the iterable once, keep hidden state rooted, and copy each yielded binding. Arrays/vectors preserve index order; map/set order remains unspecified. | Source-mutation independence, yielded-copy independence, early `break`/`continue`, and pair typing for maps. |
-| **M14.18 — Formatter runtime** | Define the mutable `Formatter` representation and primitive append/write operations used by `Display` lowering. Keep sequencing explicit and allocation behind managed runtime hooks. | Direct formatter tests cover text growth, Unicode, allocation, and left-to-right writes. |
-| **M14.19 — `Display` implementations** | Add built-in `Display` for primitives, text, references to displayable values, and displayable collections; connect ordinary user impls through M13 static and dynamic dispatch. | One focused test per family plus user static/trait-object impls; map/set tests assume no order. |
-| **M14.20 — Formatted strings** | Lower formatted literals to left-to-right formatter operations with exactly-once interpolation, `{{`/`}}` escapes, immutable `str` results, and no width/precision/debug extensions. | Evaluation-order, escape, unmatched-brace, non-`Display`, and nested-formatting tests. |
-| **M14.21 — `print` and `println`** | Replace the early output skeleton with the single-value generic `Display` functions, keeping `std.io` and prelude entry points consistent. | Primitive, string, user-display, formatted-string, and newline behavior. |
-| **M14.22 — Standard-value integration** | Run the complete value/copy/place/formatting matrix through generic instantiation and C emission; remove M8 boundary diagnostics only for completed constructs. | Collection, `for`, numeric-alternative, and formatting regions of `spec_demo.elx` run without enabling M15 behavior. |
+| **M14.5 — Immutable `str`** *(complete)* | Finish immutable UTF-8 storage, literal default/contextual materialization, default/equality/order/hash/`StableHash`, and immutable copy behavior. | Unicode and escape run-pass tests, exact codepoint comparison, stable hashing, and rejected content mutation. |
+| **M14.6 — Mutable `String`** *(complete)* | Finish mutable UTF-8 storage, `String.from(str)`, independent logical copying, and default/equality/order/hash. Do not provide `StableHash` or an implicit conversion from an existing `str` value. | Copy-independence, explicit-conversion, comparison, and `StableHash` rejection tests. |
+| **M14.7 — Collection runtime boundary** *(complete)* | Define target-independent layouts and helper interfaces for `Vec`, `Map`, and `Set`; integrate allocation, empty defaults, and recursive copy hooks with `ManagedMemoryStrategy`; invoke no user cleanup. | Default/empty construction and nested-copy tests for all three collections with deterministic generated C. |
+| **M14.8 — Array APIs** *(complete)* | Complete fixed-array `len` and `get`, exact `usize` indexing, static and runtime bounds behavior, and conditional `StableHash`. Arrays remain fixed-size ordinary aggregates. | Length/get/index tests, statically known and runtime OOB cases, and conditional stable hashing. |
+| **M14.9 — `Vec` APIs** *(complete)* | Implement `Vec.new`, `len`, `is_empty`, `get`, `append`, `insert`, `remove`, and `clear`; add conditional lexicographic equality, ordering, and hashing. Do not introduce a `Vector` alias. | API-by-API run-pass tests, insert/remove trap boundaries, copied return values, comparisons, and rejection of `Vector`. |
+| **M14.10 — Runtime stable-key hashing** *(complete)* | Connect M13 `StableHash` capability proofs to matching equality/hash helpers used by hashed collections. Reject floats, mutable values, ordinary safe references, and manually claimed stability without promising map/set iteration order or cross-process hash values. | Equal stable values hash equally within a collection; each forbidden key category has a compile-fail test. |
+| **M14.11 — `Map` APIs** *(complete)* | Implement `Map.new`, `len`, `is_empty`, `contains_key`, `get`, `insert`, `remove`, `clear`, and trapping value indexing. Keys and values copy normally; conditional equality/hash ignore iteration order, and maps have no relational order. | Replacement/removal results, absent-key behavior, copy independence, stable keys, and order-independent equality/hash. |
+| **M14.12 — `Set` APIs** *(complete)* | Implement `Set.new`, `len`, `is_empty`, `contains`, `insert`, `remove`, and `clear`, plus conditional order-independent equality/hash. Sets have no indexing or relational order. | Duplicate collapse, boolean insert/remove results, copy independence, and order-independent equality/hash. |
+| **M14.13 — Identity-key wrappers** *(complete)* | Implement `Identity[&T]` and `Identity[&var T]` equality, hashing, and `StableHash` using managed target identity rather than pointee contents. | Aliases to one target compare/hash equally and work as map keys/set elements despite pointee mutation. |
+| **M14.14 — Collection literal typing** *(complete)* | Type-check `@vec`, `@map`, and `@set` without introducing general macros; require exact homogeneous types, contextual typing for empty literals, and `StableHash` where required. | Compile-pass contextual literals and compile-fail heterogeneous, ambiguous-empty, and unstable-key cases. |
+| **M14.15 — Collection literal lowering** *(complete)* | Evaluate entries left-to-right into explicit temporaries, then build the collection; later duplicate map keys replace values and duplicate set entries collapse. | Side-effect ordering and duplicate tests use independently copied inputs. |
+| **M14.16 — Collection places** *(complete)* | Lower value-context indexing as a copy and mutable array/`Vec`/`Map` paths as assignable, non-addressable places. Evaluate a compound-assignment destination once and expose no safe interior reference. | Replacement, compound assignment, nested-field mutation, absent-key traps, and reference-formation rejection. |
+| **M14.17 — Collection iteration** *(complete)* | Lower `for` over arrays, `Vec`, `Map`, and `Set`: evaluate and copy the iterable once, keep hidden state rooted, and copy each yielded binding. Arrays/vectors preserve index order; map/set order remains unspecified. | Source-mutation independence, yielded-copy independence, early `break`/`continue`, and pair typing for maps. |
+| **M14.18 — Formatter runtime** *(complete)* | Define the mutable `Formatter` representation and primitive append/write operations used by `Display` lowering. Keep sequencing explicit and allocation behind managed runtime hooks. | Direct formatter tests cover text growth, Unicode, allocation, and left-to-right writes. |
+| **M14.19 — `Display` implementations** *(complete)* | Add built-in `Display` for primitives, text, references to displayable values, and displayable collections; connect ordinary user impls through M13 static and dynamic dispatch. | One focused test per family plus user static/trait-object impls; map/set tests assume no order. |
+| **M14.20 — Formatted strings** *(complete)* | Lower formatted literals to left-to-right formatter operations with exactly-once interpolation, `{{`/`}}` escapes, immutable `str` results, and no width/precision/debug extensions. | Evaluation-order, escape, unmatched-brace, non-`Display`, and nested-formatting tests. |
+| **M14.21 — `print` and `println`** *(complete)* | Replace the early output skeleton with the single-value generic `Display` functions, keeping `std.io` and prelude entry points consistent. | Primitive, string, user-display, formatted-string, and newline behavior. |
+| **M14.22 — Standard-value integration** *(complete)* | Run the complete value/copy/place/formatting matrix through generic instantiation and C emission; remove M8 boundary diagnostics only for completed constructs. | Collection, `for`, numeric-alternative, and formatting regions of `spec_demo.elx` run without enabling M15 behavior. |
 
 Validation:
 
@@ -906,13 +906,43 @@ Validation:
 
 ### Milestone 15: `Result`, postfix `?`, and `defer`
 
-> Status: Pending Milestone 14.
+> Status: Complete.
 >
-> Boundary: standard `Result[T, E]` values already construct, match, and copy
-> through M14's ordinary generic-enum path. This milestone gives that exact
-> compiler-known type its propagation role. `defer call` and `defer:` syntax,
-> name resolution, lexical scoping, and control-flow placement restrictions
-> already exist from M3, M4, and M7. Cleanup remains explicit: there is no
+> The propagation role keys on the standard `Result` declaration's identity
+> through `check::standard_result_payloads` (aliases included), so a shadowing
+> user `Result` receives nothing. `check_try` validates the operand and the
+> enclosing function's return type against one exact `E`; the checker also
+> rejects a deferred non-unit or unsafe/foreign call (`call_is_unsafe`
+> records the rule Milestone 17 re-applies to executable foreign calls).
+>
+> Cleanup lowering is *static*: registration is per-lexical-block and a
+> block's statement list is straight-line at the statement level, so at any
+> exit edge the reached registrations are exactly the `defer` statements
+> lexically preceding that edge in each exited scope. `src/ir.rs` therefore
+> keeps one cleanup plan per open scope and re-lowers the registered bodies at
+> every edge — fallthrough and `return` (M15.7), `break`/`continue` down to
+> the loop body's recorded scope depth (M15.8), and `?` propagation across
+> every open scope (M15.9) — innermost scope first, reverse registration
+> order within a scope, a `defer:` body forward as one unit. No runtime
+> registration list, callable, or environment value exists
+> (`deferred_execution_is_static_and_constructs_no_callable` proves the
+> per-edge expansion in generated C), and re-lowering at the edge is what
+> gives deferred expressions their execution-time values (M15.10).
+>
+> Postfix `?` lowers to a discriminant branch reusing the match machinery:
+> the `Err` path copies the error payload, builds the enclosing return type's
+> `Result.Err`, runs every open scope's cleanup, and returns; the `Ok` path
+> copies the payload as the expression's value. Return values are evaluated
+> and copied before cleanup begins, so an unconditionally deferred `close()`
+> on a returned shared handle closes the returned copy through its alias.
+> Traps and OOM keep terminating through the existing non-unwinding runtime
+> path (M15.11).
+>
+> `io.IoError`, which the authoritative demonstration propagates, became an
+> ordinary compiler-supplied declaration in the `std.io` module (the M14
+> pattern); like `NumericError`, its variants are implementation-chosen
+> because no normative text names them — M18.2's standard-package skeleton
+> owns refining that surface. Cleanup remains explicit: there is no
 > compiler-known cleanup trait, privileged method name, implicit destruction,
 > GC finalizer, `with`, or `errdefer`.
 
@@ -923,18 +953,18 @@ Implementation tasks, in order:
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M15.1 — Compiler-known `Result` role** | Resolve the exact standard `Result[T, E]` identity for propagation and expose typed/IR queries for its tag and payloads. Do not recognize a user type merely because it is also named `Result`. | The standard type is recognized under aliases/imports; a shadowing user type receives no special behavior. |
-| **M15.2 — Postfix `?` typing** | Accept `?` only for `Result[T, E]` inside a function returning `Result[U, E]` with exactly the same `E`; reject `Option`, differing errors, and non-result operands without implicit conversion. | One compile-pass case and focused compile-fail cases for every rejected shape. |
-| **M15.3 — Postfix `?` control flow** | Evaluate the operand once, branch explicitly on its tag, copy an `Ok` payload into the expression result, and copy an `Err` payload into an early `Result.Err` return. | Side-effect-counting and copy-independence tests for both branches. |
-| **M15.4 — Deferred-registration IR** | Represent each reached `defer call` or `defer:` as one registration owned by its lexical scope. Retain syntax/typed IR tied to lexical binding identities; do not create a closure, capture values, or evaluate deferred expressions at registration. | IR tests distinguish registration from execution and show no callable/environment value is constructed. |
-| **M15.5 — Deferred-body checking** | Require the single-call form to be a safe unit-returning call with no postfix `?`. Type-check a block form as its existing lexical scope while preserving the M7 bans on control redirection, nested `defer`, and `unsafe:`. Reject a deferred call whose existing function signature is unsafe; M17 applies the same recorded rule to foreign calls. | Compile-fail tests for non-call, non-unit, `?`, each forbidden statement, and a direct unsafe call. |
-| **M15.6 — Scope cleanup plans** | Build one cleanup plan per lexical scope. Preserve source registration order in IR and execute registrations in reverse order; execute a `defer:` body forward as one registration. | IR and run-pass tests for multiple calls, multiple blocks, and mixed call/block registration. |
-| **M15.7 — Fallthrough and return edges** | Route normal block fallthrough and explicit `return` through the required inner-to-outer cleanup chain. Evaluate and independently copy the return value before cleanup begins. | Nested-scope ordering tests and a returned shared handle whose deferred mutation is observable in the returned copy. |
-| **M15.8 — Loop-exit edges** | Route `break` and `continue` through exactly the scopes exited by that edge, without running cleanup for scopes that remain active. | Nested loop/block tests for both exits and repeated registrations across iterations. |
-| **M15.9 — Propagation edges** | Compose M15.3 with cleanup plans so an `Err` propagation copies its error before running every exited scope's cleanup. | Nested-scope `?` tests proving exactly-once evaluation, copy-before-cleanup, and ordering. |
-| **M15.10 — Deferred-value liveness** | Keep bindings and managed targets referenced by deferred syntax alive until that registration finishes. Rebinding a `var` changes the value observed at exit; a `let` continues to identify the original value. | Reassigned-variable, managed-allocation, and nested aggregate liveness tests. |
-| **M15.11 — Non-unwinding termination boundary** | Ensure traps, OOM, and traps during deferred execution terminate through the existing runtime path without promising remaining cleanup. Do not synthesize exception unwinding. | Subprocess tests confirm termination and avoid asserting execution of remaining registrations. |
-| **M15.12 — Error/cleanup integration** | Remove lowering diagnostics only for completed `Result`, `?`, and `defer` forms; run them together with methods, generics, traits, collections, and formatting. | The error and resource-cleanup regions of `spec_demo.elx` build and run. |
+| **M15.1 — Compiler-known `Result` role** *(complete)* | Resolve the exact standard `Result[T, E]` identity for propagation and expose typed/IR queries for its tag and payloads. Do not recognize a user type merely because it is also named `Result`. | The standard type is recognized under aliases/imports; a shadowing user type receives no special behavior. |
+| **M15.2 — Postfix `?` typing** *(complete)* | Accept `?` only for `Result[T, E]` inside a function returning `Result[U, E]` with exactly the same `E`; reject `Option`, differing errors, and non-result operands without implicit conversion. | One compile-pass case and focused compile-fail cases for every rejected shape. |
+| **M15.3 — Postfix `?` control flow** *(complete)* | Evaluate the operand once, branch explicitly on its tag, copy an `Ok` payload into the expression result, and copy an `Err` payload into an early `Result.Err` return. | Side-effect-counting and copy-independence tests for both branches. |
+| **M15.4 — Deferred-registration IR** *(complete)* | Represent each reached `defer call` or `defer:` as one registration owned by its lexical scope. Retain syntax/typed IR tied to lexical binding identities; do not create a closure, capture values, or evaluate deferred expressions at registration. | IR tests distinguish registration from execution and show no callable/environment value is constructed. |
+| **M15.5 — Deferred-body checking** *(complete)* | Require the single-call form to be a safe unit-returning call with no postfix `?`. Type-check a block form as its existing lexical scope while preserving the M7 bans on control redirection, nested `defer`, and `unsafe:`. Reject a deferred call whose existing function signature is unsafe; M17 applies the same recorded rule to foreign calls. | Compile-fail tests for non-call, non-unit, `?`, each forbidden statement, and a direct unsafe call. |
+| **M15.6 — Scope cleanup plans** *(complete)* | Build one cleanup plan per lexical scope. Preserve source registration order in IR and execute registrations in reverse order; execute a `defer:` body forward as one registration. | IR and run-pass tests for multiple calls, multiple blocks, and mixed call/block registration. |
+| **M15.7 — Fallthrough and return edges** *(complete)* | Route normal block fallthrough and explicit `return` through the required inner-to-outer cleanup chain. Evaluate and independently copy the return value before cleanup begins. | Nested-scope ordering tests and a returned shared handle whose deferred mutation is observable in the returned copy. |
+| **M15.8 — Loop-exit edges** *(complete)* | Route `break` and `continue` through exactly the scopes exited by that edge, without running cleanup for scopes that remain active. | Nested loop/block tests for both exits and repeated registrations across iterations. |
+| **M15.9 — Propagation edges** *(complete)* | Compose M15.3 with cleanup plans so an `Err` propagation copies its error before running every exited scope's cleanup. | Nested-scope `?` tests proving exactly-once evaluation, copy-before-cleanup, and ordering. |
+| **M15.10 — Deferred-value liveness** *(complete)* | Keep bindings and managed targets referenced by deferred syntax alive until that registration finishes. Rebinding a `var` changes the value observed at exit; a `let` continues to identify the original value. | Reassigned-variable, managed-allocation, and nested aggregate liveness tests. |
+| **M15.11 — Non-unwinding termination boundary** *(complete)* | Ensure traps, OOM, and traps during deferred execution terminate through the existing runtime path without promising remaining cleanup. Do not synthesize exception unwinding. | Subprocess tests confirm termination and avoid asserting execution of remaining registrations. |
+| **M15.12 — Error/cleanup integration** *(complete)* | Remove lowering diagnostics only for completed `Result`, `?`, and `defer` forms; run them together with methods, generics, traits, collections, and formatting. | The error and resource-cleanup regions of `spec_demo.elx` build and run. |
 
 Validation:
 
@@ -951,7 +981,7 @@ Validation:
 
 ### Milestone 16: unsafe contexts and raw pointers
 
-> Status: Pending Milestone 15.
+> Status: Next.
 >
 > Boundary: raw-pointer syntax and canonical types already exist, but this
 > milestone is the first point at which pointer access and unsafe invocation

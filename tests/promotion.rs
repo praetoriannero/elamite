@@ -252,7 +252,7 @@ fn takes_address() -> ():
         r#"
 fn plain() -> ():
     let value = 1
-    println(f"{value}")
+    println(value)
 "#,
     );
     let function = program
@@ -263,7 +263,7 @@ fn plain() -> ():
     assert!(function.promoted_locals.is_empty());
     assert!(
         !requires_managed_memory,
-        "a program with no promoted local stays collector-free"
+        "a program with no promoted local or allocating value stays collector-free"
     );
 }
 

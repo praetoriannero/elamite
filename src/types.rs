@@ -2182,14 +2182,7 @@ pub(crate) fn primitive_from_name(name: &str) -> Option<PrimitiveType> {
 fn builtin_has_layout(name: &str) -> bool {
     matches!(
         name,
-        "Vec"
-            | "Map"
-            | "Set"
-            | "Formatter"
-            | "Identity"
-            | "IoError"
-            | "ForeignRoot"
-            | "ForeignRootMut"
+        "Vec" | "Map" | "Set" | "Formatter" | "Identity" | "ForeignRoot" | "ForeignRootMut"
     )
 }
 

@@ -8,12 +8,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::check::{NumericAlternative, NumericOperator, NumericOutcome};
+use crate::check::{NumericAlternative, NumericOperator, NumericOutcome, StandardCall};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{
-    AggregateValue, BinaryOperator, BlockId, ControlFlowFunction, ControlFlowPlace,
-    ControlFlowProgram, Instruction, LogicalCopyStrategy, Rvalue, TemporaryId, Terminator,
-    TypedEnum, UnaryOperator, logical_copy_strategy,
+    AggregateValue, BinaryOperator, BlockId, CollectionLiteralKind, ControlFlowFunction,
+    ControlFlowPlace, ControlFlowProgram, IndexKind, Instruction, IterationKind,
+    LogicalCopyStrategy, RuntimeFormattedPart, Rvalue, TemporaryId, Terminator, TypedEnum,
+    UnaryOperator, logical_copy_strategy,
 };
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
@@ -146,6 +147,8 @@ struct CEmitter<'a> {
     emitting_equality_helpers: BTreeSet<TypeId>,
     emitted_ordering_helpers: BTreeSet<TypeId>,
     emitting_ordering_helpers: BTreeSet<TypeId>,
+    emitted_hash_helpers: BTreeSet<TypeId>,
+    emitting_hash_helpers: BTreeSet<TypeId>,
     emitted_default_helpers: BTreeSet<TypeId>,
     emitting_default_helpers: BTreeSet<TypeId>,
     strategy: &'static dyn ManagedMemoryStrategy,
@@ -189,6 +192,8 @@ impl<'a> CEmitter<'a> {
             emitting_equality_helpers: BTreeSet::new(),
             emitted_ordering_helpers: BTreeSet::new(),
             emitting_ordering_helpers: BTreeSet::new(),
+            emitted_hash_helpers: BTreeSet::new(),
+            emitting_hash_helpers: BTreeSet::new(),
             emitted_default_helpers: BTreeSet::new(),
             emitting_default_helpers: BTreeSet::new(),
             strategy: default_managed_memory_strategy(),
@@ -220,6 +225,12 @@ impl<'a> CEmitter<'a> {
                 self.emit_ordering_helper(ty, None);
             }
         }
+        for ty in self.stable_key_types() {
+            if self.needs_hash_helper(ty) {
+                self.emit_hash_helper(ty, None);
+            }
+        }
+        self.emit_standard_runtime_helpers();
         self.emit_prototypes();
         for ty in self.defaulted_types() {
             if self.needs_default_helper(ty) {
@@ -380,6 +391,13 @@ impl<'a> CEmitter<'a> {
     /// translation unit free of any collector dependency.
     fn emit_managed_memory_prelude(&mut self) {
         if !self.program.requires_managed_memory {
+            self.output.push_str(
+                "void *el_runtime_alloc(size_t byte_count) {\n\
+                 \x20\x20\x20\x20void *result = malloc(byte_count);\n\
+                 \x20\x20\x20\x20if (result == NULL) exit(101);\n\
+                 \x20\x20\x20\x20return result;\n\
+                 }\n\n",
+            );
             return;
         }
         let strategy = self.strategy;
@@ -393,6 +411,15 @@ impl<'a> CEmitter<'a> {
             ));
             return;
         }
+        self.output
+            .push_str("\nvoid *el_runtime_alloc(size_t byte_count) {\n    void *result;\n");
+        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+            destination: "result",
+            byte_count: "byte_count",
+            class: AllocationClass::Scanned,
+        });
+        self.output
+            .push_str("    if (result == NULL) el_out_of_memory();\n    return result;\n}\n");
         // Allocation failure attempts a full collection and then terminates
         // without running deferred cleanup (`SPEC.md` 9).
         self.output.push_str("\nvoid el_out_of_memory(void) {\n");
@@ -440,20 +467,105 @@ impl<'a> CEmitter<'a> {
              typedef struct { uint8_t _value; } el_unit;\n\
              typedef struct { uint64_t lo; int64_t hi; } el_i128;\n\
              typedef struct { uint64_t lo; uint64_t hi; } el_u128;\n\n\
+             typedef struct { const char *bytes; size_t length; } el_str;\n\
+             typedef struct { char *bytes; size_t length; } el_string;\n\n\
+             void el_out_of_memory(void);\n\
+             void *el_runtime_alloc(size_t byte_count);\n\n\
              static void el_trap(const char *code, const char *path, uint32_t line, uint32_t column) {\n\
              \x20\x20\x20\x20fprintf(stderr, \"elamite trap [%s] at %s:%\" PRIu32 \":%\" PRIu32 \"\\n\", code, path, line, column);\n\
              \x20\x20\x20\x20fflush(stderr);\n\
              \x20\x20\x20\x20exit(101);\n\
              }\n\n\
-             char *el_copy_string(const char *value) {\n\
-             \x20\x20\x20\x20size_t length;\n\
-             \x20\x20\x20\x20char *copy;\n\
-             \x20\x20\x20\x20if (value == NULL) return NULL;\n\
-             \x20\x20\x20\x20length = strlen(value) + 1U;\n\
-             \x20\x20\x20\x20copy = (char *)malloc(length);\n\
-             \x20\x20\x20\x20if (copy == NULL) exit(101);\n\
-             \x20\x20\x20\x20memcpy(copy, value, length);\n\
+             el_string el_copy_string(el_string value) {\n\
+             \x20\x20\x20\x20el_string copy = {NULL, value.length};\n\
+             \x20\x20\x20\x20copy.bytes = (char *)el_runtime_alloc(value.length + 1U);\n\
+             \x20\x20\x20\x20if (value.length != 0U) memcpy(copy.bytes, value.bytes, value.length);\n\
+             \x20\x20\x20\x20copy.bytes[value.length] = '\\0';\n\
              \x20\x20\x20\x20return copy;\n\
+             }\n\
+             el_string el_string_from(el_str value) {\n\
+             \x20\x20\x20\x20el_string owned = {NULL, value.length};\n\
+             \x20\x20\x20\x20owned.bytes = (char *)el_runtime_alloc(value.length + 1U);\n\
+             \x20\x20\x20\x20if (value.length != 0U) memcpy(owned.bytes, value.bytes, value.length);\n\
+             \x20\x20\x20\x20owned.bytes[value.length] = '\\0';\n\
+             \x20\x20\x20\x20return owned;\n\
+             }\n\n\
+             bool el_text_equal(const char *a, size_t a_length, const char *b, size_t b_length) {\n\
+             \x20\x20\x20\x20return a_length == b_length && (a_length == 0U || memcmp(a, b, a_length) == 0);\n\
+             }\n\
+             int el_text_order(const char *a, size_t a_length, const char *b, size_t b_length) {\n\
+             \x20\x20\x20\x20size_t length = a_length < b_length ? a_length : b_length;\n\
+             \x20\x20\x20\x20int order = length == 0U ? 0 : memcmp(a, b, length);\n\
+             \x20\x20\x20\x20if (order < 0) return -1;\n\
+             \x20\x20\x20\x20if (order > 0) return 1;\n\
+             \x20\x20\x20\x20return a_length < b_length ? -1 : (a_length > b_length ? 1 : 0);\n\
+             }\n\n\
+             uint64_t el_hash_bytes(const char *bytes, size_t length) {\n\
+             \x20\x20\x20\x20uint64_t hash = UINT64_C(14695981039346656037);\n\
+             \x20\x20\x20\x20size_t index;\n\
+             \x20\x20\x20\x20for (index = 0U; index < length; ++index) { hash ^= (uint8_t)bytes[index]; hash *= UINT64_C(1099511628211); }\n\
+             \x20\x20\x20\x20return hash;\n\
+             }\n\
+             uint64_t el_hash_u64(uint64_t value) {\n\
+             \x20\x20\x20\x20value ^= value >> 30; value *= UINT64_C(0xbf58476d1ce4e5b9);\n\
+             \x20\x20\x20\x20value ^= value >> 27; value *= UINT64_C(0x94d049bb133111eb);\n\
+             \x20\x20\x20\x20return value ^ (value >> 31);\n\
+             }\n\
+             uint64_t el_hash_combine(uint64_t state, uint64_t value) {\n\
+             \x20\x20\x20\x20return (state ^ (value + UINT64_C(0x9e3779b97f4a7c15) + (state << 6) + (state >> 2)));\n\
+             }\n\n\
+             typedef struct el_formatter {\n\
+             \x20\x20\x20\x20char *bytes;\n\
+             \x20\x20\x20\x20size_t length;\n\
+             \x20\x20\x20\x20size_t capacity;\n\
+             } el_formatter;\n\
+             void el_fmt_reserve(el_formatter *formatter, size_t extra) {\n\
+             \x20\x20\x20\x20size_t needed = formatter->length + extra + 1U;\n\
+             \x20\x20\x20\x20size_t capacity;\n\
+             \x20\x20\x20\x20char *replacement;\n\
+             \x20\x20\x20\x20if (needed <= formatter->capacity) return;\n\
+             \x20\x20\x20\x20capacity = formatter->capacity == 0U ? 32U : formatter->capacity;\n\
+             \x20\x20\x20\x20while (capacity < needed) capacity *= 2U;\n\
+             \x20\x20\x20\x20replacement = (char *)el_runtime_alloc(capacity);\n\
+             \x20\x20\x20\x20if (formatter->length != 0U) memcpy(replacement, formatter->bytes, formatter->length);\n\
+             \x20\x20\x20\x20formatter->bytes = replacement;\n\
+             \x20\x20\x20\x20formatter->capacity = capacity;\n\
+             }\n\
+             void el_fmt_append_n(el_formatter *formatter, const char *text, size_t length) {\n\
+             \x20\x20\x20\x20el_fmt_reserve(formatter, length);\n\
+             \x20\x20\x20\x20if (length != 0U) memcpy(formatter->bytes + formatter->length, text, length);\n\
+             \x20\x20\x20\x20formatter->length += length;\n\
+             \x20\x20\x20\x20formatter->bytes[formatter->length] = '\\0';\n\
+             }\n\
+             void el_fmt_append(el_formatter *formatter, const char *text) {\n\
+             \x20\x20\x20\x20el_fmt_append_n(formatter, text, strlen(text));\n\
+             }\n\
+             void el_fmt_signed(el_formatter *formatter, intmax_t value) {\n\
+             \x20\x20\x20\x20char buffer[64];\n\
+             \x20\x20\x20\x20int length = snprintf(buffer, sizeof(buffer), \"%\" PRIdMAX, value);\n\
+             \x20\x20\x20\x20if (length > 0) el_fmt_append_n(formatter, buffer, (size_t)length);\n\
+             }\n\
+             void el_fmt_unsigned(el_formatter *formatter, uintmax_t value) {\n\
+             \x20\x20\x20\x20char buffer[64];\n\
+             \x20\x20\x20\x20int length = snprintf(buffer, sizeof(buffer), \"%\" PRIuMAX, value);\n\
+             \x20\x20\x20\x20if (length > 0) el_fmt_append_n(formatter, buffer, (size_t)length);\n\
+             }\n\
+             void el_fmt_float(el_formatter *formatter, double value) {\n\
+             \x20\x20\x20\x20char buffer[64];\n\
+             \x20\x20\x20\x20int length = snprintf(buffer, sizeof(buffer), \"%.17g\", value);\n\
+             \x20\x20\x20\x20if (length > 0) el_fmt_append_n(formatter, buffer, (size_t)length);\n\
+             }\n\
+             void el_fmt_char(el_formatter *formatter, uint32_t value) {\n\
+             \x20\x20\x20\x20char bytes[4]; size_t length;\n\
+             \x20\x20\x20\x20if (value <= 0x7fU) { bytes[0] = (char)value; length = 1U; }\n\
+             \x20\x20\x20\x20else if (value <= 0x7ffU) { bytes[0] = (char)(0xc0U | (value >> 6)); bytes[1] = (char)(0x80U | (value & 0x3fU)); length = 2U; }\n\
+             \x20\x20\x20\x20else if (value <= 0xffffU) { bytes[0] = (char)(0xe0U | (value >> 12)); bytes[1] = (char)(0x80U | ((value >> 6) & 0x3fU)); bytes[2] = (char)(0x80U | (value & 0x3fU)); length = 3U; }\n\
+             \x20\x20\x20\x20else { bytes[0] = (char)(0xf0U | (value >> 18)); bytes[1] = (char)(0x80U | ((value >> 12) & 0x3fU)); bytes[2] = (char)(0x80U | ((value >> 6) & 0x3fU)); bytes[3] = (char)(0x80U | (value & 0x3fU)); length = 4U; }\n\
+             \x20\x20\x20\x20el_fmt_append_n(formatter, bytes, length);\n\
+             }\n\
+             el_str el_fmt_finish(el_formatter *formatter) {\n\
+             \x20\x20\x20\x20if (formatter->bytes == NULL) { formatter->bytes = (char *)el_runtime_alloc(1U); formatter->bytes[0] = '\\0'; }\n\
+             \x20\x20\x20\x20return (el_str){formatter->bytes, formatter->length};\n\
              }\n\n\
              void el_print_char(uint32_t value) {\n\
              \x20\x20\x20\x20if (value <= 0x7fU) { fputc((int)value, stdout); return; }\n\
@@ -658,6 +770,44 @@ impl<'a> CEmitter<'a> {
                         self.output,
                         "typedef struct {name} {{ {c_type} *values; uintptr_t length; }} {name};\n"
                     );
+                }
+            }
+            TypeKind::Builtin { builtin, arguments } => {
+                let builtin_name = self.resolved.builtin_name(*builtin);
+                for argument in arguments {
+                    self.emit_type_definition(*argument, span);
+                }
+                let name = collection_type_name(ty);
+                match (builtin_name, arguments.as_slice()) {
+                    ("Vec" | "Set", [element]) => {
+                        if let Some(element_type) = self.c_type(*element, span) {
+                            let _ = writeln!(
+                                self.output,
+                                "typedef struct {name}_data {{\n    uintptr_t length;\n    \
+                                 uintptr_t capacity;\n    {element_type} *values;\n}} *{name};\n"
+                            );
+                        }
+                    }
+                    ("Map", [key, value]) => {
+                        if let (Some(key_type), Some(value_type)) =
+                            (self.c_type(*key, span), self.c_type(*value, span))
+                        {
+                            let _ = writeln!(
+                                self.output,
+                                "typedef struct {name}_data {{\n    uintptr_t length;\n    \
+                                 uintptr_t capacity;\n    {key_type} *keys;\n    \
+                                 {value_type} *values;\n}} *{name};\n"
+                            );
+                        }
+                    }
+                    ("Formatter", []) => {}
+                    ("Identity", [_]) => {
+                        let _ = writeln!(
+                            self.output,
+                            "typedef struct {name} {{ void *target; }} {name};\n"
+                        );
+                    }
+                    _ => {}
                 }
             }
             TypeKind::Reference { target, .. }
@@ -1007,6 +1157,703 @@ impl<'a> CEmitter<'a> {
         );
     }
 
+    fn standard_call_instances(&self) -> BTreeMap<StandardCall, (TypeId, Span)> {
+        let mut calls = BTreeMap::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        destination,
+                        value: Rvalue::StandardCall { operation, .. },
+                        span,
+                    } = instruction
+                    {
+                        calls
+                            .entry(*operation)
+                            .or_insert((function.temporary_types[destination.index()], *span));
+                    }
+                }
+            }
+        }
+        calls
+    }
+
+    fn collection_literal_instances(&self) -> BTreeSet<(CollectionLiteralKind, TypeId, usize)> {
+        let mut literals = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        destination,
+                        value: Rvalue::CollectionLiteral { kind, elements },
+                        ..
+                    } = instruction
+                    {
+                        literals.insert((
+                            *kind,
+                            function.temporary_types[destination.index()],
+                            elements.len(),
+                        ));
+                    }
+                }
+            }
+        }
+        literals
+    }
+
+    fn emit_runtime_allocate(
+        &mut self,
+        destination: &str,
+        byte_count: &str,
+        class: AllocationClass,
+    ) {
+        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+            destination,
+            byte_count,
+            class,
+        });
+        let _ = writeln!(
+            self.output,
+            "    if ({destination} == NULL) el_out_of_memory();"
+        );
+    }
+
+    fn option_expression(&mut self, option: TypeId, value: Option<(&str, TypeId)>) -> String {
+        let Some(enumeration) = self.enums.get(&option).copied() else {
+            return zero_value(option, &self.typed.types);
+        };
+        let variant_name = if value.is_some() { "Some" } else { "None" };
+        let Some(variant_id) = self.resolved.standard_variant("Option", variant_name) else {
+            return zero_value(option, &self.typed.types);
+        };
+        let Some(variant) = enumeration
+            .variants
+            .iter()
+            .find(|variant| variant.id == variant_id)
+        else {
+            return zero_value(option, &self.typed.types);
+        };
+        let c_type = self
+            .c_type(option, None)
+            .unwrap_or_else(|| "el_unit".to_string());
+        match (value, variant.fields.first()) {
+            (Some((expression, value_type)), Some((field, _, _))) => format!(
+                "({c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = {}({expression}) }} }}",
+                variant_id.index(),
+                variant_member_name(variant_id),
+                field_name(*field),
+                copy_helper_name(self.resolve_alias(value_type))
+            ),
+            _ => {
+                let payload = enumeration
+                    .variants
+                    .iter()
+                    .find(|candidate| !candidate.fields.is_empty())
+                    .map_or_else(
+                        || ".payload._empty = 0".to_string(),
+                        |candidate| {
+                            format!(".payload.{} = {{0}}", variant_member_name(candidate.id))
+                        },
+                    );
+                format!(
+                    "({c_type}){{ .tag = UINT32_C({}), {payload} }}",
+                    variant_id.index()
+                )
+            }
+        }
+    }
+
+    fn emit_standard_runtime_helpers(&mut self) {
+        let calls = self.standard_call_instances();
+        let literals = self.collection_literal_instances();
+        let mut collections = BTreeSet::new();
+        for operation in calls.keys() {
+            if let Some(collection) = standard_collection_type(*operation) {
+                collections.insert(collection);
+            }
+        }
+        collections.extend(literals.iter().map(|(_, ty, _)| *ty));
+        collections.extend(self.used_types().into_iter().filter(|ty| {
+            match self.typed.types.kind(self.resolve_alias(*ty)) {
+                TypeKind::Builtin { builtin, .. } => {
+                    matches!(self.resolved.builtin_name(*builtin), "Vec" | "Map" | "Set")
+                }
+                _ => false,
+            }
+        }));
+
+        for collection in collections {
+            let TypeKind::Builtin { builtin, arguments } = self
+                .typed
+                .types
+                .kind(self.resolve_alias(collection))
+                .clone()
+            else {
+                continue;
+            };
+            match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
+                ("Vec", [element]) => {
+                    self.emit_vec_helpers(collection, *element, &calls, &literals);
+                }
+                ("Map", [key, value]) => {
+                    self.emit_map_helpers(collection, *key, *value, &calls, &literals);
+                }
+                ("Set", [element]) => {
+                    self.emit_set_helpers(collection, *element, &calls, &literals);
+                }
+                _ => {}
+            }
+        }
+
+        for (operation, (result, _)) in &calls {
+            let (StandardCall::ArrayLen { collection } | StandardCall::ArrayGet { collection }) =
+                operation
+            else {
+                continue;
+            };
+            let TypeKind::Array { element, length } = self
+                .typed
+                .types
+                .kind(self.resolve_alias(*collection))
+                .clone()
+            else {
+                continue;
+            };
+            let Some(array_type) = self.c_type(*collection, None) else {
+                continue;
+            };
+            match operation {
+                StandardCall::ArrayLen { .. } => {
+                    let _ = writeln!(
+                        self.output,
+                        "static uintptr_t {}({array_type} value) {{\n    (void)value;\n    \
+                         return (uintptr_t){length}U;\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::ArrayGet { .. } => {
+                    let none = self.option_expression(*result, None);
+                    let some =
+                        self.option_expression(*result, Some(("value.values[index]", element)));
+                    let result_type = self
+                        .c_type(*result, None)
+                        .unwrap_or_else(|| "el_unit".to_string());
+                    let _ = writeln!(
+                        self.output,
+                        "static {result_type} {}({array_type} value, uintptr_t index) {{\n    \
+                         if (index >= (uintptr_t){length}U) return {none};\n    return {some};\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn emit_vec_helpers(
+        &mut self,
+        collection: TypeId,
+        element: TypeId,
+        calls: &BTreeMap<StandardCall, (TypeId, Span)>,
+        literals: &BTreeSet<(CollectionLiteralKind, TypeId, usize)>,
+    ) {
+        let Some(collection_type) = self.c_type(collection, None) else {
+            return;
+        };
+        let Some(element_type) = self.c_type(element, None) else {
+            return;
+        };
+        let scanned = if self.scanned_allocation(element) {
+            AllocationClass::Scanned
+        } else {
+            AllocationClass::PointerFree
+        };
+        let new = standard_call_name(StandardCall::VecNew { collection });
+        let _ = writeln!(self.output, "static {collection_type} {new}(void) {{");
+        let _ = writeln!(self.output, "    {collection_type} result;");
+        self.emit_runtime_allocate("result", "sizeof(*result)", AllocationClass::Scanned);
+        self.output.push_str(
+            "    result->length = 0U;\n    result->capacity = 0U;\n    result->values = NULL;\n    \
+             return result;\n}\n\n",
+        );
+
+        let operation = StandardCall::VecLen { collection };
+        if calls.contains_key(&operation) {
+            let _ = writeln!(
+                self.output,
+                "static uintptr_t {}({collection_type} value) {{ return value->length; }}\n",
+                standard_call_name(operation)
+            );
+        }
+        let operation = StandardCall::VecIsEmpty { collection };
+        if calls.contains_key(&operation) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value) {{ return value->length == 0U; }}\n",
+                standard_call_name(operation)
+            );
+        }
+        let operation = StandardCall::VecGet { collection };
+        if let Some((result, _)) = calls.get(&operation) {
+            let result_type = self
+                .c_type(*result, None)
+                .unwrap_or_else(|| "el_unit".to_string());
+            let none = self.option_expression(*result, None);
+            let some = self.option_expression(*result, Some(("value->values[index]", element)));
+            let _ = writeln!(
+                self.output,
+                "static {result_type} {}({collection_type} value, uintptr_t index) {{\n    \
+                 if (index >= value->length) return {none};\n    return {some};\n}}\n",
+                standard_call_name(operation)
+            );
+        }
+        let append = StandardCall::VecAppend { collection };
+        let insert = StandardCall::VecInsert { collection };
+        if calls.contains_key(&append) || calls.contains_key(&insert) {
+            let reserve = format!("el_vec_reserve_t{}", collection.index());
+            let _ = writeln!(
+                self.output,
+                "static void {reserve}({collection_type} value, uintptr_t needed) {{\n    \
+                 uintptr_t capacity;\n    {element_type} *replacement;\n    \
+                 if (value->capacity >= needed) return;\n    \
+                 capacity = value->capacity == 0U ? 4U : value->capacity;\n    \
+                 while (capacity < needed) capacity *= 2U;"
+            );
+            let bytes = format!("capacity * sizeof({element_type})");
+            self.emit_runtime_allocate("replacement", &bytes, scanned);
+            self.output.push_str(
+                "    if (value->length != 0U) memcpy(replacement, value->values, \
+                 value->length * sizeof(*replacement));\n\
+                 \x20   value->values = replacement;\n\
+                 \x20   value->capacity = capacity;\n}\n\n",
+            );
+            if calls.contains_key(&append) {
+                let _ = writeln!(
+                    self.output,
+                    "static el_unit {}({collection_type} value, {element_type} element) {{\n    \
+                     {reserve}(value, value->length + 1U);\n    \
+                     value->values[value->length++] = element;\n    return (el_unit){{0}};\n}}\n",
+                    standard_call_name(append)
+                );
+            }
+            if calls.contains_key(&insert) {
+                let _ = writeln!(
+                    self.output,
+                    "static el_unit {}({collection_type} value, uintptr_t index, \
+                     {element_type} element, const char *path, uint32_t line, uint32_t column) {{\n    \
+                     if (index > value->length) el_trap(\"E-RUN-INDEX\", path, line, column);\n    \
+                     {reserve}(value, value->length + 1U);\n    \
+                     memmove(&value->values[index + 1U], &value->values[index], \
+                     (value->length - index) * sizeof(*value->values));\n    \
+                     value->values[index] = element;\n    ++value->length;\n    \
+                     return (el_unit){{0}};\n}}\n",
+                    standard_call_name(insert)
+                );
+            }
+        }
+        let remove = StandardCall::VecRemove { collection };
+        if calls.contains_key(&remove) {
+            let _ = writeln!(
+                self.output,
+                "static {element_type} {}({collection_type} value, uintptr_t index, \
+                 const char *path, uint32_t line, uint32_t column) {{\n    \
+                 {element_type} removed;\n    \
+                 if (index >= value->length) el_trap(\"E-RUN-INDEX\", path, line, column);\n    \
+                 removed = value->values[index];\n    \
+                 memmove(&value->values[index], &value->values[index + 1U], \
+                 (value->length - index - 1U) * sizeof(*value->values));\n    \
+                 --value->length;\n    return removed;\n}}\n",
+                standard_call_name(remove)
+            );
+        }
+        let clear = StandardCall::VecClear { collection };
+        if calls.contains_key(&clear) {
+            let _ = writeln!(
+                self.output,
+                "static el_unit {}({collection_type} value) {{ value->length = 0U; \
+                 return (el_unit){{0}}; }}\n",
+                standard_call_name(clear)
+            );
+        }
+
+        for (_, _, count) in literals
+            .iter()
+            .filter(|(kind, ty, _)| *kind == CollectionLiteralKind::Vec && *ty == collection)
+        {
+            let parameters = (0..*count)
+                .map(|index| format!("{element_type} v{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let literal_name = format!("el_vec_literal_t{}_n{count}", collection.index());
+            let _ = writeln!(
+                self.output,
+                "static {collection_type} {literal_name}({}) {{\n    \
+                 {collection_type} result = {new}();",
+                if parameters.is_empty() {
+                    "void"
+                } else {
+                    &parameters
+                }
+            );
+            if *count != 0 {
+                let bytes = format!("{count}U * sizeof({element_type})");
+                self.emit_runtime_allocate("result->values", &bytes, scanned);
+                let _ = writeln!(
+                    self.output,
+                    "    result->length = {count}U;\n    result->capacity = {count}U;"
+                );
+                for index in 0..*count {
+                    let _ = writeln!(self.output, "    result->values[{index}] = v{index};");
+                }
+            }
+            self.output.push_str("    return result;\n}\n\n");
+        }
+    }
+
+    fn emit_map_helpers(
+        &mut self,
+        collection: TypeId,
+        key: TypeId,
+        value: TypeId,
+        calls: &BTreeMap<StandardCall, (TypeId, Span)>,
+        literals: &BTreeSet<(CollectionLiteralKind, TypeId, usize)>,
+    ) {
+        let (Some(collection_type), Some(key_type), Some(value_type)) = (
+            self.c_type(collection, None),
+            self.c_type(key, None),
+            self.c_type(value, None),
+        ) else {
+            return;
+        };
+        if self.needs_equality_helper(key) {
+            self.emit_equality_helper(key, None);
+        }
+        let key_equal = self.component_equality(key, "value->keys[index]", "key");
+        let stored_hash = self.component_hash(key, "value->keys[index]");
+        let target_hash = self.component_hash(key, "key");
+        let new = standard_call_name(StandardCall::MapNew { collection });
+        let _ = writeln!(self.output, "static {collection_type} {new}(void) {{");
+        let _ = writeln!(self.output, "    {collection_type} result;");
+        self.emit_runtime_allocate("result", "sizeof(*result)", AllocationClass::Scanned);
+        self.output.push_str(
+            "    result->length = 0U;\n    result->capacity = 0U;\n    result->keys = NULL;\n    \
+             result->values = NULL;\n    return result;\n}\n\n",
+        );
+        let find = format!("el_map_find_t{}", collection.index());
+        let _ = writeln!(
+            self.output,
+            "intptr_t {find}({collection_type} value, {key_type} key) {{\n    \
+             uintptr_t index;\n    uint64_t hash = {target_hash};\n    \
+             for (index = 0U; index < value->length; ++index) {{\n        \
+             if ({stored_hash} == hash && {key_equal}) return (intptr_t)index;\n    }}\n    \
+             return (intptr_t)-1;\n}}\n"
+        );
+        let reserve = format!("el_map_reserve_t{}", collection.index());
+        let key_class = if self.scanned_allocation(key) {
+            AllocationClass::Scanned
+        } else {
+            AllocationClass::PointerFree
+        };
+        let value_class = if self.scanned_allocation(value) {
+            AllocationClass::Scanned
+        } else {
+            AllocationClass::PointerFree
+        };
+        let _ = writeln!(
+            self.output,
+            "void {reserve}({collection_type} value, uintptr_t needed) {{\n    \
+             uintptr_t capacity;\n    {key_type} *keys;\n    {value_type} *values;\n    \
+             if (value->capacity >= needed) return;\n    \
+             capacity = value->capacity == 0U ? 4U : value->capacity;\n    \
+             while (capacity < needed) capacity *= 2U;"
+        );
+        let key_bytes = format!("capacity * sizeof({key_type})");
+        self.emit_runtime_allocate("keys", &key_bytes, key_class);
+        let value_bytes = format!("capacity * sizeof({value_type})");
+        self.emit_runtime_allocate("values", &value_bytes, value_class);
+        self.output.push_str(
+            "    if (value->length != 0U) {\n        memcpy(keys, value->keys, \
+             value->length * sizeof(*keys));\n        memcpy(values, value->values, \
+             value->length * sizeof(*values));\n    }\n    value->keys = keys;\n    \
+             value->values = values;\n    value->capacity = capacity;\n}\n\n",
+        );
+
+        let len = StandardCall::MapLen { collection };
+        if calls.contains_key(&len) {
+            let _ = writeln!(
+                self.output,
+                "static uintptr_t {}({collection_type} value) {{ return value->length; }}\n",
+                standard_call_name(len)
+            );
+        }
+        let empty = StandardCall::MapIsEmpty { collection };
+        if calls.contains_key(&empty) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value) {{ return value->length == 0U; }}\n",
+                standard_call_name(empty)
+            );
+        }
+        let contains = StandardCall::MapContainsKey { collection };
+        if calls.contains_key(&contains) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value, {key_type} key) {{ \
+                 return {find}(value, key) >= 0; }}\n",
+                standard_call_name(contains)
+            );
+        }
+        let get = StandardCall::MapGet { collection };
+        if let Some((result, _)) = calls.get(&get) {
+            let result_type = self
+                .c_type(*result, None)
+                .unwrap_or_else(|| "el_unit".to_string());
+            let none = self.option_expression(*result, None);
+            let some =
+                self.option_expression(*result, Some(("value->values[(uintptr_t)index]", value)));
+            let _ = writeln!(
+                self.output,
+                "static {result_type} {}({collection_type} value, {key_type} key) {{\n    \
+                 intptr_t index = {find}(value, key);\n    if (index < 0) return {none};\n    \
+                 return {some};\n}}\n",
+                standard_call_name(get)
+            );
+        }
+        let insert = StandardCall::MapInsert { collection };
+        if let Some((result, _)) = calls.get(&insert) {
+            let result_type = self
+                .c_type(*result, None)
+                .unwrap_or_else(|| "el_unit".to_string());
+            let none = self.option_expression(*result, None);
+            let some =
+                self.option_expression(*result, Some(("value->values[(uintptr_t)index]", value)));
+            let _ = writeln!(
+                self.output,
+                "static {result_type} {}({collection_type} value, {key_type} key, \
+                 {value_type} replacement) {{\n    intptr_t index = {find}(value, key);\n    \
+                 if (index >= 0) {{\n        {result_type} previous = {some};\n        \
+                 value->values[(uintptr_t)index] = replacement;\n        return previous;\n    }}\n    \
+                 {reserve}(value, value->length + 1U);\n    value->keys[value->length] = key;\n    \
+                 value->values[value->length] = replacement;\n    ++value->length;\n    return {none};\n}}\n",
+                standard_call_name(insert)
+            );
+        }
+        let remove = StandardCall::MapRemove { collection };
+        if let Some((result, _)) = calls.get(&remove) {
+            let result_type = self
+                .c_type(*result, None)
+                .unwrap_or_else(|| "el_unit".to_string());
+            let none = self.option_expression(*result, None);
+            let some =
+                self.option_expression(*result, Some(("value->values[(uintptr_t)index]", value)));
+            let _ = writeln!(
+                self.output,
+                "static {result_type} {}({collection_type} value, {key_type} key) {{\n    \
+                 intptr_t index = {find}(value, key);\n    if (index < 0) return {none};\n    {{\n        \
+                 {result_type} removed = {some};\n        uintptr_t tail = value->length - \
+                 (uintptr_t)index - 1U;\n        memmove(&value->keys[(uintptr_t)index], \
+                 &value->keys[(uintptr_t)index + 1U], tail * sizeof(*value->keys));\n        \
+                 memmove(&value->values[(uintptr_t)index], \
+                 &value->values[(uintptr_t)index + 1U], tail * sizeof(*value->values));\n        \
+                 --value->length;\n        return removed;\n    }}\n}}\n",
+                standard_call_name(remove)
+            );
+        }
+        let clear = StandardCall::MapClear { collection };
+        if calls.contains_key(&clear) {
+            let _ = writeln!(
+                self.output,
+                "static el_unit {}({collection_type} value) {{ value->length = 0U; \
+                 return (el_unit){{0}}; }}\n",
+                standard_call_name(clear)
+            );
+        }
+
+        for (_, _, flat_count) in literals
+            .iter()
+            .filter(|(kind, ty, _)| *kind == CollectionLiteralKind::Map && *ty == collection)
+        {
+            let entry_count = flat_count / 2;
+            let parameters = (0..entry_count)
+                .flat_map(|index| {
+                    [
+                        format!("{key_type} k{index}"),
+                        format!("{value_type} v{index}"),
+                    ]
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let literal_name = format!("el_map_literal_t{}_n{flat_count}", collection.index());
+            let _ = writeln!(
+                self.output,
+                "static {collection_type} {literal_name}({}) {{\n    \
+                 {collection_type} result = {new}();\n    intptr_t found;",
+                if parameters.is_empty() {
+                    "void"
+                } else {
+                    &parameters
+                }
+            );
+            for index in 0..entry_count {
+                let _ = writeln!(
+                    self.output,
+                    "    found = {find}(result, k{index});\n    if (found >= 0) {{\n        \
+                     result->values[(uintptr_t)found] = v{index};\n    }} else {{\n        \
+                     {reserve}(result, result->length + 1U);\n        \
+                     result->keys[result->length] = k{index};\n        \
+                     result->values[result->length] = v{index};\n        ++result->length;\n    }}"
+                );
+            }
+            self.output.push_str("    return result;\n}\n\n");
+        }
+    }
+
+    fn emit_set_helpers(
+        &mut self,
+        collection: TypeId,
+        element: TypeId,
+        calls: &BTreeMap<StandardCall, (TypeId, Span)>,
+        literals: &BTreeSet<(CollectionLiteralKind, TypeId, usize)>,
+    ) {
+        let (Some(collection_type), Some(element_type)) =
+            (self.c_type(collection, None), self.c_type(element, None))
+        else {
+            return;
+        };
+        if self.needs_equality_helper(element) {
+            self.emit_equality_helper(element, None);
+        }
+        let equal = self.component_equality(element, "value->values[index]", "element");
+        let stored_hash = self.component_hash(element, "value->values[index]");
+        let target_hash = self.component_hash(element, "element");
+        let new = standard_call_name(StandardCall::SetNew { collection });
+        let _ = writeln!(self.output, "static {collection_type} {new}(void) {{");
+        let _ = writeln!(self.output, "    {collection_type} result;");
+        self.emit_runtime_allocate("result", "sizeof(*result)", AllocationClass::Scanned);
+        self.output.push_str(
+            "    result->length = 0U;\n    result->capacity = 0U;\n    result->values = NULL;\n    \
+             return result;\n}\n\n",
+        );
+        let find = format!("el_set_find_t{}", collection.index());
+        let _ = writeln!(
+            self.output,
+            "intptr_t {find}({collection_type} value, {element_type} element) {{\n    \
+             uintptr_t index;\n    uint64_t hash = {target_hash};\n    \
+             for (index = 0U; index < value->length; ++index) {{\n        \
+             if ({stored_hash} == hash && {equal}) return (intptr_t)index;\n    }}\n    \
+             return (intptr_t)-1;\n}}\n"
+        );
+        let reserve = format!("el_set_reserve_t{}", collection.index());
+        let class = if self.scanned_allocation(element) {
+            AllocationClass::Scanned
+        } else {
+            AllocationClass::PointerFree
+        };
+        let _ = writeln!(
+            self.output,
+            "void {reserve}({collection_type} value, uintptr_t needed) {{\n    \
+             uintptr_t capacity;\n    {element_type} *replacement;\n    \
+             if (value->capacity >= needed) return;\n    \
+             capacity = value->capacity == 0U ? 4U : value->capacity;\n    \
+             while (capacity < needed) capacity *= 2U;"
+        );
+        let bytes = format!("capacity * sizeof({element_type})");
+        self.emit_runtime_allocate("replacement", &bytes, class);
+        self.output.push_str(
+            "    if (value->length != 0U) memcpy(replacement, value->values, \
+             value->length * sizeof(*replacement));\n    value->values = replacement;\n    \
+             value->capacity = capacity;\n}\n\n",
+        );
+        let len = StandardCall::SetLen { collection };
+        if calls.contains_key(&len) {
+            let _ = writeln!(
+                self.output,
+                "static uintptr_t {}({collection_type} value) {{ return value->length; }}\n",
+                standard_call_name(len)
+            );
+        }
+        let empty = StandardCall::SetIsEmpty { collection };
+        if calls.contains_key(&empty) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value) {{ return value->length == 0U; }}\n",
+                standard_call_name(empty)
+            );
+        }
+        let contains = StandardCall::SetContains { collection };
+        if calls.contains_key(&contains) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value, {element_type} element) {{ \
+                 return {find}(value, element) >= 0; }}\n",
+                standard_call_name(contains)
+            );
+        }
+        let insert = StandardCall::SetInsert { collection };
+        if calls.contains_key(&insert) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value, {element_type} element) {{\n    \
+                 if ({find}(value, element) >= 0) return false;\n    \
+                 {reserve}(value, value->length + 1U);\n    \
+                 value->values[value->length++] = element;\n    return true;\n}}\n",
+                standard_call_name(insert)
+            );
+        }
+        let remove = StandardCall::SetRemove { collection };
+        if calls.contains_key(&remove) {
+            let _ = writeln!(
+                self.output,
+                "static bool {}({collection_type} value, {element_type} element) {{\n    \
+                 intptr_t index = {find}(value, element);\n    if (index < 0) return false;\n    \
+                 memmove(&value->values[(uintptr_t)index], \
+                 &value->values[(uintptr_t)index + 1U], \
+                 (value->length - (uintptr_t)index - 1U) * sizeof(*value->values));\n    \
+                 --value->length;\n    return true;\n}}\n",
+                standard_call_name(remove)
+            );
+        }
+        let clear = StandardCall::SetClear { collection };
+        if calls.contains_key(&clear) {
+            let _ = writeln!(
+                self.output,
+                "static el_unit {}({collection_type} value) {{ value->length = 0U; \
+                 return (el_unit){{0}}; }}\n",
+                standard_call_name(clear)
+            );
+        }
+
+        for (_, _, count) in literals
+            .iter()
+            .filter(|(kind, ty, _)| *kind == CollectionLiteralKind::Set && *ty == collection)
+        {
+            let parameters = (0..*count)
+                .map(|index| format!("{element_type} v{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let literal_name = format!("el_set_literal_t{}_n{count}", collection.index());
+            let _ = writeln!(
+                self.output,
+                "static {collection_type} {literal_name}({}) {{\n    \
+                 {collection_type} result = {new}();\n    intptr_t found;",
+                if parameters.is_empty() {
+                    "void"
+                } else {
+                    &parameters
+                }
+            );
+            for index in 0..*count {
+                let _ = writeln!(
+                    self.output,
+                    "    found = {find}(result, v{index});\n    if (found < 0) {{\n        \
+                     {reserve}(result, result->length + 1U);\n        \
+                     result->values[result->length++] = v{index};\n    }}"
+                );
+            }
+            self.output.push_str("    return result;\n}\n\n");
+        }
+    }
+
     /// The variant and field identities a checked conversion's result value is
     /// built from, or `None` when the standard declarations are unavailable.
     fn checked_conversion_parts(&self, result: TypeId) -> Option<CheckedConversionParts> {
@@ -1220,6 +2067,7 @@ impl<'a> CEmitter<'a> {
                     }
                 }
             }
+            TypeKind::Builtin { arguments, .. } => components.extend(arguments.iter().copied()),
             _ => {}
         }
         for component in components {
@@ -1291,6 +2139,50 @@ impl<'a> CEmitter<'a> {
                     }
                 }
             }
+            TypeKind::Builtin { builtin, arguments } => {
+                match (self.resolved.builtin_name(*builtin), arguments.as_slice()) {
+                    ("Vec", [element]) => {
+                        body.push_str("    if (a->length != b->length) return false;\n");
+                        body.push_str(&format!(
+                            "    for (uintptr_t i = 0U; i < a->length; ++i) {{\n        \
+                             if (!{}) return false;\n    }}\n",
+                            self.component_equality(*element, "a->values[i]", "b->values[i]")
+                        ));
+                    }
+                    ("Map", [key, value]) => {
+                        let key_equal = self.component_equality(*key, "a->keys[i]", "b->keys[j]");
+                        let value_equal =
+                            self.component_equality(*value, "a->values[i]", "b->values[j]");
+                        body.push_str(
+                            "    if (a->length != b->length) return false;\n    \
+                             for (uintptr_t i = 0U; i < a->length; ++i) {\n        bool found = false;\n        \
+                             for (uintptr_t j = 0U; j < b->length; ++j) {\n",
+                        );
+                        body.push_str(&format!(
+                            "            if ({key_equal}) {{\n                \
+                             if (!{value_equal}) return false;\n                found = true;\n                break;\n            }}\n"
+                        ));
+                        body.push_str("        }\n        if (!found) return false;\n    }\n");
+                    }
+                    ("Set", [element]) => {
+                        let equal =
+                            self.component_equality(*element, "a->values[i]", "b->values[j]");
+                        body.push_str(
+                            "    if (a->length != b->length) return false;\n    \
+                             for (uintptr_t i = 0U; i < a->length; ++i) {\n        bool found = false;\n        \
+                             for (uintptr_t j = 0U; j < b->length; ++j) {\n",
+                        );
+                        body.push_str(&format!(
+                            "            if ({equal}) {{ found = true; break; }}\n"
+                        ));
+                        body.push_str("        }\n        if (!found) return false;\n    }\n");
+                    }
+                    ("Identity", [_]) => {
+                        body.push_str("    return a.target == b.target;\n");
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
         let _ = writeln!(
@@ -1308,7 +2200,10 @@ impl<'a> CEmitter<'a> {
             self.typed.types.expanded_primitive(ty),
             Some(PrimitiveType::Str | PrimitiveType::String)
         ) {
-            return format!("(strcmp({left}, {right}) == 0)");
+            return format!(
+                "el_text_equal(({left}).bytes, ({left}).length, \
+                 ({right}).bytes, ({right}).length)"
+            );
         }
         if self.needs_equality_helper(ty) {
             format!("{}({left}, {right})", equality_helper_name(ty))
@@ -1322,7 +2217,7 @@ impl<'a> CEmitter<'a> {
         let ty = self.resolve_alias(ty);
         matches!(
             self.typed.types.kind(ty),
-            TypeKind::Tuple(_) | TypeKind::Array { .. }
+            TypeKind::Tuple(_) | TypeKind::Array { .. } | TypeKind::Builtin { .. }
         ) || self.structs.contains_key(&ty)
             || self.enums.contains_key(&ty)
     }
@@ -1352,6 +2247,7 @@ impl<'a> CEmitter<'a> {
                     }
                 }
             }
+            TypeKind::Builtin { arguments, .. } => components.extend(arguments.iter().copied()),
             _ => {}
         }
         for component in components {
@@ -1425,6 +2321,23 @@ impl<'a> CEmitter<'a> {
                     }
                 }
             }
+            TypeKind::Builtin { builtin, arguments }
+                if self.resolved.builtin_name(*builtin) == "Vec" =>
+            {
+                if let [element] = arguments.as_slice() {
+                    body.push_str(
+                        "    uintptr_t length = a->length < b->length ? a->length : b->length;\n    \
+                         for (uintptr_t i = 0U; i < length; ++i) {\n",
+                    );
+                    let expression =
+                        self.component_ordering(*element, "a->values[i]", "b->values[i]");
+                    append_component(&mut body, expression, "        ");
+                    body.push_str(
+                        "    }\n    if (a->length < b->length) return -1;\n    \
+                         if (a->length > b->length) return 1;\n",
+                    );
+                }
+            }
             _ => {}
         }
         let _ = writeln!(
@@ -1445,8 +2358,8 @@ impl<'a> CEmitter<'a> {
             Some(PrimitiveType::Str | PrimitiveType::String)
         ) {
             return format!(
-                "(strcmp({left}, {right}) < 0 ? -1 : \
-                 (strcmp({left}, {right}) > 0 ? 1 : 0))"
+                "el_text_order(({left}).bytes, ({left}).length, \
+                 ({right}).bytes, ({right}).length)"
             );
         }
         if self.needs_ordering_helper(ty) {
@@ -1459,7 +2372,164 @@ impl<'a> CEmitter<'a> {
     }
 
     fn needs_ordering_helper(&self, ty: TypeId) -> bool {
-        self.needs_equality_helper(ty)
+        let ty = self.resolve_alias(ty);
+        match self.typed.types.kind(ty) {
+            TypeKind::Builtin { builtin, .. } => self.resolved.builtin_name(*builtin) == "Vec",
+            _ => self.needs_equality_helper(ty),
+        }
+    }
+
+    fn stable_key_types(&self) -> BTreeSet<TypeId> {
+        let mut keys = BTreeSet::new();
+        for ty in self.used_types() {
+            let ty = self.resolve_alias(ty);
+            let TypeKind::Builtin { builtin, arguments } = self.typed.types.kind(ty) else {
+                continue;
+            };
+            match (self.resolved.builtin_name(*builtin), arguments.as_slice()) {
+                ("Map", [key, _]) | ("Set", [key]) => {
+                    keys.insert(*key);
+                }
+                _ => {}
+            }
+        }
+        keys
+    }
+
+    fn needs_hash_helper(&self, ty: TypeId) -> bool {
+        let ty = self.resolve_alias(ty);
+        matches!(
+            self.typed.types.kind(ty),
+            TypeKind::Tuple(_)
+                | TypeKind::Array { .. }
+                | TypeKind::Nominal { .. }
+                | TypeKind::Builtin { .. }
+        )
+    }
+
+    fn component_hash(&self, ty: TypeId, value: &str) -> String {
+        let ty = self.resolve_alias(ty);
+        if let Some(primitive) = self.typed.types.expanded_primitive(ty) {
+            return match primitive {
+                PrimitiveType::Unit => "UINT64_C(0)".to_string(),
+                PrimitiveType::Str | PrimitiveType::String => {
+                    format!("el_hash_bytes(({value}).bytes, ({value}).length)")
+                }
+                PrimitiveType::I128 | PrimitiveType::U128 => format!(
+                    "el_hash_combine(el_hash_u64(({value}).lo), el_hash_u64((uint64_t)({value}).hi))"
+                ),
+                _ => format!("el_hash_u64((uint64_t)({value}))"),
+            };
+        }
+        if self.needs_hash_helper(ty) {
+            format!("{}({value})", hash_helper_name(ty))
+        } else {
+            format!("el_hash_u64((uint64_t)(uintptr_t)({value}))")
+        }
+    }
+
+    fn emit_hash_helper(&mut self, ty: TypeId, span: Option<Span>) {
+        let ty = self.resolve_alias(ty);
+        if self.emitted_hash_helpers.contains(&ty) || !self.emitting_hash_helpers.insert(ty) {
+            return;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        let components = match &kind {
+            TypeKind::Tuple(elements) => elements.clone(),
+            TypeKind::Array { element, .. } => vec![*element],
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    structure
+                        .fields
+                        .iter()
+                        .map(|(_, _, field_type)| *field_type)
+                        .collect()
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
+                    enumeration
+                        .variants
+                        .iter()
+                        .flat_map(|variant| {
+                            variant.fields.iter().map(|(_, _, field_type)| *field_type)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            TypeKind::Builtin { arguments, .. } => arguments.clone(),
+            _ => Vec::new(),
+        };
+        for component in components {
+            if self.needs_hash_helper(component) {
+                self.emit_hash_helper(component, span);
+            }
+        }
+        let Some(c_type) = self.c_type(ty, span) else {
+            self.emitting_hash_helpers.remove(&ty);
+            return;
+        };
+        let mut body = String::from("    uint64_t hash = UINT64_C(14695981039346656037);\n");
+        match &kind {
+            TypeKind::Tuple(elements) => {
+                for (index, element) in elements.iter().enumerate() {
+                    let value = self.component_hash(*element, &format!("value.v{index}"));
+                    let _ = writeln!(body, "    hash = el_hash_combine(hash, {value});");
+                }
+            }
+            TypeKind::Array { element, length } => {
+                let value = self.component_hash(*element, "value.values[index]");
+                let _ = writeln!(
+                    body,
+                    "    for (uintptr_t index = 0U; index < {length}U; ++index) \
+                     hash = el_hash_combine(hash, {value});"
+                );
+            }
+            TypeKind::Nominal { .. } => {
+                if let Some(structure) = self.structs.get(&ty).copied() {
+                    for (field, _, field_type) in &structure.fields {
+                        let value = self
+                            .component_hash(*field_type, &format!("value.{}", field_name(*field)));
+                        let _ = writeln!(body, "    hash = el_hash_combine(hash, {value});");
+                    }
+                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
+                    body.push_str(
+                        "    hash = el_hash_combine(hash, el_hash_u64(value.tag));\n    \
+                         switch (value.tag) {\n",
+                    );
+                    for variant in &enumeration.variants {
+                        let _ = writeln!(body, "    case UINT32_C({}):", variant.id.index());
+                        for (field, _, field_type) in &variant.fields {
+                            let expression = format!(
+                                "value.payload.{}.{}",
+                                variant_member_name(variant.id),
+                                field_name(*field)
+                            );
+                            let value = self.component_hash(*field_type, &expression);
+                            let _ =
+                                writeln!(body, "        hash = el_hash_combine(hash, {value});");
+                        }
+                        body.push_str("        break;\n");
+                    }
+                    body.push_str("    default: abort();\n    }\n");
+                }
+            }
+            TypeKind::Builtin { builtin, arguments }
+                if self.resolved.builtin_name(*builtin) == "Identity" && arguments.len() == 1 =>
+            {
+                body.push_str(
+                    "    hash = el_hash_combine(hash, \
+                     el_hash_u64((uint64_t)(uintptr_t)value.target));\n",
+                );
+            }
+            _ => {}
+        }
+        let _ = writeln!(
+            self.output,
+            "static uint64_t {}({c_type} value) {{\n{body}    return hash;\n}}\n",
+            hash_helper_name(ty)
+        );
+        self.emitting_hash_helpers.remove(&ty);
+        self.emitted_hash_helpers.insert(ty);
     }
 
     fn emit_copy_helper(&mut self, ty: TypeId, span: Option<Span>) {
@@ -1487,6 +2557,11 @@ impl<'a> CEmitter<'a> {
                             self.emit_copy_helper(*field_type, span);
                         }
                     }
+                }
+            }
+            TypeKind::Builtin { arguments, .. } => {
+                for argument in arguments {
+                    self.emit_copy_helper(*argument, span);
                 }
             }
             _ => {}
@@ -1561,6 +2636,139 @@ impl<'a> CEmitter<'a> {
                         .push_str("    default: abort();\n    }\n    return result;\n");
                 } else {
                     self.output.push_str("    return value;\n");
+                }
+            }
+            TypeKind::Builtin { builtin, arguments } => {
+                match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
+                    ("Vec" | "Set", [element]) => {
+                        let element_type = self
+                            .c_type(*element, span)
+                            .unwrap_or_else(|| "uint8_t".to_string());
+                        let helper = copy_helper_name(self.resolve_alias(*element));
+                        let _ = writeln!(self.output, "    {c_type} result;");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result",
+                            byte_count: "sizeof(*result)",
+                            class: AllocationClass::Scanned,
+                        });
+                        self.output.push_str(
+                            "    if (result == NULL) el_out_of_memory();\n\
+                             \x20   result->length = value->length;\n\
+                             \x20   result->capacity = value->length;\n\
+                             \x20   result->values = NULL;\n\
+                             \x20   if (value->length != 0U) {\n",
+                        );
+                        let bytes = format!("value->length * sizeof({element_type})");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result->values",
+                            byte_count: &bytes,
+                            class: if self.scanned_allocation(*element) {
+                                AllocationClass::Scanned
+                            } else {
+                                AllocationClass::PointerFree
+                            },
+                        });
+                        let _ = writeln!(
+                            self.output,
+                            "        if (result->values == NULL) el_out_of_memory();\n\
+                             \x20       for (uintptr_t index = 0U; index < value->length; ++index) \
+                             result->values[index] = {helper}(value->values[index]);\n\
+                             \x20   }}\n    return result;"
+                        );
+                    }
+                    ("Map", [key, value_type]) => {
+                        let key_c_type = self
+                            .c_type(*key, span)
+                            .unwrap_or_else(|| "uint8_t".to_string());
+                        let value_c_type = self
+                            .c_type(*value_type, span)
+                            .unwrap_or_else(|| "uint8_t".to_string());
+                        let key_helper = copy_helper_name(self.resolve_alias(*key));
+                        let value_helper = copy_helper_name(self.resolve_alias(*value_type));
+                        let _ = writeln!(self.output, "    {c_type} result;");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result",
+                            byte_count: "sizeof(*result)",
+                            class: AllocationClass::Scanned,
+                        });
+                        self.output.push_str(
+                            "    if (result == NULL) el_out_of_memory();\n\
+                             \x20   result->length = value->length;\n\
+                             \x20   result->capacity = value->length;\n\
+                             \x20   result->keys = NULL;\n\
+                             \x20   result->values = NULL;\n\
+                             \x20   if (value->length != 0U) {\n",
+                        );
+                        let key_bytes = format!("value->length * sizeof({key_c_type})");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result->keys",
+                            byte_count: &key_bytes,
+                            class: if self.scanned_allocation(*key) {
+                                AllocationClass::Scanned
+                            } else {
+                                AllocationClass::PointerFree
+                            },
+                        });
+                        let value_bytes = format!("value->length * sizeof({value_c_type})");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result->values",
+                            byte_count: &value_bytes,
+                            class: if self.scanned_allocation(*value_type) {
+                                AllocationClass::Scanned
+                            } else {
+                                AllocationClass::PointerFree
+                            },
+                        });
+                        let _ = writeln!(
+                            self.output,
+                            "        if (result->keys == NULL || result->values == NULL) \
+                             el_out_of_memory();\n\
+                             \x20       for (uintptr_t index = 0U; index < value->length; ++index) \
+                             {{\n\
+                             \x20           result->keys[index] = \
+                             {key_helper}(value->keys[index]);\n\
+                             \x20           result->values[index] = \
+                             {value_helper}(value->values[index]);\n\
+                             \x20       }}\n\
+                             \x20   }}\n    return result;"
+                        );
+                    }
+                    ("Identity", [_]) => self.output.push_str("    return value;\n"),
+                    ("Formatter", []) => {
+                        let _ = writeln!(self.output, "    {c_type} result;");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result",
+                            byte_count: "sizeof(*result)",
+                            class: AllocationClass::Scanned,
+                        });
+                        self.output.push_str(
+                            "    if (result == NULL) el_out_of_memory();\n\
+                             \x20   result->length = value->length;\n\
+                             \x20   result->capacity = value->length;\n\
+                             \x20   result->bytes = NULL;\n\
+                             \x20   if (value->length != 0U) {\n",
+                        );
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result->bytes",
+                            byte_count: "value->length + 1U",
+                            class: AllocationClass::PointerFree,
+                        });
+                        self.output.push_str(
+                            "        if (result->bytes == NULL) el_out_of_memory();\n\
+                             \x20       memcpy(result->bytes, value->bytes, value->length);\n\
+                             \x20       result->bytes[value->length] = '\\0';\n\
+                             \x20   }\n\
+                             \x20   return result;\n",
+                        );
+                    }
+                    _ => {
+                        self.type_error(
+                            ty,
+                            span,
+                            "this builtin runtime type has no logical-copy operation",
+                        );
+                        self.output.push_str("    abort();\n");
+                    }
                 }
             }
             _ if matches!(
@@ -1746,9 +2954,6 @@ impl<'a> CEmitter<'a> {
                     temporary_name(*value),
                 );
             }
-            Instruction::PrintText { text, .. } => {
-                let _ = writeln!(self.output, "    fputs({}, stdout);", c_string(text));
-            }
             Instruction::PrintValue { value, ty, span } => {
                 self.emit_print(*value, *ty, *span);
             }
@@ -1807,6 +3012,129 @@ impl<'a> CEmitter<'a> {
                 }
                 call.push(')');
                 call
+            }
+            Rvalue::StandardCall {
+                operation,
+                arguments,
+            } => {
+                if matches!(operation, StandardCall::FormatterWrite { .. }) {
+                    let receiver = arguments
+                        .first()
+                        .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
+                    let text = arguments
+                        .get(1)
+                        .map_or_else(|| "\"\"".to_string(), |value| temporary_name(*value));
+                    return Some(format!(
+                        "(el_fmt_append_n(*{receiver}, ({text}).bytes, ({text}).length), \
+                         (el_unit){{0}})"
+                    ));
+                }
+                if matches!(operation, StandardCall::IdentityFrom { .. }) {
+                    let c_type = self.c_type(destination_type, Some(span))?;
+                    let value = arguments
+                        .first()
+                        .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
+                    return Some(format!("({c_type}){{ .target = (void *){value} }}"));
+                }
+                let mut arguments = arguments
+                    .iter()
+                    .map(|argument| temporary_name(*argument))
+                    .collect::<Vec<_>>();
+                if matches!(
+                    operation,
+                    StandardCall::VecInsert { .. } | StandardCall::VecRemove { .. }
+                ) {
+                    arguments.push(self.trap_arguments(span));
+                }
+                format!(
+                    "{}({})",
+                    standard_call_name(*operation),
+                    arguments.join(", ")
+                )
+            }
+            Rvalue::CollectionLiteral { kind, elements } => {
+                let name = match kind {
+                    CollectionLiteralKind::Vec => "vec_literal",
+                    CollectionLiteralKind::Map => "map_literal",
+                    CollectionLiteralKind::Set => "set_literal",
+                };
+                format!(
+                    "el_{name}_t{}_n{}({})",
+                    destination_type.index(),
+                    elements.len(),
+                    elements
+                        .iter()
+                        .map(|element| temporary_name(*element))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            Rvalue::CollectionLength { collection, kind } => match kind {
+                IterationKind::Array { length, .. } => format!("(uintptr_t){length}U"),
+                IterationKind::Vec { .. }
+                | IterationKind::Map { .. }
+                | IterationKind::Set { .. } => {
+                    format!("{}->length", temporary_name(*collection))
+                }
+            },
+            Rvalue::IterationElement {
+                collection,
+                index,
+                kind,
+            } => {
+                let collection_name = temporary_name(*collection);
+                let index_name = temporary_name(*index);
+                match kind {
+                    IterationKind::Array { element, .. } => format!(
+                        "{}({collection_name}.values[{index_name}])",
+                        copy_helper_name(self.resolve_alias(*element))
+                    ),
+                    IterationKind::Vec { element, .. } | IterationKind::Set { element, .. } => {
+                        format!(
+                            "{}({collection_name}->values[{index_name}])",
+                            copy_helper_name(self.resolve_alias(*element))
+                        )
+                    }
+                    IterationKind::Map {
+                        key, value, pair, ..
+                    } => {
+                        let pair_type = self.c_type(*pair, Some(span))?;
+                        format!(
+                            "({pair_type}){{ .v0 = {}({collection_name}->keys[{index_name}]), \
+                             .v1 = {}({collection_name}->values[{index_name}]) }}",
+                            copy_helper_name(self.resolve_alias(*key)),
+                            copy_helper_name(self.resolve_alias(*value))
+                        )
+                    }
+                }
+            }
+            Rvalue::FormattedString(parts) => {
+                let formatter = format!("el_fmt_{}", destination.index());
+                let _ = writeln!(
+                    self.output,
+                    "    el_formatter {formatter} = {{NULL, 0U, 0U}};"
+                );
+                for part in parts {
+                    match part {
+                        RuntimeFormattedPart::Text(text) => {
+                            let _ = writeln!(
+                                self.output,
+                                "    el_fmt_append_n(&{formatter}, {}, (size_t){}U);",
+                                c_string(text),
+                                text.len()
+                            );
+                        }
+                        RuntimeFormattedPart::Value { value, ty } => {
+                            self.emit_formatter_value(
+                                &formatter,
+                                &temporary_name(*value),
+                                *ty,
+                                span,
+                            );
+                        }
+                    }
+                }
+                format!("el_fmt_finish(&{formatter})")
             }
             Rvalue::MakeTraitObject {
                 trait_declaration,
@@ -2012,7 +3340,18 @@ impl<'a> CEmitter<'a> {
             crate::ir::Constant::Character(value) => {
                 format!("({c_type})UINT32_C({})", u32::from(*value))
             }
-            crate::ir::Constant::String(value) => c_string(value),
+            crate::ir::Constant::String(value) => {
+                let literal = format!(
+                    "(el_str){{ {}, (size_t){}U }}",
+                    c_string(value),
+                    value.len()
+                );
+                if self.typed.types.expanded_primitive(ty) == Some(PrimitiveType::String) {
+                    format!("el_string_from({literal})")
+                } else {
+                    literal
+                }
+            }
             crate::ir::Constant::Null => "NULL".to_string(),
         })
     }
@@ -2192,6 +3531,223 @@ impl<'a> CEmitter<'a> {
         })
     }
 
+    fn emit_formatter_text(&mut self, formatter: &str, text: &str) {
+        let _ = writeln!(
+            self.output,
+            "    el_fmt_append_n(&{formatter}, {}, (size_t){}U);",
+            c_string(text),
+            text.len()
+        );
+    }
+
+    fn emit_formatter_value(&mut self, formatter: &str, value: &str, ty: TypeId, span: Span) {
+        let ty = self.resolve_alias(ty);
+        if let Some(trait_declaration) = crate::traits::object_trait(self.resolved, self.typed, ty)
+            && self
+                .resolved
+                .is_standard_declaration(trait_declaration, "Display")
+        {
+            let slot = crate::traits::vtable_slots(self.resolved, trait_declaration)
+                .iter()
+                .position(|(name, _)| name == "fmt")
+                .unwrap_or(0);
+            let _ = writeln!(
+                self.output,
+                "    {{ el_formatter *el_user_formatter = &{formatter}; \
+                 (void){value}.vtable->{}({value}.data, &el_user_formatter); }}",
+                vtable_slot_name(slot)
+            );
+            return;
+        }
+        match self.typed.types.kind(ty).clone() {
+            TypeKind::Primitive(primitive) => match primitive {
+                PrimitiveType::Unit => self.emit_formatter_text(formatter, "()"),
+                PrimitiveType::Bool => {
+                    let _ = writeln!(
+                        self.output,
+                        "    el_fmt_append(&{formatter}, {value} ? \"true\" : \"false\");"
+                    );
+                }
+                PrimitiveType::Char => {
+                    let _ = writeln!(self.output, "    el_fmt_char(&{formatter}, {value});");
+                }
+                PrimitiveType::I8
+                | PrimitiveType::I16
+                | PrimitiveType::I32
+                | PrimitiveType::I64
+                | PrimitiveType::Isize => {
+                    let _ = writeln!(
+                        self.output,
+                        "    el_fmt_signed(&{formatter}, (intmax_t){value});"
+                    );
+                }
+                PrimitiveType::U8
+                | PrimitiveType::U16
+                | PrimitiveType::U32
+                | PrimitiveType::U64
+                | PrimitiveType::Usize => {
+                    let _ = writeln!(
+                        self.output,
+                        "    el_fmt_unsigned(&{formatter}, (uintmax_t){value});"
+                    );
+                }
+                PrimitiveType::F32 | PrimitiveType::F64 => {
+                    let _ = writeln!(
+                        self.output,
+                        "    el_fmt_float(&{formatter}, (double){value});"
+                    );
+                }
+                PrimitiveType::Str | PrimitiveType::String => {
+                    let _ = writeln!(
+                        self.output,
+                        "    el_fmt_append_n(&{formatter}, ({value}).bytes, ({value}).length);"
+                    );
+                }
+                PrimitiveType::I128 | PrimitiveType::U128 => {
+                    self.type_error(ty, Some(span), "128-bit values cannot yet be displayed");
+                }
+            },
+            TypeKind::Reference { target, .. } => {
+                self.emit_formatter_value(formatter, &format!("(*{value})"), target, span);
+            }
+            TypeKind::Tuple(elements) => {
+                self.emit_formatter_text(formatter, "(");
+                for (index, element) in elements.iter().enumerate() {
+                    if index != 0 {
+                        self.emit_formatter_text(formatter, ", ");
+                    }
+                    self.emit_formatter_value(
+                        formatter,
+                        &format!("{value}.v{index}"),
+                        *element,
+                        span,
+                    );
+                }
+                if elements.len() == 1 {
+                    self.emit_formatter_text(formatter, ",");
+                }
+                self.emit_formatter_text(formatter, ")");
+            }
+            TypeKind::Array { element, length } => {
+                self.emit_formatter_text(formatter, "[");
+                for index in 0..length {
+                    if index != 0 {
+                        self.emit_formatter_text(formatter, ", ");
+                    }
+                    self.emit_formatter_value(
+                        formatter,
+                        &format!("{value}.values[{index}U]"),
+                        element,
+                        span,
+                    );
+                }
+                self.emit_formatter_text(formatter, "]");
+            }
+            TypeKind::Builtin { builtin, arguments } => {
+                match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
+                    ("Vec", [element]) => {
+                        let index = format!("el_i_t{}", ty.index());
+                        self.emit_formatter_text(formatter, "[");
+                        let _ = writeln!(
+                            self.output,
+                            "    for (uintptr_t {index} = 0U; {index} < {value}->length; ++{index}) {{"
+                        );
+                        let _ = writeln!(
+                            self.output,
+                            "        if ({index} != 0U) el_fmt_append(&{formatter}, \", \");"
+                        );
+                        self.emit_formatter_value(
+                            formatter,
+                            &format!("{value}->values[{index}]"),
+                            *element,
+                            span,
+                        );
+                        self.output.push_str("    }\n");
+                        self.emit_formatter_text(formatter, "]");
+                    }
+                    ("Set", [element]) => {
+                        let index = format!("el_i_t{}", ty.index());
+                        self.emit_formatter_text(formatter, "{");
+                        let _ = writeln!(
+                            self.output,
+                            "    for (uintptr_t {index} = 0U; {index} < {value}->length; ++{index}) {{"
+                        );
+                        let _ = writeln!(
+                            self.output,
+                            "        if ({index} != 0U) el_fmt_append(&{formatter}, \", \");"
+                        );
+                        self.emit_formatter_value(
+                            formatter,
+                            &format!("{value}->values[{index}]"),
+                            *element,
+                            span,
+                        );
+                        self.output.push_str("    }\n");
+                        self.emit_formatter_text(formatter, "}");
+                    }
+                    ("Map", [key, item]) => {
+                        let index = format!("el_i_t{}", ty.index());
+                        self.emit_formatter_text(formatter, "{");
+                        let _ = writeln!(
+                            self.output,
+                            "    for (uintptr_t {index} = 0U; {index} < {value}->length; ++{index}) {{"
+                        );
+                        let _ = writeln!(
+                            self.output,
+                            "        if ({index} != 0U) el_fmt_append(&{formatter}, \", \");"
+                        );
+                        self.emit_formatter_value(
+                            formatter,
+                            &format!("{value}->keys[{index}]"),
+                            *key,
+                            span,
+                        );
+                        self.emit_formatter_text(formatter, ": ");
+                        self.emit_formatter_value(
+                            formatter,
+                            &format!("{value}->values[{index}]"),
+                            *item,
+                            span,
+                        );
+                        self.output.push_str("    }\n");
+                        self.emit_formatter_text(formatter, "}");
+                    }
+                    _ => self.type_error(
+                        ty,
+                        Some(span),
+                        "this builtin type has no `Display` implementation",
+                    ),
+                }
+            }
+            TypeKind::Nominal { .. } => {
+                match crate::traits::select_trait_method(self.resolved, self.typed, ty, "fmt", None)
+                    .ok()
+                    .flatten()
+                {
+                    Some(selected) => {
+                        let instance = FunctionInstance {
+                            declaration: selected.declaration,
+                            arguments: selected.arguments,
+                            self_type: selected.self_type,
+                        };
+                        let symbol = mangle_function_instance(self.resolved, &instance);
+                        let _ = writeln!(
+                            self.output,
+                            "    {{ el_formatter *el_user_formatter = &{formatter}; \
+                             (void){symbol}(&({value}), &el_user_formatter); }}"
+                        );
+                    }
+                    None => self.type_error(
+                        ty,
+                        Some(span),
+                        "this nominal type has no `Display.fmt` implementation",
+                    ),
+                }
+            }
+            _ => self.type_error(ty, Some(span), "this type cannot be displayed"),
+        }
+    }
+
     fn emit_place_checks(&mut self, place: Option<&ControlFlowPlace>, span: Span) {
         let Some(place) = place else { return };
         match place {
@@ -2206,21 +3762,50 @@ impl<'a> CEmitter<'a> {
             ControlFlowPlace::Index {
                 base,
                 index,
-                length,
+                kind,
                 trap,
             } => {
                 self.emit_place_checks(Some(base), span);
                 let arguments = self.trap_arguments(span);
-                let bound = length.map_or_else(
-                    || format!("(uintmax_t){}.length", self.place_expression(base)),
-                    |length| format!("UINTMAX_C({length})"),
-                );
-                let _ = writeln!(
-                    self.output,
-                    "    if ((uintmax_t){} >= {bound}) el_trap(\"{}\", {arguments});",
-                    temporary_name(*index),
-                    trap.code()
-                );
+                match kind {
+                    IndexKind::Array { length } => {
+                        let _ = writeln!(
+                            self.output,
+                            "    if ((uintmax_t){} >= UINTMAX_C({length})) \
+                             el_trap(\"{}\", {arguments});",
+                            temporary_name(*index),
+                            trap.code()
+                        );
+                    }
+                    IndexKind::Slice => {
+                        let bound = format!("(uintmax_t){}.length", self.place_expression(base));
+                        let _ = writeln!(
+                            self.output,
+                            "    if ((uintmax_t){} >= {bound}) el_trap(\"{}\", {arguments});",
+                            temporary_name(*index),
+                            trap.code()
+                        );
+                    }
+                    IndexKind::Vec { .. } => {
+                        let bound = format!("(uintmax_t){}->length", self.place_expression(base));
+                        let _ = writeln!(
+                            self.output,
+                            "    if ((uintmax_t){} >= {bound}) el_trap(\"{}\", {arguments});",
+                            temporary_name(*index),
+                            trap.code()
+                        );
+                    }
+                    IndexKind::Map { collection } => {
+                        let find = format!("el_map_find_t{}", collection.index());
+                        let _ = writeln!(
+                            self.output,
+                            "    if ({find}({}, {}) < 0) el_trap(\"{}\", {arguments});",
+                            self.place_expression(base),
+                            temporary_name(*index),
+                            trap.code()
+                        );
+                    }
+                }
             }
         }
     }
@@ -2254,15 +3839,32 @@ impl<'a> CEmitter<'a> {
             ControlFlowPlace::Dereference { base } => {
                 format!("(*{})", self.place_expression(base))
             }
-            ControlFlowPlace::Index { base, index, .. } => format!(
-                "{}.values[{}]",
-                self.place_expression(base),
-                temporary_name(*index)
-            ),
+            ControlFlowPlace::Index {
+                base, index, kind, ..
+            } => match kind {
+                IndexKind::Array { .. } | IndexKind::Slice => format!(
+                    "{}.values[{}]",
+                    self.place_expression(base),
+                    temporary_name(*index)
+                ),
+                IndexKind::Vec { .. } => format!(
+                    "{}->values[{}]",
+                    self.place_expression(base),
+                    temporary_name(*index)
+                ),
+                IndexKind::Map { collection } => format!(
+                    "{}->values[(uintptr_t)el_map_find_t{}({}, {})]",
+                    self.place_expression(base),
+                    collection.index(),
+                    self.place_expression(base),
+                    temporary_name(*index)
+                ),
+            },
         }
     }
 
     fn emit_print(&mut self, value: TemporaryId, ty: TypeId, span: Span) {
+        let value_id = value;
         let value = temporary_name(value);
         match self.typed.types.expanded_primitive(ty) {
             Some(PrimitiveType::Unit) => {
@@ -2311,13 +3913,25 @@ impl<'a> CEmitter<'a> {
                 let _ = writeln!(self.output, "    fprintf(stdout, \"%.17g\", {value});");
             }
             Some(PrimitiveType::Str | PrimitiveType::String) => {
-                let _ = writeln!(self.output, "    fputs({value}, stdout);");
+                let _ = writeln!(
+                    self.output,
+                    "    fwrite(({value}).bytes, 1U, ({value}).length, stdout);"
+                );
             }
-            _ => self.type_error(
-                ty,
-                Some(span),
-                "printing this type requires the Milestone 13 `Display` implementation",
-            ),
+            _ => {
+                let formatter = format!("el_print_fmt_{}", value_id.index());
+                let _ = writeln!(
+                    self.output,
+                    "    el_formatter {formatter} = {{NULL, 0U, 0U}};"
+                );
+                self.emit_formatter_value(&formatter, &value, ty, span);
+                let rendered = format!("el_print_text_{}", value_id.index());
+                let _ = writeln!(
+                    self.output,
+                    "    el_str {rendered} = el_fmt_finish(&{formatter});\n    \
+                     fwrite({rendered}.bytes, 1U, {rendered}.length, stdout);"
+                );
+            }
         }
     }
 
@@ -2505,8 +4119,31 @@ impl<'a> CEmitter<'a> {
             return Some(format!("{}()", default_helper_name(resolved)));
         }
         match self.typed.types.kind(resolved).clone() {
-            TypeKind::Primitive(PrimitiveType::Str) => Some("\"\"".to_string()),
-            TypeKind::Primitive(PrimitiveType::String) => Some("el_copy_string(\"\")".to_string()),
+            TypeKind::Primitive(PrimitiveType::Str) => {
+                Some("(el_str){\"\", (size_t)0U}".to_string())
+            }
+            TypeKind::Primitive(PrimitiveType::String) => {
+                Some("el_string_from((el_str){\"\", (size_t)0U})".to_string())
+            }
+            TypeKind::Builtin { builtin, arguments }
+                if matches!(
+                    (self.resolved.builtin_name(builtin), arguments.len()),
+                    ("Vec", 1) | ("Map", 2) | ("Set", 1)
+                ) =>
+            {
+                let operation = match self.resolved.builtin_name(builtin) {
+                    "Vec" => StandardCall::VecNew {
+                        collection: resolved,
+                    },
+                    "Map" => StandardCall::MapNew {
+                        collection: resolved,
+                    },
+                    _ => StandardCall::SetNew {
+                        collection: resolved,
+                    },
+                };
+                Some(format!("{}()", standard_call_name(operation)))
+            }
             TypeKind::Reference { .. } | TypeKind::Function { .. } => {
                 self.type_error(
                     ty,
@@ -2611,8 +4248,8 @@ impl<'a> CEmitter<'a> {
                 PrimitiveType::Usize => "uintptr_t",
                 PrimitiveType::F32 => "float",
                 PrimitiveType::F64 => "double",
-                PrimitiveType::Str => "const char *",
-                PrimitiveType::String => "char *",
+                PrimitiveType::Str => "el_str",
+                PrimitiveType::String => "el_string",
             }
             .to_string(),
             TypeKind::Tuple(_) => tuple_name(ty),
@@ -2656,6 +4293,19 @@ impl<'a> CEmitter<'a> {
                 format!("{} *", self.c_type(*target, span)?)
             }
             TypeKind::Function { .. } => function_type_name(ty),
+            TypeKind::Builtin { builtin, arguments }
+                if self.resolved.builtin_name(*builtin) == "Formatter" && arguments.is_empty() =>
+            {
+                "el_formatter *".to_string()
+            }
+            TypeKind::Builtin { builtin, arguments }
+                if matches!(
+                    (self.resolved.builtin_name(*builtin), arguments.len()),
+                    ("Vec" | "Set" | "Identity", 1) | ("Map", 2) | ("Formatter", 0)
+                ) =>
+            {
+                collection_type_name(ty)
+            }
             TypeKind::Error => {
                 self.type_error(ty, span, "the explicit error type reached C generation");
                 return None;
@@ -2844,6 +4494,83 @@ fn numeric_conversion_name(outcome: NumericOutcome, source: TypeId, result: Type
     format!("el_{stem}_t{}_t{}", source.index(), result.index())
 }
 
+fn standard_call_name(operation: StandardCall) -> String {
+    use StandardCall::{
+        ArrayGet, ArrayLen, MapClear, MapContainsKey, MapGet, MapInsert, MapIsEmpty, MapLen,
+        MapNew, MapRemove, SetClear, SetContains, SetInsert, SetIsEmpty, SetLen, SetNew, SetRemove,
+        StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
+    };
+    let (name, ty) = match operation {
+        StringFrom => return "el_string_from".to_string(),
+        StandardCall::IdentityFrom { wrapper } => ("identity_from", wrapper),
+        StandardCall::FormatterWrite { formatter } => ("formatter_write", formatter),
+        ArrayLen { collection } => ("array_len", collection),
+        ArrayGet { collection } => ("array_get", collection),
+        VecNew { collection } => ("vec_new", collection),
+        VecLen { collection } => ("vec_len", collection),
+        VecIsEmpty { collection } => ("vec_is_empty", collection),
+        VecGet { collection } => ("vec_get", collection),
+        VecAppend { collection } => ("vec_append", collection),
+        VecInsert { collection } => ("vec_insert", collection),
+        VecRemove { collection } => ("vec_remove", collection),
+        VecClear { collection } => ("vec_clear", collection),
+        MapNew { collection } => ("map_new", collection),
+        MapLen { collection } => ("map_len", collection),
+        MapIsEmpty { collection } => ("map_is_empty", collection),
+        MapContainsKey { collection } => ("map_contains_key", collection),
+        MapGet { collection } => ("map_get", collection),
+        MapInsert { collection } => ("map_insert", collection),
+        MapRemove { collection } => ("map_remove", collection),
+        MapClear { collection } => ("map_clear", collection),
+        SetNew { collection } => ("set_new", collection),
+        SetLen { collection } => ("set_len", collection),
+        SetIsEmpty { collection } => ("set_is_empty", collection),
+        SetContains { collection } => ("set_contains", collection),
+        SetInsert { collection } => ("set_insert", collection),
+        SetRemove { collection } => ("set_remove", collection),
+        SetClear { collection } => ("set_clear", collection),
+    };
+    format!("el_{name}_t{}", ty.index())
+}
+
+fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
+    use StandardCall::{
+        ArrayGet, ArrayLen, MapClear, MapContainsKey, MapGet, MapInsert, MapIsEmpty, MapLen,
+        MapNew, MapRemove, SetClear, SetContains, SetInsert, SetIsEmpty, SetLen, SetNew, SetRemove,
+        StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
+    };
+    Some(match operation {
+        StringFrom | StandardCall::IdentityFrom { .. } | StandardCall::FormatterWrite { .. } => {
+            return None;
+        }
+        ArrayLen { collection }
+        | ArrayGet { collection }
+        | VecNew { collection }
+        | VecLen { collection }
+        | VecIsEmpty { collection }
+        | VecGet { collection }
+        | VecAppend { collection }
+        | VecInsert { collection }
+        | VecRemove { collection }
+        | VecClear { collection }
+        | MapNew { collection }
+        | MapLen { collection }
+        | MapIsEmpty { collection }
+        | MapContainsKey { collection }
+        | MapGet { collection }
+        | MapInsert { collection }
+        | MapRemove { collection }
+        | MapClear { collection }
+        | SetNew { collection }
+        | SetLen { collection }
+        | SetIsEmpty { collection }
+        | SetContains { collection }
+        | SetInsert { collection }
+        | SetRemove { collection }
+        | SetClear { collection } => collection,
+    })
+}
+
 fn variant_member_name(variant: VariantId) -> String {
     format!("v{}", variant.index())
 }
@@ -2854,6 +4581,10 @@ fn tuple_name(ty: TypeId) -> String {
 
 fn array_name(ty: TypeId) -> String {
     format!("el_array_t{}", ty.index())
+}
+
+fn collection_type_name(ty: TypeId) -> String {
+    format!("el_runtime_t{}", ty.index())
 }
 
 fn field_name(field: crate::resolution::FieldId) -> String {
@@ -2881,6 +4612,10 @@ fn equality_helper_name(ty: TypeId) -> String {
 
 fn ordering_helper_name(ty: TypeId) -> String {
     format!("el_ord_t{}", ty.index())
+}
+
+fn hash_helper_name(ty: TypeId) -> String {
+    format!("el_hash_t{}", ty.index())
 }
 
 fn default_helper_name(ty: TypeId) -> String {
@@ -3054,6 +4789,7 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             | TypeKind::Array { .. }
             | TypeKind::Slice(_)
             | TypeKind::Nominal { .. }
+            | TypeKind::Builtin { .. }
             | TypeKind::Foreign { .. } => return "{0}".to_string(),
             // A trait object is a struct, not a pointer, so it zeroes with an
             // initializer rather than `NULL`.
@@ -3062,8 +4798,10 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             {
                 return "{0}".to_string();
             }
-            TypeKind::Primitive(PrimitiveType::Str | PrimitiveType::String)
-            | TypeKind::Reference { .. }
+            TypeKind::Primitive(PrimitiveType::Str | PrimitiveType::String) => {
+                return "{0}".to_string();
+            }
+            TypeKind::Reference { .. }
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }
             | TypeKind::TraitObject { .. } => return "NULL".to_string(),

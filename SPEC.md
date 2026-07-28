@@ -610,7 +610,9 @@ another alias may mutate the target. Floating-point types do not qualify.
 reference to any collection interior. The standard-library
 `Identity[&T]` and `Identity[&var T]` wrappers compare and hash target identity
 rather than target contents and are compiler-known exceptions that qualify for
-`StableHash`.
+`StableHash`. They are formed explicitly with
+`Identity[ReferenceType].from(reference)`; the argument's safe-reference type
+must exactly match `ReferenceType`.
 
 Array and `Vec` indices have type `usize`. Indexing either in value context
 produces an ordinary independent copy of the selected element. An out-of-bounds
@@ -1250,6 +1252,11 @@ traverse targets reached through explicit reference-like values.
 writes a value to a mutable standard-library `Formatter`. Users may implement
 it normally. Primitive values, `str`, `String`, references to displayable
 values, and standard collections of displayable values provide implementations.
+Its required method is
+`fn fmt(self: &Self, formatter: &var Formatter) -> ()`. The initial formatter
+surface provides `formatter.write(text: str) -> ()`; implementations compose
+other values by writing a formatted string. Formatter growth uses the managed
+runtime allocation boundary.
 
 A formatted string literal uses the prefix `f`, as in
 `f"point: {point.x}, {point.y}"`, and produces an immutable `str`. Each
