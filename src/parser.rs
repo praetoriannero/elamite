@@ -23,6 +23,7 @@ pub enum SyntaxKind {
     File,
     Error,
     Documentation,
+    Attribute,
 
     Module,
     Import,
@@ -32,7 +33,6 @@ pub enum SyntaxKind {
     Trait,
     Impl,
     Function,
-    ExternBlock,
     ForeignType,
     Field,
     EnumVariant,
@@ -196,7 +196,6 @@ enum ItemHead {
     Trait,
     Impl,
     Function,
-    ExternBlock,
     Unknown,
 }
 
@@ -245,8 +244,14 @@ impl<'a> Parser<'a> {
             ItemHead::Enum => self.parse_enum(),
             ItemHead::Trait => self.parse_trait(),
             ItemHead::Impl => self.parse_impl(),
-            ItemHead::Function => self.parse_function(FunctionBody::Required),
-            ItemHead::ExternBlock => self.parse_extern_block(),
+            ItemHead::Function => {
+                let body = if self.leading_attribute_named("importc") {
+                    FunctionBody::Forbidden
+                } else {
+                    FunctionBody::Required
+                };
+                self.parse_function(body)
+            }
             ItemHead::Unknown => {
                 let fallback = self.current_span();
                 let mut children = self.take_docs();
@@ -265,22 +270,19 @@ impl<'a> Parser<'a> {
         ) {
             offset += 1;
         }
-        loop {
-            match self.kind_at(offset) {
-                Some(TokenKind::Keyword(Keyword::Pub | Keyword::Unsafe)) => offset += 1,
-                Some(TokenKind::Keyword(Keyword::Extern)) => {
-                    if matches!(self.kind_at(offset + 1), Some(TokenKind::StringLiteral(_)))
-                        && matches!(self.kind_at(offset + 2), Some(TokenKind::Colon))
-                    {
-                        return ItemHead::ExternBlock;
-                    }
-                    offset += 1;
-                    if matches!(self.kind_at(offset), Some(TokenKind::StringLiteral(_))) {
-                        offset += 1;
-                    }
-                }
-                _ => break,
+        while matches!(self.kind_at(offset), Some(TokenKind::At)) {
+            while !matches!(
+                self.kind_at(offset),
+                Some(TokenKind::Newline | TokenKind::Eof) | None
+            ) {
+                offset += 1;
             }
+            if matches!(self.kind_at(offset), Some(TokenKind::Newline)) {
+                offset += 1;
+            }
+        }
+        while let Some(TokenKind::Keyword(Keyword::Pub | Keyword::Unsafe)) = self.kind_at(offset) {
+            offset += 1;
         }
         match self.kind_at(offset) {
             Some(TokenKind::Keyword(Keyword::Mod)) => ItemHead::Module,
@@ -297,7 +299,7 @@ impl<'a> Parser<'a> {
 
     fn parse_module(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Mod, &mut children, "expected `mod`");
         self.expect_identifier(&mut children, "expected module name");
@@ -307,7 +309,7 @@ impl<'a> Parser<'a> {
 
     fn parse_import(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Import, &mut children, "expected `import`");
         self.parse_path_tokens(&mut children);
@@ -321,22 +323,35 @@ impl<'a> Parser<'a> {
 
     fn parse_type_alias(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let imported = self.leading_attribute_named("importc");
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Type, &mut children, "expected `type`");
         self.expect_identifier(&mut children, "expected type alias name");
         if self.at_simple(&TokenKind::LBracket) {
             children.push(node(self.parse_generic_parameters()));
         }
-        self.expect_simple(&TokenKind::Assign, &mut children, "expected `=`");
-        children.push(node(self.parse_type()));
+        if self.at_simple(&TokenKind::Assign) {
+            children.push(self.bump());
+            children.push(node(self.parse_type()));
+        } else if !imported {
+            self.error_here("a bodyless type declaration requires `@importc`");
+        }
         self.expect_line_end(&mut children);
-        SyntaxNode::new(SyntaxKind::TypeAlias, children, fallback)
+        SyntaxNode::new(
+            if imported {
+                SyntaxKind::ForeignType
+            } else {
+                SyntaxKind::TypeAlias
+            },
+            children,
+            fallback,
+        )
     }
 
     fn parse_struct(&mut self, foreign: bool) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Struct, &mut children, "expected `struct`");
         self.expect_identifier(&mut children, "expected struct name");
@@ -359,7 +374,7 @@ impl<'a> Parser<'a> {
 
     fn parse_enum(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Enum, &mut children, "expected `enum`");
         self.expect_identifier(&mut children, "expected enum name");
@@ -375,7 +390,7 @@ impl<'a> Parser<'a> {
 
     fn parse_trait(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Trait, &mut children, "expected `trait`");
         self.expect_identifier(&mut children, "expected trait name");
@@ -388,7 +403,7 @@ impl<'a> Parser<'a> {
 
     fn parse_impl(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.expect_keyword(Keyword::Impl, &mut children, "expected `impl`");
         if self.at_simple(&TokenKind::LBracket) {
             children.push(node(self.parse_generic_parameters()));
@@ -406,17 +421,10 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, body: FunctionBody) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         loop {
             if self.at_keyword(Keyword::Pub) || self.at_keyword(Keyword::Unsafe) {
                 children.push(self.bump());
-            } else if self.at_keyword(Keyword::Extern) {
-                children.push(self.bump());
-                if matches!(self.current_kind(), Some(TokenKind::StringLiteral(_))) {
-                    children.push(self.bump());
-                } else {
-                    self.error_here("expected ABI string after `extern`");
-                }
             } else {
                 break;
             }
@@ -448,21 +456,6 @@ impl<'a> Parser<'a> {
             }
         }
         SyntaxNode::new(SyntaxKind::Function, children, fallback)
-    }
-
-    fn parse_extern_block(&mut self) -> SyntaxNode {
-        let fallback = self.current_span();
-        let mut children = self.take_docs();
-        self.eat_keyword(Keyword::Pub, &mut children);
-        self.eat_keyword(Keyword::Unsafe, &mut children);
-        self.expect_keyword(Keyword::Extern, &mut children, "expected `extern`");
-        if matches!(self.current_kind(), Some(TokenKind::StringLiteral(_))) {
-            children.push(self.bump());
-        } else {
-            self.error_here("expected ABI string after `extern`");
-        }
-        self.parse_item_block(&mut children, MemberContext::Foreign);
-        SyntaxNode::new(SyntaxKind::ExternBlock, children, fallback)
     }
 
     fn parse_generic_parameters(&mut self) -> SyntaxNode {
@@ -554,16 +547,6 @@ impl<'a> Parser<'a> {
             } else {
                 self.error_here("expected `fn` after `unsafe` in a function type");
             }
-            return SyntaxNode::new(SyntaxKind::Type, children, fallback);
-        }
-        if self.at_keyword(Keyword::Extern) {
-            children.push(self.bump());
-            if matches!(self.current_kind(), Some(TokenKind::StringLiteral(_))) {
-                children.push(self.bump());
-            } else {
-                self.error_here("expected ABI string after `extern`");
-            }
-            self.parse_function_type_tail(&mut children);
             return SyntaxNode::new(SyntaxKind::Type, children, fallback);
         }
         if self.at_keyword(Keyword::Fn) {
@@ -676,20 +659,6 @@ impl<'a> Parser<'a> {
                     MemberContext::Enum => self.parse_enum_variant(),
                     MemberContext::Trait => self.parse_function(FunctionBody::Optional),
                     MemberContext::Impl => self.parse_function(FunctionBody::Required),
-                    MemberContext::Foreign => match self.classify_item() {
-                        ItemHead::TypeAlias => self.parse_foreign_type(),
-                        ItemHead::Struct => self.parse_struct(true),
-                        ItemHead::Function => self.parse_function(FunctionBody::Forbidden),
-                        _ => {
-                            let fallback = self.current_span();
-                            let mut error = self.take_docs();
-                            self.error_here(
-                                "expected foreign type, struct, or function declaration",
-                            );
-                            self.recover_line(&mut error);
-                            SyntaxNode::new(SyntaxKind::Error, error, fallback)
-                        }
-                    },
                 }
             };
             block.push(node(member));
@@ -709,18 +678,9 @@ impl<'a> Parser<'a> {
         children.push(node(SyntaxNode::new(SyntaxKind::Block, block, fallback)));
     }
 
-    fn parse_foreign_type(&mut self) -> SyntaxNode {
-        let fallback = self.current_span();
-        let mut children = self.take_docs();
-        self.expect_keyword(Keyword::Type, &mut children, "expected `type`");
-        self.expect_identifier(&mut children, "expected foreign type name");
-        self.expect_line_end(&mut children);
-        SyntaxNode::new(SyntaxKind::ForeignType, children, fallback)
-    }
-
     fn parse_field(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_identifier(&mut children, "expected field name");
         self.expect_simple(&TokenKind::Colon, &mut children, "expected `:`");
@@ -732,7 +692,7 @@ impl<'a> Parser<'a> {
 
     fn parse_enum_variant(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = self.take_docs();
+        let mut children = self.take_item_prefix();
         self.expect_identifier(&mut children, "expected variant name");
         if self.at_simple(&TokenKind::LParen) {
             children.push(self.bump());
@@ -1477,6 +1437,69 @@ impl<'a> Parser<'a> {
         children
     }
 
+    fn take_item_prefix(&mut self) -> Vec<SyntaxElement> {
+        let mut children = self.take_docs();
+        while self.at_simple(&TokenKind::At) {
+            children.push(node(self.parse_attribute()));
+            self.eat_simple(&TokenKind::Newline, &mut children);
+        }
+        children
+    }
+
+    fn parse_attribute(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        self.expect_identifier(&mut children, "expected attribute name after `@`");
+        self.expect_simple(
+            &TokenKind::LParen,
+            &mut children,
+            "expected `(` after attribute name",
+        );
+        while !self.at_eof() && !self.at_simple(&TokenKind::RParen) {
+            if matches!(self.current_kind(), Some(TokenKind::StringLiteral(_))) {
+                children.push(self.bump());
+            } else {
+                self.error_here("attribute arguments must be string literals");
+                if !self.at_simple(&TokenKind::Comma) {
+                    children.push(self.bump());
+                }
+            }
+            if !self.eat_simple(&TokenKind::Comma, &mut children) {
+                break;
+            }
+        }
+        self.expect_simple(&TokenKind::RParen, &mut children, "expected `)`");
+        SyntaxNode::new(SyntaxKind::Attribute, children, fallback)
+    }
+
+    fn leading_attribute_named(&self, expected: &str) -> bool {
+        let mut offset = 0usize;
+        while matches!(
+            self.kind_at(offset),
+            Some(TokenKind::DocComment(_) | TokenKind::Newline)
+        ) {
+            offset += 1;
+        }
+        while matches!(self.kind_at(offset), Some(TokenKind::At)) {
+            if matches!(
+                self.kind_at(offset + 1),
+                Some(TokenKind::Identifier(name)) if name == expected
+            ) {
+                return true;
+            }
+            while !matches!(
+                self.kind_at(offset),
+                Some(TokenKind::Newline | TokenKind::Eof) | None
+            ) {
+                offset += 1;
+            }
+            if matches!(self.kind_at(offset), Some(TokenKind::Newline)) {
+                offset += 1;
+            }
+        }
+        false
+    }
+
     fn expect_line_end(&mut self, children: &mut Vec<SyntaxElement>) {
         if !self.eat_simple(&TokenKind::Newline, children)
             && !self.at_simple(&TokenKind::Dedent)
@@ -1688,7 +1711,6 @@ enum MemberContext {
     Enum,
     Trait,
     Impl,
-    Foreign,
     ForeignStruct,
 }
 

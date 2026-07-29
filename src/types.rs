@@ -12,8 +12,8 @@ use crate::lexer::{Keyword, NumericSuffix, Token, TokenKind};
 use crate::package::PackageId;
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::resolution::{
-    BuiltinId, DeclarationId, DeclarationKind, FieldId, GenericParameterId, ImplId, ItemId,
-    NameTarget, ResolvedProgram,
+    BuiltinId, DeclarationId, DeclarationKind, FieldId, ForeignDirection, GenericParameterId,
+    ImplId, ItemId, NameTarget, ResolvedProgram,
 };
 use crate::source::Span;
 
@@ -1027,8 +1027,25 @@ impl TypedProgram {
                 | PrimitiveType::Usize
                 | PrimitiveType::F32
                 | PrimitiveType::F64,
-            )
-            | TypeKind::RawPointer { .. } => true,
+            ) => true,
+            TypeKind::RawPointer { target, .. } => {
+                let target = self.types.resolve_inference(*target);
+                match self.types.kind(target) {
+                    TypeKind::Function {
+                        parameters,
+                        return_type,
+                        ..
+                    } => {
+                        parameters.iter().all(|parameter| {
+                            !parameter.variadic && self.abi_safe_inner(parameter.ty, visiting)
+                        }) && (matches!(
+                            self.types.kind(*return_type),
+                            TypeKind::Primitive(PrimitiveType::Unit)
+                        ) || self.abi_safe_inner(*return_type, visiting))
+                    }
+                    _ => true,
+                }
+            }
             TypeKind::Foreign {
                 identity,
                 complete: true,
@@ -1040,26 +1057,132 @@ impl TypedProgram {
                         .iter()
                         .all(|field| self.abi_safe_inner(*field, visiting))
                 }),
-            TypeKind::Function {
-                abi: Abi::C,
-                parameters,
-                return_type,
-                ..
-            } => {
-                parameters
-                    .iter()
-                    .all(|parameter| self.abi_safe_inner(parameter.ty, visiting))
-                    && (matches!(
-                        self.types.kind(*return_type),
-                        TypeKind::Primitive(PrimitiveType::Unit)
-                    ) || self.abi_safe_inner(*return_type, visiting))
-            }
             TypeKind::Alias { target, .. } => self.abi_safe_inner(*target, visiting),
             _ => false,
         };
         visiting.remove(&ty);
         safe
     }
+}
+
+fn validate_foreign_declarations(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for declaration in &resolved.declarations {
+        let Some(binding) = &declaration.foreign_binding else {
+            continue;
+        };
+        if !declaration.generic_parameters.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "an imported or exported C declaration cannot be generic",
+                )
+                .with_primary(declaration.span),
+            );
+        }
+        match declaration.kind {
+            DeclarationKind::ForeignType => {}
+            DeclarationKind::ForeignStruct => {
+                if direct_child(&declaration.syntax, SyntaxKind::DeriveList).is_some() {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "an imported C struct cannot derive traits",
+                        )
+                        .with_primary(declaration.span),
+                    );
+                }
+                for field in resolved
+                    .fields
+                    .iter()
+                    .filter(|field| field.parent_declaration == declaration.id)
+                {
+                    if typed
+                        .field_types
+                        .get(&field.id)
+                        .is_some_and(|ty| !typed.is_abi_safe(*ty))
+                    {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "an imported C struct field must have an ABI-safe type",
+                            )
+                            .with_primary(field.span),
+                        );
+                    }
+                }
+            }
+            DeclarationKind::ForeignFunction | DeclarationKind::Function => {
+                let Some(signature) = typed.function_signatures.get(&declaration.id) else {
+                    continue;
+                };
+                if signature.receiver.is_some() {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "an imported or exported C function cannot have a receiver",
+                        )
+                        .with_primary(declaration.span),
+                    );
+                }
+                for parameter in &signature.parameters {
+                    if parameter.variadic {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "C variadic functions are not supported",
+                            )
+                            .with_primary(declaration.span),
+                        );
+                    }
+                    if !typed.is_abi_safe(parameter.ty) {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "a C function parameter must have an ABI-safe type",
+                            )
+                            .with_primary(declaration.span),
+                        );
+                    }
+                }
+                let unit = matches!(
+                    typed.types.kind(signature.return_type),
+                    TypeKind::Primitive(PrimitiveType::Unit)
+                );
+                if !unit && !typed.is_abi_safe(signature.return_type) {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "a C function result must be unit or an ABI-safe type",
+                        )
+                        .with_primary(declaration.span),
+                    );
+                }
+                if binding.direction == ForeignDirection::Export
+                    && declaration.kind != DeclarationKind::Function
+                {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "`@exportc` requires an Elamite function definition",
+                        )
+                        .with_primary(declaration.span),
+                    );
+                }
+            }
+            _ => diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "this declaration kind cannot carry an FFI attribute",
+                )
+                .with_primary(declaration.span),
+            ),
+        }
+    }
+    diagnostics
 }
 
 struct TypeBuilder<'a> {
@@ -1152,38 +1275,41 @@ impl<'a> TypeBuilder<'a> {
             self.lower_impl(implementation.id);
         }
 
+        let program = TypedProgram {
+            types: self.types,
+            declaration_types: self.declaration_types,
+            field_types: self.field_types,
+            function_signatures: self.function_signatures,
+            function_instance_signatures: BTreeMap::new(),
+            impl_trait_types: self.impl_trait_types,
+            impl_target_types: self.impl_target_types,
+            obligations: self.obligations,
+            foreign_fields: self.foreign_fields,
+            nominal_fields: self.nominal_fields,
+            nominal_parameters: self
+                .resolved
+                .declarations
+                .iter()
+                .map(|declaration| (declaration.id, declaration.generic_parameters.clone()))
+                .collect(),
+            layout_nominals: self
+                .resolved
+                .declarations
+                .iter()
+                .filter(|declaration| {
+                    matches!(
+                        declaration.kind,
+                        DeclarationKind::Struct | DeclarationKind::Enum
+                    )
+                })
+                .map(|declaration| declaration.id)
+                .collect(),
+            builtin_layout: self.builtin_layout,
+        };
+        self.diagnostics
+            .extend(validate_foreign_declarations(self.resolved, &program));
         TypeOutput {
-            program: TypedProgram {
-                types: self.types,
-                declaration_types: self.declaration_types,
-                field_types: self.field_types,
-                function_signatures: self.function_signatures,
-                function_instance_signatures: BTreeMap::new(),
-                impl_trait_types: self.impl_trait_types,
-                impl_target_types: self.impl_target_types,
-                obligations: self.obligations,
-                foreign_fields: self.foreign_fields,
-                nominal_fields: self.nominal_fields,
-                nominal_parameters: self
-                    .resolved
-                    .declarations
-                    .iter()
-                    .map(|declaration| (declaration.id, declaration.generic_parameters.clone()))
-                    .collect(),
-                layout_nominals: self
-                    .resolved
-                    .declarations
-                    .iter()
-                    .filter(|declaration| {
-                        matches!(
-                            declaration.kind,
-                            DeclarationKind::Struct | DeclarationKind::Enum
-                        )
-                    })
-                    .map(|declaration| declaration.id)
-                    .collect(),
-                builtin_layout: self.builtin_layout,
-            },
+            program,
             diagnostics: self.diagnostics,
         }
     }
@@ -1369,11 +1495,11 @@ impl<'a> TypeBuilder<'a> {
                 );
                 target = self.types.error();
             }
-            if !raw && mutable && matches!(self.types.kind(target), TypeKind::Function { .. }) {
+            if mutable && matches!(self.types.kind(target), TypeKind::Function { .. }) {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::TypeSystem,
-                        "function references cannot be mutable",
+                        "function pointers and references cannot be mutable",
                     )
                     .with_primary(node.span),
                 );
@@ -1393,9 +1519,7 @@ impl<'a> TypeBuilder<'a> {
         }
         if matches!(
             first,
-            Some(TokenKind::Keyword(
-                Keyword::Fn | Keyword::Unsafe | Keyword::Extern
-            ))
+            Some(TokenKind::Keyword(Keyword::Fn | Keyword::Unsafe))
         ) {
             if position == TypePosition::Value {
                 self.diagnostics.push(
@@ -1654,7 +1778,7 @@ impl<'a> TypeBuilder<'a> {
         } else {
             Safety::Safe
         };
-        let abi = if foreign {
+        let abi = if foreign || declaration_data.foreign_binding.is_some() {
             Abi::C
         } else {
             abi_from_tokens(&direct)
@@ -2336,19 +2460,6 @@ pub(crate) fn array_length_literal(node: &SyntaxNode) -> Option<u128> {
 }
 
 fn abi_from_tokens(tokens: &[&Token]) -> Abi {
-    if !tokens
-        .iter()
-        .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Extern)))
-    {
-        return Abi::Elamite;
-    }
-    let name = tokens.iter().find_map(|token| match &token.kind {
-        TokenKind::StringLiteral(name) => Some(name.clone()),
-        _ => None,
-    });
-    match name.as_deref() {
-        Some("C") => Abi::C,
-        Some(name) => Abi::Unsupported(name.to_string()),
-        None => Abi::Unsupported(String::new()),
-    }
+    let _ = tokens;
+    Abi::Elamite
 }

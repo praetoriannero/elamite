@@ -460,12 +460,14 @@ fn exposes_layout_place_obligation_reference_and_abi_queries() {
              impl[T: Marker] Marker for Wrapper[T]:\n\
              \x20\x20\x20\x20fn mark(self: &Self) -> ():\n\
              \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
-             extern \"C\":\n\
-             \x20\x20\x20\x20type Opaque\n\
-             \x20\x20\x20\x20struct CRecord:\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20number: i32\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20handle: *Opaque\n\
-             \x20\x20\x20\x20fn accept(record: CRecord) -> i32\n",
+             @importc(\"opaque_t\", \"query.h\")\n\
+             type Opaque\n\
+             @importc(\"record_t\", \"query.h\")\n\
+             struct CRecord:\n\
+             \x20\x20\x20\x20number: i32\n\
+             \x20\x20\x20\x20handle: *Opaque\n\
+             @importc(\"accept\", \"query.h\")\n\
+             fn accept(record: CRecord) -> i32\n",
         )],
     );
     let (sources, resolved) = resolve_package(&package);
@@ -474,7 +476,7 @@ fn exposes_layout_place_obligation_reference_and_abi_queries() {
         "{}",
         diagnostics(&sources, &resolved.diagnostics)
     );
-    let typed = resolve_types(&resolved.program);
+    let mut typed = resolve_types(&resolved.program);
     assert!(
         typed.diagnostics.is_empty(),
         "{}",
@@ -507,7 +509,12 @@ fn exposes_layout_place_obligation_reference_and_abi_queries() {
     assert!(typed.program.layout_available(record, 32));
     assert!(typed.program.is_abi_safe(record));
     let accept = &typed.program.function_signatures[&declaration("accept").id];
-    assert!(typed.program.is_abi_safe(accept.ty));
+    assert!(!typed.program.is_abi_safe(accept.ty));
+    let accept_pointer = typed.program.types.intern(TypeKind::RawPointer {
+        mutability: Mutability::Shared,
+        target: accept.ty,
+    });
+    assert!(typed.program.is_abi_safe(accept_pointer));
 
     let constrained = declaration("constrained");
     let parameter = constrained.generic_parameters[0];

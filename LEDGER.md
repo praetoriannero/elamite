@@ -4,8 +4,7 @@
 >
 > Basis: `SPEC.md` version 0.4.0-draft and `examples/spec_demo.elx`
 >
-> Purpose: resolve [I-017](ISSUES.md#i-017-specification-migration-and-consistency)
-> by turning the specification into an implementable checklist, per
+> Purpose: turn the specification into an implementable checklist, per
 > [`IMPL.md`](IMPL.md) Stage A / Milestone 0. This document assigns no new
 > semantics. When it conflicts with `SPEC.md`, the specification wins and this
 > ledger must be corrected.
@@ -47,9 +46,9 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 13 are complete (implemented together in one
-frontend pass where applicable; see `IMPL.md`); later rows remain planned until their milestone
-status changes in `IMPL.md`.
+tracker. Milestones 0 through 17 are complete (implemented together in one
+frontend pass where applicable; see `IMPL.md`); later rows remain planned until
+their milestone status changes in `IMPL.md`.
 
 ## 0.1 Legacy artifact inventory
 
@@ -102,7 +101,7 @@ removed.
 | Spaces-only leading indentation; a tab is an error | M2 | — | compile-fail |
 | Exactly four spaces per nested block | M2 | — | compile-fail (wrong width) |
 | Body-bearing construct: trailing `:` + newline + one deeper indent; body ends at dedent; dedent must return to an established level; EOF closes all open blocks | M2 (indent/dedent events), M3 (block parsing) | — | parse, compile-fail (bad dedent) |
-| Body form applies to `mod`, `struct`, `enum`, `trait`, `impl`, `extern`, `if`, `else`, `match`, `for`, `while`, `unsafe`, and function declarations with bodies | M3 | — | parse (one case per construct) |
+| Body form applies to `mod`, `struct`, `enum`, `trait`, `impl`, `if`, `else`, `match`, `for`, `while`, `unsafe`, and function declarations with bodies | M3 | — | parse (one case per construct) |
 | Brace-delimited bodies and same-line bodies are invalid everywhere | M3 | — | compile-fail |
 | Empty body is invalid; `pass` is the explicit no-op | M3 (reject empty), M6 (`pass` is a valid statement) | — | compile-fail (empty body), compile-pass (`pass`) |
 | Blank lines and comment-only lines do not affect indentation | M2 | — | parse |
@@ -116,7 +115,7 @@ removed.
 | Package = compilation/dependency/nominal-identity/coherence unit; `elamite.toml` declares name, version, target kind (`library`\|`executable`), dependencies, root file; default roots `src/lib.elx`/`src/main.elx` | M1 | — | compile-fail (malformed manifest), integration |
 | Root file defines `root` module; other `.elx` files define file-backed modules from relative path; directories are namespace components; path components must be valid identifiers | M1 | — | integration, compile-fail (invalid component) |
 | `mod name:` inline nested module; inline and file-backed modules cannot collide; file-backed modules need no bodyless `mod` declaration | M1 (discover file-backed paths), M3 (parse inline modules), M4 (reject collision during collection) | — | compile-fail (duplicate module path) |
-| Path roots `root`, `self`, `super` (error at package root) are keywords; `std` and dependency aliases are ordinary names resolved after lexical bindings, module declarations, imports, and prelude names, so a module may shadow `std` ([I-019](ISSUES.md#i-019-trait-object-syntax-and-the-std-path-root)) | M4 | — | compile-fail (`super` at root) |
+| Path roots `root`, `self`, `super` (error at package root) are keywords; `std` and dependency aliases are ordinary names resolved after lexical bindings, module declarations, imports, and prelude names, so a module may shadow `std` | M4 | — | compile-fail (`super` at root) |
 | Unqualified name lookup: lexical bindings, current-module decls/imports, prelude only — never unrelated modules | M4 | — | compile-fail |
 | `import path` / `import path as name`; not inherited by nested modules; no wildcard/grouped imports; import order has no semantic effect | M3 (parse), M4 (resolve) | — | compile-pass, compile-fail |
 | `pub` visibility on modules/fns/structs/enums/traits/aliases; fields and inherent methods package-private unless individually `pub`; all variants/payload fields of a `pub enum` are public; all methods of a `pub trait` are public | M4 | — | compile-fail (private access across packages) |
@@ -152,7 +151,7 @@ removed.
 | References are valid struct fields, enum payloads, parameter types, and return types (no closure captures — closures do not exist) | M5 | — | compile-pass |
 | A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is M20) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
 | A reference formed directly from a binding targets that binding's storage cell and observes later assignment; promotion preserves this | M10 (done) | Boehm GC | run-pass (`references_observe_storage_through_binding_and_path`) |
-| A reference into a nested aggregate points to that subvalue's storage within its container, so replacing the container is observable through the reference, and mutation through the reference is visible in the container (§19, [I-018](ISSUES.md#i-018-reference-target-model-for-nested-aggregates)) | M10 (done) | Boehm GC (interior pointers) | run-pass (`city` example) |
+| A reference into a nested aggregate points to that subvalue's storage within its container, so replacing the container is observable through the reference, and mutation through the reference is visible in the container (§19) | M10 (done) | Boehm GC (interior pointers) | run-pass (`city` example) |
 | A reference into an aggregate keeps its whole container reachable | M10 (done; `GC_set_all_interior_pointers(1)` before `GC_INIT`) | Boehm GC (interior pointers) | run-pass (`an_interior_reference_keeps_its_whole_container_reachable`) |
 
 ### 3.3 Raw pointers and null
@@ -244,6 +243,8 @@ removed.
 | --- | --- | --- | --- |
 | Named function params need name+type; return type after `->`, omit for unit; non-unit function needs explicit `return expr` on every reachable path; no implicit tail-expression return; bare `return`/fallthrough only for unit functions | M6, M7 (return-path analysis) | — | compile-fail (missing return), compile-pass |
 | No overloading: one function per name per namespace regardless of signature; generics/distinct names are the alternative; doesn't decide inherent-vs-trait collisions | M4 | — | compile-fail (duplicate name) |
+| Safe/unsafe function references are `&fn`/`&unsafe fn`; general raw function pointers are `*fn`/`*unsafe fn`; both are directly callable, but every raw call requires `unsafe:` and traps on null | M11 (references), M17 (raw function pointers, done) | null trap | run-pass (`raw_function_pointers_are_general_and_directly_callable`), compile-fail |
+| Exact function references explicitly convert to matching raw function pointers; function and data pointer domains never cast between each other | M17 (done) | — | compile-pass/fail (`rejects_invalid_c_contracts_and_unsafe_calls`) |
 | No default parameter values; every non-variadic call needs the exact declared arity | M6 | — | compile-fail (arity mismatch) |
 | Variadic final parameter `name: ...T`: 0+ trailing `T` args bound as `[T]`; homogeneous, only once, final position; type marker preserved (`&fn(i32, ...String) -> ()`); lowered as a slice argument, not C's variadic ABI | M3, M6, M8 | — | compile-pass, run-pass |
 | Function value = *function reference*: safe `&fn(P) -> R`, unsafe `&unsafe fn(P) -> R`; bare `fn(...)`/`unsafe fn(...)` types are inhabited only behind a reference (like a trait); no `&var fn`; **no closures, anonymous function literals, captured environments, or bound-method values**; a reference is produced only by naming a named function or unbound method, with the matching safety qualifier | M5 (types), M11 (semantics) | — | compile-fail (bare `fn` type as a value) |
@@ -265,7 +266,7 @@ removed.
 | A call infers all generic arguments from argument types + expected result type only when unique; otherwise every argument must be explicit (no partial explicit lists); struct/enum literals infer the same way | M12 | — | compile-fail (ambiguous/partial inference), compile-pass |
 | A generic body is type-checked once against its bounds only; constructed generic types have exact identity, no subtype/variance; the C backend monomorphizes per concrete instantiation; finite mutually-recursive instantiation sets are valid, unbounded expansion (`T`, `Vec[T]`, `Vec[Vec[T]]`, …) is rejected | M12 | — | compile-fail (unbounded expansion), run-pass |
 | `trait`/`impl Trait for Type`; bodyless method = required, with-body = default; an impl must supply every required method with the exact signature, may override defaults, may not add extra methods; traits initially have methods only (no associated types/constants) | M13 | — | compile-fail (missing/extra method, signature mismatch) |
-| Concrete/monomorphized calls use static dispatch; a trait object is `&Trait`/`&var Trait` and appears only behind a safe reference; bare trait-object values/raw pointers to trait objects are invalid; where that exact trait-object type is expected, a concrete safe reference of matching mutability converts automatically when its target implements the object-safe trait; `reference as &Trait` remains available explicitly; this conversion introduces no general reference subtyping or variance; the object is a fat reference (target + vtable) ([I-019](ISSUES.md#i-019-trait-object-syntax-and-the-std-path-root)) | M6 (reference shape + mutability), M13 (implements + object safety and coercion) | — | compile-fail (bare trait value, mutability mismatch, non-reference source, missing impl), run-pass |
+| Concrete/monomorphized calls use static dispatch; a trait object is `&Trait`/`&var Trait` and appears only behind a safe reference; bare trait-object values/raw pointers to trait objects are invalid; where that exact trait-object type is expected, a concrete safe reference of matching mutability converts automatically when its target implements the object-safe trait; `reference as &Trait` remains available explicitly; this conversion introduces no general reference subtyping or variance; the object is a fat reference (target + vtable) | M6 (reference shape + mutability), M13 (implements + object safety and coercion) | — | compile-fail (bare trait value, mutability mismatch, non-reference source, missing impl), run-pass |
 | A trait has no value representation: a trait name is a type only as a safe-reference target, a generic/impl bound, or the trait of an `impl Trait for Type`; a bare trait name in a field, parameter, return, local annotation, alias, or generic argument is an error, as is `*Trait` | M5 | — | compile-fail (bare trait in each value position) |
 | Object safety: every object-reachable method needs `&Self`/`&var Self`, no method-level generics, no other `Self` mention; a failing trait remains usable with static dispatch only; a generic trait needs concrete type arguments to form an object; default methods participate in the vtable | M13 | — | compile-fail (non-object-safe trait as a trait object) |
 | Trait-object calls dispatch through the vtable; heterogeneous concrete types coexist in e.g. `Vec[&Trait]`, with each concrete reference converted against the expected element type; no downcasting/runtime-type-inspection/multi-trait objects initially; safe-reference reachability/escape promotion applies to concrete targets | M13 | Boehm GC | run-pass |
@@ -310,7 +311,7 @@ removed.
 | `?` is the explicit exception to "return uses `return`"; no implicit error conversion (caller converts explicitly, e.g. via `match`); `Option[T]` uses `match`, not `?` | M15.2 (done) | — | compile-fail (`Option` operand, differing errors, non-`Result` operand and function) |
 | No implicit destruction protocol; GC manages memory only; deterministic external cleanup uses lexical `defer` | M15 (done) | — | run-pass (defer suite) |
 | There is no compiler-known cleanup trait or privileged method name; resource types expose ordinary safe unit-returning cleanup methods, and each API specifies its own idempotence, sharing, and error behavior; shared handle identity must be represented explicitly | M15 (done) | — | run-pass (`spec_demo_error_and_cleanup_regions_build_and_run`, `a_returned_shared_handle_observes_its_deferred_close`) |
-| `defer call` registers one safe unit-returning call for block exit; `defer:` defers an indented block of statements as one registration, its body an ordinary lexical scope; both only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block ([I-020](ISSUES.md#i-020-multi-statement-defer-blocks)) | M3 (parse both forms), M15.4–15.5 (done) | — | compile-fail (`deferred_calls_must_be_safe_and_unit_returning`), run-pass (`deferred_execution_is_static_and_constructs_no_callable`: static per-edge expansion, no callable/environment value) |
+| `defer call` registers one safe unit-returning call for block exit; `defer:` defers an indented block of statements as one registration, its body an ordinary lexical scope; both only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block | M3 (parse both forms), M15.4–15.5 (done) | — | compile-fail (`deferred_calls_must_be_safe_and_unit_returning`), run-pass (`deferred_execution_is_static_and_constructs_no_callable`: static per-edge expansion, no callable/environment value) |
 | The deferred call evaluates at block exit using the callee/receiver/argument values *at that time* (not at registration); referenced bindings stay alive until the call finishes; reassigning a `var` after registration affects the later call | M15.10 (done) | — | run-pass (`deferred_bodies_read_execution_time_values`) |
 | Deferred calls run on fallthrough/`return`/`?`-propagation/`break`/`continue`; one block's calls run in reverse registration order; an inner block's calls run before an enclosing block's; a return value/propagated error is evaluated and copied *before* deferred calls begin (so an unconditionally deferred `close()` on a returned resource closes the returned handle too); no `errdefer` | M15.6–15.9 (done; static per-scope cleanup plans expanded at every exit edge) | — | run-pass (`deferred_registrations_run_in_reverse_on_every_exit_edge`, `propagation_runs_cleanup_for_every_exited_scope`, `a_returned_shared_handle_observes_its_deferred_close`) |
 | No `errdefer` and no conditional error-only deferral; a deferred block cannot redirect control, so `return`/`break`/`continue`/postfix `?`/nested `defer` are invalid inside it; a `defer` statement is invalid inside an `unsafe` block and an `unsafe` block is invalid inside a `defer:` block; a direct unsafe/foreign call cannot be deferred (wrap it in a safe unit method); an unrecoverable trap (including during deferred execution) or OOM doesn't guarantee remaining deferred statements run | M7 (placement rules), M15.5/15.11 (done; M17 re-applies the recorded rule to foreign calls) | trap path | compile-fail (each control-flow escape, nested `defer`, `defer` in `unsafe`, `unsafe` in `defer`, unsafe deferred call), run-pass (`traps_terminate_without_promising_remaining_cleanup`) |
@@ -342,29 +343,29 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| C ABI only initially; module-level `extern "C":` block holds bodyless imported function declarations, opaque foreign types, foreign struct declarations; imported function identifiers name exact unmangled C symbols; native libs/link options declared in `elamite.toml`; import has no runtime effect | M17 | C toolchain | compile-pass, integration |
-| Opaque foreign type: unknown size/align, usable only behind a raw pointer; foreign struct matches the target C struct's layout, is an ordinary copyable value with ABI-safe fields, can't be generic/derive/have methods/contain an incomplete opaque type directly; mismatch is an unsafe contract violation (UB at the boundary) | M17 | C toolchain | compile-fail (generic foreign struct), integration |
-| ABI-safe scalars: `i8`–`i64`, `u8`–`u64`, `isize`/`usize`, `f32`/`f64`; also raw pointers, foreign structs of ABI-safe fields, `extern "C" fn` pointers with ABI-safe signatures; `()` only as a return type (lowers to `void`); fixed-width ints use `stdint.h` types; `isize`/`usize` use `intptr_t`/`uintptr_t`; `std.ffi.CVoid` opaque, behind a raw pointer only, corresponds to C `void` | M17 | C toolchain | compile-pass/fail |
-| Not ABI-safe: `bool`/`char`/`str`/`String`/safe refs/function refs/tuples/arrays/ordinary structs+enums/trait objects/std collections/`i128`/`u128`; no implicit marshalling — wrappers explicitly encode text+terminator, pass raw pointer+length, and keep/register backing storage for the foreign-access duration | M17 | — | compile-fail (`bool` param in an `extern` fn) |
-| Every imported foreign function is unsafe to call even with scalar-only signatures, is bodyless, cannot use the variadic parameter syntax, and has type `unsafe extern "C" fn`; no C variadics initially; every raw-pointer param/result needs a documented foreign contract that the compiler does not infer from a C header | M17 | — | compile-fail (variadic `extern` fn), integration |
+| C ABI only initially; `@importc("c_name", "header.h")` marks a module-level bodyless function, opaque type, or foreign struct; generated C includes the authoritative header and uses the exact C spelling while the local Elamite name may differ; manifest include/library paths, libraries, and link options feed deterministic native commands; import has no runtime effect | M17 (done) | C toolchain | compile-pass, integration (`imports_c_symbols_through_attributes`, callback include-path harness) |
+| Opaque foreign type: unknown size/align, usable only behind a raw pointer; foreign struct matches the header type's target C layout, is an ordinary copyable value with ABI-safe fields, can't be generic/derive/have methods/contain an incomplete opaque type directly; mismatch is an unsafe contract violation (UB at the boundary) | M17 (done) | C toolchain | compile-fail (generic foreign struct), integration (`imported_c_structs_use_header_layout_and_field_names`) |
+| ABI-safe scalars: `i8`–`i64`, `u8`–`u64`, `isize`/`usize`, `f32`/`f64`; also raw data pointers, foreign structs of ABI-safe fields, and `*fn`/`*unsafe fn` pointers with ABI-safe signatures; `()` only as a return type (lowers to `void`); fixed-width ints use `stdint.h`; `isize`/`usize` use `intptr_t`/`uintptr_t`; `std.ffi.CVoid` is raw-pointer-only C `void` | M17 (done) | C toolchain | compile-pass/fail, callback integration |
+| Not ABI-safe: `bool`/`char`/`str`/`String`/safe refs/function refs/bare function types/tuples/arrays/ordinary structs+enums/trait objects/std collections/`i128`/`u128`; no implicit marshalling — wrappers explicitly encode text+terminator, pass raw pointer+length, and keep/register backing storage for the foreign-access duration | M17 (done) | — | compile-fail (`rejects_invalid_c_contracts_and_unsafe_calls`) |
+| Every imported foreign function is unsafe to call even with scalar-only signatures, is bodyless, and cannot use Elamite variadic syntax; no C variadics initially; every raw-pointer parameter/result needs a documented foreign contract that the compiler does not infer from a C header | M17 (done) | — | compile-fail and integration |
 
 ### 10.2 Ownership, retention, and managed roots
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| A raw pointer never owns its target; receiving/passing one never schedules or transfers cleanup by itself; an owning C API is wrapped in an Elamite handle whose ordinary methods enforce the API state and may include an idempotent `close()` that invokes native release; shared copies represent their identity explicitly; borrowed foreign pointers are valid only per the foreign contract's duration | M17 | — | integration |
-| Safe references are not ABI-safe and cross the boundary only as an explicit raw-pointer conversion; a non-retaining foreign call keeps the source binding/reference as a strong root for the call; retained-after-return storage needs `std.ffi.ForeignRoot[T]`/`ForeignRootMut[T]` registration | M17 | Boehm GC | integration |
-| `ForeignRoot.retain`/`ForeignRootMut.retain` promote the target if needed and create a runtime root registration; `.pointer` returns `*T`/`*var T`; copies share one explicitly represented registration; `.close()` is idempotent, closing any copy unregisters, and `.pointer` on a closed handle errors; unreachable-without-close handles may leak | M17 | Boehm GC (root registration table) | run-pass, integration |
-| Closing a registration is valid only once the foreign contract says no later access will occur; a raw pointer returned *by* foreign code does not root foreign storage, and converting it to a safe reference does not extend the foreign lifetime | M17 | — | doc-contract, integration |
+| A raw pointer never owns its target; receiving/passing one never schedules or transfers cleanup by itself; an owning C API is wrapped in an Elamite handle whose ordinary methods enforce the API state and may include an idempotent `close()` that invokes native release; shared copies represent their identity explicitly; borrowed foreign pointers are valid only per the foreign contract's duration | M17 (done) | — | integration |
+| Safe references are not ABI-safe and cross the boundary only as an explicit raw-pointer conversion; a non-retaining foreign call keeps raw pointer arguments alive for the call; retained-after-return storage needs `std.ffi.ForeignRoot[T]`/`ForeignRootMut[T]` registration | M17 (done) | Boehm GC | integration |
+| `ForeignRoot.retain`/`ForeignRootMut.retain` promote the target if needed and create a runtime root registration; `.pointer()` returns `*T`/`*var T`; copies share one explicit registration; `.close()` is idempotent, closing any copy unregisters, and `.pointer()` on a closed handle traps with `E-RUN-CLOSED`; unreachable-without-close handles may leak | M17 (done) | Boehm GC root registration | run-pass (`foreign_root_copies_share_one_idempotent_registration`, `a_closed_foreign_root_reports_a_stable_runtime_error`) |
+| Closing a registration is valid only once the foreign contract says no later access will occur; a raw pointer returned *by* foreign code does not root foreign storage, and converting it to a safe reference does not extend the foreign lifetime | M17 (done) | — | doc-contract, integration |
 
 ### 10.3 Callbacks and foreign control flow
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| Module-level `extern "C" fn` emits an unmangled C-callable function with a stable process-lifetime address; `unsafe extern "C" fn` requires foreign callers to uphold extra preconditions, body still needs nested `unsafe:` blocks; ordinary Elamite functions/function references cannot convert to C function pointers | M17 | — | compile-fail (converting an ordinary fn to a C fn ptr), integration |
-| Foreign code may retain a callback pointer indefinitely; retained managed callback state passes through a raw context pointer backed by an open `ForeignRoot` registration; the callback recovers a reference only within `unsafe:`; the registration must stay open until both callback and context pointer are released per the foreign API's contract | M17 | Boehm GC | integration (callback demo) |
-| Until concurrency is specified, C may invoke an Elamite callback only on an OS thread already executing Elamite code (direct/nested reentry); reentrant callbacks on that thread are allowed; foreign-created-thread or concurrent invocation is UB; broader threading is deferred to [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution) | M17 (enforce where checkable) + I-015 gate | — | integration, doc |
-| Recoverable Elamite errors don't cross the ABI automatically (wrapper translates to a status code/out-params); `errno`/foreign error channels are observed only through explicit wrapper ops; a trap during foreign code/callback terminates the process without unwinding through C; foreign unwinding (C++ exceptions, `longjmp`) across an Elamite frame is forbidden and is UB | M17 | trap path | integration (trap-in-callback termination) |
+| `@exportc("c_name")` gives an ABI-safe module-level function definition an exact unmangled link symbol without creating a separate function kind; any exact ordinary `&fn`/`&unsafe fn` can explicitly become a raw callback pointer | M17 (done) | — | C harness (`a_c_harness_calls_an_exported_elamite_function`), callback run-pass |
+| Foreign code may retain a callback pointer indefinitely; retained managed callback state passes through a raw context pointer backed by an open `ForeignRoot` registration; the callback recovers a reference only within `unsafe:`; the registration must stay open until both callback and context pointer are released per the foreign API's contract | M17 (done) | Boehm GC | integration (`a_foreign_callback_can_use_registered_managed_context`) |
+| Until concurrency is specified, C callback entry is supported only on the OS thread that initialized the runtime; direct/nested and later same-thread callbacks are allowed; foreign-created-thread/concurrent invocation is UB and is not generally compiler-detectable; broader threading is deferred to [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution) | M17 (documented) + I-015 gate | — | integration, doc |
+| Recoverable Elamite errors don't cross the ABI automatically (wrapper translates to a status code/out-params); `errno`/foreign error channels are observed only through explicit wrapper ops; a trap during foreign code/callback terminates the process without unwinding through C; foreign unwinding (C++ exceptions, `longjmp`) across an Elamite frame is forbidden and is UB | M17 (done) | trap path | integration/documentation |
 
 ## 11. Conformance example (§11)
 
@@ -408,7 +409,7 @@ Per `IMPL.md` Milestone 0, the initial supported-target assumptions:
 | Integer representations | Fixed-width types map to `stdint.h` types; `isize`/`usize` map to `intptr_t`/`uintptr_t` (§10.1) | fixed by spec |
 | C compiler requirement | **Decided: C99.** `stdint.h` fixed-width types and `stdbool.h` (§10.1, §4.1) are both available. The C backend (M8) and foreign declarations (M10.1) must not emit or require C11-only features (`_Static_assert`, `_Generic`, anonymous struct/union members) — tagged unions for enum lowering must be hand-rolled with a discriminant field rather than relying on C11 anonymous unions | fixed — M8/M10.1 must conform |
 | Boehm GC availability | Assumed available on Linux via a distro-provided Boehm GC development package (e.g. `libgc-dev` on Debian/Ubuntu-family systems), for both x86-64 and x86; the manifest's native-library/link-option mechanism (§2.3, §10.1) is the same path used to supply it | target OS/arch fixed above. **Decided (M10): the dependency is demand-driven** — `ManagedMemoryStrategy` contributes its native libraries, and the backend engages the collector prelude, entry-shim initialization, and link inputs only when lowering produced managed storage, so programs needing no managed storage keep a collector-free translation unit. System package vs. bundled build remains open |
-| Native library supply | Declared in `elamite.toml` (native libraries, link options); consumed without executing code (§2.3, §10.1) | fixed by spec, mechanism unbuilt |
+| Native library supply | Declared in `elamite.toml` (include/library paths, native libraries, link options); consumed without executing code (§2.3, §10.1) | implemented in M17 |
 
 ## 14. Command-level outcomes
 
@@ -477,11 +478,10 @@ Per `IMPL.md`:
   as a test-migration task.** There are no old implementation artifacts left
   to disagree (§0.1) — the prior Python/Lark implementation was deleted, not
   reconciled.
-- [x] **`I-017` can be closed without claiming the compiler is
-  implemented.** This ledger is that closure artifact; `ISSUES.md` is updated
-  accordingly. When these criteria were met no row claimed anything was built —
-  every row's status was "planned." Rows now reach "complete" only as their
-  owning milestone's status changes in `IMPL.md`; see §0.
+- [x] **The specification can be mapped without claiming the compiler is
+  implemented.** When these criteria were met no row claimed anything was
+  built—every row's status was "planned." Rows now reach "complete" only as
+  their owning milestone's status changes in `IMPL.md`; see §0.
 
 Both tooling gaps surfaced by this exercise are now decided (§13): the C
 compiler requirement is **C99**, and the supported OS/architecture matrix is
@@ -957,14 +957,13 @@ alongside "a binding reference observes reassignment" is impossible for a
 single contiguous cell, and the only resolution preserving one C representation
 for `&T` was to box every address-taken field into its own managed cell.
 
-That was rejected with the rule itself under
-[I-018](ISSUES.md#i-018-reference-target-model-for-nested-aggregates). Boxing
-would have made a nominal type's C layout depend on a whole-program analysis,
-and would have required M9's copy helpers to deep-copy through each box to
-preserve independence — a silent-aliasing failure mode, since a copy that
-duplicated the pointer would produce two values that are supposed to be
-independent but share a subvalue. The cost bought behavior that no C or Go
-programmer would predict.
+That rule was rejected in favor of the storage model specified by `SPEC.md`
+§3.2. Boxing would have made a nominal type's C layout depend on a
+whole-program analysis, and would have required M9's copy helpers to deep-copy
+through each box to preserve independence—a silent-aliasing failure mode,
+since a copy that duplicated the pointer would produce two values that are
+supposed to be independent but share a subvalue. The cost bought behavior that
+no C or Go programmer would predict.
 
 Two alternatives were considered and rejected on their own terms: *generation
 cells* (allocate a fresh cell per assignment, with binding references pointing

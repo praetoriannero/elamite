@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use lasso::{Rodeo, Spur};
 
 use crate::diagnostics::{Category, Diagnostic};
+use crate::ident::is_valid_identifier;
 use crate::lexer::{Keyword, Token, TokenKind, lex};
 use crate::package::{PackageGraph, PackageId};
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode, parse};
@@ -186,6 +187,21 @@ pub enum DeclarationKind {
     ForeignFunction,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignDirection {
+    Import,
+    Export,
+}
+
+/// Compiler-validated external naming metadata supplied by `@importc` or
+/// `@exportc`. The header is present only for imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignBinding {
+    pub direction: ForeignDirection,
+    pub c_name: String,
+    pub header: Option<String>,
+}
+
 /// One named declaration, including methods.
 #[derive(Debug)]
 pub struct Declaration {
@@ -200,6 +216,7 @@ pub struct Declaration {
     pub parent_impl: Option<ImplId>,
     pub generic_parameters: Vec<GenericParameterId>,
     pub externally_reachable: bool,
+    pub foreign_binding: Option<ForeignBinding>,
 }
 
 /// One `impl Trait for Type` block.
@@ -594,6 +611,7 @@ impl<'a> Resolver<'a> {
         self.parse_source_files();
         self.discover_inline_modules();
         self.collect_all_declarations();
+        self.check_exported_c_symbol_conflicts();
         self.register_standard_declarations();
         self.resolve_all_imports();
         self.resolve_all_declaration_contents();
@@ -979,24 +997,51 @@ impl<'a> Resolver<'a> {
             .map(|unit| (unit.module, unit.tree.clone()))
             .collect::<Vec<_>>();
         for (module, tree) in units {
-            self.collect_container(module, &tree, false);
+            self.collect_container(module, &tree);
         }
     }
 
-    fn collect_container(&mut self, module: ModuleId, container: &SyntaxNode, foreign: bool) {
+    fn check_exported_c_symbol_conflicts(&mut self) {
+        let exports = self
+            .program
+            .declarations
+            .iter()
+            .filter_map(|declaration| {
+                declaration
+                    .foreign_binding
+                    .as_ref()
+                    .filter(|binding| binding.direction == ForeignDirection::Export)
+                    .map(|binding| (binding.c_name.clone(), declaration.span))
+            })
+            .collect::<Vec<_>>();
+        let mut first_export = BTreeMap::new();
+        for (symbol, span) in exports {
+            if let Some(previous) = first_export.insert(symbol.clone(), span) {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        format!("C symbol `{symbol}` is exported more than once"),
+                    )
+                    .with_primary(span)
+                    .with_related(previous, "first export is here"),
+                );
+            }
+        }
+    }
+
+    fn collect_container(&mut self, module: ModuleId, container: &SyntaxNode) {
         for item in direct_item_nodes(container) {
             match item.kind {
                 SyntaxKind::Module | SyntaxKind::PassStatement | SyntaxKind::Error => {}
                 SyntaxKind::Import => self.collect_import(module, item),
                 SyntaxKind::Impl => self.collect_impl(module, item),
-                SyntaxKind::ExternBlock => self.collect_container(module, item, true),
                 SyntaxKind::TypeAlias
                 | SyntaxKind::Struct
                 | SyntaxKind::Enum
                 | SyntaxKind::Trait
                 | SyntaxKind::Function
                 | SyntaxKind::ForeignType => {
-                    self.collect_named_declaration(module, item, foreign, None, None);
+                    self.collect_named_declaration(module, item, false, None, None);
                 }
                 _ => {}
             }
@@ -1066,6 +1111,10 @@ impl<'a> Resolver<'a> {
         parent_declaration: Option<DeclarationId>,
         parent_impl: Option<ImplId>,
     ) -> Option<DeclarationId> {
+        let foreign_binding = self.foreign_binding(node, parent_declaration, parent_impl);
+        let imported = foreign_binding
+            .as_ref()
+            .is_some_and(|binding| binding.direction == ForeignDirection::Import);
         let keyword = match node.kind {
             SyntaxKind::TypeAlias | SyntaxKind::ForeignType => Keyword::Type,
             SyntaxKind::Struct => Keyword::Struct,
@@ -1076,6 +1125,7 @@ impl<'a> Resolver<'a> {
         };
         let (name_text, span) = declaration_name(node, keyword)?;
         let name = self.intern(&name_text);
+        let foreign = foreign || imported;
         let kind = match (node.kind, foreign) {
             (SyntaxKind::TypeAlias, _) => DeclarationKind::TypeAlias,
             (SyntaxKind::ForeignType, _) => DeclarationKind::ForeignType,
@@ -1100,6 +1150,7 @@ impl<'a> Resolver<'a> {
             parent_impl,
             generic_parameters: Vec::new(),
             externally_reachable: false,
+            foreign_binding,
         });
         self.program.declaration_members.entry(id).or_default();
         if parent_declaration.is_none() && parent_impl.is_none() {
@@ -1114,13 +1165,159 @@ impl<'a> Resolver<'a> {
         self.collect_generic_parameters(id, node);
         match kind {
             DeclarationKind::Struct | DeclarationKind::ForeignStruct => {
-                self.collect_struct_members(id, foreign)
+                self.collect_struct_members(id, kind == DeclarationKind::ForeignStruct)
             }
             DeclarationKind::Enum => self.collect_enum_variants(id),
             DeclarationKind::Trait => self.collect_trait_methods(id),
             _ => {}
         }
         Some(id)
+    }
+
+    fn foreign_binding(
+        &mut self,
+        node: &SyntaxNode,
+        parent_declaration: Option<DeclarationId>,
+        parent_impl: Option<ImplId>,
+    ) -> Option<ForeignBinding> {
+        let attributes = direct_children_of_kind(node, SyntaxKind::Attribute);
+        let mut binding = None;
+        for attribute in attributes {
+            let tokens = attribute
+                .children
+                .iter()
+                .filter_map(|child| match child {
+                    SyntaxElement::Token(token) => Some(token),
+                    SyntaxElement::Node(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let name = tokens.iter().find_map(|token| match &token.kind {
+                TokenKind::Identifier(name) => Some(name.as_str()),
+                _ => None,
+            });
+            let arguments = tokens
+                .iter()
+                .filter_map(|token| match &token.kind {
+                    TokenKind::StringLiteral(value) => Some(value.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let (direction, expected) = match name {
+                Some("importc") => (ForeignDirection::Import, 2usize),
+                Some("exportc") => (ForeignDirection::Export, 1usize),
+                Some(other) => {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::DeclarationConflict,
+                            format!("unknown compiler attribute `@{other}`"),
+                        )
+                        .with_primary(attribute.span),
+                    );
+                    continue;
+                }
+                None => continue,
+            };
+            if binding.is_some() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        "a declaration can have only one FFI attribute",
+                    )
+                    .with_primary(attribute.span),
+                );
+                continue;
+            }
+            if arguments.len() != expected {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        if direction == ForeignDirection::Import {
+                            "`@importc` requires a C name and header"
+                        } else {
+                            "`@exportc` requires one C symbol name"
+                        },
+                    )
+                    .with_primary(attribute.span),
+                );
+                continue;
+            }
+            if parent_declaration.is_some() || parent_impl.is_some() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        "FFI attributes are permitted only on module-level declarations",
+                    )
+                    .with_primary(attribute.span),
+                );
+                continue;
+            }
+            let item_allowed = match direction {
+                ForeignDirection::Import => matches!(
+                    node.kind,
+                    SyntaxKind::ForeignType | SyntaxKind::Struct | SyntaxKind::Function
+                ),
+                ForeignDirection::Export => node.kind == SyntaxKind::Function,
+            };
+            if !item_allowed {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        match direction {
+                            ForeignDirection::Import => {
+                                "`@importc` applies only to a type, struct, or bodyless function"
+                            }
+                            ForeignDirection::Export => {
+                                "`@exportc` applies only to a function definition"
+                            }
+                        },
+                    )
+                    .with_primary(attribute.span),
+                );
+                continue;
+            }
+            let c_name = &arguments[0];
+            let valid_c_name = if node.kind == SyntaxKind::Function {
+                is_valid_identifier(c_name)
+            } else {
+                is_valid_identifier(c_name)
+                    || c_name
+                        .strip_prefix("struct ")
+                        .is_some_and(is_valid_identifier)
+            };
+            if !valid_c_name {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        "the imported C spelling is not a supported identifier or struct tag",
+                    )
+                    .with_primary(attribute.span),
+                );
+                continue;
+            }
+            let header = (direction == ForeignDirection::Import).then(|| arguments[1].clone());
+            if header.as_ref().is_some_and(|header| {
+                header.is_empty()
+                    || !header.chars().all(|character| {
+                        character.is_ascii_alphanumeric()
+                            || matches!(character, '_' | '-' | '.' | '/')
+                    })
+            }) {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        "a C header name may contain only ASCII path characters",
+                    )
+                    .with_primary(attribute.span),
+                );
+                continue;
+            }
+            binding = Some(ForeignBinding {
+                direction,
+                c_name: c_name.clone(),
+                header,
+            });
+        }
+        binding
     }
 
     fn collect_generic_parameters(&mut self, declaration: DeclarationId, node: &SyntaxNode) {
@@ -1188,6 +1385,16 @@ impl<'a> Resolver<'a> {
                 }
                 SyntaxKind::Function => {
                     saw_method = true;
+                    if foreign {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::DeclarationConflict,
+                                "an imported C struct cannot contain methods",
+                            )
+                            .with_primary(member.span),
+                        );
+                        continue;
+                    }
                     if let Some(id) =
                         self.collect_named_declaration(module, member, false, Some(parent), None)
                     {
@@ -2817,7 +3024,7 @@ impl<'a> Resolver<'a> {
 }
 
 fn direct_item_nodes(node: &SyntaxNode) -> Vec<&SyntaxNode> {
-    let container = if matches!(node.kind, SyntaxKind::Module | SyntaxKind::ExternBlock) {
+    let container = if node.kind == SyntaxKind::Module {
         node.children.iter().find_map(|child| match child {
             SyntaxElement::Node(child) if child.kind == SyntaxKind::Block => Some(child.as_ref()),
             _ => None,
@@ -2869,6 +3076,16 @@ fn child_nodes_of_kind(node: &SyntaxNode, kind: SyntaxKind) -> Vec<&SyntaxNode> 
     let mut output = Vec::new();
     walk(node, kind, &mut output);
     output
+}
+
+fn direct_children_of_kind(node: &SyntaxNode, kind: SyntaxKind) -> Vec<&SyntaxNode> {
+    node.children
+        .iter()
+        .filter_map(|child| match child {
+            SyntaxElement::Node(child) if child.kind == kind => Some(child.as_ref()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn generic_parameter_nodes(node: &SyntaxNode) -> Vec<&SyntaxNode> {

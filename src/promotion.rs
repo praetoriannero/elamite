@@ -8,11 +8,9 @@
 //! address taken — and is deliberately conservative, per `IMPL.md` Milestone
 //! 10: every such local is promoted, with precise escape analysis left to
 //! Milestone 20. Because references point into their container's storage
-//! rather than at a boxed subvalue ([`I-018`]), taking a reference through a
-//! path promotes the *root* local of that path and nothing else; no
+//! rather than at a boxed subvalue (`SPEC.md` §3.2), taking a reference through
+//! a path promotes the *root* local of that path and nothing else; no
 //! whole-program field analysis is involved.
-//!
-//! [`I-018`]: ../../ISSUES.md
 
 use std::collections::BTreeSet;
 

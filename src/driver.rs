@@ -205,6 +205,14 @@ pub fn build(
     if root.manifest.target_kind == TargetKind::Library {
         command.arg("-c");
     }
+    for package in graph.packages.values() {
+        for path in &package.manifest.include_paths {
+            command.arg("-I").arg(package.manifest_dir.join(path));
+        }
+        for path in &package.manifest.library_paths {
+            command.arg("-L").arg(package.manifest_dir.join(path));
+        }
+    }
     command.arg(&c_path).arg("-o").arg(&artifact_path);
     if root.manifest.target_kind == TargetKind::Executable {
         for package in graph.packages.values() {

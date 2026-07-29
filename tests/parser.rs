@@ -102,12 +102,16 @@ impl[T: Show] Show[T] for Pair[T]:
     fn show(self: &Self, value: &T) -> str:
         return "pair"
 
-extern "C":
-    type Handle
-    struct CPoint:
-        x: f64
-        y: f64
-    fn open(callback: extern "C" fn(*u8) -> i32) -> *var Handle
+@importc("native_handle_t", "native.h")
+type Handle
+
+@importc("point_t", "native.h")
+struct CPoint:
+    x: f64
+    y: f64
+
+@importc("open", "native.h")
+fn open(callback: *fn(*u8) -> i32) -> *var Handle
 "#;
     let (sources, output) = parse_text(source);
     assert!(
@@ -173,7 +177,8 @@ fn parses_each_initial_type_form() {
         "*var i32",
         "&fn(i32) -> bool",
         "&unsafe fn(*i32) -> &i32",
-        "extern \"C\" fn(*u8) -> i32",
+        "*fn(*u8) -> i32",
+        "*unsafe fn(*u8) -> i32",
         "&Display",
     ];
 
@@ -345,13 +350,8 @@ fn reports_required_invalid_surface_forms_at_source_spans() {
         ),
         (
             "foreign function body",
-            "extern \"C\":\n    fn bad():\n        pass\n",
+            "@importc(\"bad\", \"bad.h\")\nfn bad():\n    pass\n",
             "foreign function declaration cannot have a body",
-        ),
-        (
-            "foreign struct method",
-            "extern \"C\":\n    struct Bad:\n        fn method():\n            pass\n",
-            "foreign struct can contain only fields",
         ),
         (
             "anonymous function expression",
@@ -398,10 +398,12 @@ fn parses_module_level_function_modifiers() {
 unsafe pub fn checked_by_caller():
     pass
 
-extern "C" fn exported_callback(value: i32) -> i32:
+@exportc("exported_callback")
+fn exported_callback(value: i32) -> i32:
     return value
 
-unsafe extern "C" fn unsafe_export(value: *i32) -> i32:
+@exportc("unsafe_export")
+unsafe fn unsafe_export(value: *i32) -> i32:
     unsafe:
         return *value
 "#;
@@ -426,8 +428,6 @@ trait Marker:
     pass
 impl Marker for Empty:
     pass
-extern "C":
-    pass
 "#;
     let (sources, output) = parse_text(source);
     assert!(
@@ -435,7 +435,7 @@ extern "C":
         "{}",
         diagnostics(&sources, &output.diagnostics)
     );
-    assert_eq!(output.tree.count(SyntaxKind::PassStatement), 6);
+    assert_eq!(output.tree.count(SyntaxKind::PassStatement), 5);
 }
 
 #[test]

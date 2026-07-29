@@ -163,6 +163,9 @@ pub enum CheckedCall {
 pub enum StandardCall {
     StringFrom,
     IdentityFrom { wrapper: TypeId },
+    ForeignRootRetain { handle: TypeId, mutable: bool },
+    ForeignRootPointer { handle: TypeId, mutable: bool },
+    ForeignRootClose { handle: TypeId },
     FormatterWrite { formatter: TypeId },
     ArrayLen { collection: TypeId },
     ArrayGet { collection: TypeId },
@@ -1907,10 +1910,20 @@ impl<'a> Checker<'a> {
             parameters,
             return_type,
         });
-        self.typed.types.intern(TypeKind::Reference {
-            mutability: Mutability::Shared,
-            target: function,
-        })
+        let kind = if self.resolved.declarations[instance.declaration.index()].kind
+            == DeclarationKind::ForeignFunction
+        {
+            TypeKind::RawPointer {
+                mutability: Mutability::Shared,
+                target: function,
+            }
+        } else {
+            TypeKind::Reference {
+                mutability: Mutability::Shared,
+                target: function,
+            }
+        };
+        self.typed.types.intern(kind)
     }
 
     fn callable_parameters(&self, declaration: DeclarationId) -> Vec<GenericParameterId> {
@@ -2620,6 +2633,10 @@ impl<'a> Checker<'a> {
                     identity,
                     arguments,
                 } => (identity.declaration, arguments, base_place),
+                TypeKind::Foreign {
+                    identity,
+                    complete: true,
+                } => (identity.declaration, Vec::new(), base_place),
                 TypeKind::Reference { mutability, target } => {
                     let target = self.typed.types.resolve_inference(target);
                     match self.typed.types.kind(target).clone() {
@@ -2633,6 +2650,17 @@ impl<'a> Checker<'a> {
                                 PlaceKind::Addressable
                             };
                             (identity.declaration, arguments, place)
+                        }
+                        TypeKind::Foreign {
+                            identity,
+                            complete: true,
+                        } => {
+                            let place = if mutability == Mutability::Mutable {
+                                PlaceKind::Mutable
+                            } else {
+                                PlaceKind::Addressable
+                            };
+                            (identity.declaration, Vec::new(), place)
                         }
                         _ => return (self.typed.types.error(), PlaceKind::Value),
                     }
@@ -3294,6 +3322,29 @@ impl<'a> Checker<'a> {
                     target: target_target,
                 },
             ) => {
+                let source_function = matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(source_target)),
+                    TypeKind::Function { .. }
+                );
+                let target_function = matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(target_target)),
+                    TypeKind::Function { .. }
+                );
+                if source_function != target_function {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "raw function pointers and raw data pointers cannot be converted \
+                             between one another",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
                 // No cast may upgrade `*T` to any `*var U`.
                 if target_mutability == Mutability::Mutable
                     && source_mutability == Mutability::Shared
@@ -3532,6 +3583,16 @@ impl<'a> Checker<'a> {
         let mut ty = self.typed.types.resolve_inference(ty);
         loop {
             match self.typed.types.kind(ty) {
+                TypeKind::RawPointer { target, .. }
+                    if matches!(
+                        self.typed
+                            .types
+                            .kind(self.typed.types.resolve_inference(*target)),
+                        TypeKind::Function { .. }
+                    ) =>
+                {
+                    return true;
+                }
                 TypeKind::Alias { target, .. } | TypeKind::Reference { target, .. } => {
                     ty = self.typed.types.resolve_inference(*target);
                 }
@@ -4175,6 +4236,40 @@ impl<'a> Checker<'a> {
             return Some((wrapper, PlaceKind::Value));
         }
 
+        if member_name == "retain"
+            && let Some(handle) = self.type_from_expression(base)
+            && let TypeKind::Builtin {
+                builtin,
+                arguments: type_arguments,
+            } = self.typed.types.kind(handle).clone()
+            && matches!(
+                self.resolved.builtin_name(builtin),
+                "ForeignRoot" | "ForeignRootMut"
+            )
+            && let [target] = type_arguments.as_slice()
+        {
+            let mutable = self.resolved.builtin_name(builtin) == "ForeignRootMut";
+            let reference = self.typed.types.intern(TypeKind::Reference {
+                mutability: if mutable {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Shared
+                },
+                target: *target,
+            });
+            self.check_standard_arguments(
+                call_span,
+                &format!("{}.retain", self.resolved.builtin_name(builtin)),
+                arguments,
+                &[reference],
+            );
+            self.program.calls.insert(
+                call_span,
+                CheckedCall::Standard(StandardCall::ForeignRootRetain { handle, mutable }),
+            );
+            return Some((handle, PlaceKind::Value));
+        }
+
         // Empty collection constructors are associated functions. Their
         // element types come from explicit generic arguments or from the
         // expected result type.
@@ -4777,6 +4872,42 @@ impl<'a> Checker<'a> {
                     name,
                     arguments.as_slice(),
                 ) {
+                    ("ForeignRoot", "pointer", [target]) => {
+                        let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Shared,
+                            target: *target,
+                        });
+                        Some((
+                            StandardCall::ForeignRootPointer {
+                                handle: receiver,
+                                mutable: false,
+                            },
+                            Vec::new(),
+                            pointer,
+                            false,
+                        ))
+                    }
+                    ("ForeignRootMut", "pointer", [target]) => {
+                        let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Mutable,
+                            target: *target,
+                        });
+                        Some((
+                            StandardCall::ForeignRootPointer {
+                                handle: receiver,
+                                mutable: true,
+                            },
+                            Vec::new(),
+                            pointer,
+                            false,
+                        ))
+                    }
+                    ("ForeignRoot" | "ForeignRootMut", "close", [_]) => Some((
+                        StandardCall::ForeignRootClose { handle: receiver },
+                        Vec::new(),
+                        unit_type,
+                        false,
+                    )),
                     ("Vec", "len", [_]) => Some((
                         StandardCall::VecLen {
                             collection: receiver,
@@ -5060,7 +5191,9 @@ impl<'a> Checker<'a> {
     fn function_value_signature(&self, ty: TypeId) -> Option<(Vec<FunctionParameter>, TypeId)> {
         let ty = self.typed.types.resolve_inference(ty);
         let target = match self.typed.types.kind(ty) {
-            TypeKind::Reference { target, .. } => self.typed.types.resolve_inference(*target),
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                self.typed.types.resolve_inference(*target)
+            }
             TypeKind::Alias { target, .. } => {
                 return self.function_value_signature(*target);
             }
@@ -5859,9 +5992,7 @@ impl<'a> Checker<'a> {
                 Some(child)
                     if matches!(
                         types::direct_tokens(child).first().map(|token| &token.kind),
-                        Some(TokenKind::Keyword(
-                            Keyword::Fn | Keyword::Unsafe | Keyword::Extern
-                        ))
+                        Some(TokenKind::Keyword(Keyword::Fn | Keyword::Unsafe))
                     ) =>
                 {
                     self.lower_function_type_annotation(child)
@@ -5905,12 +6036,11 @@ impl<'a> Checker<'a> {
             } else {
                 Mutability::Shared
             };
-            if !raw && mutable && matches!(self.typed.types.kind(target), TypeKind::Function { .. })
-            {
+            if mutable && matches!(self.typed.types.kind(target), TypeKind::Function { .. }) {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::TypeSystem,
-                        "function references cannot be mutable",
+                        "function pointers and references cannot be mutable",
                     )
                     .with_primary(node.span),
                 );
@@ -5924,9 +6054,7 @@ impl<'a> Checker<'a> {
         }
         if matches!(
             first,
-            Some(TokenKind::Keyword(
-                Keyword::Fn | Keyword::Unsafe | Keyword::Extern
-            ))
+            Some(TokenKind::Keyword(Keyword::Fn | Keyword::Unsafe))
         ) {
             self.diagnostics.push(
                 Diagnostic::new(
@@ -6041,14 +6169,7 @@ impl<'a> Checker<'a> {
         } else {
             Safety::Safe
         };
-        let abi = if tokens
-            .iter()
-            .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Extern)))
-        {
-            Abi::C
-        } else {
-            Abi::Elamite
-        };
+        let abi = Abi::Elamite;
         let type_nodes = types::direct_children(node, SyntaxKind::Type);
         let return_type = match type_nodes.last() {
             Some(result) => self.lower_type(result),

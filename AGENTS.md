@@ -86,12 +86,17 @@ Append new entries to `ISSUES.md`; use `I-X.Y` for a sub-issue related to
 `I-X`. Do not implement or change surface grammar while its design review is
 active.
 
-The language uses a **minimal function model**: function values are safe or
-unsafe function references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), with no
-closures, no anonymous `fn` literals, no capture, and no `move`. Callbacks that
-carry data use `&Trait`, formed automatically from a concrete safe reference
-when that exact trait-object type is expected (or explicitly with `as &Trait`),
-and recursion uses named functions. Keep `SPEC.md`,
+The language uses a **minimal function model**: safe function values are
+references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), and their general raw
+counterparts are `*fn(P) -> R` and `*unsafe fn(P) -> R`. Both are directly
+callable; every raw-function call requires `unsafe:` and a runtime null check.
+Exact function references may explicitly convert to matching raw function
+pointers, but function and data pointer domains never cast between each other.
+There are no closures, anonymous `fn` literals, captures, or `move`. Ordinary
+stateful Elamite callbacks use `&Trait`, formed automatically from a concrete
+safe reference when that exact trait-object type is expected (or explicitly
+with `as &Trait`); C callbacks carry registered state through a separate raw
+context pointer. Recursion uses named functions. Keep `SPEC.md`,
 `examples/spec_demo.elx`, and `ISSUES.md` consistent with this direction, and
 do not reintroduce closures, capture, anonymous function literals, or `move`
 unless the design decision is explicitly reopened. When this direction

@@ -80,8 +80,11 @@ pub fn logical_copy_strategy(types: &TypeContext, mut ty: TypeId) -> LogicalCopy
             | TypeKind::Function { .. }
             | TypeKind::TraitObject { .. }
             | TypeKind::Slice(_) => LogicalCopyStrategy::PreserveIdentity,
+            TypeKind::Foreign { complete: true, .. } => LogicalCopyStrategy::Trivial,
             TypeKind::Builtin { .. }
-            | TypeKind::Foreign { .. }
+            | TypeKind::Foreign {
+                complete: false, ..
+            }
             | TypeKind::GenericParameter(_)
             | TypeKind::SelfType(_)
             | TypeKind::InferenceVariable(_)
@@ -1418,7 +1421,11 @@ impl<'a> TypedLowerer<'a> {
             });
         }
         let declaration = match self.expanded_kind(expected) {
-            TypeKind::Nominal { identity, .. } => identity.declaration,
+            TypeKind::Nominal { identity, .. }
+            | TypeKind::Foreign {
+                identity,
+                complete: true,
+            } => identity.declaration,
             _ => return None,
         };
         let required = self
@@ -1918,6 +1925,7 @@ impl<'a> TypedLowerer<'a> {
                     operation,
                     StandardCall::StringFrom
                         | StandardCall::IdentityFrom { .. }
+                        | StandardCall::ForeignRootRetain { .. }
                         | StandardCall::VecNew { .. }
                         | StandardCall::MapNew { .. }
                         | StandardCall::SetNew { .. }
@@ -2017,7 +2025,9 @@ impl<'a> TypedLowerer<'a> {
     fn function_parameters(&self, ty: TypeId) -> Option<Vec<crate::types::FunctionParameter>> {
         let ty = self.typed.types.resolve_inference(ty);
         let target = match self.typed.types.kind(ty) {
-            TypeKind::Reference { target, .. } => self.typed.types.resolve_inference(*target),
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                self.typed.types.resolve_inference(*target)
+            }
             TypeKind::Alias { target, .. } => return self.function_parameters(*target),
             _ => return None,
         };
@@ -2109,15 +2119,21 @@ impl<'a> TypedLowerer<'a> {
             let template = self.checked.expression_types.get(&node.span).copied()?;
             let ty = self.concrete_type(template);
             match self.expanded_kind(ty) {
-                TypeKind::Nominal { identity, .. } => identity.declaration,
+                TypeKind::Nominal { identity, .. }
+                | TypeKind::Foreign {
+                    identity,
+                    complete: true,
+                } => identity.declaration,
                 _ => {
                     self.unsupported(node.span, "a non-struct record construction");
                     return None;
                 }
             }
         };
-        if self.resolved.declarations[declaration.index()].kind != DeclarationKind::Struct
-            && enum_variant.is_none()
+        if !matches!(
+            self.resolved.declarations[declaration.index()].kind,
+            DeclarationKind::Struct | DeclarationKind::ForeignStruct
+        ) && enum_variant.is_none()
         {
             self.unsupported(node.span, "a non-record construction");
             return None;
@@ -2372,9 +2388,17 @@ impl<'a> TypedLowerer<'a> {
     /// reference: reference field access automatically dereferences (SPEC 3.2).
     fn field_owner(&self, base_type: TypeId) -> Option<DeclarationId> {
         match self.expanded_kind(base_type) {
-            TypeKind::Nominal { identity, .. } => Some(identity.declaration),
+            TypeKind::Nominal { identity, .. }
+            | TypeKind::Foreign {
+                identity,
+                complete: true,
+            } => Some(identity.declaration),
             TypeKind::Reference { target, .. } => match self.expanded_kind(*target) {
-                TypeKind::Nominal { identity, .. } => Some(identity.declaration),
+                TypeKind::Nominal { identity, .. }
+                | TypeKind::Foreign {
+                    identity,
+                    complete: true,
+                } => Some(identity.declaration),
                 _ => None,
             },
             _ => None,
@@ -2624,6 +2648,13 @@ pub enum Instruction {
     CheckPointer {
         pointer: TemporaryId,
         pointee: TypeId,
+        span: Span,
+    },
+    /// A direct call through `*fn`: null is checked before invocation. Other
+    /// target validity and signature obligations are asserted by the unsafe
+    /// call site.
+    CheckFunctionPointer {
+        pointer: TemporaryId,
         span: Span,
     },
     Store {
@@ -3608,7 +3639,21 @@ impl<'a> FunctionLowerer<'a> {
                 callee: TypedCallee::Indirect(callee),
                 arguments,
             } => {
+                let raw = matches!(
+                    expanded_kind(&self.types.types, callee.ty),
+                    TypeKind::RawPointer { target, .. }
+                        if matches!(
+                            expanded_kind(&self.types.types, *target),
+                            TypeKind::Function { .. }
+                        )
+                );
                 let callee = self.lower_expression(callee);
+                if raw {
+                    self.emit(Instruction::CheckFunctionPointer {
+                        pointer: callee,
+                        span: expression.span,
+                    });
+                }
                 let arguments = arguments
                     .iter()
                     .map(|argument| self.lower_expression(argument))

@@ -127,7 +127,7 @@ fn taken() -> ():
 
 #[test]
 fn a_reference_through_a_path_promotes_the_root_local() {
-    // I-018: a reference points into its container's storage, so the whole
+    // SPEC 3.2: a reference points into its container's storage, so the whole
     // container is promoted rather than one boxed field.
     let source = r#"
 struct Address:

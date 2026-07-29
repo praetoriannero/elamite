@@ -31,7 +31,7 @@ Elamite source files are UTF-8 text. An identifier begins with an ASCII letter
 or `_` and continues with ASCII letters, decimal digits, or `_`; equivalently,
 it matches `[A-Za-z_][A-Za-z0-9_]*`. Keywords are reserved and cannot be used
 as identifiers. The reserved keywords are `as`, `break`, `continue`, `defer`,
-`else`, `enum`, `extern`, `false`, `fn`, `for`, `if`, `impl`, `import`, `in`,
+`else`, `enum`, `false`, `fn`, `for`, `if`, `impl`, `import`, `in`,
 `let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`, `Self`,
 `struct`, `super`, `trait`, `true`, `type`, `unsafe`, `var`, and `while`.
 Unicode text remains valid in comments, documentation, and string or character
@@ -62,8 +62,8 @@ indentation level. The body ends at the next dedent. Dedentation must return to
 a previously established block indentation level. EOF closes every remaining
 open block.
 
-This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `extern`,
-`if`, `else`, `match`, `for`, `while`, `unsafe`, and function
+This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `if`,
+`else`, `match`, `for`, `while`, `unsafe`, and function
 declarations with bodies. Brace-delimited bodies and same-line bodies are
 invalid everywhere. An empty body is also invalid; `pass` is the explicit
 no-op statement when a body must otherwise be empty.
@@ -929,6 +929,29 @@ let bump: &fn(i32) -> i32 = increment
 println(f"{bump(41)}") // 42
 ~~~
 
+The corresponding general raw function-pointer types are
+`*fn(Parameters) -> Return` and `*unsafe fn(Parameters) -> Return`. They are
+not specific to C: they are the raw, nullable counterpart of Elamite function
+references and may be stored or passed anywhere an ordinary raw pointer may be
+used. There is no `*var fn` form because code is not writable. An exact `&fn`
+or `&unsafe fn` may be explicitly converted to its matching `*fn` or
+`*unsafe fn`. Function-pointer and data-pointer domains are distinct; casts
+between them are invalid.
+
+Both reference and raw function values use ordinary call syntax and are
+automatically dereferenced for the call. Calling any raw function pointer
+requires `unsafe:`, even when its target signature is safe, because the caller
+must establish that the pointer is non-null, valid, and names a function with
+the exact signature. An executed null raw-function call traps before
+invocation. The `unsafe` marker in `*unsafe fn` additionally records
+preconditions imposed by the target function itself.
+
+~~~elx
+let raw: *fn(i32) -> i32 = bump as *fn(i32) -> i32
+unsafe:
+    println(raw(41))
+~~~
+
 Referencing a function or unbound method declared `unsafe` instead produces an
 `&unsafe fn` value. Taking, storing, copying, passing, returning, or comparing
 that reference is safe because none of those operations invokes its target.
@@ -1495,22 +1518,47 @@ specified in Section 3.3.
 
 ### 10.1 Foreign declarations and ABI types
 
-The initial foreign-function interface supports the C ABI only. A module-level
-`extern "C":` block contains bodyless imported function declarations, opaque
-foreign types, and foreign struct declarations. Imported function identifiers
-name the exact unmangled C symbols. Native libraries and link options are
-declared in `elamite.toml`; executing an import has no runtime effect.
+The initial foreign-function interface supports only C's platform ABI. It uses
+compiler-defined item attributes rather than an `extern` block or an ABI
+modifier in the function grammar:
 
 ~~~elx
-extern "C":
-    type FileHandle
+@importc("FILE", "stdio.h")
+type FileHandle
 
-    struct CPoint:
-        x: f64
-        y: f64
+@importc("div_t", "stdlib.h")
+struct CDiv:
+    quot: i32
+    rem: i32
 
-    fn open_file(path: *u8, mode: *u8) -> *var FileHandle
-    fn close_file(file: *var FileHandle) -> i32
+@importc("fopen", "stdio.h")
+fn open_file(path: *u8, mode: *u8) -> *var FileHandle
+
+@importc("fclose", "stdio.h")
+fn close_file(file: *var FileHandle) -> i32
+~~~
+
+`@importc("c_name", "header.h")` is valid only on a module-level bodyless
+function, opaque bodyless type, or struct. Its first string is the exact C
+symbol or type spelling used by generated C; a foreign type may name either a
+typedef identifier or a `struct tag`. Its second string names the authoritative
+C header, which generated C includes. The local Elamite declaration name may
+differ from the C name. Attribute arguments are string literals, and a header
+name is restricted to portable ASCII path characters. Importing a declaration
+has no runtime initialization effect.
+
+The header remains authoritative for C layout and declarations: the backend
+does not emit a competing definition. The Elamite declaration is the type
+checker's view of that contract. Header search paths, library search paths,
+native libraries, and final link options are declared under `[native]` in
+`elamite.toml`:
+
+~~~toml
+[native]
+include_paths = ["native/include"]
+library_paths = ["native/lib"]
+libraries = ["example"]
+link_options = ["-pthread"]
 ~~~
 
 An opaque foreign type has unknown size and alignment and may be used only
@@ -1523,14 +1571,16 @@ matching the C header exactly. A mismatched foreign declaration is an unsafe
 contract violation and causes undefined behavior when used across the boundary.
 
 The ABI-safe scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`,
-`u64`, `isize`, `usize`, `f32`, and `f64`. Raw pointers, foreign structs made
-recursively from ABI-safe fields, and `extern "C" fn` pointers with ABI-safe
-signatures are also ABI-safe. Unit `()` is permitted only as a function return
-and is lowered to C `void`. The fixed-width integer types use the corresponding
-`stdint.h` ABI types; `isize` and `usize` use `intptr_t` and `uintptr_t`.
-The compiler-known opaque type `std.ffi.CVoid` may be used only behind a raw
-pointer and corresponds to C `void`; unsafe raw-pointer casts to and from
-`*CVoid` or `*var CVoid` preserve provenance under Section 3.3.
+`u64`, `isize`, `usize`, `f32`, and `f64`. Raw data pointers, foreign structs
+made recursively from ABI-safe fields, and raw `*fn` or `*unsafe fn` pointers
+whose parameters and result are ABI-safe are also ABI-safe. A bare function
+type or safe function reference is not. Unit `()` is permitted only as a
+function return and is lowered to C `void`. The fixed-width integer types use
+the corresponding `stdint.h` ABI types; `isize` and `usize` use `intptr_t` and
+`uintptr_t`. The compiler-known opaque type `std.ffi.CVoid` may be used only
+behind a raw pointer and corresponds to C `void`; unsafe raw-pointer casts to
+and from `*std.ffi.CVoid` or `*var std.ffi.CVoid` preserve provenance under
+Section 3.3.
 
 `bool`, `char`, `str`, `String`, safe references, function references, tuples,
 arrays, ordinary structs and enums, trait objects, and standard collections are
@@ -1542,9 +1592,9 @@ the backing storage for as long as foreign code may access it.
 
 Every imported foreign function is unsafe to call, including one whose
 signature contains only scalars. Its declaration has no body, cannot use
-Elamite's homogeneous variadic parameter syntax, and has an
-`unsafe extern "C" fn` function type. C variadic functions are not supported in
-the initial interface. Each raw-pointer parameter and result must have a
+Elamite's homogeneous variadic parameter syntax, and its value has the
+corresponding raw function-pointer type. C variadic functions are not supported
+in the initial interface. Each raw-pointer parameter and result must have a
 documented foreign contract covering nullability, readable or writable extent,
 alignment, pointee initialization and type, whether the pointer is retained,
 and what event ends its validity. The compiler does not infer those facts from
@@ -1574,9 +1624,9 @@ target when necessary and create a runtime root registration. Their `pointer`
 methods return `*T` and `*var T`, respectively. Copies of a foreign-root handle
 share one registration, represented by explicit shared state. Their `close()`
 method is idempotent, and closing any copy unregisters the root. Calling
-`pointer` on a closed handle returns an appropriate closed-handle error. If
-every handle becomes unreachable without being closed, the registration and
-target may leak; garbage collection never unregisters it.
+`pointer()` on a closed handle traps with `E-RUN-CLOSED`. If every handle
+becomes unreachable without being closed, the registration and target may
+leak; garbage collection never unregisters it.
 
 Closing a registration is valid only after the foreign contract says that no
 later access will occur. Once it is closed, some other strong path may happen
@@ -1588,33 +1638,38 @@ safe reference does not extend a foreign lifetime.
 
 ### 10.3 Callbacks and foreign control flow
 
-A module-level function definition may use `extern "C" fn` to emit an unmangled
-C-callable function with an ABI-safe signature. It has a stable address for the
-process lifetime. A function that requires its foreign caller to uphold
-additional preconditions is declared `unsafe extern "C" fn`; its body still
-requires explicit `unsafe:` blocks for unsafe-only operations. Ordinary Elamite
-functions and function references cannot convert to C function pointers.
+A module-level function definition may use `@exportc("c_name")` to emit its
+definition under that exact unmangled C symbol. Its signature must be ABI-safe
+and its address is stable for the process lifetime. `@exportc` changes only
+external naming and ABI validation: the declaration remains an ordinary safe
+or unsafe named Elamite function, and an unsafe function body still requires
+explicit `unsafe:` blocks for unsafe-only operations.
 
 ~~~elx
-unsafe extern "C" fn visit_value(context: *var i32) -> i32:
+@exportc("visit_value")
+unsafe fn visit_value(context: *var i32) -> i32:
     unsafe:
         let value: &var i32 = context as &var i32
         *value = *value + 1
         return *value
 ~~~
 
-Foreign code may retain such a function pointer indefinitely. Retained managed
-callback state is passed separately through a raw context pointer backed by an
-open foreign-root registration. The callback function is responsible for
-recovering a reference only within an `unsafe:` block, and the registration
-must remain open until both the callback and context pointer have been released
-under the foreign API's contract.
+Any named function with an ABI-safe signature can serve as a C callback by
+explicitly converting its exact `&fn` or `&unsafe fn` reference to a matching
+raw function pointer. `@exportc` is needed only when C must link to a stable
+symbol by name. Foreign code may retain either address for the process lifetime.
+Retained managed callback state is passed separately through a raw context
+pointer backed by an open foreign-root registration. The callback function is
+responsible for recovering a reference only within an `unsafe:` block, and the
+registration must remain open until both callback and context pointer have
+been released under the foreign API's contract.
 
-Until concurrency is specified, C may invoke an Elamite callback only on an OS
-thread that is already executing Elamite code, normally as a direct or nested
-callback during an Elamite-to-C call. Reentrant callbacks on that thread are
-allowed. Invocation on a foreign-created thread or concurrently with Elamite
-execution is undefined behavior. Broader callback threading follows
+Until concurrency is specified, C may invoke an Elamite callback only on the OS
+thread that initialized the Elamite runtime. Direct and nested reentry, and
+later calls such as process-exit callbacks on that same thread, are allowed.
+Invocation on a foreign-created thread or concurrently with Elamite execution
+is undefined behavior; this initial restriction is a foreign contract and is
+not generally detectable by the compiler. Broader callback threading follows
 [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution).
 
 Recoverable Elamite errors do not cross the ABI automatically; a wrapper must

@@ -2,7 +2,7 @@
 source: tests/parser.rs
 expression: render(&output.tree)
 ---
-File @ 0..616
+File @ 0..677
   Module @ 0..76
     Documentation @ 0..18
       DocComment("Public facade")
@@ -215,54 +215,73 @@ File @ 0..616
             Keyword(Return)
             LiteralExpression @ 467..473
               StringLiteral("pair")
-  ExternBlock @ 475..616
-    Keyword(Extern)
-    StringLiteral("C")
-    Block @ 485..616
+  ForeignType @ 475..527
+    Attribute @ 475..514
+      At
+      Identifier("importc")
+      LParen
+      StringLiteral("native_handle_t")
+      Comma
+      StringLiteral("native.h")
+      RParen
+    Keyword(Type)
+    Identifier("Handle")
+  Struct @ 528..598
+    Attribute @ 528..559
+      At
+      Identifier("importc")
+      LParen
+      StringLiteral("point_t")
+      Comma
+      StringLiteral("native.h")
+      RParen
+    Keyword(Struct)
+    Identifier("CPoint")
+    Block @ 573..598
       Colon
-      ForeignType @ 491..503
-        Keyword(Type)
-        Identifier("Handle")
-      Struct @ 507..556
-        Keyword(Struct)
-        Identifier("CPoint")
-        Block @ 520..556
-          Colon
-          Field @ 530..537
-            Identifier("x")
-            Colon
-            Type @ 533..536
-              Identifier("f64")
-          Field @ 545..552
-            Identifier("y")
-            Colon
-            Type @ 548..551
-              Identifier("f64")
-      Function @ 556..616
-        Keyword(Fn)
-        Identifier("open")
-        Parameters @ 563..600
-          LParen
-          Parameter @ 564..599
-            Identifier("callback")
-            Colon
-            Type @ 574..599
-              Keyword(Extern)
-              StringLiteral("C")
-              Keyword(Fn)
-              LParen
-              Type @ 588..591
-                Star
-                Type @ 589..591
-                  Identifier("u8")
-              RParen
-              Arrow
-              Type @ 596..599
-                Identifier("i32")
-          RParen
-        Arrow
-        Type @ 604..615
+      Field @ 579..586
+        Identifier("x")
+        Colon
+        Type @ 582..585
+          Identifier("f64")
+      Field @ 590..597
+        Identifier("y")
+        Colon
+        Type @ 593..596
+          Identifier("f64")
+  Function @ 598..677
+    Attribute @ 598..626
+      At
+      Identifier("importc")
+      LParen
+      StringLiteral("open")
+      Comma
+      StringLiteral("native.h")
+      RParen
+    Keyword(Fn)
+    Identifier("open")
+    Parameters @ 634..661
+      LParen
+      Parameter @ 635..660
+        Identifier("callback")
+        Colon
+        Type @ 645..660
           Star
-          Keyword(Var)
-          Type @ 609..615
-            Identifier("Handle")
+          Type @ 646..660
+            Keyword(Fn)
+            LParen
+            Type @ 649..652
+              Star
+              Type @ 650..652
+                Identifier("u8")
+            RParen
+            Arrow
+            Type @ 657..660
+              Identifier("i32")
+      RParen
+    Arrow
+    Type @ 665..676
+      Star
+      Keyword(Var)
+      Type @ 670..676
+        Identifier("Handle")

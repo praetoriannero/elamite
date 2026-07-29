@@ -1,8 +1,8 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 16 complete, Milestone 17 next
+> Status: Active — Milestones 0 through 17 complete, Milestone 18 next
 >
-> Next work package: M17.1 — foreign declaration validation
+> Next work package: M18.1 — intrinsic inventory audit
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -164,8 +164,8 @@ intermediate semantics that contradict it.
 
 ### Milestone 0: specification migration and feature ledger
 
-**Goal:** Resolve `I-017` by turning the current specification into an
-implementable checklist before relying on legacy compiler behavior.
+**Goal:** Turn the current specification into an implementable checklist
+before relying on legacy compiler behavior.
 
 Implementation work:
 
@@ -192,7 +192,8 @@ Exit criteria:
 - Known disagreements between old implementation artifacts and the current
   specification are either removed from the planned behavior or recorded as a
   test migration task.
-- `I-017` can be closed without claiming that the compiler is implemented.
+- The specification is fully mapped without claiming that the compiler is
+  implemented.
 
 ## 4. Stage B: source, packages, and syntax
 
@@ -1010,8 +1011,7 @@ Validation:
 > (`raw_to_reference_conversion_restores_a_strong_managed_path`); raw
 > pointers themselves are never registered as roots. With this milestone the
 > authoritative demonstration passes the complete frontend check; full
-> execution still awaits M17's foreign declarations and M18's `std`
-> surface.
+> execution still awaits M18's remaining `std` surface.
 
 **Goal:** Isolate unverifiable pointer operations behind the specified lexical
 unsafe boundary.
@@ -1043,11 +1043,12 @@ Validation:
 
 ### Milestone 17: C ABI, foreign roots, and callbacks
 
-> Status: Next.
+> Status: Complete.
 >
 > Boundary: the backend remains C99. Elamite's internal calling convention is
-> not the public C ABI, ordinary function references never convert to C
-> function pointers, and safe references never cross the boundary directly.
+> not itself a public ABI. General `*fn`/`*unsafe fn` values are raw function
+> pointers rather than a C-only type; exact function references can explicitly
+> convert to them. Safe references never cross the boundary directly.
 
 **Goal:** Interoperate with C without weakening Elamite's ordinary type and
 reachability rules.
@@ -1056,18 +1057,18 @@ Implementation tasks, in order:
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M17.1 — Foreign declaration validation** | Validate parsed module-level `extern "C"` blocks, bodyless imports, opaque types, foreign structs, and exported module-level C-callable functions. Reject generics, derive lists, methods, bodies where forbidden, and C variadics. | One compile-pass declaration of each kind and focused compile-fail cases for every structural restriction. |
-| **M17.2 — ABI-safety query** | Centralize the exact recursive ABI-safe type query. Accept the specified scalars, raw pointers, foreign structs, `std.ffi.CVoid` behind a pointer, and exact `extern "C" fn` signatures; reject every listed Elamite-only representation. | Table-driven tests for all accepted/rejected types on x86 and x86-64. |
-| **M17.3 — Foreign layout and declarations** | Emit named C99 declarations for opaque and foreign-struct types, preserving field order and target layout assumptions without C11 anonymous members or `_Static_assert`. | C harness confirms size/alignment/field offsets for nested ABI-safe foreign structs. |
-| **M17.4 — Imported functions** | Emit exact unmangled C symbol declarations and unsafe call sites. Map fixed-width/pointer-sized integers, floats, unit return, raw pointers, foreign structs, and C function pointers without implicit marshalling. | Scalar/pointer/struct calls link and run; unsafe-context, deferred-direct-call, and non-ABI-safe signatures fail. |
-| **M17.5 — Native link inputs** | Feed manifest native libraries and link options from the resolved package graph into deterministic build commands. Source `import` remains compile-time lookup only and never executes initialization. | Fake-toolchain argument test and a real small-library link test. |
-| **M17.6 — Exported C entry points** | Emit stable process-lifetime callback symbols for module-level `extern "C" fn`; keep their identity and type distinct from ordinary Elamite functions. | C calls exported safe and unsafe-signature functions; ordinary-function conversion is rejected. |
-| **M17.7 — Non-retaining call liveness** | Keep each source binding/reference strongly reachable for the complete foreign call when a raw pointer is not retained. Document borrowed foreign-pointer duration without inventing runtime ownership. | A C harness triggers collection during a call and still reads the live buffer. |
-| **M17.8 — Foreign-root registration core** | Implement runtime registration/unregistration and `ForeignRoot[T]`/`ForeignRootMut[T]` construction and pointer access. Retaining promotes storage when needed. | Retained buffers survive collection and yield exact raw pointer mutability. |
-| **M17.9 — Foreign-root shared handle API** | Represent one registration as explicit shared handle state. Make `.close()` idempotent, close through any copy, return a closed-handle error from later pointer access, and never unregister from GC reachability alone. | Copy/close/error tests and a best-effort leak test that asserts no finalizer behavior. |
-| **M17.10 — Callback context pattern** | Support a retained raw context pointer backed by an open foreign-root registration; recover a temporary safe reference only inside `unsafe:` and keep it within the foreign contract. | Stateful callback round trip with explicit registration lifetime. |
-| **M17.11 — Error and trap boundary** | Require wrappers to translate `Result`, `errno`, status codes, and out-parameters explicitly. Make traps terminate rather than unwind through C and document C++ exceptions/`longjmp` across Elamite frames as contract violations. | Status-translation tests and trap-in-foreign/callback subprocess tests. |
-| **M17.12 — Callback thread restriction** | Track enough runtime entry state to support direct/nested reentry on an OS thread already executing Elamite and reject or terminate checkable foreign-thread entry. Document unchecked foreign-created or concurrent invocation as undefined behavior pending I-015. | Same-thread nested reentry harness and a separately isolated forbidden-thread test. |
+| **M17.1 — Item attributes and foreign declaration validation** *(complete)* | Parse compiler item attributes and validate `@importc("c_name", "header.h")` on module-level bodyless functions, opaque types, and structs, plus `@exportc("c_name")` on module-level function definitions. Reject unknown/duplicate/misplaced attributes, invalid C spellings or headers, generics, derive lists, methods, forbidden bodies, and variadics. | Declaration parse snapshots, libc imports, and focused invalid-contract cases. |
+| **M17.2 — General raw function pointers** *(complete)* | Make `*fn`/`*unsafe fn` general raw pointer types, directly callable in `unsafe:`, null-checked at runtime, and exactly convertible from matching `&fn`/`&unsafe fn`. Keep function and data pointer cast domains separate. | Direct-call run-pass, C callback run-pass, null/unsafe/cast compile-fail coverage. |
+| **M17.3 — ABI-safety query** *(complete)* | Centralize the recursive ABI-safe query. Accept specified scalars, raw data pointers, foreign structs, `std.ffi.CVoid` behind a pointer, and raw function pointers with ABI-safe signatures; reject every Elamite-only representation. | Query tests and invalid imported/exported signature cases. |
+| **M17.4 — Header-backed foreign types** *(complete)* | Include each authoritative header once and use exact typedef/tag and field spellings rather than emitting a competing definition. Preserve C99 output and target-width mappings. | `div_t` by-value layout/field integration against `stdlib.h`. |
+| **M17.5 — Imported function calls** *(complete)* | Emit exact C symbols and unsafe calls. Map integers, floats, C `void`, raw pointers, foreign structs, and raw callbacks without implicit marshalling; keep raw pointer arguments reachable through a non-retaining call. | libc scalar/struct calls, unit callback, unsafe and ABI compile failures, generated `GC_reachable_here`. |
+| **M17.6 — Native build inputs** *(complete)* | Parse include paths, library paths, native libraries, and link options from every resolved package and feed deterministic `-I`, `-L`, `-l`, and final options to the C command. Source `import` remains compile-time lookup only. | Manifest unit test, fake-toolchain argument test, and real header-path callback fixture. |
+| **M17.7 — Exported C entry points** *(complete)* | Give an ABI-safe module-level function the exact unmangled symbol named by `@exportc` without introducing a second function kind. Lower unit returns as C `void`. | Generated-symbol assertion and an external C harness linked against a library object. |
+| **M17.8 — Foreign-root registration core** *(complete)* | Implement `ForeignRoot[T]`/`ForeignRootMut[T]` retain, exact-mutability pointer access, GC root registration, and unregister. Retaining an address-taken local uses managed promoted storage. | Forced collection while registered and raw pointer access after collection. |
+| **M17.9 — Shared foreign-root handle state** *(complete)* | Make copies share one explicit registration, make `.close()` idempotent through every copy, trap later `.pointer()` with `E-RUN-CLOSED`, and never unregister merely because the handle becomes unreachable. | Copy/double-close run-pass and closed-pointer subprocess trap. |
+| **M17.10 — Callback context pattern** *(complete)* | Pass registered managed state through `*CVoid`, invoke an ordinary Elamite function through an ABI-safe raw function pointer, and recover/access the typed target only inside `unsafe:`. | Header-defined C callback round trip with explicit registration lifetime. |
+| **M17.11 — Error, trap, and control-flow boundary** *(complete)* | Keep error channels explicit: wrappers translate `Result`, status values, `errno`, and out-parameters themselves. Traps terminate the process and never unwind through C; foreign exceptions and `longjmp` across an Elamite frame are documented contract violations. | Status-returning callback fixtures, stable trap subprocesses, and specification contract. |
+| **M17.12 — Initial callback-thread contract** *(complete)* | Permit callback entry only on the OS thread that initialized the runtime, including direct, nested, and later same-thread calls. Document foreign-created-thread and concurrent invocation as undefined behavior and defer a checkable concurrency model to I-015. | Same-thread libc and header callback integrations plus the normative contract. |
 
 Validation:
 
@@ -1084,7 +1085,7 @@ Validation:
 
 ### Milestone 18: prelude, standard library, and developer tooling
 
-> Status: Pending Milestone 17.
+> Status: Next.
 >
 > Boundary: compiler-known names are ordinary declarations from the user's
 > perspective. Keep the intrinsic list identical to `LEDGER.md` §12; in

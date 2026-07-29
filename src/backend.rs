@@ -203,10 +203,12 @@ impl<'a> CEmitter<'a> {
 
     fn run(mut self) -> COutput {
         self.emit_prelude();
+        self.emit_foreign_headers();
         self.emit_managed_memory_prelude();
         self.emit_forward_structs();
         self.emit_object_types();
         let used_types = self.used_types();
+        self.emit_foreign_root_runtime(&used_types);
         for ty in &used_types {
             self.emit_type_definition(*ty, None);
         }
@@ -268,6 +270,103 @@ impl<'a> CEmitter<'a> {
         }
     }
 
+    fn emit_foreign_headers(&mut self) {
+        let headers = self
+            .resolved
+            .declarations
+            .iter()
+            .filter_map(|declaration| declaration.foreign_binding.as_ref())
+            .filter_map(|binding| binding.header.as_ref())
+            .collect::<BTreeSet<_>>();
+        for header in headers {
+            let _ = writeln!(self.output, "#include <{header}>");
+        }
+        if self
+            .resolved
+            .declarations
+            .iter()
+            .any(|declaration| declaration.foreign_binding.is_some())
+        {
+            self.output.push('\n');
+        }
+    }
+
+    fn function_symbol(&self, instance: &FunctionInstance) -> String {
+        self.resolved.declarations[instance.declaration.index()]
+            .foreign_binding
+            .as_ref()
+            .map_or_else(
+                || mangle_function_instance(self.resolved, instance),
+                |binding| binding.c_name.clone(),
+            )
+    }
+
+    fn c_field_name(&self, field: crate::resolution::FieldId) -> String {
+        let data = &self.resolved.fields[field.index()];
+        if self.resolved.declarations[data.parent_declaration.index()].kind
+            == crate::resolution::DeclarationKind::ForeignStruct
+        {
+            self.resolved.symbol_text(data.name).to_string()
+        } else {
+            field_name(field)
+        }
+    }
+
+    fn emit_foreign_root_runtime(&mut self, used_types: &BTreeSet<TypeId>) {
+        let needed = used_types.iter().any(|ty| {
+            matches!(
+                self.typed.types.kind(self.resolve_alias(*ty)),
+                TypeKind::Builtin { builtin, .. }
+                    if matches!(
+                        self.resolved.builtin_name(*builtin),
+                        "ForeignRoot" | "ForeignRootMut"
+                    )
+            )
+        });
+        if !needed {
+            return;
+        }
+        self.output.push_str(
+            "typedef struct el_foreign_root_state {\n\
+             \x20\x20\x20\x20void *target;\n\
+             \x20\x20\x20\x20bool open;\n\
+             } el_foreign_root_state;\n\n\
+             static el_foreign_root_state *el_foreign_root_retain(void *target) {\n\
+             \x20\x20\x20\x20el_foreign_root_state *state = \
+             (el_foreign_root_state *)malloc(sizeof(*state));\n\
+             \x20\x20\x20\x20if (state == NULL) el_out_of_memory();\n\
+             \x20\x20\x20\x20state->target = target;\n\
+             \x20\x20\x20\x20state->open = true;\n",
+        );
+        self.emit_managed_operation(ManagedMemoryOperation::RegisterRoot {
+            start: "&state->target",
+            byte_count: "sizeof(state->target)",
+        });
+        self.output.push_str(
+            "    return state;\n\
+             }\n\n\
+             static void *el_foreign_root_pointer(el_foreign_root_state *state, \
+             const char *path, uint32_t line, uint32_t column) {\n\
+             \x20\x20\x20\x20if (state == NULL || !state->open) \
+             el_trap(\"E-RUN-CLOSED\", path, line, column);\n\
+             \x20\x20\x20\x20return state->target;\n\
+             }\n\n\
+             static el_unit el_foreign_root_close(el_foreign_root_state *state) {\n\
+             \x20\x20\x20\x20if (state != NULL && state->open) {\n",
+        );
+        self.emit_managed_operation(ManagedMemoryOperation::UnregisterRoot {
+            start: "&state->target",
+            byte_count: "sizeof(state->target)",
+        });
+        self.output.push_str(
+            "        state->target = NULL;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20state->open = false;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20return (el_unit){0};\n\
+             }\n\n",
+        );
+    }
+
     /// Emits one method-pointer struct per trait, a `void *`-receiver thunk per
     /// slot, and one static table per implementing type.
     ///
@@ -296,7 +395,8 @@ impl<'a> CEmitter<'a> {
                 let Some(signature) = self.typed.function_signatures.get(method).cloned() else {
                     continue;
                 };
-                let Some(return_type) = self.c_type(signature.return_type, None) else {
+                let Some(return_type) = self.c_function_return_type(signature.return_type, None)
+                else {
                     continue;
                 };
                 let mut parameters = vec!["void *".to_string()];
@@ -355,7 +455,9 @@ impl<'a> CEmitter<'a> {
                     else {
                         continue;
                     };
-                    let Some(return_type) = self.c_type(signature.return_type, None) else {
+                    let Some(return_type) =
+                        self.c_function_return_type(signature.return_type, None)
+                    else {
                         continue;
                     };
                     let thunk = thunk_name(trait_declaration, table.concrete, slot);
@@ -368,13 +470,21 @@ impl<'a> CEmitter<'a> {
                         parameters.push(format!("{ty} a{index}"));
                         arguments.push(format!("a{index}"));
                     }
-                    let symbol = mangle_function_instance(self.resolved, instance);
-                    let _ = writeln!(
-                        self.output,
-                        "static {return_type} {thunk}({}) {{\n    return {symbol}({});\n}}\n",
-                        parameters.join(", "),
-                        arguments.join(", ")
-                    );
+                    let symbol = self.function_symbol(instance);
+                    let call = format!("{symbol}({})", arguments.join(", "));
+                    if return_type == "void" {
+                        let _ = writeln!(
+                            self.output,
+                            "static void {thunk}({}) {{\n    {call};\n}}\n",
+                            parameters.join(", ")
+                        );
+                    } else {
+                        let _ = writeln!(
+                            self.output,
+                            "static {return_type} {thunk}({}) {{\n    return {call};\n}}\n",
+                            parameters.join(", ")
+                        );
+                    }
                 }
                 let entries = (0..table.methods.len())
                     .map(|slot| thunk_name(trait_declaration, table.concrete, slot))
@@ -818,6 +928,11 @@ impl<'a> CEmitter<'a> {
             {
                 self.emit_type_definition(*target, span);
             }
+            TypeKind::RawPointer { target, .. }
+                if matches!(self.typed.types.kind(*target), TypeKind::Function { .. }) =>
+            {
+                self.emit_type_definition(*target, span);
+            }
             // A trait object's struct is emitted with its vtable, not here.
             TypeKind::TraitObject { .. } => {}
             TypeKind::Reference { target, .. }
@@ -844,7 +959,7 @@ impl<'a> CEmitter<'a> {
                         self.emit_type_definition(slice, span);
                     }
                 }
-                let Some(result) = self.c_type(*return_type, span) else {
+                let Some(result) = self.c_function_return_type(*return_type, span) else {
                     self.emitting_types.remove(&ty);
                     return;
                 };
@@ -2774,7 +2889,9 @@ impl<'a> CEmitter<'a> {
                              \x20   }}\n    return result;"
                         );
                     }
-                    ("Identity", [_]) => self.output.push_str("    return value;\n"),
+                    ("Identity" | "ForeignRoot" | "ForeignRootMut", [_]) => {
+                        self.output.push_str("    return value;\n")
+                    }
                     ("Formatter", []) => {
                         let _ = writeln!(self.output, "    {c_type} result;");
                         self.emit_managed_operation(ManagedMemoryOperation::Allocate {
@@ -2835,10 +2952,12 @@ impl<'a> CEmitter<'a> {
 
     fn emit_prototypes(&mut self) {
         for function in &self.program.functions {
-            let Some(return_type) = self.c_type(function.return_type, Some(function.span)) else {
+            let Some(return_type) =
+                self.c_function_return_type(function.return_type, Some(function.span))
+            else {
                 continue;
             };
-            let symbol = mangle_function_instance(self.resolved, &function.instance);
+            let symbol = self.function_symbol(&function.instance);
             let parameters = self.parameter_list(function);
             let _ = writeln!(self.output, "{return_type} {symbol}({parameters});");
         }
@@ -2847,11 +2966,13 @@ impl<'a> CEmitter<'a> {
 
     fn emit_function(&mut self, function: &ControlFlowFunction) {
         self.promoted = function.promoted_locals.clone();
-        let Some(return_type) = self.c_type(function.return_type, Some(function.span)) else {
+        let Some(return_type) =
+            self.c_function_return_type(function.return_type, Some(function.span))
+        else {
             self.promoted.clear();
             return;
         };
-        let symbol = mangle_function_instance(self.resolved, &function.instance);
+        let symbol = self.function_symbol(&function.instance);
         let parameters = self.parameter_list(function);
         let location = self.location(function.span);
         let _ = writeln!(
@@ -2985,6 +3106,14 @@ impl<'a> CEmitter<'a> {
                     temporary_name(*pointer)
                 );
             }
+            Instruction::CheckFunctionPointer { pointer, span } => {
+                let arguments = self.trap_arguments(*span);
+                let _ = writeln!(
+                    self.output,
+                    "    if ({} == NULL) el_trap(\"E-RUN-NULL\", {arguments});",
+                    temporary_name(*pointer)
+                );
+            }
             Instruction::Assign {
                 destination,
                 value,
@@ -2997,6 +3126,29 @@ impl<'a> CEmitter<'a> {
                         self.output,
                         "    {destination_name} = {expression};\n    (void){destination_name};"
                     );
+                    if self.program.requires_managed_memory
+                        && let Rvalue::Call {
+                            instance,
+                            arguments,
+                        } = value
+                        && self.resolved.declarations[instance.declaration.index()].kind
+                            == crate::resolution::DeclarationKind::ForeignFunction
+                    {
+                        for argument in arguments {
+                            if matches!(
+                                self.typed.types.kind(
+                                    self.typed.types.resolve_inference(
+                                        function.temporary_types[argument.index()]
+                                    )
+                                ),
+                                TypeKind::RawPointer { .. }
+                            ) {
+                                self.emit_managed_operation(ManagedMemoryOperation::KeepAlive {
+                                    expression: &temporary_name(*argument),
+                                });
+                            }
+                        }
+                    }
                 }
             }
             Instruction::Store { place, value, span } => {
@@ -3029,9 +3181,7 @@ impl<'a> CEmitter<'a> {
             Rvalue::Constant(constant) => {
                 self.constant_expression(constant, destination_type, span)?
             }
-            Rvalue::FunctionReference(instance) => {
-                mangle_function_instance(self.resolved, instance)
-            }
+            Rvalue::FunctionReference(instance) => self.function_symbol(instance),
             Rvalue::Load(place) => self.place_expression(place),
             Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
             Rvalue::DefaultValue(ty) => self.default_expression(*ty, span)?,
@@ -3071,6 +3221,28 @@ impl<'a> CEmitter<'a> {
                 operation,
                 arguments,
             } => {
+                if matches!(operation, StandardCall::ForeignRootRetain { .. }) {
+                    let value = arguments
+                        .first()
+                        .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
+                    return Some(format!("el_foreign_root_retain((void *){value})"));
+                }
+                if matches!(operation, StandardCall::ForeignRootPointer { .. }) {
+                    let receiver = arguments
+                        .first()
+                        .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
+                    return Some(format!(
+                        "({})el_foreign_root_pointer({receiver}, {})",
+                        self.c_type(destination_type, Some(span))?,
+                        self.trap_arguments(span)
+                    ));
+                }
+                if matches!(operation, StandardCall::ForeignRootClose { .. }) {
+                    let receiver = arguments
+                        .first()
+                        .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
+                    return Some(format!("el_foreign_root_close({receiver})"));
+                }
                 if matches!(operation, StandardCall::FormatterWrite { .. }) {
                     let receiver = arguments
                         .first()
@@ -3218,7 +3390,7 @@ impl<'a> CEmitter<'a> {
                 }
                 let _ = trait_declaration;
                 call.push(')');
-                call
+                self.call_rvalue(call, destination_type)
             }
             Rvalue::AllocateManaged { value, value_type } => {
                 // A referenced composite literal needs its own managed cell.
@@ -3299,24 +3471,30 @@ impl<'a> CEmitter<'a> {
             Rvalue::Call {
                 instance,
                 arguments,
-            } => format!(
-                "{}({})",
-                mangle_function_instance(self.resolved, instance),
-                arguments
-                    .iter()
-                    .map(|argument| temporary_name(*argument))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            Rvalue::IndirectCall { callee, arguments } => format!(
-                "{}({})",
-                temporary_name(*callee),
-                arguments
-                    .iter()
-                    .map(|argument| temporary_name(*argument))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            } => {
+                let call = format!(
+                    "{}({})",
+                    self.function_symbol(instance),
+                    arguments
+                        .iter()
+                        .map(|argument| temporary_name(*argument))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                self.call_rvalue(call, destination_type)
+            }
+            Rvalue::IndirectCall { callee, arguments } => {
+                let call = format!(
+                    "{}({})",
+                    temporary_name(*callee),
+                    arguments
+                        .iter()
+                        .map(|argument| temporary_name(*argument))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                self.call_rvalue(call, destination_type)
+            }
             Rvalue::VariadicSlice {
                 elements,
                 element_type,
@@ -3538,7 +3716,11 @@ impl<'a> CEmitter<'a> {
                 fields
                     .iter()
                     .map(|(field, value)| {
-                        format!(".{} = {}", field_name(*field), temporary_name(*value))
+                        format!(
+                            ".{} = {}",
+                            self.c_field_name(*field),
+                            temporary_name(*value)
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -3785,7 +3967,7 @@ impl<'a> CEmitter<'a> {
                             arguments: selected.arguments,
                             self_type: selected.self_type,
                         };
-                        let symbol = mangle_function_instance(self.resolved, &instance);
+                        let symbol = self.function_symbol(&instance);
                         let _ = writeln!(
                             self.output,
                             "    {{ el_formatter *el_user_formatter = &{formatter}; \
@@ -3876,7 +4058,11 @@ impl<'a> CEmitter<'a> {
             }
             ControlFlowPlace::Temporary(temporary) => temporary_name(*temporary),
             ControlFlowPlace::Field { base, field } => {
-                format!("{}.{}", self.place_expression(base), field_name(*field))
+                format!(
+                    "{}.{}",
+                    self.place_expression(base),
+                    self.c_field_name(*field)
+                )
             }
             ControlFlowPlace::TupleField { base, index } => {
                 format!("{}.v{index}", self.place_expression(base))
@@ -4009,14 +4195,25 @@ impl<'a> CEmitter<'a> {
                 );
             }
             Terminator::Return(Some(value)) => {
-                let _ = writeln!(self.output, "    return {};", temporary_name(*value));
+                if matches!(
+                    self.typed.types.expanded_primitive(function.return_type),
+                    Some(PrimitiveType::Unit)
+                ) {
+                    let _ = writeln!(
+                        self.output,
+                        "    (void){};\n    return;",
+                        temporary_name(*value)
+                    );
+                } else {
+                    let _ = writeln!(self.output, "    return {};", temporary_name(*value));
+                }
             }
             Terminator::Return(None) => {
                 if matches!(
                     self.typed.types.expanded_primitive(function.return_type),
                     Some(PrimitiveType::Unit)
                 ) {
-                    self.output.push_str("    return (el_unit){0};\n");
+                    self.output.push_str("    return;\n");
                 } else {
                     self.output.push_str("    abort();\n");
                 }
@@ -4063,7 +4260,11 @@ impl<'a> CEmitter<'a> {
             );
             return;
         }
-        let symbol = mangle_declaration(self.resolved, entry);
+        let symbol = self.function_symbol(&FunctionInstance {
+            declaration: entry,
+            arguments: Vec::new(),
+            self_type: None,
+        });
         // The collector is initialized before any Elamite code runs. A library
         // package emits no shim, so initialization is the linking
         // executable's responsibility.
@@ -4222,10 +4423,7 @@ impl<'a> CEmitter<'a> {
                     arguments: selected.arguments,
                     self_type: selected.self_type,
                 };
-                Some(format!(
-                    "{}()",
-                    mangle_function_instance(self.resolved, &instance)
-                ))
+                Some(format!("{}()", self.function_symbol(&instance)))
             }
             _ => {
                 let c_type = self.c_type(resolved, span)?;
@@ -4316,9 +4514,23 @@ impl<'a> CEmitter<'a> {
             TypeKind::Nominal { .. } if self.enums.contains_key(&ty) => {
                 enum_name(self.enums[&ty].declaration, ty)
             }
+            TypeKind::Foreign { identity, .. } => self.resolved.declarations
+                [identity.declaration.index()]
+            .foreign_binding
+            .as_ref()
+            .map(|binding| binding.c_name.clone())
+            .unwrap_or_else(|| {
+                self.type_error(ty, span, "a foreign type is missing `@importc` metadata");
+                "void".to_string()
+            }),
             // `&T`, `&var T`, `*T`, and `*var T` are all `T *`; mutability is
             // compile-time only (LEDGER 19).
             TypeKind::Reference { target, .. }
+                if matches!(self.typed.types.kind(*target), TypeKind::Function { .. }) =>
+            {
+                function_type_name(*target)
+            }
+            TypeKind::RawPointer { target, .. }
                 if matches!(self.typed.types.kind(*target), TypeKind::Function { .. }) =>
             {
                 function_type_name(*target)
@@ -4349,6 +4561,19 @@ impl<'a> CEmitter<'a> {
             }
             TypeKind::Function { .. } => function_type_name(ty),
             TypeKind::Builtin { builtin, arguments }
+                if self.resolved.builtin_name(*builtin) == "CVoid" && arguments.is_empty() =>
+            {
+                "void".to_string()
+            }
+            TypeKind::Builtin { builtin, arguments }
+                if matches!(
+                    (self.resolved.builtin_name(*builtin), arguments.len()),
+                    ("ForeignRoot" | "ForeignRootMut", 1)
+                ) =>
+            {
+                "el_foreign_root_state *".to_string()
+            }
+            TypeKind::Builtin { builtin, arguments }
                 if self.resolved.builtin_name(*builtin) == "Formatter" && arguments.is_empty() =>
             {
                 "el_formatter *".to_string()
@@ -4374,6 +4599,28 @@ impl<'a> CEmitter<'a> {
                 return None;
             }
         })
+    }
+
+    fn c_function_return_type(&mut self, ty: TypeId, span: Option<Span>) -> Option<String> {
+        if matches!(
+            self.typed.types.expanded_primitive(ty),
+            Some(PrimitiveType::Unit)
+        ) {
+            Some("void".to_string())
+        } else {
+            self.c_type(ty, span)
+        }
+    }
+
+    fn call_rvalue(&self, call: String, destination_type: TypeId) -> String {
+        if matches!(
+            self.typed.types.expanded_primitive(destination_type),
+            Some(PrimitiveType::Unit)
+        ) {
+            format!("({call}, (el_unit){{0}})")
+        } else {
+            call
+        }
     }
 
     fn resolve_alias(&self, mut ty: TypeId) -> TypeId {
@@ -4562,6 +4809,9 @@ fn standard_call_name(operation: StandardCall) -> String {
     let (name, ty) = match operation {
         StringFrom => return "el_string_from".to_string(),
         StandardCall::IdentityFrom { wrapper } => ("identity_from", wrapper),
+        StandardCall::ForeignRootRetain { handle, .. } => ("foreign_root_retain", handle),
+        StandardCall::ForeignRootPointer { handle, .. } => ("foreign_root_pointer", handle),
+        StandardCall::ForeignRootClose { handle } => ("foreign_root_close", handle),
         StandardCall::FormatterWrite { formatter } => ("formatter_write", formatter),
         ArrayLen { collection } => ("array_len", collection),
         ArrayGet { collection } => ("array_get", collection),
@@ -4599,7 +4849,12 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
     };
     Some(match operation {
-        StringFrom | StandardCall::IdentityFrom { .. } | StandardCall::FormatterWrite { .. } => {
+        StringFrom
+        | StandardCall::IdentityFrom { .. }
+        | StandardCall::ForeignRootRetain { .. }
+        | StandardCall::ForeignRootPointer { .. }
+        | StandardCall::ForeignRootClose { .. }
+        | StandardCall::FormatterWrite { .. } => {
             return None;
         }
         ArrayLen { collection }

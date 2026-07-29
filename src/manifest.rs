@@ -49,6 +49,8 @@ pub struct Manifest {
     /// Path to the root `.elx` file, relative to the manifest's directory.
     pub root: PathBuf,
     pub dependencies: Vec<DependencyDecl>,
+    pub include_paths: Vec<PathBuf>,
+    pub library_paths: Vec<PathBuf>,
     pub native_libraries: Vec<String>,
     pub link_options: Vec<String>,
 }
@@ -77,6 +79,10 @@ struct RawDependency {
 
 #[derive(Debug, Deserialize, Default)]
 struct RawNative {
+    #[serde(default)]
+    include_paths: Vec<PathBuf>,
+    #[serde(default)]
+    library_paths: Vec<PathBuf>,
     #[serde(default)]
     libraries: Vec<String>,
     #[serde(default)]
@@ -225,6 +231,8 @@ impl Manifest {
             target_kind,
             root,
             dependencies,
+            include_paths: raw.native.include_paths,
+            library_paths: raw.native.library_paths,
             native_libraries: raw.native.libraries,
             link_options: raw.native.link_options,
         })
@@ -382,11 +390,15 @@ mod tests {
             target_kind = "executable"
 
             [native]
+            include_paths = ["native/include"]
+            library_paths = ["native/lib"]
             libraries = ["gc", "m"]
             link_options = ["-pthread"]
             "#,
         )
         .expect("manifest should parse");
+        assert_eq!(manifest.include_paths, [PathBuf::from("native/include")]);
+        assert_eq!(manifest.library_paths, [PathBuf::from("native/lib")]);
         assert_eq!(manifest.native_libraries, ["gc", "m"]);
         assert_eq!(manifest.link_options, ["-pthread"]);
     }

@@ -137,6 +137,392 @@ fn main() -> ():
 }
 
 #[test]
+fn imports_c_symbols_through_attributes() {
+    let source = r#"
+@importc("abs", "stdlib.h")
+fn c_abs(value: i32) -> i32
+
+fn main() -> ():
+    unsafe:
+        println(c_abs(-42))
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn imported_c_structs_use_header_layout_and_field_names() {
+    let source = r#"
+@importc("div_t", "stdlib.h")
+struct CDiv:
+    quot: i32
+    rem: i32
+
+@importc("div", "stdlib.h")
+fn c_div(numerator: i32, denominator: i32) -> CDiv
+
+fn main() -> ():
+    unsafe:
+        let result = c_div(17, 5)
+        println(result.quot)
+        println(result.rem)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "3\n2\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn exports_unmangled_c_symbols() {
+    let tree = TestTree::new("exportc");
+    tree.library(
+        r#"
+@exportc("elamite_add_one")
+fn add_one(value: i32) -> i32:
+    return value + 1
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(
+        compilation
+            .generated_c
+            .contains("int32_t elamite_add_one(int32_t")
+    );
+    assert!(!compilation.generated_c.contains("elamite_add_one_t"));
+}
+
+#[test]
+fn a_c_harness_calls_an_exported_elamite_function() {
+    let tree = TestTree::new("exportc-harness");
+    tree.library(
+        r#"
+@exportc("elamite_add_one")
+fn add_one(value: i32) -> i32:
+    return value + 1
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let artifact = build(
+        &graph,
+        &mut sources,
+        &BuildOptions {
+            target: Target::X86_64,
+            optimization: Optimization::Debug,
+            output_directory: tree.root.join("out"),
+            keep_generated_c: true,
+            c_compiler: None,
+        },
+    )
+    .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    let harness = tree.root.join("harness.c");
+    fs::write(
+        &harness,
+        "extern int elamite_add_one(int);\n\
+         int main(void) { return elamite_add_one(41) == 42 ? 0 : 1; }\n",
+    )
+    .expect("write C harness");
+    let executable = tree.root.join("harness");
+    let output = Command::new("cc")
+        .arg("-std=c99")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-Werror")
+        .arg(&harness)
+        .arg(&artifact.path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("run C compiler");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        Command::new(executable)
+            .status()
+            .expect("run harness")
+            .success()
+    );
+}
+
+#[test]
+fn raw_function_pointers_are_general_and_directly_callable() {
+    let source = r#"
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let reference: &fn(i32) -> i32 = increment
+    let pointer: *fn(i32) -> i32 = reference as *fn(i32) -> i32
+    unsafe:
+        println(pointer(41))
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn a_null_raw_function_pointer_traps_before_the_call() {
+    let (_, stderr, status) = build_and_run(
+        r#"
+fn main() -> ():
+    let pointer: *fn() -> () = null
+    unsafe:
+        pointer()
+"#,
+        Optimization::Debug,
+    );
+    assert_ne!(status, 0);
+    assert!(stderr.contains("E-RUN-NULL"), "{stderr}");
+}
+
+#[test]
+fn foreign_root_copies_share_one_idempotent_registration() {
+    let source = r#"
+@importc("GC_gcollect", "gc.h")
+fn collect()
+
+fn main() -> ():
+    let value = 42
+    let registration = std.ffi.ForeignRoot[i32].retain(&value)
+    let copy = registration
+    unsafe:
+        collect()
+        println(*copy.pointer())
+    registration.close()
+    copy.close()
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn a_mutable_foreign_root_exposes_a_mutable_raw_pointer() {
+    let source = r#"
+fn main() -> ():
+    var value = 1
+    let registration = std.ffi.ForeignRootMut[i32].retain(&var value)
+    unsafe:
+        *registration.pointer() = 42
+    println(value)
+    registration.close()
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "42\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn c_can_invoke_an_elamite_raw_function_pointer() {
+    let source = r#"
+@importc("atexit", "stdlib.h")
+fn register_exit(callback: *fn() -> ()) -> i32
+
+fn goodbye() -> ():
+    println("callback")
+
+fn main() -> ():
+    let callback: &fn() -> () = goodbye
+    unsafe:
+        let status = register_exit(callback as *fn() -> ())
+        println(status)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "0\ncallback\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn a_foreign_callback_can_use_registered_managed_context() {
+    let tree = TestTree::new("callback-context");
+    fs::create_dir_all(tree.root.join("native/include")).expect("create include directory");
+    fs::write(
+        tree.root.join("native/include/callback.h"),
+        "#ifndef ELAMITE_CALLBACK_H\n\
+         #define ELAMITE_CALLBACK_H\n\
+         static int run_callback(int (*callback)(void *), void *context) {\n\
+         \x20\x20\x20\x20return callback(context);\n\
+         }\n\
+         #endif\n",
+    )
+    .expect("write callback header");
+    fs::write(
+        tree.root.join("elamite.toml"),
+        "[package]\n\
+         name = \"backend_test\"\n\
+         version = \"0.1.0\"\n\
+         target_kind = \"executable\"\n\
+         \n\
+         [native]\n\
+         include_paths = [\"native/include\"]\n",
+    )
+    .expect("write manifest");
+    fs::write(
+        tree.root.join("src/main.elx"),
+        r#"
+@importc("run_callback", "callback.h")
+fn run_callback(callback: *fn(*std.ffi.CVoid) -> i32, context: *std.ffi.CVoid) -> i32
+
+fn read_context(context: *std.ffi.CVoid) -> i32:
+    unsafe:
+        let value = context as *i32
+        return *value
+
+fn main() -> ():
+    let value = 42
+    let registration = std.ffi.ForeignRoot[i32].retain(&value)
+    let handler: &fn(*std.ffi.CVoid) -> i32 = read_context
+    unsafe:
+        let context = registration.pointer() as *std.ffi.CVoid
+        println(run_callback(handler as *fn(*std.ffi.CVoid) -> i32, context))
+    registration.close()
+"#,
+    )
+    .expect("write Elamite source");
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let artifact = build(
+        &graph,
+        &mut sources,
+        &BuildOptions {
+            target: Target::X86_64,
+            optimization: Optimization::Debug,
+            output_directory: tree.root.join("out"),
+            keep_generated_c: true,
+            c_compiler: None,
+        },
+    )
+    .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    let generated = fs::read_to_string(
+        artifact
+            .generated_c_path
+            .as_ref()
+            .expect("generated C is retained"),
+    )
+    .expect("read generated C");
+    assert!(generated.contains("GC_reachable_here("));
+    let result = run(&artifact).expect("run callback fixture");
+    assert_eq!(result.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&result.stdout), "42\n");
+    assert_eq!(String::from_utf8_lossy(&result.stderr), "");
+}
+
+#[test]
+fn a_closed_foreign_root_reports_a_stable_runtime_error() {
+    let (_, stderr, status) = build_and_run(
+        r#"
+fn main() -> ():
+    let value = 42
+    let registration = std.ffi.ForeignRoot[i32].retain(&value)
+    registration.close()
+    registration.pointer()
+"#,
+        Optimization::Debug,
+    );
+    assert_ne!(status, 0);
+    assert!(stderr.contains("E-RUN-CLOSED"), "{stderr}");
+}
+
+#[test]
+fn rejects_invalid_c_contracts_and_unsafe_calls() {
+    let cases = [
+        (
+            "generic import",
+            "@importc(\"identity\", \"foreign.h\")\nfn identity[T](value: T) -> T\n",
+            "cannot be generic",
+        ),
+        (
+            "non ABI-safe parameter",
+            "@importc(\"accept\", \"foreign.h\")\nfn accept(value: bool) -> i32\n",
+            "ABI-safe",
+        ),
+        (
+            "C variadic",
+            "@importc(\"accept\", \"foreign.h\")\nfn accept(values: ...i32) -> i32\n",
+            "variadic",
+        ),
+        (
+            "derived foreign struct",
+            "@importc(\"foreign_value\", \"foreign.h\")\n\
+             struct ForeignValue(PartialEq):\n\
+             \x20\x20\x20\x20value: i32\n",
+            "cannot derive",
+        ),
+        (
+            "unknown item attribute",
+            "@unknown(\"value\")\nfn main() -> ():\n    pass\n",
+            "unknown compiler attribute",
+        ),
+        (
+            "safe imported call",
+            "@importc(\"abs\", \"stdlib.h\")\nfn c_abs(value: i32) -> i32\n\
+             fn main() -> ():\n    c_abs(-1)\n",
+            "unsafe",
+        ),
+        (
+            "deferred imported call",
+            "@importc(\"close\", \"foreign.h\")\nfn close() -> ()\n\
+             fn main() -> ():\n    defer close()\n",
+            "unsafe",
+        ),
+        (
+            "safe raw function-pointer call",
+            "fn increment(value: i32) -> i32:\n    return value + 1\n\
+             fn main() -> ():\n\
+             \x20\x20\x20\x20let pointer = increment as *fn(i32) -> i32\n\
+             \x20\x20\x20\x20pointer(1)\n",
+            "unsafe",
+        ),
+        (
+            "function-to-data pointer cast",
+            "fn increment(value: i32) -> i32:\n    return value + 1\n\
+             fn main() -> ():\n\
+             \x20\x20\x20\x20let pointer = increment as *i32\n",
+            "exactly its pointee type",
+        ),
+        (
+            "mutable function pointer",
+            "type Bad = *var fn(i32) -> i32\nfn main() -> ():\n    pass\n",
+            "function pointers and references cannot be mutable",
+        ),
+        (
+            "duplicate exported symbol",
+            "@exportc(\"same_symbol\")\nfn first() -> ():\n    pass\n\
+             @exportc(\"same_symbol\")\nfn second() -> ():\n    pass\n",
+            "exported more than once",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let tree = TestTree::new(name);
+        tree.executable(source);
+        let mut sources = SourceManager::new();
+        let graph = tree.graph(&mut sources);
+        let diagnostics = compile(&graph, &mut sources, Target::X86_64)
+            .err()
+            .unwrap_or_else(|| panic!("{name} unexpectedly compiled"));
+        let rendered = render(&sources, &diagnostics);
+        assert!(
+            rendered.contains(expected),
+            "{name} did not report `{expected}`:\n{rendered}"
+        );
+    }
+}
+
+#[test]
 fn monomorphizes_explicit_and_inferred_generic_calls() {
     let source = r#"
 fn identity[T](value: T) -> T:
@@ -725,6 +1111,20 @@ fn selected_pointer_width_controls_usize_literal_materialization() {
 fn selected_x86_target_reaches_the_native_driver() {
     let tree = TestTree::new("x86-driver");
     tree.executable("fn main() -> ():\n    println(\"x86\")\n");
+    fs::write(
+        tree.root.join("elamite.toml"),
+        "[package]\n\
+         name = \"backend_test\"\n\
+         version = \"0.1.0\"\n\
+         target_kind = \"executable\"\n\
+         \n\
+         [native]\n\
+         include_paths = [\"native/include\"]\n\
+         library_paths = [\"native/lib\"]\n\
+         libraries = [\"fixture\"]\n\
+         link_options = [\"-pthread\"]\n",
+    )
+    .expect("write native manifest");
     let compiler = tree.root.join("fake-cc");
     let argument_log = tree.root.join("fake-cc.args");
     let script = format!(
@@ -763,6 +1163,20 @@ fn selected_x86_target_reaches_the_native_driver() {
     let arguments = fs::read_to_string(argument_log).expect("read fake compiler arguments");
     assert!(arguments.lines().any(|argument| argument == "-std=c99"));
     assert!(arguments.lines().any(|argument| argument == "-m32"));
+    assert!(arguments.lines().any(|argument| argument == "-I"));
+    assert!(
+        arguments
+            .lines()
+            .any(|argument| argument == tree.root.join("native/include").to_string_lossy())
+    );
+    assert!(arguments.lines().any(|argument| argument == "-L"));
+    assert!(
+        arguments
+            .lines()
+            .any(|argument| argument == tree.root.join("native/lib").to_string_lossy())
+    );
+    assert!(arguments.lines().any(|argument| argument == "-lfixture"));
+    assert!(arguments.lines().any(|argument| argument == "-pthread"));
 }
 
 #[test]
@@ -1118,7 +1532,7 @@ fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
 
 #[test]
 fn references_observe_storage_through_binding_and_path() {
-    // SPEC 3.2 / I-018: a reference names storage. A binding reference sees
+    // SPEC 3.2: a reference names storage. A binding reference sees
     // reassignment, and a reference into an aggregate sees replacement of its
     // container, exactly as in C and Go.
     let source = r#"
