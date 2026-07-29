@@ -46,9 +46,11 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 18 are complete (implemented together in one
+tracker. Milestones 0 through 19 are complete (implemented together in one
 frontend pass where applicable; see `IMPL.md`); later rows remain planned until
-their milestone status changes in `IMPL.md`.
+their milestone status changes in `IMPL.md`. The Milestone 19 closure evidence
+is indexed by `docs/release.md` and the section-owned fixture map in
+`tests/fixtures/conformance/README.md`.
 
 ## 0.1 Legacy artifact inventory
 
@@ -164,7 +166,7 @@ removed.
 | `&T`→`*T`, `&var T`→`*var T`/`*T` safe conversions; `*var T`→`*T` safe downgrade; dereference / raw→ref conversion require `unsafe`; write requires `*var T`; raw→ref conversion asserts non-null, aligned, valid, and remains valid for every use; `unsafe` never makes an ordinary reference nullable | M16.2/16.3/16.6/16.9 (done) | — | compile-fail (`unsafe_only_operations_require_a_lexical_unsafe_block`, `raw_dereference_places_permit_writes_but_never_safe_references`), run-pass |
 | Dereference validity: storage alive, subobject initialized as pointee type, access within subobject (write needs writable storage); raw pointer is not itself a GC root, so managed-storage liveness needs a separate strong path; foreign storage lifetime is the foreign contract | M16, M9 (root doc) | — | doc-contract (largely unenforceable) |
 | Every executed raw dereference/raw→ref conversion does a mandatory null+alignment check and traps on failure; compile-time error only for an expression-local constant-evaluable null/misaligned operand (literals/casts/operators within the operand expression — no propagation through bindings, assignment, branches, reachability, or calls); broader analysis may warn only | M16.7/16.8 (done; `E-RUN-NULL`/`E-RUN-ALIGN` via per-pointee C99 `offsetof` probes; only `null` is constructible as a constant pointer, so the misalignment half of the evaluator is vacuous until int→ptr conversion exists) | trap path | run-pass (`raw_pointer_null_and_alignment_checks_trap`), compile-fail/compile-pass (`pointer_validity_is_expression_local`) |
-| Remaining obligations (provenance/liveness/bounds/init/pointee-type/write-permission) are UB if violated and generally unchecked; accidental GC retention or address reuse cannot validate a dangling pointer | M16 | — | fuzz/UBSan coverage at M19 |
+| Remaining obligations (provenance/liveness/bounds/init/pointee-type/write-permission) are UB if violated and generally unchecked; accidental GC retention or address reuse cannot validate a dangling pointer | M16 | — | doc-contract (not generally constructible as defined behavior), retained malformed-input corpus, and M19 UBSan gate (`generated_c_is_clean_under_address_and_undefined_behavior_sanitizers`) |
 | Raw→safe-ref conversion asserts obligations hold for the reference's whole reachable lifetime; once valid it becomes a strong path for managed storage (§9); a reference to foreign/manual storage does not extend its lifetime; safe code alone cannot create UB through a raw pointer | M16.9 (done for managed targets), M17 (foreign contract) | Boehm GC | run-pass (`raw_to_reference_conversion_restores_a_strong_managed_path`), integration at M17 |
 
 ## 4. Types (§4)
@@ -325,9 +327,9 @@ removed.
 | Strong roots: every local binding until scope end, function parameters for the complete call, temporaries until their full expression finishes, module-level values, safe references, managed handles in structs/enums/collections/hidden loop state; assigning a new value to a `var` removes the binding's strong path to the old value (other strong paths remain effective) | M10 (root tracking) | Boehm GC | run-pass (liveness tests) |
 | Reachable safe references are roots for managed targets; a reference constructed from a raw pointer roots the target only if managed; it doesn't extend foreign/manual storage lifetime | M10, M16 | Boehm GC | run-pass, doc-contract |
 | Raw pointers are *not* language roots; code retaining one is responsible for a separate managed path; Boehm may conservatively over-retain via bit-pattern resemblance but a program cannot rely on it | M10, M16 | Boehm GC | doc-contract, best-effort test |
-| Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | untested — recursive `Option[&T]` graphs are executable as of M14.1, so a best-effort cycle test is now writable; timing stays outside the conformance requirement |
+| Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | run-pass (`runtime_stress_is_stable_across_repeated_debug_and_release_runs` constructs a managed cycle); reclamation timing remains intentionally unasserted |
 | No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes resource-cleanup methods; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
-| Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, then terminates with an OOM diagnostic; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path) | Boehm GC | integration (OOM termination — likely a manually driven test) |
+| Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, retries the allocation, then terminates with an OOM diagnostic only if the retry fails; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path; retry closure audited at M19) | Boehm GC | generated-C integration (`managed_storage_engages_the_collector_prelude_and_link_inputs` asserts collect → retry → terminal ordering); forced host OOM remains nondeterministic |
 | No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, M20 | Boehm GC (nonportable extensions) | optional tooling, not required |
 
 ## 10. Unsafe operations and C interoperability (§10)
@@ -371,7 +373,7 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| The `Counter`/`main` example (value-copy vs. `&var`-mutated alias) must build and run with the specified output once the compiler exists | M19 | Boehm GC, C toolchain | run-pass (this and `examples/spec_demo.elx` both become conformance fixtures) |
+| The `Counter`/`main` example (value-copy vs. `&var`-mutated alias) must build and run with the specified output once the compiler exists | M19 (done) | Boehm GC, C toolchain | run-pass (`11_example`; authoritative `examples/spec_demo` package) |
 
 ---
 
@@ -842,7 +844,7 @@ ledger follows the same split.
 | Diagnostic rendering | `codespan-reporting` | Our `Diagnostic`/`Category`/`Span` shape (§0 legend; `IMPL.md` §2.3) already matches its `Diagnostic`/`Label`/`Files` model directly. Retrofitted into M1 immediately (`SourceManager` implements `Files`, `manifest.rs` captures real spans via `toml::Spanned` and `toml::de::Error::span()`, `main.rs` renders with `term::emit_to_write_style`) rather than left as a future intention — this is real span-based rustc-style output today, not just a plan | M1 (retrofitted), all later milestones |
 | Snapshot testing | `insta` | `IMPL.md` explicitly asks for "golden token streams," "a syntax-tree dump... stable enough to serve as a debugging tool," and snapshot-compared parse tests (§2.4) — exactly insta's purpose, and the standard choice in this niche (rust-analyzer, ruff, and biome all use it for the same purpose) | M2 onward |
 | Property testing | `proptest` | `IMPL.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
-| Fuzzing | `cargo-fuzz` / `libfuzzer-sys` | `IMPL.md` Milestone 19: "Fuzz the lexer and parser... with the invariant that malformed source never crashes the compiler" | M19 |
+| Retained parser fuzz corpus | `proptest` plus checked-in malformed inputs | M19 combines the existing arbitrary-Unicode parser property test with seeded indentation, delimiter, escape, formatted-string, and recovery inputs; this keeps failures reproducible without making libFuzzer a normal build dependency | M19 (done; `tests/robustness.rs`) |
 | Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`IMPL.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
 | CLI surface | `clap` (derive) | `IMPL.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
 

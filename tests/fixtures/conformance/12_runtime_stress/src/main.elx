@@ -1,0 +1,49 @@
+struct Link:
+    value: i32
+    next: Option[&Link]
+
+fn identity[T](value: T) -> T:
+    return value
+
+fn recursive_sum(value: i32) -> i32:
+    if value == 0:
+        return 0
+    return value + recursive_sum(value - 1)
+
+fn promoted(value: i32) -> &i32:
+    let local = value
+    return &local
+
+fn cleanup_probe() -> ():
+    defer println("cleanup outer")
+    if true:
+        defer println("cleanup inner")
+        println("cleanup body")
+
+fn main() -> ():
+    var values = Vec[i32].new()
+    var index = 0
+    while index < 200:
+        values.append(identity(index))
+        index += 1
+    var removed = 0
+    while removed < 100:
+        values.remove(0)
+        removed += 1
+    var copied = values
+    copied[0] = 999
+
+    var left = Link { value: 1, next: Option.None }
+    var right = Link { value: 2, next: Option.None }
+    left.next = Option.Some(&right)
+    right.next = Option.Some(&left)
+
+    let escaped = promoted(42)
+    println(f"{values.len()} {values[0]} {copied[0]}")
+    println(f"{recursive_sum(100)} {*escaped}")
+    match left.next:
+        Option.Some(link):
+            println(f"{link.value}")
+        Option.None:
+            println("missing")
+    cleanup_probe()

@@ -872,13 +872,20 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn collect_concrete_nominals(&mut self, program: &mut TypedIrProgram) {
-        let concrete = (0..self.typed.types.len())
-            .filter_map(|index| {
-                let ty = self.typed.types.id_at(index)?;
-                (!self.typed.types.contains_generic_parameter(ty)).then_some(ty)
-            })
-            .collect::<Vec<_>>();
-        for ty in concrete {
+        // Instantiating one nominal's fields can intern further concrete
+        // nominals (for example `Chain[i32]` creates
+        // `Option[&Chain[i32]]`). Walk the arena to a fixed point instead of
+        // snapshotting its initial length, otherwise those nested instances
+        // reach the backend without a representation.
+        let mut index = 0;
+        while index < self.typed.types.len() {
+            let Some(ty) = self.typed.types.id_at(index) else {
+                break;
+            };
+            index += 1;
+            if self.typed.types.contains_generic_parameter(ty) {
+                continue;
+            }
             let TypeKind::Nominal {
                 identity,
                 arguments,
@@ -1983,6 +1990,38 @@ impl<'a> TypedLowerer<'a> {
                 self.enqueue_reachable(instance.clone(), node.span);
                 let base = child_nodes(callee_node).into_iter().next()?;
                 let receiver = self.lower_expression(base)?;
+                (
+                    TypedCallee::Function(instance),
+                    signature.parameters,
+                    Some(receiver),
+                )
+            }
+            CheckedCall::GenericBoundMethod {
+                trait_declaration,
+                method,
+                receiver_type,
+                adjustment,
+            } => {
+                let concrete = self.concrete_type(receiver_type);
+                let name = self
+                    .resolved
+                    .symbol_text(self.resolved.declarations[method.index()].name);
+                let selected = crate::traits::vtable_entry(
+                    self.resolved,
+                    self.typed,
+                    trait_declaration,
+                    concrete,
+                    name,
+                )?;
+                let instance = FunctionInstance {
+                    declaration: selected.declaration,
+                    arguments: selected.arguments,
+                    self_type: selected.self_type,
+                };
+                let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
+                self.enqueue_reachable(instance.clone(), node.span);
+                let base = child_nodes(callee_node).into_iter().next()?;
+                let receiver = self.lower_bound_receiver(base, signature.receiver?, adjustment)?;
                 (
                     TypedCallee::Function(instance),
                     signature.parameters,

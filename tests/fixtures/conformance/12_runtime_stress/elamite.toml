@@ -1,0 +1,4 @@
+[package]
+name = "runtime_stress"
+version = "0.1.0"
+target_kind = "exe"

@@ -23,7 +23,7 @@ use elamite::source::SourceManager;
 #[derive(Debug, Parser)]
 #[command(
     name = "elamite",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.4.0-draft)"),
     about = "The Elamite programming language compiler",
     arg_required_else_help = true
 )]
@@ -76,6 +76,10 @@ struct BuildArgs {
     /// Retain the generated C translation unit.
     #[arg(long)]
     keep_c: bool,
+
+    /// Pass an additional hardening or instrumentation flag to the C compiler.
+    #[arg(long, value_name = "FLAG", allow_hyphen_values = true)]
+    c_flag: Vec<OsString>,
 }
 
 #[derive(Debug, Args)]
@@ -210,6 +214,7 @@ struct CompileRequest {
     output_directory: PathBuf,
     keep_generated_c: bool,
     c_compiler: Option<OsString>,
+    c_flags: Vec<OsString>,
 }
 
 impl CompileRequest {
@@ -226,6 +231,7 @@ impl CompileRequest {
             optimization: Optimization::Debug,
             keep_generated_c: false,
             c_compiler: None,
+            c_flags: Vec::new(),
         }
     }
 
@@ -249,6 +255,7 @@ impl CompileRequest {
             output_directory,
             keep_generated_c: arguments.keep_c,
             c_compiler: arguments.cc,
+            c_flags: arguments.c_flag,
         }
     }
 }
@@ -352,6 +359,8 @@ fn test_packages(arguments: TestArgs) -> ExitCode {
         filter: arguments.filter,
         targets,
         optimizations,
+        c_flags: Vec::new(),
+        runtime_environment: Vec::new(),
     };
     let report = match elamite::conformance::run_suite(&arguments.suite, &options) {
         Ok(report) => report,
@@ -392,6 +401,7 @@ fn compile_package(request: CompileRequest) -> ExitCode {
                         output_directory: request.output_directory,
                         keep_generated_c: request.keep_generated_c,
                         c_compiler: request.c_compiler,
+                        c_flags: request.c_flags,
                     },
                 ) {
                     Ok(artifact) => artifact,

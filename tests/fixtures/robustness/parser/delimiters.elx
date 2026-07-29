@@ -1,0 +1,4 @@
+fn main() -> ():
+    let first = ([1, 2}
+    let second = Map[str, Vec[i32]
+    println(first))

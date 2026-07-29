@@ -94,6 +94,7 @@ fn build_and_run(source: &str, optimization: Optimization) -> (String, String, i
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
+            c_flags: Vec::new(),
         },
     )
     .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
@@ -218,6 +219,7 @@ fn add_one(value: i32) -> i32:
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
+            c_flags: Vec::new(),
         },
     )
     .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
@@ -404,6 +406,7 @@ fn main() -> ():
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
+            c_flags: Vec::new(),
         },
     )
     .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
@@ -1156,6 +1159,7 @@ fn selected_x86_target_reaches_the_native_driver() {
             output_directory: tree.root.join("x86-out"),
             keep_generated_c: true,
             c_compiler: Some(compiler.into_os_string()),
+            c_flags: Vec::new(),
         },
     )
     .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
@@ -1328,6 +1332,7 @@ fn library_packages_produce_relocatable_objects_without_entry_shims() {
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
+            c_flags: Vec::new(),
         },
     )
     .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
@@ -1405,6 +1410,7 @@ fn a_multi_package_build_consumes_reexported_generic_metadata_once() {
             output_directory: tree.root.join("out"),
             keep_generated_c: false,
             c_compiler: None,
+            c_flags: Vec::new(),
         },
     )
     .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
@@ -1482,6 +1488,23 @@ fn command_line_help_lists_the_supported_workflows() {
             "missing `{command}` in:\n{stdout}"
         );
     }
+}
+
+#[test]
+fn command_line_version_reports_the_specification_revision() {
+    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .arg("--version")
+        .output()
+        .expect("run compiler version command");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "elamite {} (SPEC {})\n",
+            elamite::version(),
+            elamite::spec_revision()
+        )
+    );
 }
 
 #[test]
@@ -1577,6 +1600,7 @@ fn reports_missing_toolchains_without_losing_generated_c() {
             output_directory: output.clone(),
             keep_generated_c: false,
             c_compiler: Some("elamite-no-such-c-compiler".into()),
+            c_flags: Vec::new(),
         },
     )
     .err()
@@ -1613,6 +1637,7 @@ fn reports_a_toolchain_that_omits_its_promised_artifact() {
             output_directory: output.clone(),
             keep_generated_c: false,
             c_compiler: Some(compiler.into_os_string()),
+            c_flags: Vec::new(),
         },
     )
     .err()
@@ -1710,6 +1735,29 @@ fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
     assert!(
         initialization > entry,
         "the collector must be initialized inside the entry shim"
+    );
+    let scanned_allocator = emitted
+        .source
+        .split("void *el_runtime_alloc(size_t byte_count) {")
+        .nth(1)
+        .and_then(|source| source.split("void *el_runtime_alloc_atomic").next())
+        .expect("generated scanned allocation wrapper");
+    let first_attempt = scanned_allocator
+        .find("GC_MALLOC(byte_count)")
+        .expect("first allocation attempt");
+    let collection = scanned_allocator
+        .find("GC_gcollect()")
+        .expect("full collection after failure");
+    let retry = scanned_allocator[first_attempt + 1..]
+        .find("GC_MALLOC(byte_count)")
+        .map(|offset| offset + first_attempt + 1)
+        .expect("allocation retry");
+    let terminal = scanned_allocator
+        .find("el_out_of_memory()")
+        .expect("terminal OOM path");
+    assert!(
+        first_attempt < collection && collection < retry && retry < terminal,
+        "OOM handling must collect, retry, and only then terminate"
     );
 
     if !libgc_available() {

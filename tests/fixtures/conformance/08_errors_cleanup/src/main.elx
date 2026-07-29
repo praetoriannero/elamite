@@ -1,0 +1,10 @@
+fn cleanup() -> ():
+    println("cleanup")
+
+fn value() -> Result[i32, str]:
+    defer cleanup()
+    return Result.Ok(42)
+
+fn main() -> Result[(), str]:
+    println(value()?)
+    return Result.Ok(())

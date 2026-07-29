@@ -1,0 +1,5 @@
+fn main() -> ():
+    let value = 42
+    println(f"open {value")
+    println(f"nested {f"{value}"}")
+    println(f"bad } delimiter")

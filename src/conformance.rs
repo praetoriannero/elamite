@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::backend::Target;
 use crate::diagnostics::Diagnostic;
-use crate::driver::{BuildOptions, Optimization, build, run};
+use crate::driver::{BuildOptions, Optimization, build, run_with_environment};
 use crate::package::PackageGraph;
 use crate::source::SourceManager;
 
@@ -17,6 +17,8 @@ pub struct RunnerOptions {
     pub filter: Option<String>,
     pub targets: Vec<Target>,
     pub optimizations: Vec<Optimization>,
+    pub c_flags: Vec<std::ffi::OsString>,
+    pub runtime_environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 impl Default for RunnerOptions {
@@ -25,6 +27,8 @@ impl Default for RunnerOptions {
             filter: None,
             targets: vec![Target::host()],
             optimizations: vec![Optimization::Debug],
+            c_flags: Vec::new(),
+            runtime_environment: Vec::new(),
         }
     }
 }
@@ -54,11 +58,12 @@ impl RunnerReport {
 
 /// Runs each immediate child package in `suite`.
 ///
-/// A case is a directory containing `elamite.toml` and `expected.stdout`.
-/// `expected.stderr` and `expected.status` are optional and default to empty
-/// output and status zero. When `suite` itself contains a manifest, it is one
-/// case. Build output is isolated beneath a unique temporary directory, which
-/// is deleted after a completely successful run and retained after failure.
+/// A case is a directory containing `elamite.toml` and either a portable
+/// `expected.stdout` or target-specific `expected.<target>.stdout` files.
+/// Stderr and status expectations are optional and default to empty output and
+/// status zero. When `suite` itself contains a manifest, it is one case. Build
+/// output is isolated beneath a unique temporary directory, which is deleted
+/// after a completely successful run and retained after failure.
 pub fn run_suite(suite: &Path, options: &RunnerOptions) -> Result<RunnerReport, String> {
     let cases = discover_cases(suite)?;
     let serial = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
@@ -107,6 +112,8 @@ pub fn run_suite(suite: &Path, options: &RunnerOptions) -> Result<RunnerReport, 
                     *target,
                     *optimization,
                     output_directory,
+                    &options.c_flags,
+                    &options.runtime_environment,
                 ));
             }
         }
@@ -157,8 +164,10 @@ fn run_case(
     target: Target,
     optimization: Optimization,
     output_directory: PathBuf,
+    c_flags: &[std::ffi::OsString],
+    runtime_environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> CaseResult {
-    let expected_stdout = match fs::read(case.join("expected.stdout")) {
+    let expected_stdout = match fs::read(expected_path(case, target, "stdout")) {
         Ok(output) => output,
         Err(error) => {
             return failure(
@@ -169,8 +178,8 @@ fn run_case(
             );
         }
     };
-    let expected_stderr = fs::read(case.join("expected.stderr")).unwrap_or_default();
-    let expected_status = fs::read_to_string(case.join("expected.status"))
+    let expected_stderr = fs::read(expected_path(case, target, "stderr")).unwrap_or_default();
+    let expected_status = fs::read_to_string(expected_path(case, target, "status"))
         .ok()
         .and_then(|status| status.trim().parse::<i32>().ok())
         .unwrap_or(0);
@@ -196,6 +205,7 @@ fn run_case(
             output_directory,
             keep_generated_c: true,
             c_compiler: None,
+            c_flags: c_flags.to_vec(),
         },
     ) {
         Ok(artifact) => artifact,
@@ -208,7 +218,7 @@ fn run_case(
             );
         }
     };
-    let output = match run(&artifact) {
+    let output = match run_with_environment(&artifact, runtime_environment) {
         Ok(output) => output,
         Err(diagnostic) => {
             return failure(
@@ -250,6 +260,15 @@ fn run_case(
         }
     } else {
         failure(name, target, optimization, mismatches.join("\n"))
+    }
+}
+
+fn expected_path(case: &Path, target: Target, kind: &str) -> PathBuf {
+    let targeted = case.join(format!("expected.{}.{}", target_name(target), kind));
+    if targeted.is_file() {
+        targeted
+    } else {
+        case.join(format!("expected.{kind}"))
     }
 }
 

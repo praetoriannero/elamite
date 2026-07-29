@@ -1,0 +1,6 @@
+fn main() -> ():
+    var value = 42
+    let pointer: *var i32 = &var value as *var i32
+    unsafe:
+        let restored = pointer as &var i32
+        println(*restored)

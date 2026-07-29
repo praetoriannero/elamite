@@ -144,6 +144,15 @@ pub enum CheckedCall {
         trait_declaration: DeclarationId,
         method: DeclarationId,
     },
+    /// A statically dispatched call through a user-declared trait bound on a
+    /// generic parameter. The generic body is checked against the trait
+    /// declaration; monomorphization selects the concrete implementation.
+    GenericBoundMethod {
+        trait_declaration: DeclarationId,
+        method: DeclarationId,
+        receiver_type: TypeId,
+        adjustment: ReceiverAdjustment,
+    },
     /// A call through a trait object's vtable. The receiver is the object
     /// itself; `slot` is the method's index in the trait's vtable, ordered by
     /// method name so the layout is deterministic.
@@ -4556,6 +4565,130 @@ impl<'a> Checker<'a> {
                 member_token.span,
             ));
         }
+        if let Some(generic_target) = self.generic_receiver_target(base_type) {
+            let candidates = self
+                .typed
+                .obligations_for(generic_target.0)
+                .filter_map(|obligation| {
+                    let TypeKind::Nominal {
+                        identity,
+                        arguments,
+                    } = self
+                        .typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(obligation.trait_type))
+                    else {
+                        return None;
+                    };
+                    let trait_declaration = identity.declaration;
+                    if self.resolved.declarations[trait_declaration.index()].kind
+                        != DeclarationKind::Trait
+                        || self.current_module.is_some_and(|module| {
+                            !self
+                                .resolved
+                                .declaration_in_scope(module, trait_declaration)
+                        })
+                    {
+                        return None;
+                    }
+                    let method =
+                        self.find_member(trait_declaration, &member_name)
+                            .and_then(|member| match member {
+                                MemberId::Method(method) => Some(method),
+                                MemberId::Field(_) | MemberId::Variant(_) => None,
+                            })?;
+                    Some((
+                        trait_declaration,
+                        method,
+                        arguments.clone(),
+                        crate::traits::name_of(self.resolved, trait_declaration),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            if candidates.len() > 1 {
+                let names = candidates
+                    .iter()
+                    .map(|(_, _, _, name)| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        format!(
+                            "method `{member_name}` is provided by more than one bound \
+                             ({names}); select the intended trait explicitly"
+                        ),
+                    )
+                    .with_primary(member_token.span),
+                );
+                for argument in arguments {
+                    self.check_expr(argument, ExpectedType::None);
+                }
+                return Some((self.typed.types.error(), PlaceKind::Value));
+            }
+            if let Some((trait_declaration, method, trait_arguments, _)) =
+                candidates.into_iter().next()
+            {
+                let instance = FunctionInstance {
+                    declaration: method,
+                    arguments: trait_arguments,
+                    self_type: Some(generic_target.1),
+                };
+                let Some(signature) = self.typed.instantiate_signature(self.resolved, &instance)
+                else {
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                };
+                let Some(receiver_type) = signature.receiver else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            format!(
+                                "associated function `{member_name}` must be selected from its \
+                                 trait"
+                            ),
+                        )
+                        .with_primary(member_token.span),
+                    );
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                };
+                let Some(adjustment) =
+                    self.check_receiver_adjustment(base, base_type, base_place, receiver_type)
+                else {
+                    for argument in arguments {
+                        self.check_expr(argument, ExpectedType::None);
+                    }
+                    return Some((self.typed.types.error(), PlaceKind::Value));
+                };
+                self.check_call_arguments(call_span, &signature.parameters, arguments);
+                self.program.calls.insert(
+                    call_span,
+                    CheckedCall::GenericBoundMethod {
+                        trait_declaration,
+                        method,
+                        receiver_type: generic_target.1,
+                        adjustment,
+                    },
+                );
+                return Some((signature.return_type, PlaceKind::Value));
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    format!(
+                        "no method named `{member_name}` is provided by this generic parameter's \
+                         bounds"
+                    ),
+                )
+                .with_primary(member_token.span),
+            );
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            return Some((self.typed.types.error(), PlaceKind::Value));
+        }
         let (owner, self_type) = self.receiver_owner(base_type)?;
         // Fields and inherent methods are found first; a trait method is
         // selected only when the type itself provides no member of that name
@@ -5123,6 +5256,18 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn generic_receiver_target(&self, ty: TypeId) -> Option<(GenericParameterId, TypeId)> {
+        let ty = self.typed.types.resolve_inference(ty);
+        match self.typed.types.kind(ty) {
+            TypeKind::GenericParameter(parameter) => Some((*parameter, ty)),
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                self.generic_receiver_target(*target)
+            }
+            TypeKind::Alias { target, .. } => self.generic_receiver_target(*target),
+            _ => None,
+        }
+    }
+
     fn check_receiver_adjustment(
         &mut self,
         base: &SyntaxNode,
@@ -5132,22 +5277,30 @@ impl<'a> Checker<'a> {
     ) -> Option<ReceiverAdjustment> {
         let actual = self.typed.types.resolve_inference(actual);
         let expected = self.typed.types.resolve_inference(expected);
-        let (_, self_type) = self.receiver_owner(expected)?;
+        let self_type = match self.typed.types.kind(expected).clone() {
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => target,
+            TypeKind::Alias { target, .. } => {
+                return self.check_receiver_adjustment(base, actual, place, target);
+            }
+            _ => expected,
+        };
         let adjustment = match self.typed.types.kind(expected).clone() {
-            TypeKind::Nominal { .. } => match self.typed.types.kind(actual).clone() {
-                TypeKind::Nominal { .. } if self.typed.types.exactly_equal(actual, self_type) => {
-                    Some(ReceiverAdjustment::CopyValue)
+            TypeKind::Nominal { .. } | TypeKind::GenericParameter(_) => {
+                match self.typed.types.kind(actual).clone() {
+                    _ if self.typed.types.exactly_equal(actual, self_type) => {
+                        Some(ReceiverAdjustment::CopyValue)
+                    }
+                    TypeKind::Reference { target, .. }
+                        if self.typed.types.exactly_equal(target, self_type) =>
+                    {
+                        Some(ReceiverAdjustment::DereferenceAndCopy)
+                    }
+                    _ => None,
                 }
-                TypeKind::Reference { target, .. }
-                    if self.typed.types.exactly_equal(target, self_type) =>
-                {
-                    Some(ReceiverAdjustment::DereferenceAndCopy)
-                }
-                _ => None,
-            },
+            }
             TypeKind::Reference { mutability, target } => {
                 match self.typed.types.kind(actual).clone() {
-                    TypeKind::Nominal { .. } if self.typed.types.exactly_equal(actual, target) => {
+                    _ if self.typed.types.exactly_equal(actual, target) => {
                         if mutability == Mutability::Mutable {
                             place
                                 .is_mutable()

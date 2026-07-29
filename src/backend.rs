@@ -524,19 +524,77 @@ impl<'a> CEmitter<'a> {
             ));
             return;
         }
-        self.output
-            .push_str("\nvoid *el_runtime_alloc(size_t byte_count) {\n    void *result;\n");
-        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-            destination: "result",
-            byte_count: "byte_count",
-            class: AllocationClass::Scanned,
-        });
-        self.output
-            .push_str("    if (result == NULL) el_out_of_memory();\n    return result;\n}\n");
-        // Allocation failure attempts a full collection and then terminates
-        // without running deferred cleanup (`SPEC.md` 9).
+        self.output.push_str("\nvoid el_out_of_memory(void);\n");
+        for (name, class) in [
+            ("el_runtime_alloc", AllocationClass::Scanned),
+            ("el_runtime_alloc_atomic", AllocationClass::PointerFree),
+        ] {
+            let _ = writeln!(
+                self.output,
+                "\nvoid *{name}(size_t byte_count) {{\n    void *result;"
+            );
+            if strategy
+                .emit_c_operation(
+                    ManagedMemoryOperation::Allocate {
+                        destination: "result",
+                        byte_count: "byte_count",
+                        class,
+                    },
+                    &mut self.output,
+                )
+                .is_err()
+            {
+                self.diagnostics.push(Diagnostic::new(
+                    Category::CodeGeneration,
+                    format!(
+                        "failed to emit the `{}` allocation operation",
+                        strategy.name()
+                    ),
+                ));
+                return;
+            }
+            self.output.push_str("    if (result == NULL) {\n        ");
+            if strategy
+                .emit_c_operation(ManagedMemoryOperation::Collect, &mut self.output)
+                .is_err()
+            {
+                self.diagnostics.push(Diagnostic::new(
+                    Category::CodeGeneration,
+                    format!(
+                        "failed to emit the `{}` collection operation",
+                        strategy.name()
+                    ),
+                ));
+                return;
+            }
+            self.output.push_str("        ");
+            if strategy
+                .emit_c_operation(
+                    ManagedMemoryOperation::Allocate {
+                        destination: "result",
+                        byte_count: "byte_count",
+                        class,
+                    },
+                    &mut self.output,
+                )
+                .is_err()
+            {
+                self.diagnostics.push(Diagnostic::new(
+                    Category::CodeGeneration,
+                    format!("failed to emit the `{}` allocation retry", strategy.name()),
+                ));
+                return;
+            }
+            self.output.push_str(
+                "        if (result == NULL) el_out_of_memory();\n\
+                 \x20   }\n\
+                 \x20   return result;\n\
+                 }\n",
+            );
+        }
+        // Every allocation wrapper has already attempted a full collection
+        // and retried before reaching this terminal path (`SPEC.md` 9).
         self.output.push_str("\nvoid el_out_of_memory(void) {\n");
-        self.emit_managed_operation(ManagedMemoryOperation::Collect);
         self.output.push_str(
             "\x20\x20\x20\x20fputs(\"elamite: out of memory\\n\", stderr);\n\
              \x20\x20\x20\x20fflush(stderr);\n\
@@ -548,6 +606,19 @@ impl<'a> CEmitter<'a> {
     /// Emits one managed-memory operation behind the strategy boundary,
     /// indented as a statement inside the current function body.
     fn emit_managed_operation(&mut self, operation: ManagedMemoryOperation<'_>) {
+        if let ManagedMemoryOperation::Allocate {
+            destination,
+            byte_count,
+            class,
+        } = operation
+        {
+            let allocator = match class {
+                AllocationClass::Scanned => "el_runtime_alloc",
+                AllocationClass::PointerFree => "el_runtime_alloc_atomic",
+            };
+            let _ = writeln!(self.output, "{destination} = {allocator}({byte_count});");
+            return;
+        }
         let strategy = self.strategy;
         self.output.push_str("    ");
         if strategy
@@ -4250,11 +4321,35 @@ impl<'a> CEmitter<'a> {
             self.typed.types.expanded_primitive(function.return_type),
             Some(PrimitiveType::Unit)
         );
-        if !function.parameters.is_empty() || !unit {
+        let result_unit = match self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(function.return_type))
+        {
+            TypeKind::Nominal {
+                identity,
+                arguments,
+            } if self
+                .resolved
+                .is_standard_declaration(identity.declaration, "Result") =>
+            {
+                matches!(
+                    arguments.as_slice(),
+                    [ok, _]
+                        if matches!(
+                            self.typed.types.expanded_primitive(*ok),
+                            Some(PrimitiveType::Unit)
+                        )
+                )
+            }
+            _ => false,
+        };
+        if !function.parameters.is_empty() || (!unit && !result_unit) {
             self.diagnostics.push(
                 Diagnostic::new(
                     Category::CodeGeneration,
-                    "the Milestone 8 executable entry must have signature `fn main() -> ()`",
+                    "an executable entry must have signature `fn main() -> ()` or \
+                     `fn main() -> Result[(), E]`",
                 )
                 .with_primary(function.span),
             );

@@ -1,0 +1,3 @@
+fn main() -> ():
+    println(usize.wrapping_from(4294967296u64))
+    println(isize.saturating_from(2147483648i64))

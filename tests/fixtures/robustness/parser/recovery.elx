@@ -1,0 +1,11 @@
+trait Broken[T:
+    fn call(self &Self value T) -> T
+
+impl Broken[i32] for:
+    fn call(:
+        return ???
+
+fn main() -> ():
+    match
+        Option.Some(1) if:
+            let =

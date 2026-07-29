@@ -1,0 +1,4 @@
+fn main() -> ():
+    println("bad \q escape")
+    println('\u{110000}')
+    println("unterminated

@@ -1,0 +1,16 @@
+trait Value:
+    fn value(self: &Self) -> i32
+
+struct Number:
+    inner: i32
+
+impl Value for Number:
+    fn value(self: &Self) -> i32:
+        return self.inner
+
+fn read[T: Value](value: &T) -> i32:
+    return value.value()
+
+fn main() -> ():
+    let number = Number { inner: 42 }
+    println(read(&number))

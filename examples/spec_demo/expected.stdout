@@ -1,0 +1,34 @@
+starting spec demonstration
+resource closed: false
+resource closed: true
+mask: 255
+precedence: 7
+10, 0
+original x: 0, copied x: 5
+same target: false
+equal contents: false
+city: Aster
+city after replacement: Beacon
+city after mutation: Cove
+coordinate sum: 10
+ptr was null
+chain length: 2
+recovered bound status: inherent inactive
+recovered unbound status: inherent inactive
+inherent inactive / trait inactive / toggle / trait inactive
+function reference result: 42
+stored function reference result: 42
+same function: true
+transform result: 42
+is_even(4): true
+fixed array first element: 1
+copied element: 3, vector element: 2
+apply_offset result: 42
+retry 0
+retry 1
+map entries: 2, set entries: 2
+value 1
+value 3
+value 3
+value 4
+propagated value: 42

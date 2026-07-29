@@ -1,0 +1,4 @@
+case	compile_seconds	compile_peak_kib	generated_c_bytes	native_bytes	runtime_seconds	runtime_peak_kib
+spec_demo	1.13	61144	100258	57624	0.00	2444
+runtime_stress	0.48	44428	32234	37608	0.00	2208
+c_ffi	1.11	45032	27208	37896	0.00	2204

@@ -1,0 +1,15 @@
+struct Counter:
+    value: i32
+
+    fn increment(self: &var Self) -> ():
+        self.value = self.value + 1
+
+fn main() -> Result[(), String]:
+    var counter = Counter { value: 0 }
+    let copied = counter
+    let counter_ref: &var Counter = &var counter
+    counter_ref.increment()
+
+    println(copied.value)
+    println(counter.value)
+    return Result.Ok(())

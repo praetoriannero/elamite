@@ -1,0 +1,7 @@
+fn promoted() -> &i32:
+    var value = 42
+    return &value
+
+fn main() -> ():
+    let value = promoted()
+    println(*value)

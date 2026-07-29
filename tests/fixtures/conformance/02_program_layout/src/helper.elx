@@ -1,0 +1,3 @@
+/// Returns text from a file-backed module.
+pub fn message() -> str:
+    return "module"

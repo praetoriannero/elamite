@@ -1,0 +1,13 @@
+enum State:
+    Value(i32)
+    Empty
+
+fn main() -> ():
+    var total = 0
+    for value in [1, 2, 3]:
+        total += value
+    match State.Value(total):
+        State.Value(value):
+            println(value)
+        State.Empty:
+            println(0)

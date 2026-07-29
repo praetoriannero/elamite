@@ -28,10 +28,17 @@ pub const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Returns the language specification revision targeted by this compiler.
+#[must_use]
+pub const fn spec_revision() -> &'static str {
+    "0.4.0-draft"
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
-    fn version_is_defined() {
+    fn release_identity_is_defined() {
         assert!(!super::version().is_empty());
+        assert_eq!(super::spec_revision(), "0.4.0-draft");
     }
 }

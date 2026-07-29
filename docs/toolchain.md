@@ -38,10 +38,15 @@ elamite doc path/to/package
 elamite test path/to/suite --filter=case-name
 ```
 
+`elamite --version` reports both the compiler version and the targeted
+`SPEC.md` revision.
+
 `check` runs all semantic passes without lowering or native tools. `build` and
 `run` accept `--out-dir`, `--cc`, `--release`, `--keep-c`, and either supported
-target. Executable packages produce an executable; library packages produce a
-relocatable object and versioned `.elamite-meta` public metadata.
+target. Repeatable `--c-flag=FLAG` options add sanitizer or hardening flags
+without removing the driver's C99 and warning flags. Executable packages
+produce an executable; library packages produce a relocatable object and
+versioned `.elamite-meta` public metadata.
 
 `dump` accepts `tokens`, `syntax`, `resolution`, `types`, `typed-ir`,
 `control-flow`, `monomorphized`, or `generated-c`. Dumps are deterministic for
@@ -59,6 +64,8 @@ one fixture package directly. Each fixture contains `expected.stdout`;
 stderr and status zero. `--filter` selects one or more named fixtures,
 `--target` selects one architecture, `--all-targets` selects both,
 `--release` selects optimized builds, and `--all-modes` runs debug and release.
+An `expected.x86.*` or `expected.x86_64.*` file overrides its portable
+`expected.*` counterpart for a target-specific result.
 Build output is isolated in a unique temporary directory. Successful output is
 removed; failing output, including generated C, is retained and reported.
 

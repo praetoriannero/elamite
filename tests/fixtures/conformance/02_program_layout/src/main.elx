@@ -1,0 +1,4 @@
+import root.helper.message
+
+fn main() -> ():
+    println(message())

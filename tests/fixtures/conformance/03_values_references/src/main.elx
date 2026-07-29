@@ -1,0 +1,10 @@
+struct Cell:
+    value: i32
+
+fn main() -> ():
+    var original = Cell { value: 0 }
+    let copied = original
+    let alias = &var original.value
+    *alias = 1
+    println(copied.value)
+    println(original.value)

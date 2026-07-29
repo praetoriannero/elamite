@@ -48,6 +48,9 @@ pub struct BuildOptions {
     pub output_directory: PathBuf,
     pub keep_generated_c: bool,
     pub c_compiler: Option<OsString>,
+    /// Extra hardening or instrumentation flags. Driver-owned C99 and warning
+    /// flags remain present in every invocation.
+    pub c_flags: Vec<OsString>,
 }
 
 impl Default for BuildOptions {
@@ -58,6 +61,7 @@ impl Default for BuildOptions {
             output_directory: PathBuf::from("build"),
             keep_generated_c: false,
             c_compiler: None,
+            c_flags: Vec::new(),
         }
     }
 }
@@ -339,6 +343,7 @@ pub fn build(
         .arg("-Werror")
         .arg(options.optimization.compiler_flag())
         .arg(options.target.compiler_flag());
+    command.args(&options.c_flags);
     if root.manifest.target_kind == TargetKind::Library {
         command.arg("-c");
     }
@@ -459,12 +464,25 @@ fn materialize_package_metadata(
 }
 
 pub fn run(artifact: &BuildArtifact) -> Result<RunResult, Diagnostic> {
-    let output = Command::new(&artifact.path).output().map_err(|error| {
-        Diagnostic::new(
-            Category::Toolchain,
-            format!("cannot execute {}: {error}", artifact.path.display()),
-        )
-    })?;
+    run_with_environment(artifact, &[])
+}
+
+/// Runs an artifact with explicit environment overrides. Conformance uses
+/// this for sanitizer runtime configuration without mutating the compiler
+/// process's global environment.
+pub fn run_with_environment(
+    artifact: &BuildArtifact,
+    environment: &[(OsString, OsString)],
+) -> Result<RunResult, Diagnostic> {
+    let output = Command::new(&artifact.path)
+        .envs(environment.iter().cloned())
+        .output()
+        .map_err(|error| {
+            Diagnostic::new(
+                Category::Toolchain,
+                format!("cannot execute {}: {error}", artifact.path.display()),
+            )
+        })?;
     Ok(RunResult {
         status: output.status,
         stdout: output.stdout,

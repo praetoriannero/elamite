@@ -13,6 +13,8 @@ implementation.
 - [`ISSUES.md`](ISSUES.md) records unresolved language-design questions.
 - [`docs/toolchain.md`](docs/toolchain.md) documents installation, commands,
   developer interfaces, and deliberate initial limitations.
+- [`docs/release.md`](docs/release.md) indexes the Milestone 19 conformance and
+  release evidence.
 
 ## Development
 

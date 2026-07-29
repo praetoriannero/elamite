@@ -1,9 +1,9 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 18 are complete and omitted from this
-> forward-looking plan; Milestone 19 is next
+> Status: Active — Milestones 0 through 19 are complete and omitted from this
+> forward-looking plan; Milestone 20 is next
 >
-> Next work package: M19.1 — authoritative demo fixture
+> Next work package: select and measure an M20 optimization candidate
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -168,46 +168,9 @@ intermediate semantics that contradict it.
 
 ## 3. Active implementation roadmap
 
-### Milestone 19: conformance, hardening, and initial release gate
-
-> Status: Next.
->
-> Boundary: this milestone adds no language features. A failing normative rule
-> returns ownership to the milestone named in `LEDGER.md`; it is not patched
-> around in the conformance harness.
-
-**Goal:** Demonstrate that the entire specified initial language works together.
-
-Implementation tasks, in order:
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **M19.1 — Authoritative demo fixture** | Turn `examples/spec_demo.elx` and its package files into a deterministic end-to-end fixture with explicit expected output on both supported targets. | Debug and release builds produce the same specified behavior. |
-| **M19.2 — Section conformance fixtures** | Add focused positive, negative, trap, and interaction fixtures for each `SPEC.md` section so failures localize without the large demo. | Every section has an owned fixture directory and a documented test layer. |
-| **M19.3 — Ledger closure audit** | Review every normative `LEDGER.md` row against implementation code and a named test. Mark it implemented, specified as unsupported, or return it to its owning milestone. | No row remains with an ambiguous pass, runtime dependency, or test status. |
-| **M19.4 — Target/optimization matrix** | Run x86 and x86-64 across debug/release C optimization. Concentrate explicit cases on integer width, layout, root liveness, evaluation order, and function identity. | All supported matrix cells pass or the target claim is revised before release. |
-| **M19.5 — Strict generated-C gate** | Compile generated C99 with strong warnings treated as errors. Exercise available undefined-behavior and memory instrumentation without allowing backend-generated suppressions to hide defects. | The conformance suite is warning-clean and sanitizer-clean in supported configurations. |
-| **M19.6 — Lexer/parser robustness** | Add seeded property/fuzz corpora for indentation, delimiters, escapes, formatted strings, recovery, and arbitrary malformed token streams. | No panic, hang, or unbounded diagnostic cascade across the retained corpus. |
-| **M19.7 — Semantic robustness** | Feed parsed malformed and type-invalid programs through resolution, checking, lowering boundaries, and diagnostic rendering with explicit error symbols/types. | No user input reaches an internal-invariant panic or malformed C emission. |
-| **M19.8 — Runtime stress** | Stress recursive copying, generic instantiation, collection churn, cycles, reference promotion, cleanup chains, traps, and callback reentry. | Stable output/status and no sanitizer failures under repeated runs. |
-| **M19.9 — Diagnostic review** | Curate common mistakes for modules, types, traits, generics, collections, unsafe code, and FFI. Ensure primary/related spans point to Elamite source and categories remain stable. | Snapshot review contains no raw internal IDs or unexplained IR/backend failures. |
-| **M19.10 — Performance baseline** | Record compile time, peak memory, generated-C size, native size, and runtime for representative programs without changing semantics to meet arbitrary targets. | Reproducible benchmark inputs and baseline results are checked in or published with the release process. |
-| **M19.11 — Release audit** | Verify version/spec reporting, supported-toolchain documentation, license/notices, known limitations, unsupported concurrency, and foreign-thread restrictions. | Every initial release criterion below has linked evidence. |
-
-Initial release criteria:
-
-- The authoritative demonstration builds and produces its expected output.
-- All required positive, negative, runtime-trap, multi-package, and C ABI tests
-  pass on every declared supported target.
-- There are no known violations of independent value copying, managed-reference
-  reachability, explicit unsafe boundaries, or cleanup ordering.
-- Unsupported concurrency and foreign-thread callback behavior is documented.
-- The compiler can report its version and the specification revision it
-  targets.
-
 ### Milestone 20: post-conformance optimization
 
-> Status: Candidate work after Milestone 19.
+> Status: Candidate work; select a measured problem before implementation.
 
 **Goal:** Improve implementation quality without changing language behavior.
 

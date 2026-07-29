@@ -1,0 +1,36 @@
+name: conformance
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y libgc-dev
+      - run: cargo fmt --check
+      - run: cargo check --all-targets
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+
+  native-matrix:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, x86]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo dpkg --add-architecture i386
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y gcc-multilib libc6-dev-i386 libgc-dev libgc-dev:i386
+      - run: cargo run -- test examples/spec_demo --target=${{ matrix.target }} --all-modes
+      - run: cargo run -- test tests/fixtures/conformance --target=${{ matrix.target }} --all-modes
+      - run: cargo run -- run examples/c_ffi --target=${{ matrix.target }} --release

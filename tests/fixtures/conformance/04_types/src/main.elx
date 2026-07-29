@@ -1,0 +1,7 @@
+fn main() -> ():
+    let value: Option[i32] = Option.Some(7)
+    match value:
+        Option.Some(number):
+            println(number)
+        Option.None:
+            println(0)
