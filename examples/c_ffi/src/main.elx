@@ -1,0 +1,94 @@
+@importc("ffi_pair", "elamite_ffi_demo.h")
+struct Pair:
+    left: i32
+    right: i32
+
+@importc("ffi_counter", "elamite_ffi_demo.h")
+type Counter
+
+@importc("ffi_scalar_checksum", "elamite_ffi_demo.h")
+fn scalar_checksum(
+    i8_value: i8,
+    i16_value: i16,
+    i32_value: i32,
+    i64_value: i64,
+    u8_value: u8,
+    u16_value: u16,
+    u32_value: u32,
+    u64_value: u64,
+    isize_value: isize,
+    usize_value: usize,
+    f32_value: f32,
+    f64_value: f64,
+) -> i64
+
+@importc("ffi_make_pair", "elamite_ffi_demo.h")
+fn make_pair(left: i32, right: i32) -> Pair
+
+@importc("ffi_add_pairs", "elamite_ffi_demo.h")
+fn add_pairs(first: Pair, second: Pair) -> Pair
+
+@importc("ffi_counter_open", "elamite_ffi_demo.h")
+fn counter_open(initial_value: i32) -> *var Counter
+
+@importc("ffi_counter_add", "elamite_ffi_demo.h")
+fn counter_add(counter: *var Counter, amount: i32) -> ()
+
+@importc("ffi_counter_read", "elamite_ffi_demo.h")
+fn counter_read(counter: *Counter) -> i32
+
+@importc("ffi_counter_reset", "elamite_ffi_demo.h")
+fn counter_reset(counter: *var Counter) -> ()
+
+@importc("ffi_apply_callback", "elamite_ffi_demo.h")
+fn apply_callback(callback: *fn(i32) -> i32, value: i32) -> i32
+
+@importc("ffi_call_elamite_export", "elamite_ffi_demo.h")
+fn call_elamite_export(value: i32) -> i32
+
+fn square(value: i32) -> i32:
+    return value * value
+
+@exportc("elamite_triple")
+fn triple(value: i32) -> i32:
+    return value * 3
+
+fn main() -> ():
+    let callback: &fn(i32) -> i32 = square
+
+    unsafe:
+        let checksum = scalar_checksum(
+            1i8,
+            2i16,
+            3i32,
+            4i64,
+            5u8,
+            6u16,
+            7u32,
+            8u64,
+            9isize,
+            10usize,
+            11.0f32,
+            12.0f64,
+        )
+        println(f"scalar checksum: {checksum} (expected 78)")
+
+        let first = make_pair(10, 20)
+        let second = make_pair(1, 2)
+        let sum = add_pairs(first, second)
+        println(f"pair by value: ({sum.left}, {sum.right}) (expected (11, 22))")
+
+        let counter = counter_open(40)
+        counter_add(counter, 2)
+        println(f"opaque pointer: {counter_read(counter as *Counter)} (expected 42)")
+        counter_reset(counter)
+        println(f"void return: {counter_read(counter as *Counter)} (expected 0)")
+
+        let callback_result = apply_callback(
+            callback as *fn(i32) -> i32,
+            6,
+        )
+        println(f"C callback: {callback_result} (expected 41)")
+
+        let export_result = call_elamite_export(14)
+        println(f"C calls @exportc: {export_result} (expected 43)")

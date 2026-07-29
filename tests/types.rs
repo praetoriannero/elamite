@@ -97,7 +97,7 @@ fn canonicalizes_aliases_generic_applications_and_unit() {
     let tree = TestTree::new("aliases");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -168,19 +168,19 @@ fn nominal_identity_includes_the_package_instance() {
     let tree = TestTree::new("package-identity");
     tree.package(
         "left",
-        "library",
+        "lib",
         &[],
         &[("src/lib.elx", "pub struct Value:\n    pass\n")],
     );
     tree.package(
         "right",
-        "library",
+        "lib",
         &[],
         &[("src/lib.elx", "pub struct Value:\n    pass\n")],
     );
     let root = tree.package(
         "root",
-        "executable",
+        "exe",
         &[("left", "../left"), ("right", "../right")],
         &[(
             "src/main.elx",
@@ -408,7 +408,7 @@ fn reports_alias_cycles_wrong_arity_and_non_trait_bounds() {
     let tree = TestTree::new("type-errors");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -445,7 +445,7 @@ fn exposes_layout_place_obligation_reference_and_abi_queries() {
     let tree = TestTree::new("queries");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -541,7 +541,7 @@ fn canonicalizes_the_authoritative_demonstration() {
     let tree = TestTree::new("spec-demo");
     let package = tree.package(
         "demo",
-        "executable",
+        "exe",
         &[],
         &[("src/main.elx", include_str!("../examples/spec_demo.elx"))],
     );
@@ -577,7 +577,7 @@ fn validates_receiver_forms_and_function_reference_value_types() {
     let tree = TestTree::new("callable-types-ok");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -623,7 +623,7 @@ fn validates_receiver_forms_and_function_reference_value_types() {
         ),
     ] {
         let tree = TestTree::new(name);
-        let package = tree.package("app", "executable", &[], &[("src/main.elx", source)]);
+        let package = tree.package("app", "exe", &[], &[("src/main.elx", source)]);
         let (sources, resolved) = resolve_package(&package);
         let typed = resolve_types(&resolved.program);
         let text = diagnostics(&sources, &typed.diagnostics);
@@ -649,7 +649,7 @@ fn a_bare_trait_name_is_a_type_only_where_a_trait_is_expected() {
          fn bounded[T: Toggle](value: &T) -> ():\n\
          \x20\x20\x20\x20pass\n";
     let tree = TestTree::new("trait-position-ok");
-    let package = tree.package("app", "executable", &[], &[("src/main.elx", accepted)]);
+    let package = tree.package("app", "exe", &[], &[("src/main.elx", accepted)]);
     let (sources, resolved) = resolve_package(&package);
     let typed = resolve_types(&resolved.program);
     assert!(
@@ -673,7 +673,7 @@ fn a_bare_trait_name_is_a_type_only_where_a_trait_is_expected() {
             "trait Toggle:\n\x20\x20\x20\x20fn status(self: &Self) -> str\n{value_position}"
         );
         let tree = TestTree::new(&format!("trait-position-{index}"));
-        let package = tree.package("app", "executable", &[], &[("src/main.elx", &source)]);
+        let package = tree.package("app", "exe", &[], &[("src/main.elx", &source)]);
         let (sources, resolved) = resolve_package(&package);
         let typed = resolve_types(&resolved.program);
         let text = diagnostics(&sources, &typed.diagnostics);

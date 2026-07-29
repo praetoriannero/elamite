@@ -7,6 +7,7 @@ description = "The Elamite programming language compiler"
 publish = false
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
 codespan-reporting = "0.13"
 lasso = "0.7"
 serde = { version = "1", features = ["derive"] }

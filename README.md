@@ -40,11 +40,28 @@ cargo run -- build path/to/package
 cargo run -- run path/to/package
 ```
 
+Create a new executable package containing a hello-world program with:
+
+```sh
+cargo run -- init hello
+cargo run -- run hello
+```
+
+Executable packages are the default. Add `--lib` to create a library with
+`src/lib.elx` instead:
+
+```sh
+cargo run -- init hello_lib --lib
+cargo run -- build hello_lib
+```
+
 All three commands accept `--target=x86` or `--target=x86_64`. `build` and
 `run` also accept `--release`, `--out-dir=PATH`, and `--cc=PATH`; add
-`--keep-c` to retain the generated translation unit for inspection. Executable
-packages produce a native executable; library packages produce a relocatable
-object. The Milestone 8 executable subset includes primitive calculations,
+`--keep-c` to retain the generated translation unit for inspection. Run
+`cargo run -- --help` or append `--help` to a command for the complete
+Clap-generated interface. Executable packages produce a native executable;
+library packages produce a relocatable object. The Milestone 8 executable
+subset includes primitive calculations,
 locals, direct function calls, `if`, `while`, short-circuit operators, tuples,
 fixed arrays, initial non-recursive structs, and output. Milestone 9 adds
 recursive logical copies, non-generic enums, and `match` over the currently

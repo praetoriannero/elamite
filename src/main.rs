@@ -1,11 +1,11 @@
-//! Initial command-line entry point through the Milestone 8 native backend.
-//! The polished `clap` surface and IR dump modes remain Milestone 18.
+//! Command-line interface for the Elamite compiler.
 
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use codespan_reporting::term::{
     self,
@@ -14,33 +14,211 @@ use codespan_reporting::term::{
 use elamite::backend::Target;
 use elamite::diagnostics::Diagnostic;
 use elamite::driver::{BuildOptions, Optimization, build, check_frontend, run};
+use elamite::manifest::TargetKind;
 use elamite::package::PackageGraph;
+use elamite::scaffold::init_package;
 use elamite::source::SourceManager;
 
-fn main() -> ExitCode {
-    let cli = match Cli::parse(std::env::args_os().skip(1)) {
-        Ok(cli) => cli,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let package_dir = cli.package_dir.clone();
-    let manifest_path = package_dir.join("elamite.toml");
+#[derive(Debug, Parser)]
+#[command(
+    name = "elamite",
+    version,
+    about = "The Elamite programming language compiler",
+    arg_required_else_help = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
 
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Check a package without generating native code.
+    Check(CheckArgs),
+    /// Compile a package into a native artifact.
+    Build(BuildArgs),
+    /// Compile and run an executable package.
+    Run(BuildArgs),
+    /// Create a new hello-world package.
+    Init(InitArgs),
+}
+
+#[derive(Debug, Args)]
+struct CheckArgs {
+    #[command(flatten)]
+    package: PackageArgs,
+}
+
+#[derive(Debug, Args)]
+struct BuildArgs {
+    #[command(flatten)]
+    package: PackageArgs,
+
+    /// Optimize the generated native artifact.
+    #[arg(long)]
+    release: bool,
+
+    /// Directory for generated and native artifacts.
+    #[arg(long, value_name = "PATH")]
+    out_dir: Option<PathBuf>,
+
+    /// C compiler executable to invoke.
+    #[arg(long, value_name = "PATH")]
+    cc: Option<OsString>,
+
+    /// Retain the generated C translation unit.
+    #[arg(long)]
+    keep_c: bool,
+}
+
+#[derive(Debug, Args)]
+struct PackageArgs {
+    /// Package directory containing elamite.toml.
+    #[arg(value_name = "PACKAGE", default_value = ".")]
+    package_dir: PathBuf,
+
+    /// Native target architecture; defaults to the host architecture.
+    #[arg(long, value_enum, value_name = "ARCH")]
+    target: Option<CliTarget>,
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Directory to initialize.
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Package name; defaults to the destination directory name.
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
+
+    /// Create a library package instead of an executable.
+    #[arg(long)]
+    lib: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliTarget {
+    #[value(name = "x86")]
+    X86,
+    #[value(name = "x86_64")]
+    X86_64,
+}
+
+impl From<CliTarget> for Target {
+    fn from(target: CliTarget) -> Self {
+        match target {
+            CliTarget::X86 => Self::X86,
+            CliTarget::X86_64 => Self::X86_64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompileCommand {
+    Check,
+    Build,
+    Run,
+}
+
+struct CompileRequest {
+    command: CompileCommand,
+    package_dir: PathBuf,
+    target: Target,
+    optimization: Optimization,
+    output_directory: PathBuf,
+    keep_generated_c: bool,
+    c_compiler: Option<OsString>,
+}
+
+impl CompileRequest {
+    fn check(arguments: CheckArgs) -> Self {
+        let package_dir = arguments.package.package_dir;
+        Self {
+            command: CompileCommand::Check,
+            target: arguments
+                .package
+                .target
+                .map_or_else(Target::host, Target::from),
+            output_directory: package_dir.join("build"),
+            package_dir,
+            optimization: Optimization::Debug,
+            keep_generated_c: false,
+            c_compiler: None,
+        }
+    }
+
+    fn build(command: CompileCommand, arguments: BuildArgs) -> Self {
+        let package_dir = arguments.package.package_dir;
+        let output_directory = arguments
+            .out_dir
+            .unwrap_or_else(|| package_dir.join("build"));
+        Self {
+            command,
+            target: arguments
+                .package
+                .target
+                .map_or_else(Target::host, Target::from),
+            package_dir,
+            optimization: if arguments.release {
+                Optimization::Release
+            } else {
+                Optimization::Debug
+            },
+            output_directory,
+            keep_generated_c: arguments.keep_c,
+            c_compiler: arguments.cc,
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    match Cli::parse().command {
+        Command::Check(arguments) => compile_package(CompileRequest::check(arguments)),
+        Command::Build(arguments) => {
+            compile_package(CompileRequest::build(CompileCommand::Build, arguments))
+        }
+        Command::Run(arguments) => {
+            compile_package(CompileRequest::build(CompileCommand::Run, arguments))
+        }
+        Command::Init(arguments) => initialize_package(arguments),
+    }
+}
+
+fn initialize_package(arguments: InitArgs) -> ExitCode {
+    let target_kind = if arguments.lib {
+        TargetKind::Library
+    } else {
+        TargetKind::Executable
+    };
+    match init_package(&arguments.path, arguments.name.as_deref(), target_kind) {
+        Ok(package) => {
+            println!("initialized {}", package.directory.display());
+            println!("run with: elamite run {}", package.directory.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn compile_package(request: CompileRequest) -> ExitCode {
+    let manifest_path = request.package_dir.join("elamite.toml");
     let mut sources = SourceManager::new();
     match PackageGraph::resolve(&manifest_path, &mut sources) {
         Ok(graph) => {
-            if cli.command != CommandKind::Check {
+            if request.command != CompileCommand::Check {
                 let artifact = match build(
                     &graph,
                     &mut sources,
                     &BuildOptions {
-                        target: cli.target,
-                        optimization: cli.optimization,
-                        output_directory: cli.output_directory,
-                        keep_generated_c: cli.keep_generated_c,
-                        c_compiler: cli.c_compiler,
+                        target: request.target,
+                        optimization: request.optimization,
+                        output_directory: request.output_directory,
+                        keep_generated_c: request.keep_generated_c,
+                        c_compiler: request.c_compiler,
                     },
                 ) {
                     Ok(artifact) => artifact,
@@ -49,7 +227,7 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
-                if cli.command == CommandKind::Run {
+                if request.command == CompileCommand::Run {
                     let result = match run(&artifact) {
                         Ok(result) => result,
                         Err(diagnostic) => {
@@ -70,7 +248,7 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             let root = &graph.packages[&graph.root];
-            let frontend = match check_frontend(&graph, &mut sources, cli.target) {
+            let frontend = match check_frontend(&graph, &mut sources, request.target) {
                 Ok(frontend) => frontend,
                 Err(diagnostics) => {
                     render_diagnostics(&sources, &diagnostics);
@@ -101,74 +279,6 @@ fn main() -> ExitCode {
             render_diagnostics(&sources, &diagnostics);
             ExitCode::FAILURE
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CommandKind {
-    Check,
-    Build,
-    Run,
-}
-
-struct Cli {
-    command: CommandKind,
-    package_dir: PathBuf,
-    target: Target,
-    optimization: Optimization,
-    output_directory: PathBuf,
-    keep_generated_c: bool,
-    c_compiler: Option<OsString>,
-}
-
-impl Cli {
-    fn parse(arguments: impl Iterator<Item = OsString>) -> Result<Self, String> {
-        let mut command = CommandKind::Check;
-        let mut package_dir = None;
-        let mut target = Target::host();
-        let mut optimization = Optimization::Debug;
-        let mut output_directory = None;
-        let mut keep_generated_c = false;
-        let mut c_compiler = None;
-        for (index, argument) in arguments.enumerate() {
-            let text = argument.to_string_lossy();
-            match text.as_ref() {
-                "check" if index == 0 => command = CommandKind::Check,
-                "build" if index == 0 => command = CommandKind::Build,
-                "run" if index == 0 => command = CommandKind::Run,
-                "--release" => optimization = Optimization::Release,
-                "--keep-c" => keep_generated_c = true,
-                "--target=x86" => target = Target::X86,
-                "--target=x86_64" => target = Target::X86_64,
-                _ if text.starts_with("--out-dir=") => {
-                    output_directory = Some(PathBuf::from(&text["--out-dir=".len()..]));
-                }
-                _ if text.starts_with("--cc=") => {
-                    c_compiler = Some(OsString::from(&text["--cc=".len()..]));
-                }
-                _ if text.starts_with('-') => {
-                    return Err(format!(
-                        "unknown option `{text}`\n\
-                         usage: elamite [check|build|run] [package] \
-                         [--target=x86|--target=x86_64] [--release] [--keep-c] \
-                         [--out-dir=PATH] [--cc=PATH]"
-                    ));
-                }
-                _ if package_dir.is_none() => package_dir = Some(PathBuf::from(argument)),
-                _ => return Err("only one package path may be supplied".to_string()),
-            }
-        }
-        let package_dir = package_dir.unwrap_or_else(|| PathBuf::from("."));
-        let output_directory = output_directory.unwrap_or_else(|| package_dir.join("build"));
-        Ok(Self {
-            command,
-            package_dir,
-            target,
-            optimization,
-            output_directory,
-            keep_generated_c,
-            c_compiler,
-        })
     }
 }
 

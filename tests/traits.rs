@@ -36,7 +36,7 @@ fn frontend_diagnostics(source: &str) -> (SourceManager, Vec<Diagnostic>) {
     let tree = TestTree::new("case");
     fs::write(
         tree.root.join("elamite.toml"),
-        "[package]\nname = \"traits_test\"\nversion = \"0.1.0\"\ntarget_kind = \"executable\"\n",
+        "[package]\nname = \"traits_test\"\nversion = \"0.1.0\"\ntarget_kind = \"exe\"\n",
     )
     .expect("write manifest");
     fs::write(tree.root.join("src/main.elx"), source).expect("write source");

@@ -1,4 +1,4 @@
 [package]
 name = "leaf"
 version = "0.1.0"
-target_kind = "library"
+target_kind = "lib"

@@ -1,0 +1,11 @@
+[package]
+name = "c_ffi_demo"
+version = "0.1.0"
+target_kind = "exe"
+
+[native]
+include_paths = ["native/include"]
+# Link options are passed to the C compiler from the directory where the
+# Elamite driver is invoked. This path supports the repository-root command
+# documented in README.md.
+link_options = ["examples/c_ffi/native/elamite_ffi_demo.c"]

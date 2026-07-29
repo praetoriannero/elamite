@@ -30,7 +30,7 @@ impl TestTree {
     fn executable(&self, source: &str) {
         fs::write(
             self.root.join("elamite.toml"),
-            "[package]\nname = \"backend_test\"\nversion = \"0.1.0\"\ntarget_kind = \"executable\"\n",
+            "[package]\nname = \"backend_test\"\nversion = \"0.1.0\"\ntarget_kind = \"exe\"\n",
         )
         .expect("write manifest");
         fs::write(self.root.join("src/main.elx"), source).expect("write source");
@@ -39,7 +39,7 @@ impl TestTree {
     fn library(&self, source: &str) {
         fs::write(
             self.root.join("elamite.toml"),
-            "[package]\nname = \"backend_test\"\nversion = \"0.1.0\"\ntarget_kind = \"library\"\n",
+            "[package]\nname = \"backend_test\"\nversion = \"0.1.0\"\ntarget_kind = \"lib\"\n",
         )
         .expect("write manifest");
         fs::write(self.root.join("src/lib.elx"), source).expect("write source");
@@ -365,7 +365,7 @@ fn a_foreign_callback_can_use_registered_managed_context() {
         "[package]\n\
          name = \"backend_test\"\n\
          version = \"0.1.0\"\n\
-         target_kind = \"executable\"\n\
+         target_kind = \"exe\"\n\
          \n\
          [native]\n\
          include_paths = [\"native/include\"]\n",
@@ -1116,7 +1116,7 @@ fn selected_x86_target_reaches_the_native_driver() {
         "[package]\n\
          name = \"backend_test\"\n\
          version = \"0.1.0\"\n\
-         target_kind = \"executable\"\n\
+         target_kind = \"exe\"\n\
          \n\
          [native]\n\
          include_paths = [\"native/include\"]\n\
@@ -1343,6 +1343,99 @@ fn command_line_check_honors_the_selected_pointer_width() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn command_line_help_lists_the_supported_workflows() {
+    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .arg("--help")
+        .output()
+        .expect("run Elamite help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for command in ["check", "build", "run", "init"] {
+        assert!(
+            stdout.contains(command),
+            "missing `{command}` in:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn command_line_rejects_an_unknown_target_with_clap_guidance() {
+    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .args(["check", "--target=arm64"])
+        .output()
+        .expect("run Elamite with an invalid target");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value 'arm64'"), "{stderr}");
+    assert!(stderr.contains("x86_64"), "{stderr}");
+}
+
+#[test]
+fn command_line_init_creates_a_runnable_hello_world_package() {
+    let tree = TestTree::new("cli-init");
+    let package = tree.root.join("hello");
+    let initialized = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .arg("init")
+        .arg(&package)
+        .output()
+        .expect("run Elamite init command");
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    assert!(package.join("elamite.toml").is_file());
+    assert!(package.join("src/main.elx").is_file());
+
+    let executed = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .arg("run")
+        .arg(&package)
+        .output()
+        .expect("run initialized package");
+    assert!(
+        executed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&executed.stdout),
+        "Hello, Elamite!\n"
+    );
+}
+
+#[test]
+fn command_line_init_can_create_a_library_package() {
+    let tree = TestTree::new("cli-init-lib");
+    let package = tree.root.join("hello_lib");
+    let initialized = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .arg("init")
+        .arg(&package)
+        .arg("--lib")
+        .output()
+        .expect("run Elamite library init command");
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    assert!(package.join("elamite.toml").is_file());
+    assert!(package.join("src/lib.elx").is_file());
+    assert!(!package.join("src/main.elx").exists());
+
+    let built = Command::new(env!("CARGO_BIN_EXE_elamite"))
+        .arg("build")
+        .arg(&package)
+        .output()
+        .expect("build initialized library package");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(package.join("build/hello_lib.o").is_file());
 }
 
 #[test]

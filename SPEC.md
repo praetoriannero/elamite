@@ -104,7 +104,7 @@ let total = point.x
 A package is the unit of compilation, dependency resolution, nominal identity,
 and trait coherence. Every package has an `elamite.toml` manifest declaring its
 name, version, target kind, dependencies, and root source file. Target kind is
-either `library` or `executable`. `src/lib.elx` and `src/main.elx` are the
+either `lib` or `exe`. `src/lib.elx` and `src/main.elx` are the
 respective default roots; the manifest may select a different `.elx` file. The
 directory containing the selected root file is the package's source directory.
 
@@ -117,7 +117,7 @@ depending package's manifest directory.
 [package]
 name = "app"
 version = "0.1.0"
-target_kind = "executable"
+target_kind = "exe"
 
 [dependencies.codec]
 path = "../codec"

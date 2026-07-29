@@ -112,7 +112,7 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| Package = compilation/dependency/nominal-identity/coherence unit; `elamite.toml` declares name, version, target kind (`library`\|`executable`), dependencies, root file; default roots `src/lib.elx`/`src/main.elx` | M1 | — | compile-fail (malformed manifest), integration |
+| Package = compilation/dependency/nominal-identity/coherence unit; `elamite.toml` declares name, version, target kind (`lib`\|`exe`), dependencies, root file; default roots `src/lib.elx`/`src/main.elx` | M1 | — | compile-fail (malformed manifest), integration |
 | Root file defines `root` module; other `.elx` files define file-backed modules from relative path; directories are namespace components; path components must be valid identifiers | M1 | — | integration, compile-fail (invalid component) |
 | `mod name:` inline nested module; inline and file-backed modules cannot collide; file-backed modules need no bodyless `mod` declaration | M1 (discover file-backed paths), M3 (parse inline modules), M4 (reject collision during collection) | — | compile-fail (duplicate module path) |
 | Path roots `root`, `self`, `super` (error at package root) are keywords; `std` and dependency aliases are ordinary names resolved after lexical bindings, module declarations, imports, and prelude names, so a module may shadow `std` | M4 | — | compile-fail (`super` at root) |
@@ -379,7 +379,7 @@ removed.
 
 Entities the compiler must recognize intrinsically (structural rules, derive
 support, or lowering hooks), versus entities that can be ordinary library code
-once the intrinsic hooks exist. Per `IMPL.md` §10/Milestone 18, compiler
+once the intrinsic hooks exist. Per `IMPL.md` §3/Milestone 18, compiler
 knowledge should stay minimal — this column records why each entity needs any
 compiler awareness at all.
 
@@ -420,6 +420,7 @@ are the outcomes the initial driver must support, independent of spelling:
 | --- | --- | --- |
 | Check a package | Run resolution + type checking without generating C or linking; report diagnostics | M4–M7 |
 | Build a package | Full pipeline through C generation, C-compiler invocation, and linking; produce an executable or library artifact | M8 (initial), M17–M18 (complete) |
+| Initialize a package | Create a non-destructive hello-world executable skeleton by default (`src/main.elx`) or a library skeleton with `--lib` (`src/lib.elx`) | M18.6 (done) |
 | Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `IMPL.md`) | M4 onward |
 | Select a target | Choose the target architecture/OS the generated C is compiled for | M1 (manifest), M8 (backend) — depends on the open target-matrix decision in §13 above |
 | Select an output directory | Choose where build artifacts (generated C, object files, linked binary) land | M8, M18 |
@@ -427,7 +428,7 @@ are the outcomes the initial driver must support, independent of spelling:
 
 ## 15. Concurrency: explicitly unsupported
 
-Per `IMPL.md` §11 and [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution),
+Per `IMPL.md` §5 and [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution),
 no task syntax, scheduler, channel, synchronization trait, or cross-thread
 callback exists in the initial language, and none should be implemented until
 I-015 resolves the questions listed there. Concretely:
@@ -440,7 +441,7 @@ I-015 resolves the questions listed there. Concretely:
   the initial language, and it is a restriction, not a capability — see the
   §10.3 table above.
 - When I-015 is resolved, concurrency is added as a new vertical slice per
-  `IMPL.md` §11 (syntax/resolution → static transfer checks → CFG lowering →
+  `IMPL.md` §5 (syntax/resolution → static transfer checks → CFG lowering →
   runtime scheduler/synchronization → GC integration → cancellation cleanup →
   foreign-thread entry → stress/race testing), not as incremental patches to
   the milestones above.
@@ -837,7 +838,7 @@ ledger follows the same split.
 | Property testing | `proptest` | `IMPL.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
 | Fuzzing | `cargo-fuzz` / `libfuzzer-sys` | `IMPL.md` Milestone 19: "Fuzz the lexer and parser... with the invariant that malformed source never crashes the compiler" | M19 |
 | Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`IMPL.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
-| CLI surface | `clap` (derive) | `IMPL.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18 |
+| CLI surface | `clap` (derive) | `IMPL.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
 
 ### 18.2 Deferred, not rejected
 

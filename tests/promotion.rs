@@ -29,7 +29,7 @@ impl TestTree {
         fs::write(
             self.root.join("elamite.toml"),
             "[package]\nname = \"promotion_test\"\nversion = \"0.1.0\"\n\
-             target_kind = \"executable\"\n",
+             target_kind = \"exe\"\n",
         )
         .expect("write manifest");
         fs::write(self.root.join("src/main.elx"), source).expect("write source");

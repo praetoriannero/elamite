@@ -11,7 +11,7 @@ use crate::diagnostics::{Category, Diagnostic};
 use crate::ident::is_valid_identifier;
 use crate::source::{FileId, SourceManager, Span};
 
-/// `SPEC.md` §2.3: "Target kind is either `library` or `executable`."
+/// `SPEC.md` §2.3: "Target kind is either `lib` or `exe`."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetKind {
     Library,
@@ -166,13 +166,13 @@ impl Manifest {
         }
 
         let target_kind = match raw.package.target_kind.get_ref().as_str() {
-            "library" => Some(TargetKind::Library),
-            "executable" => Some(TargetKind::Executable),
+            "lib" => Some(TargetKind::Library),
+            "exe" => Some(TargetKind::Executable),
             other => {
                 diagnostics.push(spanned_diagnostic(
                     file,
                     &raw.package.target_kind,
-                    format!("target kind must be \"library\" or \"executable\", found \"{other}\""),
+                    format!("target kind must be \"lib\" or \"exe\", found \"{other}\""),
                 ));
                 None
             }
@@ -256,7 +256,7 @@ mod tests {
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
             "#,
         )
         .expect("manifest should parse");
@@ -272,7 +272,7 @@ mod tests {
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "library"
+            target_kind = "lib"
             "#,
         )
         .expect("manifest should parse");
@@ -286,7 +286,7 @@ mod tests {
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
             root = "start.elx"
             "#,
         )
@@ -301,7 +301,7 @@ mod tests {
             [package]
             name = ""
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
             "#,
         )
         .expect_err("empty name should be rejected");
@@ -329,13 +329,31 @@ mod tests {
     }
 
     #[test]
+    fn rejects_legacy_target_kind_spellings() {
+        for target_kind in ["executable", "library"] {
+            let diagnostics = parse(&format!(
+                "[package]\n\
+                 name = \"demo\"\n\
+                 version = \"0.1.0\"\n\
+                 target_kind = \"{target_kind}\"\n"
+            ))
+            .expect_err("legacy target kind should be rejected");
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("\"lib\" or \"exe\""))
+            );
+        }
+    }
+
+    #[test]
     fn rejects_root_without_elx_extension() {
         let diagnostics = parse(
             r#"
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
             root = "start.txt"
             "#,
         )
@@ -351,7 +369,7 @@ mod tests {
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
 
             [dependencies."not-valid"]
             path = "../other"
@@ -369,7 +387,7 @@ mod tests {
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
 
             [dependencies.other]
             path = "../other"
@@ -387,7 +405,7 @@ mod tests {
             [package]
             name = "demo"
             version = "0.1.0"
-            target_kind = "executable"
+            target_kind = "exe"
 
             [native]
             include_paths = ["native/include"]

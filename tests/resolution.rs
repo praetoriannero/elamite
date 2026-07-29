@@ -121,7 +121,7 @@ fn predeclares_functions_and_allows_local_shadowing() {
     let tree = TestTree::new("predeclare");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -171,7 +171,7 @@ fn resolves_the_authoritative_demonstration() {
     let tree = TestTree::new("spec-demo");
     let package = tree.package(
         "demo",
-        "executable",
+        "exe",
         &[],
         &[("src/main.elx", include_str!("../examples/spec_demo.elx"))],
     );
@@ -191,7 +191,7 @@ fn resolves_circular_imports_after_collecting_declarations() {
     let tree = TestTree::new("import-cycle");
     let package = tree.package(
         "library",
-        "library",
+        "lib",
         &[],
         &[(
             "src/lib.elx",
@@ -226,7 +226,7 @@ fn duplicate_imports_conflict_even_when_their_targets_are_identical() {
     let tree = TestTree::new("duplicate-import");
     let package = tree.package(
         "library",
-        "library",
+        "lib",
         &[],
         &[(
             "src/lib.elx",
@@ -259,7 +259,7 @@ fn resolves_parameters_locals_patterns_loops_and_record_shorthand() {
     let tree = TestTree::new("lexical-scopes");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -301,7 +301,7 @@ fn lookup_does_not_search_other_modules_or_inherit_imports() {
     let tree = TestTree::new("lexical-boundaries");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[
             (
@@ -331,7 +331,7 @@ fn public_reexport_chain_preserves_the_original_identity() {
     let tree = TestTree::new("reexport");
     tree.package(
         "dep",
-        "library",
+        "lib",
         &[],
         &[
             (
@@ -346,7 +346,7 @@ fn public_reexport_chain_preserves_the_original_identity() {
     );
     let app = tree.package(
         "app",
-        "executable",
+        "exe",
         &[("dep", "../dep")],
         &[(
             "src/main.elx",
@@ -381,7 +381,7 @@ fn public_api_checks_only_externally_visible_members() {
     let tree = TestTree::new("public-api");
     let package = tree.package(
         "library",
-        "library",
+        "lib",
         &[],
         &[(
             "src/lib.elx",
@@ -413,7 +413,7 @@ fn retains_member_namespaces_and_reports_member_conflicts() {
     let tree = TestTree::new("members");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -459,7 +459,7 @@ fn self_type_is_scoped_to_structs_traits_and_trait_impls() {
     let tree = TestTree::new("self-type");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -498,7 +498,7 @@ fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
     let tree = TestTree::new("module-reexport");
     tree.package(
         "dep",
-        "library",
+        "lib",
         &[],
         &[
             ("src/lib.elx", "pub import root.hidden as hidden\n"),
@@ -510,7 +510,7 @@ fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
     );
     let app = tree.package(
         "app",
-        "executable",
+        "exe",
         &[("dep", "../dep")],
         &[(
             "src/main.elx",
@@ -526,7 +526,7 @@ fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
 
     let bad_app = tree.package(
         "bad_app",
-        "executable",
+        "exe",
         &[("dep", "../dep")],
         &[("src/main.elx", "import dep.hidden.Private\n")],
     );
@@ -546,7 +546,7 @@ fn reports_milestone_four_visibility_and_namespace_failures() {
     let tree = TestTree::new("failures");
     tree.package(
         "dep",
-        "library",
+        "lib",
         &[],
         &[
             ("src/lib.elx", ""),
@@ -558,7 +558,7 @@ fn reports_milestone_four_visibility_and_namespace_failures() {
     );
     let app = tree.package(
         "app",
-        "executable",
+        "exe",
         &[("dep", "../dep")],
         &[
             (
@@ -619,7 +619,7 @@ fn std_resolves_as_an_ordinary_name_and_can_be_shadowed() {
     let tree = TestTree::new("std-name");
     let package = tree.package(
         "demo",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -637,7 +637,7 @@ fn std_resolves_as_an_ordinary_name_and_can_be_shadowed() {
     // never be.
     let shadow = tree.package(
         "shadow",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -658,7 +658,7 @@ fn a_deferred_block_binding_is_local_to_that_block() {
     let tree = TestTree::new("defer-scope");
     let package = tree.package(
         "demo",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -684,7 +684,7 @@ fn option_is_a_standard_declaration_that_a_user_type_can_shadow() {
     let tree = TestTree::new("standard-option");
     let package = tree.package(
         "app",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",
@@ -727,7 +727,7 @@ fn option_is_a_standard_declaration_that_a_user_type_can_shadow() {
     // A user declaration shadows the prelude name and is a different identity.
     let shadowing = tree.package(
         "shadow",
-        "executable",
+        "exe",
         &[],
         &[(
             "src/main.elx",

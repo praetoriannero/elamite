@@ -30,7 +30,7 @@ impl TestTree {
         let directory = self.root.join(relative);
         fs::create_dir_all(directory.join("src")).expect("create package source directory");
         let manifest = format!(
-            "[package]\nname = \"{relative}\"\nversion = \"0.1.0\"\ntarget_kind = \"executable\"\n"
+            "[package]\nname = \"{relative}\"\nversion = \"0.1.0\"\ntarget_kind = \"exe\"\n"
         );
         fs::write(directory.join("elamite.toml"), manifest).expect("write manifest");
         for (path, source) in files {
