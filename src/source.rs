@@ -14,6 +14,13 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(u32);
 
+impl FileId {
+    #[must_use]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// A byte-offset range within one source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {
@@ -111,6 +118,14 @@ impl SourceManager {
     #[must_use]
     pub fn text(&self, file: FileId) -> &str {
         &self.files[file.0 as usize].text
+    }
+
+    /// Loaded files in stable ID order.
+    pub fn files(&self) -> impl Iterator<Item = (FileId, &Path)> {
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (FileId(index as u32), file.path.as_path()))
     }
 
     #[must_use]

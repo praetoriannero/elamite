@@ -20,6 +20,18 @@ pub enum Optimization {
     Release,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DumpStage {
+    Tokens,
+    Syntax,
+    Resolution,
+    Types,
+    TypedIr,
+    ControlFlow,
+    Monomorphized,
+    GeneratedC,
+}
+
 impl Optimization {
     fn compiler_flag(self) -> &'static str {
         match self {
@@ -65,6 +77,8 @@ pub struct Compilation {
 pub struct BuildArtifact {
     pub path: PathBuf,
     pub generated_c_path: Option<PathBuf>,
+    pub metadata_path: PathBuf,
+    pub dependency_metadata_paths: Vec<PathBuf>,
 }
 
 pub struct RunResult {
@@ -112,6 +126,127 @@ pub fn check_frontend(
         typed: type_output.program,
         checked: checked.program,
     })
+}
+
+/// Produces one deterministic intermediate representation without writing
+/// build artifacts or invoking the C compiler.
+pub fn dump(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+    stage: DumpStage,
+) -> Result<String, Vec<Diagnostic>> {
+    match stage {
+        DumpStage::Tokens | DumpStage::Syntax => dump_source_stage(graph, sources, stage),
+        DumpStage::Resolution => {
+            let output = resolve(graph, sources);
+            if output.diagnostics.is_empty() {
+                Ok(format!(
+                    "{}{}",
+                    source_identity_table(sources),
+                    output.program.dump()
+                ))
+            } else {
+                Err(output.diagnostics)
+            }
+        }
+        DumpStage::Types => {
+            let frontend = check_frontend(graph, sources, target)?;
+            Ok(format!(
+                "{}{}",
+                source_identity_table(sources),
+                frontend.typed.dump()
+            ))
+        }
+        DumpStage::TypedIr
+        | DumpStage::ControlFlow
+        | DumpStage::Monomorphized
+        | DumpStage::GeneratedC => {
+            let compilation = compile(graph, sources, target)?;
+            let body = match stage {
+                DumpStage::TypedIr => compilation.high_level_ir.dump(),
+                DumpStage::ControlFlow => compilation.control_flow_ir.dump(),
+                DumpStage::Monomorphized => compilation.control_flow_ir.monomorphization_dump(),
+                DumpStage::GeneratedC => compilation.generated_c,
+                DumpStage::Tokens
+                | DumpStage::Syntax
+                | DumpStage::Resolution
+                | DumpStage::Types => unreachable!("handled above"),
+            };
+            Ok(format!("{}{}", source_identity_table(sources), body))
+        }
+    }
+}
+
+fn dump_source_stage(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    stage: DumpStage,
+) -> Result<String, Vec<Diagnostic>> {
+    let mut files = graph
+        .packages
+        .values()
+        .flat_map(|package| {
+            std::iter::once(package.manifest_dir.join(&package.manifest.root))
+                .chain(package.modules.values().cloned())
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+
+    let mut output = String::new();
+    let mut diagnostics = Vec::new();
+    for path in files {
+        let file = match sources.load_file(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                diagnostics.push(Diagnostic::new(Category::Toolchain, error.to_string()));
+                continue;
+            }
+        };
+        let lexed = crate::lexer::lex(file, sources.text(file));
+        diagnostics.extend(lexed.diagnostics);
+        output.push_str(&format!("file {} {}\n", file.index(), path.display()));
+        match stage {
+            DumpStage::Tokens => {
+                for token in lexed.tokens {
+                    let position = sources.line_col(token.span.file, token.span.start);
+                    output.push_str(&format!(
+                        "  {:?} @ {}:{}:{} {}..{}\n",
+                        token.kind,
+                        path.display(),
+                        position.line,
+                        position.column,
+                        token.span.start,
+                        token.span.end
+                    ));
+                }
+            }
+            DumpStage::Syntax => {
+                let parsed = crate::parser::parse(&lexed.tokens);
+                diagnostics.extend(parsed.diagnostics);
+                for line in parsed.tree.dump().lines() {
+                    output.push_str("  ");
+                    output.push_str(line);
+                    output.push('\n');
+                }
+            }
+            _ => unreachable!("only token and syntax stages use source dumping"),
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(output)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+fn source_identity_table(sources: &SourceManager) -> String {
+    let mut output = String::new();
+    for (file, path) in sources.files() {
+        output.push_str(&format!("source {} {}\n", file.index(), path.display()));
+    }
+    output
 }
 
 /// Runs the complete Milestone 8 frontend and lowering pipeline without
@@ -189,6 +324,8 @@ pub fn build(
         TargetKind::Executable => options.output_directory.join(&stem),
         TargetKind::Library => options.output_directory.join(format!("{stem}.o")),
     };
+    let (metadata, metadata_path, dependency_metadata_paths) =
+        materialize_package_metadata(graph, &compilation.resolved, sources, options, &stem)?;
     let compiler = options
         .c_compiler
         .clone()
@@ -205,21 +342,21 @@ pub fn build(
     if root.manifest.target_kind == TargetKind::Library {
         command.arg("-c");
     }
-    for package in graph.packages.values() {
-        for path in &package.manifest.include_paths {
-            command.arg("-I").arg(package.manifest_dir.join(path));
+    for package in &metadata {
+        for path in &package.include_paths {
+            command.arg("-I").arg(path);
         }
-        for path in &package.manifest.library_paths {
-            command.arg("-L").arg(package.manifest_dir.join(path));
+        for path in &package.library_paths {
+            command.arg("-L").arg(path);
         }
     }
     command.arg(&c_path).arg("-o").arg(&artifact_path);
     if root.manifest.target_kind == TargetKind::Executable {
-        for package in graph.packages.values() {
-            for library in &package.manifest.native_libraries {
+        for package in &metadata {
+            for library in &package.native_libraries {
                 command.arg(format!("-l{library}"));
             }
-            command.args(&package.manifest.link_options);
+            command.args(&package.link_options);
         }
         // Runtime libraries follow the manifest's own link inputs so a
         // dependency that references the collector still resolves.
@@ -266,7 +403,59 @@ pub fn build(
     Ok(BuildArtifact {
         path: artifact_path,
         generated_c_path,
+        metadata_path,
+        dependency_metadata_paths,
     })
+}
+
+fn materialize_package_metadata(
+    graph: &PackageGraph,
+    resolved: &ResolvedProgram,
+    sources: &SourceManager,
+    options: &BuildOptions,
+    root_stem: &str,
+) -> Result<(Vec<crate::artifact::PackageMetadata>, PathBuf, Vec<PathBuf>), Vec<Diagnostic>> {
+    let dependency_directory = options.output_directory.join("deps");
+    std::fs::create_dir_all(&dependency_directory).map_err(|error| {
+        vec![Diagnostic::new(
+            Category::Toolchain,
+            format!(
+                "cannot create dependency metadata directory {}: {error}",
+                dependency_directory.display()
+            ),
+        )]
+    })?;
+
+    let root_path = options
+        .output_directory
+        .join(format!("{root_stem}.elamite-meta"));
+    let mut dependency_paths = Vec::new();
+    let mut consumed = Vec::new();
+    for (index, package_id) in graph.dependency_order().into_iter().enumerate() {
+        let package = &graph.packages[package_id];
+        let path = if package_id == &graph.root {
+            root_path.clone()
+        } else {
+            let stem = sanitize_file_name(&package.manifest.name);
+            let path = dependency_directory.join(format!("{index:04}-{stem}.elamite-meta"));
+            dependency_paths.push(path.clone());
+            path
+        };
+        let metadata =
+            crate::artifact::PackageMetadata::collect(graph, resolved, sources, package_id);
+        metadata
+            .write(&path)
+            .map_err(|error| vec![Diagnostic::new(Category::Toolchain, error)])?;
+        // Consume the serialized boundary immediately. This catches schema
+        // drift and ensures native inputs come from the same public artifact a
+        // downstream compiler invocation would read, rather than a parallel
+        // manifest-only path.
+        consumed.push(
+            crate::artifact::PackageMetadata::read(&path)
+                .map_err(|error| vec![Diagnostic::new(Category::Toolchain, error)])?,
+        );
+    }
+    Ok((consumed, root_path, dependency_paths))
 }
 
 pub fn run(artifact: &BuildArtifact) -> Result<RunResult, Diagnostic> {

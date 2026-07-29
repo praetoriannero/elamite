@@ -13,9 +13,10 @@ use codespan_reporting::term::{
 };
 use elamite::backend::Target;
 use elamite::diagnostics::Diagnostic;
-use elamite::driver::{BuildOptions, Optimization, build, check_frontend, run};
+use elamite::driver::{BuildOptions, DumpStage, Optimization, build, check_frontend, dump, run};
 use elamite::manifest::TargetKind;
 use elamite::package::PackageGraph;
+use elamite::resolution::resolve;
 use elamite::scaffold::init_package;
 use elamite::source::SourceManager;
 
@@ -41,6 +42,12 @@ enum Command {
     Run(BuildArgs),
     /// Create a new hello-world package.
     Init(InitArgs),
+    /// Print a deterministic compiler intermediate representation.
+    Dump(DumpArgs),
+    /// Extract public API documentation as Markdown.
+    Doc(DocArgs),
+    /// Run package conformance fixtures.
+    Test(TestArgs),
 }
 
 #[derive(Debug, Args)]
@@ -97,12 +104,86 @@ struct InitArgs {
     lib: bool,
 }
 
+#[derive(Debug, Args)]
+struct DumpArgs {
+    /// Intermediate representation to print.
+    #[arg(value_enum, value_name = "STAGE")]
+    stage: CliDumpStage,
+
+    #[command(flatten)]
+    package: PackageArgs,
+}
+
+#[derive(Debug, Args)]
+struct DocArgs {
+    /// Package directory containing elamite.toml.
+    #[arg(value_name = "PACKAGE", default_value = ".")]
+    package_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TestArgs {
+    /// Suite directory, or one package fixture directory.
+    #[arg(value_name = "SUITE")]
+    suite: PathBuf,
+
+    /// Run only case names containing this text.
+    #[arg(long, value_name = "TEXT")]
+    filter: Option<String>,
+
+    /// Target one architecture; defaults to the host.
+    #[arg(long, value_enum, conflicts_with = "all_targets")]
+    target: Option<CliTarget>,
+
+    /// Run both supported target architectures.
+    #[arg(long)]
+    all_targets: bool,
+
+    /// Use release optimization.
+    #[arg(long, conflicts_with = "all_modes")]
+    release: bool,
+
+    /// Run both debug and release configurations.
+    #[arg(long)]
+    all_modes: bool,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliTarget {
     #[value(name = "x86")]
     X86,
     #[value(name = "x86_64")]
     X86_64,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliDumpStage {
+    Tokens,
+    Syntax,
+    Resolution,
+    Types,
+    #[value(name = "typed-ir")]
+    TypedIr,
+    #[value(name = "control-flow")]
+    ControlFlow,
+    Monomorphized,
+    #[value(name = "generated-c")]
+    GeneratedC,
+}
+
+impl From<CliDumpStage> for DumpStage {
+    fn from(stage: CliDumpStage) -> Self {
+        match stage {
+            CliDumpStage::Tokens => Self::Tokens,
+            CliDumpStage::Syntax => Self::Syntax,
+            CliDumpStage::Resolution => Self::Resolution,
+            CliDumpStage::Types => Self::Types,
+            CliDumpStage::TypedIr => Self::TypedIr,
+            CliDumpStage::ControlFlow => Self::ControlFlow,
+            CliDumpStage::Monomorphized => Self::Monomorphized,
+            CliDumpStage::GeneratedC => Self::GeneratedC,
+        }
+    }
 }
 
 impl From<CliTarget> for Target {
@@ -182,6 +263,9 @@ fn main() -> ExitCode {
             compile_package(CompileRequest::build(CompileCommand::Run, arguments))
         }
         Command::Init(arguments) => initialize_package(arguments),
+        Command::Dump(arguments) => dump_package(arguments),
+        Command::Doc(arguments) => document_package(arguments),
+        Command::Test(arguments) => test_packages(arguments),
     }
 }
 
@@ -201,6 +285,95 @@ fn initialize_package(arguments: InitArgs) -> ExitCode {
             eprintln!("error: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn dump_package(arguments: DumpArgs) -> ExitCode {
+    let manifest_path = arguments.package.package_dir.join("elamite.toml");
+    let target = arguments
+        .package
+        .target
+        .map_or_else(Target::host, Target::from);
+    let mut sources = SourceManager::new();
+    let graph = match PackageGraph::resolve(&manifest_path, &mut sources) {
+        Ok(graph) => graph,
+        Err(diagnostics) => {
+            render_diagnostics(&sources, &diagnostics);
+            return ExitCode::FAILURE;
+        }
+    };
+    match dump(&graph, &mut sources, target, arguments.stage.into()) {
+        Ok(output) => {
+            print!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(diagnostics) => {
+            render_diagnostics(&sources, &diagnostics);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn document_package(arguments: DocArgs) -> ExitCode {
+    let manifest_path = arguments.package_dir.join("elamite.toml");
+    let mut sources = SourceManager::new();
+    let graph = match PackageGraph::resolve(&manifest_path, &mut sources) {
+        Ok(graph) => graph,
+        Err(diagnostics) => {
+            render_diagnostics(&sources, &diagnostics);
+            return ExitCode::FAILURE;
+        }
+    };
+    let output = resolve(&graph, &mut sources);
+    let documentation = elamite::docs::extract(&output.program, &sources, &graph.root);
+    print!("{}", documentation.markdown());
+    if output.diagnostics.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        render_diagnostics(&sources, &output.diagnostics);
+        ExitCode::FAILURE
+    }
+}
+
+fn test_packages(arguments: TestArgs) -> ExitCode {
+    let targets = if arguments.all_targets {
+        vec![Target::X86, Target::X86_64]
+    } else {
+        vec![arguments.target.map_or_else(Target::host, Target::from)]
+    };
+    let optimizations = if arguments.all_modes {
+        vec![Optimization::Debug, Optimization::Release]
+    } else if arguments.release {
+        vec![Optimization::Release]
+    } else {
+        vec![Optimization::Debug]
+    };
+    let options = elamite::conformance::RunnerOptions {
+        filter: arguments.filter,
+        targets,
+        optimizations,
+    };
+    let report = match elamite::conformance::run_suite(&arguments.suite, &options) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for case in &report.cases {
+        let status = if case.passed { "pass" } else { "FAIL" };
+        println!(
+            "{status} {} {:?} {:?}: {}",
+            case.name, case.target, case.optimization, case.detail
+        );
+    }
+    if let Some(path) = &report.retained_artifacts {
+        eprintln!("retained failing artifacts at {}", path.display());
+    }
+    if report.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

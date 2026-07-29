@@ -753,3 +753,123 @@ fn option_is_a_standard_declaration_that_a_user_type_can_shadow() {
         .expect("the user declaration is collected");
     assert!(!shadowed.program.is_standard_declaration(user.id, "Option"));
 }
+
+#[test]
+fn standard_intrinsic_inventory_is_exact_and_unique() {
+    let tree = TestTree::new("intrinsic-inventory");
+    let package = tree.package(
+        "app",
+        "exe",
+        &[],
+        &[("src/main.elx", "fn main() -> ():\n    pass\n")],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+
+    let actual = output.program.builtin_names();
+    let expected = elamite::standard::intrinsic_leaf_names();
+    assert_eq!(actual, expected);
+
+    let unique = actual
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        unique.len(),
+        actual.len(),
+        "a compiler-known spelling was registered more than once"
+    );
+
+    let source_declarations = elamite::standard::SOURCE_DECLARATIONS
+        .iter()
+        .map(|path| {
+            path.rsplit_once('.')
+                .expect("source declaration path is qualified")
+                .1
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    for name in source_declarations {
+        assert!(
+            !unique.contains(name),
+            "source-backed `{name}` must not also have a builtin identity"
+        );
+    }
+}
+
+#[test]
+fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
+    let tree = TestTree::new("prelude-surface");
+    let package = tree.package(
+        "app",
+        "exe",
+        &[],
+        &[("src/main.elx", "fn main() -> ():\n    pass\n")],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+
+    assert_eq!(
+        output.program.prelude_names(),
+        vec![
+            "Default",
+            "Display",
+            "Eq",
+            "Formatter",
+            "Hash",
+            "Identity",
+            "Map",
+            "NumericError",
+            "Option",
+            "Ord",
+            "PartialEq",
+            "PartialOrd",
+            "Result",
+            "Set",
+            "StableHash",
+            "String",
+            "Vec",
+            "bool",
+            "char",
+            "f32",
+            "f64",
+            "i128",
+            "i16",
+            "i32",
+            "i64",
+            "i8",
+            "isize",
+            "print",
+            "println",
+            "str",
+            "u128",
+            "u16",
+            "u32",
+            "u64",
+            "u8",
+            "usize",
+        ]
+    );
+
+    let standard_modules = output
+        .program
+        .modules
+        .iter()
+        .filter(|module| module.origin == elamite::resolution::ModuleOrigin::Standard)
+        .collect::<Vec<_>>();
+    assert_eq!(standard_modules.len(), 3);
+    for module in standard_modules {
+        assert!(
+            module.source_file.is_some(),
+            "standard module {:?} is not backed by shipped source",
+            module.path
+        );
+    }
+}

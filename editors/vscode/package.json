@@ -1,0 +1,39 @@
+{
+  "name": "elamite",
+  "displayName": "Elamite",
+  "description": "Syntax highlighting for the Elamite language.",
+  "version": "0.1.0",
+  "publisher": "elamite",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "elamite",
+        "aliases": [
+          "Elamite",
+          "elamite"
+        ],
+        "extensions": [
+          ".elx"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "elamite",
+        "scopeName": "source.elx",
+        "path": "./syntaxes/elamite.tmLanguage.json"
+      }
+    ]
+  }
+}

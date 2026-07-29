@@ -1,0 +1,18 @@
+/// A value that may be present or absent.
+pub enum Option[T]:
+    Some(T)
+    None
+
+/// A successful value or a recoverable error.
+pub enum Result[T, E]:
+    Ok(T)
+    Err(E)
+
+/// The failure returned by checked numeric conversion.
+pub enum NumericError:
+    OutOfRange
+    NotANumber
+
+/// Formats a value into a standard formatter.
+pub trait Display:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ()

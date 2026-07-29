@@ -9,14 +9,14 @@
   library so it can be exercised directly by tests and other tools.
 - `src/resolution.rs` owns stable module, declaration, member, generic, impl,
   import, and lexical-binding identities. Keep type-dependent member selection
-  in later semantic passes rather than folding it into name lookup. It also
-  owns `STANDARD_PRELUDE_SOURCE`, the compiler-supplied Elamite source for the
-  standard types `SPEC.md` writes as ordinary declarations (`Option[T]` today).
-  Prefer adding a standard type there over adding a compiler-known builtin:
-  source declarations reach every later pass through the ordinary path, so no
-  pass needs a parallel representation. A type belongs in the builtin list only
-  while it still needs a representation or lowering hook that Elamite source
-  cannot express.
+  in later semantic passes rather than folding it into name lookup.
+  `src/standard.rs` owns the exact intrinsic inventory and includes the shipped
+  sources from `stdlib/`; resolution loads those declarations through the
+  ordinary lexer/parser/collection path. Prefer adding a standard type in
+  `stdlib/src/` over adding a compiler-known builtin: source declarations reach
+  every later pass through the ordinary path, so no pass needs a parallel
+  representation. A type belongs in the intrinsic list only while it still
+  needs a representation or lowering hook that Elamite source cannot express.
 - `src/traits.rs` validates trait implementations: conformance, coherence, and
   object safety. It checks declarations, not bodies — bound-call selection and
   dispatch belong to `src/check.rs` and `src/backend.rs`.
@@ -27,6 +27,12 @@
   `IMPL.md` is the compiler roadmap; `LEDGER.md` maps every normative `SPEC.md`
   rule to an implementation milestone; and `ISSUES.md` records unresolved
   design work.
+- `editors/vscode/` is a declarative VS Code extension providing `.elx` syntax
+  highlighting: a TextMate grammar and a language configuration, with no
+  compiled code. Its grammar necessarily duplicates the keyword, numeric-suffix,
+  builtin, attribute, and macro lists owned by `src/`, so `tests/editor_grammar.rs`
+  asserts the copies still agree. Adding any of those to the compiler means
+  updating `editors/vscode/syntaxes/elamite.tmLanguage.json` in the same change.
 - Add integration tests under `tests/` and Elamite fixtures beneath a focused
   fixture directory such as `tests/fixtures/parser/`.
 

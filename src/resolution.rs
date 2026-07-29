@@ -4,10 +4,9 @@
 //! the package graph and Milestone 3 syntax trees, predeclares every module
 //! item, then resolves imports and bodies without depending on source order.
 
+use lasso::{Rodeo, Spur};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-
-use lasso::{Rodeo, Spur};
 
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ident::is_valid_identifier;
@@ -15,55 +14,6 @@ use crate::lexer::{Keyword, Token, TokenKind, lex};
 use crate::package::{PackageGraph, PackageId};
 use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode, parse};
 use crate::source::{FileId, SourceManager, Span};
-
-/// The standard declarations the specification writes as ordinary Elamite
-/// source. They are collected into the `std` root module and reach every later
-/// pass as real declarations, so no pass needs a parallel representation for
-/// them.
-///
-/// `Option[T]` and `Result[T, E]` are spelled exactly as `SPEC.md` 4.4
-/// declares them, including variant order: `Some` precedes `None` and `Ok`
-/// precedes `Err`, so derived comparison would order them that way.
-///
-/// Neither carries a derive list. `Option`'s one compiler-supplied capability
-/// — defaulting to `Option.None` without a `T: Default` obligation — is stated
-/// by `SPEC.md` 4.3 as a rule about `Default` rather than as a derivation; see
-/// [`crate::traits::intrinsic_derivation`]. `Result` has no such capability:
-/// its compiler-known role is postfix `?` propagation (`SPEC.md` 8), which is
-/// control flow rather than a trait, and Milestone 15 owns it.
-///
-/// `NumericError` is the error of a checked numeric conversion (`SPEC.md`
-/// 4.1). The specification fixes its role but not its variants; these two
-/// distinguish the two ways `Type.try_from` can fail — a finite value outside
-/// the target's range, and a source that is not a finite number at all.
-const STANDARD_PRELUDE_SOURCE: &str = "\
-pub enum Option[T]:
-    Some(T)
-    None
-
-pub enum Result[T, E]:
-    Ok(T)
-    Err(E)
-
-pub enum NumericError:
-    OutOfRange
-    NotANumber
-
-pub trait Display:
-    fn fmt(self: &Self, formatter: &var Formatter) -> ()
-";
-
-/// The compiler-supplied source of the `std.io` module's ordinary
-/// declarations. The authoritative demonstration passes `io.IoError` through
-/// `Result` propagation but never constructs or matches it, so its variants
-/// are implementation-chosen the same way `NumericError`'s are; Milestone
-/// 18.2's standard-package skeleton owns refining this surface.
-const STANDARD_IO_SOURCE: &str = "\
-pub enum IoError:
-    NotFound
-    PermissionDenied
-    Other
-";
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -386,6 +336,31 @@ impl ResolvedProgram {
             .map(|index| BuiltinId(index as u32))
     }
 
+    /// Exact compiler-known leaf spellings, in identity order.
+    ///
+    /// This is intentionally public for the standard-intrinsic inventory
+    /// audit and developer dumps. Language behavior should use stable IDs,
+    /// not search this list by spelling.
+    #[must_use]
+    pub fn builtin_names(&self) -> Vec<&str> {
+        self.builtins
+            .iter()
+            .map(|builtin| self.symbol_text(builtin.name))
+            .collect()
+    }
+
+    /// Exact names visible through unqualified prelude lookup.
+    #[must_use]
+    pub fn prelude_names(&self) -> Vec<&str> {
+        let mut names = self
+            .prelude
+            .keys()
+            .map(|name| self.symbol_text(*name))
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    }
+
     /// Finds the standard-library declaration with this exact spelling.
     ///
     /// Standard types that the specification writes as ordinary declarations
@@ -605,8 +580,8 @@ impl<'a> Resolver<'a> {
     }
 
     fn run(mut self) -> ResolutionOutput {
-        let io_module = self.install_standard_library_names();
-        self.parse_standard_library_source(io_module);
+        let (io_module, ffi_module) = self.install_standard_library_names();
+        self.parse_standard_library_source(io_module, ffi_module);
         self.create_file_module_graph();
         self.parse_source_files();
         self.discover_inline_modules();
@@ -649,7 +624,7 @@ impl<'a> Resolver<'a> {
         id
     }
 
-    fn install_standard_library_names(&mut self) -> ModuleId {
+    fn install_standard_library_names(&mut self) -> (ModuleId, ModuleId) {
         let io = self.intern("io");
         let ffi = self.intern("ffi");
         let std = self.intern("std");
@@ -709,7 +684,6 @@ impl<'a> Resolver<'a> {
             "Ord",
             "Hash",
             "StableHash",
-            "Display",
             "Formatter",
             "Identity",
             "print",
@@ -734,7 +708,15 @@ impl<'a> Resolver<'a> {
         ] {
             for name in names {
                 let symbol = self.intern(name);
-                let id = self.push_builtin(symbol);
+                let id = self
+                    .program
+                    .builtins
+                    .iter()
+                    .position(|builtin| builtin.name == symbol)
+                    .map_or_else(
+                        || self.push_builtin(symbol),
+                        |index| BuiltinId(index as u32),
+                    );
                 self.insert_namespace(
                     module,
                     symbol,
@@ -744,7 +726,7 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
-        io_module
+        (io_module, ffi_module)
     }
 
     fn push_builtin(&mut self, name: Symbol) -> BuiltinId {
@@ -762,15 +744,16 @@ impl<'a> Resolver<'a> {
     /// This source is compiler input, not user input: a diagnostic in it is an
     /// internal defect, so it is reported through the ordinary diagnostic list
     /// rather than silently dropped.
-    fn parse_standard_library_source(&mut self, io_module: ModuleId) {
+    fn parse_standard_library_source(&mut self, io_module: ModuleId, ffi_module: ModuleId) {
         let root = self.program.std_root;
         for (module, path, source) in [
-            (root, "<std>/prelude.elx", STANDARD_PRELUDE_SOURCE),
-            (io_module, "<std>/io.elx", STANDARD_IO_SOURCE),
+            (root, "<std>/lib.elx", crate::standard::ROOT_SOURCE),
+            (io_module, "<std>/io.elx", crate::standard::IO_SOURCE),
+            (ffi_module, "<std>/ffi.elx", crate::standard::FFI_SOURCE),
         ] {
             let file = self
                 .sources
-                .add_text(PathBuf::from(path), source.to_string());
+                .add_text(std::path::PathBuf::from(path), source.to_string());
             self.program.modules[module.index()].source_file = Some(file);
             self.program.modules[module.index()].span = Some(Span::new(
                 file,
@@ -788,7 +771,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Records the declarations collected from [`STANDARD_PRELUDE_SOURCE`] as
+    /// Records the declarations collected from [`crate::standard::ROOT_SOURCE`] as
     /// both the compiler-known standard identities and prelude names, so an
     /// unqualified `Option` resolves after lexical, module, import, and
     /// dependency-alias lookup exactly like the builtin names beside it.

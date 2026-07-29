@@ -279,6 +279,33 @@ impl PackageGraph {
     pub fn dependency(&self, package: &PackageId, alias: &str) -> Option<&PackageId> {
         self.dependency_edges.get(package)?.get(alias)
     }
+
+    /// Packages in deterministic dependency-first order. Each package occurs
+    /// exactly once even when several aliases share it.
+    #[must_use]
+    pub fn dependency_order(&self) -> Vec<&PackageId> {
+        fn visit<'a>(
+            graph: &'a PackageGraph,
+            package: &'a PackageId,
+            visited: &mut std::collections::BTreeSet<PackageId>,
+            output: &mut Vec<&'a PackageId>,
+        ) {
+            if !visited.insert(package.clone()) {
+                return;
+            }
+            if let Some(edges) = graph.dependency_edges.get(package) {
+                for dependency in edges.values() {
+                    visit(graph, dependency, visited, output);
+                }
+            }
+            output.push(package);
+        }
+
+        let mut visited = std::collections::BTreeSet::new();
+        let mut output = Vec::new();
+        visit(self, &self.root, &mut visited, &mut output);
+        output
+    }
 }
 
 fn resolve_recursive(

@@ -1,0 +1,2 @@
+// `ForeignRoot`, `ForeignRootMut`, and `CVoid` require runtime representation
+// or lowering hooks and are installed from the reviewed intrinsic catalog.

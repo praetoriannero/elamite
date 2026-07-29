@@ -1,0 +1,353 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Elamite",
+  "scopeName": "source.elx",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#attributes" },
+    { "include": "#declarations" },
+    { "include": "#expression" }
+  ],
+  "repository": {
+    "expression": {
+      "comment": "Everything legal inside an expression position. Reused verbatim inside formatted-string interpolation, which is why it excludes comments and declarations.",
+      "patterns": [
+        { "include": "#macros" },
+        { "include": "#formatted-string" },
+        { "include": "#string" },
+        { "include": "#character" },
+        { "include": "#numbers" },
+        { "include": "#keyword-control" },
+        { "include": "#keyword-declaration" },
+        { "include": "#keyword-modifier" },
+        { "include": "#keyword-operator-word" },
+        { "include": "#constant-language" },
+        { "include": "#variable-language" },
+        { "include": "#function-builtin" },
+        { "include": "#type-primitive" },
+        { "include": "#type-builtin" },
+        { "include": "#type-builtin-trait" },
+        { "include": "#type-name" },
+        { "include": "#function-call" },
+        { "include": "#operators" },
+        { "include": "#punctuation" }
+      ]
+    },
+
+    "comments": {
+      "patterns": [
+        {
+          "comment": "SPEC.md 2.1: a line beginning `///` is a documentation comment. Must precede the `//` rule.",
+          "name": "comment.line.documentation.elx",
+          "begin": "///",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.elx" }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.elx",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.elx" }
+          }
+        }
+      ]
+    },
+
+    "attributes": {
+      "comment": "Compiler attributes. `@importc` and `@exportc` are the only names resolution.rs accepts; anything else is a hard error there, so it is scoped invalid here.",
+      "patterns": [
+        {
+          "match": "(@)(importc|exportc)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.attribute.elx" },
+            "2": { "name": "storage.modifier.attribute.elx" }
+          }
+        },
+        {
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "punctuation.definition.attribute.elx" },
+            "2": { "name": "invalid.illegal.unknown-attribute.elx" }
+          }
+        }
+      ]
+    },
+
+    "macros": {
+      "comment": "Collection macros. parser.rs accepts exactly `@vec`, `@map`, and `@set`.",
+      "match": "(@)(vec|map|set)\\b",
+      "captures": {
+        "1": { "name": "punctuation.definition.macro.elx" },
+        "2": { "name": "keyword.other.macro.elx" }
+      }
+    },
+
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.elx" },
+            "2": { "name": "entity.name.function.elx" }
+          }
+        },
+        {
+          "match": "\\b(struct|enum|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.elx" },
+            "2": { "name": "entity.name.type.elx" }
+          }
+        },
+        {
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.elx" },
+            "2": { "name": "entity.name.type.elx" }
+          }
+        },
+        {
+          "match": "\\b(mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.elx" },
+            "2": { "name": "entity.name.namespace.elx" }
+          }
+        }
+      ]
+    },
+
+    "keyword-control": {
+      "comment": "Every keyword family below sits under the `keyword.control` prefix so that themes, which select scopes by dot-separated prefix, give declarations and modifiers the same color as `return` and `for`. The trailing segments keep the categories individually overridable in `editor.tokenColorCustomizations`.",
+      "name": "keyword.control.elx",
+      "match": "\\b(continue|return|break|defer|match|while|else|pass|for|if|in)\\b"
+    },
+
+    "keyword-declaration": {
+      "name": "keyword.control.declaration.elx",
+      "match": "\\b(struct|import|trait|enum|impl|type|mod|fn)\\b"
+    },
+
+    "keyword-modifier": {
+      "name": "keyword.control.modifier.elx",
+      "match": "\\b(unsafe|pub|var|let)\\b"
+    },
+
+    "keyword-operator-word": {
+      "name": "keyword.operator.word.elx",
+      "match": "\\b(as)\\b"
+    },
+
+    "constant-language": {
+      "name": "constant.language.elx",
+      "match": "\\b(false|true|null)\\b"
+    },
+
+    "variable-language": {
+      "name": "variable.language.elx",
+      "match": "\\b(super|self|Self|root)\\b"
+    },
+
+    "type-primitive": {
+      "comment": "SPEC.md 4.1.",
+      "name": "support.type.primitive.elx",
+      "match": "\\b(isize|usize|bool|char|i128|u128|i16|i32|i64|u16|u32|u64|f32|f64|str|i8|u8)\\b"
+    },
+
+    "type-builtin": {
+      "name": "support.type.builtin.elx",
+      "match": "\\b(ForeignRootMut|ForeignRoot|NumericError|Formatter|Identity|IoError|Option|Result|String|CVoid|Vec|Map|Set)\\b"
+    },
+
+    "type-builtin-trait": {
+      "name": "support.type.trait.elx",
+      "match": "\\b(StableHash|PartialOrd|PartialEq|Default|Display|Hash|Ord|Eq)\\b"
+    },
+
+    "function-builtin": {
+      "name": "support.function.builtin.elx",
+      "match": "\\b(println|print)\\b"
+    },
+
+    "type-name": {
+      "comment": "Convention: type and enum-variant names are UpperCamelCase. A grammar cannot resolve names, so this is a heuristic; real classification needs a language server.",
+      "name": "entity.name.type.elx",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+
+    "function-call": {
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.elx" }
+      }
+    },
+
+    "numbers": {
+      "comment": "lexer.rs lex_number / lex_prefixed_integer. Radix digits are consumed greedily before any suffix, matching the lexer: `0xff_f64` is one hexadecimal literal, not a suffixed one.",
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.elx",
+          "match": "\\b0x[0-9a-fA-F_]+(?:i128|isize|u128|usize|i16|i32|i64|u16|u32|u64|f32|f64|i8|u8)?\\b"
+        },
+        {
+          "name": "constant.numeric.octal.elx",
+          "match": "\\b0o[0-7_]+(?:i128|isize|u128|usize|i16|i32|i64|u16|u32|u64|f32|f64|i8|u8)?\\b"
+        },
+        {
+          "name": "constant.numeric.binary.elx",
+          "match": "\\b0b[01_]+(?:i128|isize|u128|usize|i16|i32|i64|u16|u32|u64|f32|f64|i8|u8)?\\b"
+        },
+        {
+          "comment": "A fractional part requires a digit after the `.`, so `1.foo` stays an integer followed by a field access.",
+          "name": "constant.numeric.float.elx",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?(?:i128|isize|u128|usize|i16|i32|i64|u16|u32|u64|f32|f64|i8|u8)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.elx",
+          "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*(?:i128|isize|u128|usize|i16|i32|i64|u16|u32|u64|f32|f64|i8|u8)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.elx",
+          "match": "\\b[0-9][0-9_]*(?:i128|isize|u128|usize|i16|i32|i64|u16|u32|u64|f32|f64|i8|u8)?\\b"
+        }
+      ]
+    },
+
+    "escape": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.elx",
+          "match": "\\\\(u\\{[0-9a-fA-F]{1,6}\\}|[nrt0\"'\\\\])"
+        },
+        {
+          "name": "invalid.illegal.escape.elx",
+          "match": "\\\\."
+        }
+      ]
+    },
+
+    "string": {
+      "comment": "The lexer bounds string scanning by end of line, so an unterminated literal cannot bleed into the next line.",
+      "name": "string.quoted.double.elx",
+      "begin": "\"",
+      "end": "\"|$",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.elx" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.elx" }
+      },
+      "patterns": [{ "include": "#escape" }]
+    },
+
+    "character": {
+      "name": "string.quoted.single.elx",
+      "match": "'(?:(\\\\(?:u\\{[0-9a-fA-F]{1,6}\\}|[nrt0\"'\\\\]))|[^'\\\\])'",
+      "captures": {
+        "1": { "name": "constant.character.escape.elx" }
+      }
+    },
+
+    "formatted-string": {
+      "comment": "SPEC.md 7.2. `{{` and `}}` are literal braces; interpolation nests, matching lexer.rs find_interpolation_end.",
+      "name": "string.quoted.double.formatted.elx",
+      "begin": "\\bf\"",
+      "end": "\"|$",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.elx" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.elx" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.elx",
+          "match": "\\{\\{|\\}\\}"
+        },
+        { "include": "#escape" },
+        { "include": "#interpolation" }
+      ]
+    },
+
+    "interpolation": {
+      "name": "meta.embedded.expression.elx",
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.embedded.begin.elx" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.section.embedded.end.elx" }
+      },
+      "patterns": [
+        { "include": "#interpolation-nested" },
+        { "include": "#expression" }
+      ]
+    },
+
+    "interpolation-nested": {
+      "comment": "Balances inner braces, e.g. a struct literal inside an interpolation.",
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        { "include": "#interpolation-nested" },
+        { "include": "#expression" }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.elx",
+          "match": "<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|="
+        },
+        {
+          "name": "keyword.operator.range.elx",
+          "match": "\\.\\.\\.|\\.\\."
+        },
+        {
+          "name": "keyword.operator.arrow.elx",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.comparison.elx",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "name": "keyword.operator.logical.elx",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "comment": "Postfix `?` propagates the enclosing error type (SPEC.md 8).",
+          "name": "keyword.operator.question.elx",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.bitwise.elx",
+          "match": "<<|>>|&|\\||\\^|~"
+        },
+        {
+          "name": "keyword.operator.arithmetic.elx",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.comparison.elx",
+          "match": "[<>]"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.parens.elx", "match": "[()]" },
+        { "name": "punctuation.section.brackets.elx", "match": "[\\[\\]]" },
+        { "name": "punctuation.section.braces.elx", "match": "[{}]" },
+        { "name": "punctuation.separator.comma.elx", "match": "," },
+        { "name": "punctuation.separator.colon.elx", "match": ":" },
+        { "name": "punctuation.terminator.elx", "match": ";" },
+        { "name": "punctuation.accessor.elx", "match": "\\." }
+      ]
+    }
+  }
+}

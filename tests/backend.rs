@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use elamite::backend::{COptions, Target, emit_c};
 use elamite::diagnostics::{Category, Diagnostic};
-use elamite::driver::{BuildOptions, Optimization, build, compile, run};
+use elamite::driver::{BuildOptions, DumpStage, Optimization, build, compile, dump, run};
 use elamite::package::PackageGraph;
 use elamite::source::SourceManager;
 
@@ -1241,6 +1241,39 @@ fn main() -> ():
 }
 
 #[test]
+fn every_intermediate_dump_is_deterministic_and_source_identified() {
+    let tree = TestTree::new("dumps");
+    tree.executable("fn main() -> ():\n    println(42)\n");
+    for stage in [
+        DumpStage::Tokens,
+        DumpStage::Syntax,
+        DumpStage::Resolution,
+        DumpStage::Types,
+        DumpStage::TypedIr,
+        DumpStage::ControlFlow,
+        DumpStage::Monomorphized,
+        DumpStage::GeneratedC,
+    ] {
+        let mut first_sources = SourceManager::new();
+        let first_graph = tree.graph(&mut first_sources);
+        let first = dump(&first_graph, &mut first_sources, Target::X86_64, stage)
+            .unwrap_or_else(|diagnostics| panic!("{}", render(&first_sources, &diagnostics)));
+
+        let mut second_sources = SourceManager::new();
+        let second_graph = tree.graph(&mut second_sources);
+        let second = dump(&second_graph, &mut second_sources, Target::X86_64, stage)
+            .unwrap_or_else(|diagnostics| panic!("{}", render(&second_sources, &diagnostics)));
+
+        assert_eq!(first, second, "{stage:?} dump changed between runs");
+        assert!(
+            first.contains("main.elx"),
+            "{stage:?} dump lacks source identity:\n{first}"
+        );
+        assert!(!first.is_empty());
+    }
+}
+
+#[test]
 fn executable_subset_lowers_for_after_milestone_fourteen() {
     let (stdout, stderr, status) = build_and_run(
         "fn main() -> ():\n    for value in [1, 2]:\n        println(value)\n",
@@ -1306,6 +1339,96 @@ fn library_packages_produce_relocatable_objects_without_entry_shims() {
     let c_path = artifact.generated_c_path.expect("retained generated C");
     let generated = fs::read_to_string(c_path).expect("read generated C");
     assert!(!generated.contains("int main("));
+    assert!(artifact.metadata_path.is_file());
+    let metadata = elamite::artifact::PackageMetadata::read(&artifact.metadata_path)
+        .expect("read library metadata");
+    assert_eq!(metadata.package_name, "backend_test");
+    assert!(
+        metadata
+            .public_api
+            .iter()
+            .any(|item| item.path == "root.answer")
+    );
+}
+
+#[test]
+fn a_multi_package_build_consumes_reexported_generic_metadata_once() {
+    let tree = TestTree::new("dependency-artifacts");
+    let leaf = tree.root.join("leaf");
+    let middle = tree.root.join("middle");
+    let app = tree.root.join("app");
+    for package in [&leaf, &middle, &app] {
+        fs::create_dir_all(package.join("src")).expect("create package source");
+    }
+    fs::write(
+        leaf.join("elamite.toml"),
+        "[package]\nname = \"leaf\"\nversion = \"0.1.0\"\ntarget_kind = \"lib\"\n",
+    )
+    .expect("write leaf manifest");
+    fs::write(
+        leaf.join("src/lib.elx"),
+        "pub fn identity[T](value: T) -> T:\n    return value\n",
+    )
+    .expect("write leaf source");
+    fs::write(
+        middle.join("elamite.toml"),
+        "[package]\nname = \"middle\"\nversion = \"0.1.0\"\ntarget_kind = \"lib\"\n\
+         \n[dependencies.leaf]\npath = \"../leaf\"\n",
+    )
+    .expect("write middle manifest");
+    fs::write(
+        middle.join("src/lib.elx"),
+        "pub import leaf.identity as identity\n",
+    )
+    .expect("write middle source");
+    fs::write(
+        app.join("elamite.toml"),
+        "[package]\nname = \"artifact_app\"\nversion = \"0.1.0\"\ntarget_kind = \"exe\"\n\
+         \n[dependencies.middle]\npath = \"../middle\"\n",
+    )
+    .expect("write app manifest");
+    fs::write(
+        app.join("src/main.elx"),
+        "import middle.identity\nfn main() -> ():\n    println(identity(42))\n",
+    )
+    .expect("write app source");
+
+    let mut sources = SourceManager::new();
+    let graph = PackageGraph::resolve(&app.join("elamite.toml"), &mut sources)
+        .expect("resolve package graph");
+    let artifact = build(
+        &graph,
+        &mut sources,
+        &BuildOptions {
+            target: Target::X86_64,
+            optimization: Optimization::Debug,
+            output_directory: tree.root.join("out"),
+            keep_generated_c: false,
+            c_compiler: None,
+        },
+    )
+    .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert_eq!(artifact.dependency_metadata_paths.len(), 2);
+    let unique = artifact
+        .dependency_metadata_paths
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), 2);
+    let metadata = artifact
+        .dependency_metadata_paths
+        .iter()
+        .map(|path| elamite::artifact::PackageMetadata::read(path).expect("read metadata"))
+        .collect::<Vec<_>>();
+    let middle_metadata = metadata
+        .iter()
+        .find(|metadata| metadata.package_name == "middle")
+        .expect("middle metadata");
+    assert!(middle_metadata.public_api.iter().any(|item| {
+        item.path == "root.identity" && item.reexport && item.signature.contains("identity[T]")
+    }));
+    let result = run(&artifact).expect("run multi-package executable");
+    assert!(result.status.success());
+    assert_eq!(result.stdout, b"42\n");
 }
 
 #[test]
@@ -1353,7 +1476,7 @@ fn command_line_help_lists_the_supported_workflows() {
         .expect("run Elamite help");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["check", "build", "run", "init"] {
+    for command in ["check", "build", "run", "init", "dump", "doc", "test"] {
         assert!(
             stdout.contains(command),
             "missing `{command}` in:\n{stdout}"

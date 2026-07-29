@@ -1,9 +1,9 @@
 # Elamite Compiler Implementation Plan
 
-> Status: Active — Milestones 0 through 17 are complete and omitted from this
-> forward-looking plan; Milestone 18 is next
+> Status: Active — Milestones 0 through 18 are complete and omitted from this
+> forward-looking plan; Milestone 19 is next
 >
-> Next work package: M18.1 — intrinsic inventory audit
+> Next work package: M19.1 — authoritative demo fixture
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -168,42 +168,9 @@ intermediate semantics that contradict it.
 
 ## 3. Active implementation roadmap
 
-### Milestone 18: prelude, standard library, and developer tooling
-
-> Status: Next.
->
-> Boundary: compiler-known names are ordinary declarations from the user's
-> perspective. Keep the intrinsic list identical to `LEDGER.md` §12; in
-> particular, there is no compiler-known cleanup trait and `std` remains an
-> ordinary, shadowable package name.
-
-**Goal:** Turn compiler mechanisms into a coherent, usable initial toolchain.
-
-Implementation tasks, in order:
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **M18.1 — Intrinsic inventory audit** | Compare compiler-known IDs, lowering hooks, prelude entries, and `LEDGER.md` §12. Remove accidental intrinsics and document why each remaining entity cannot yet be ordinary Elamite code. | A single inventory test fails on missing, extra, or multiply defined compiler-known entities. |
-| **M18.2 — Standard package skeleton** | Create the ordinary `std` package/module tree, including `std.io` and `std.ffi`, with source declarations for every non-intrinsic public API. Keep module initialization nonexistent. | The package resolves and type-checks through the ordinary package graph. |
-| **M18.3 — Prelude assembly** | Re-export exactly the specified prelude surface from `std`; preserve normal lookup and allow local/module/dependency declarations to shadow the name `std`. | Positive lookup tests and negative tests for non-prelude standard APIs. |
-| **M18.4 — Standard implementations** | Move trait impls, associated functions, and wrappers that need no intrinsic behavior into Elamite source. Keep compiler hooks behind the smallest reviewed declarations. | The standard library compiles as ordinary source except for the recorded intrinsic boundary. |
-| **M18.5 — Dependency artifact workflow** | Complete deterministic library compilation, dependency ordering, artifact reuse within one build, public metadata consumption, and native link propagation. | Multi-package executable links against a built Elamite library and uses re-exported generic APIs. |
-| **M18.6 — CLI surface** *(complete)* | Use a Clap-derived command tree to stabilize `check`, `build`, and `run` argument parsing for target, release mode, output directory, C compiler, native inputs, and generated-C retention; provide `init` for minimal executable (default) and library hello-world packages; preserve consistent exit statuses and diagnostics. | Command-level tests cover help, valid combinations, executable initialization/execution, library initialization/building, invalid options, and tool failures. |
-| **M18.7 — Intermediate dumps** | Add deterministic dumps for tokens, syntax, resolution, typed IR, control-flow IR, monomorphized instances, and generated C. Every entry retains useful source identity/span information. | Snapshot each dump twice and compare byte-for-byte. |
-| **M18.8 — Test-runner support** | Provide a reproducible conformance runner, temporary-directory isolation, artifact retention after failure, target/optimization selection, and stable expected-output handling. | The runner can select one fixture, one target, or the full matrix and preserves a failing build. |
-| **M18.9 — Documentation extraction** | Expose attached documentation comments and public API signatures without coupling documentation generation to semantic success of unrelated private bodies. | Public/private filtering and source-link tests. |
-| **M18.10 — Toolchain documentation** | Document supported Linux targets, C99 compiler requirements, Boehm installation/linking, unstable compiler interfaces, foreign-thread limits, and all deliberate language limitations. | Documentation commands and examples match the implemented CLI and CI matrix. |
-
-Validation:
-
-- The standard library can be compiled as an ordinary package except for a
-  reviewed list of intrinsics.
-- Separate packages can consume public APIs and re-exports from a built library.
-- Every intermediate dump is deterministic and refers back to source spans.
-
 ### Milestone 19: conformance, hardening, and initial release gate
 
-> Status: Pending Milestone 18.
+> Status: Next.
 >
 > Boundary: this milestone adds no language features. A failing normative rule
 > returns ownership to the milestone named in `LEDGER.md`; it is not patched

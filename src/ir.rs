@@ -550,6 +550,15 @@ pub struct TypedIrProgram {
     pub vtables: Vec<Vtable>,
 }
 
+impl TypedIrProgram {
+    /// Deterministic high-level IR dump. Maps and sets inside the IR are
+    /// ordered, while vectors retain source and lowering order.
+    #[must_use]
+    pub fn dump(&self) -> String {
+        format!("{self:#?}")
+    }
+}
+
 /// A trait's method table for one implementing type.
 #[derive(Debug, Clone)]
 pub struct Vtable {
@@ -2726,6 +2735,31 @@ pub struct ControlFlowProgram {
     /// that never need the collector keep a dependency-free translation unit.
     /// Milestone 10 promotion analysis is what turns this on.
     pub requires_managed_memory: bool,
+}
+
+impl ControlFlowProgram {
+    /// Deterministic explicit-control-flow dump.
+    #[must_use]
+    pub fn dump(&self) -> String {
+        format!("{self:#?}")
+    }
+
+    /// Concrete function instances selected by monomorphization.
+    #[must_use]
+    pub fn monomorphization_dump(&self) -> String {
+        let mut output = String::new();
+        for function in &self.functions {
+            output.push_str(&format!(
+                "{} declaration={} arguments={:?} self_type={:?} span={:?}\n",
+                function.name,
+                function.instance.declaration.index(),
+                function.instance.arguments,
+                function.instance.self_type,
+                function.span
+            ));
+        }
+        output
+    }
 }
 
 #[must_use]

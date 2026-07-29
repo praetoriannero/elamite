@@ -1,0 +1,5 @@
+/// A portable category of input/output failure.
+pub enum IoError:
+    NotFound
+    PermissionDenied
+    Other

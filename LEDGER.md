@@ -4,8 +4,8 @@
 >
 > Basis: `SPEC.md` version 0.4.0-draft and `examples/spec_demo.elx`
 >
-> Purpose: turn the specification into an implementable checklist, per
-> [`IMPL.md`](IMPL.md) Stage A / Milestone 0. This document assigns no new
+> Purpose: turn the specification into an implementable checklist, per the
+> completed [`IMPL.md`](IMPL.md) Milestone 0. This document assigns no new
 > semantics. When it conflicts with `SPEC.md`, the specification wins and this
 > ledger must be corrected.
 
@@ -46,7 +46,7 @@ to:
 | M20 | Post-conformance optimization |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 17 are complete (implemented together in one
+tracker. Milestones 0 through 18 are complete (implemented together in one
 frontend pass where applicable; see `IMPL.md`); later rows remain planned until
 their milestone status changes in `IMPL.md`.
 
@@ -301,7 +301,7 @@ removed.
 | --- | --- | --- | --- |
 | `Display` compiler-recognized prelude trait with required `fmt(self: &Self, formatter: &var Formatter)`; `Formatter.write(str)` appends text; user-implementable; primitives/`str`/`String`/references-to-displayable/std collections-of-displayable provide impls | M13, M14 (done) | managed allocation | compile-fail (non-`Display` in `f"..."`), run-pass (`user_display_implementations_write_through_formatter`, `display_trait_objects_dispatch_through_the_formatter`) |
 | `f"..."` produces immutable `str`; each `{expr}` evaluates once left-to-right, must implement `Display`; `{{`/`}}` are literal braces; unmatched braces are a compile error; no width/precision/positional/debug specifiers initially; braces in ordinary strings aren't special | M2 (lex), M6 (typecheck interpolations), M8 (lower to `Formatter` calls) | — | compile-fail (unmatched brace, non-`Display` value), run-pass |
-| Prelude `print`/`println` are single generic `Display`-value functions, not heterogeneous variadics; combine multiple values via a formatted literal first | M14, M18 | — | run-pass |
+| Prelude `print`/`println` are single generic `Display`-value functions, not heterogeneous variadics; combine multiple values via a formatted literal first | M14, M18 (done) | — | run-pass |
 
 ## 8. Errors and resource cleanup (§8)
 
@@ -379,12 +379,14 @@ removed.
 
 Entities the compiler must recognize intrinsically (structural rules, derive
 support, or lowering hooks), versus entities that can be ordinary library code
-once the intrinsic hooks exist. Per `IMPL.md` §3/Milestone 18, compiler
-knowledge should stay minimal — this column records why each entity needs any
-compiler awareness at all.
+once the intrinsic hooks exist. The completed Milestone 18 inventory is
+enforced exactly by `src/standard.rs` and its resolution tests; compiler
+knowledge should stay minimal, and this column records why each entity needs
+any compiler awareness at all.
 
 | Entity | Role | Why the compiler must know it | Pass |
 | --- | --- | --- | --- |
+| `bool`, `char`, integer and floating-point primitives | scalar values | fixed C representation, contextual literal materialization, checked operators, target-width behavior for `isize`/`usize`, and compiler-supplied trait capabilities | M5–M18 (done; exact inventory in `src/standard.rs`) |
 | `Option[T]` | possibly-absent value | `Default` special-cases it (§4.3). Otherwise ordinary: M14.1 collects it from compiler-supplied source into the `std` root module, so construction, matching, copying, exhaustiveness, and monomorphization are the generic-enum rules and the only intrinsic left is the unconditional `Default` | M13, M14.1 (done) |
 | `Result[T, E]` | recoverable error | postfix `?` and `defer`/return-copy ordering are compiler-level control flow (§8). Otherwise ordinary: M14.2 collects it from compiler-supplied source, so construction, matching, and copying are the generic-enum rules and it carries no intrinsic trait capability. The propagation role keys on the standard declaration's identity (`standard_result_payloads`), so a shadowing user `Result` receives nothing | M14.2 (values), M15.1 (`?` role) — done |
 | `Vec[T]`, `Map[K, V]`, `Set[T]` | standard collections | `@vec`/`@map`/`@set` macro lowering, `StableHash` enforcement, mutable-place vs. reference rules (§3.2, §4.1) | M14 |
@@ -393,6 +395,7 @@ compiler awareness at all.
 | `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash` | comparison traits | operator desugaring (`==`, `<`, …), structural derivation | M13 |
 | `StableHash` | compiler-controlled capability | structurally inferred, not implementable via ordinary `impl` (§4.1, §4.5) | M13 |
 | `Display`, `Formatter` | formatting | `f"..."` string lowering, `print`/`println` bound | M13, M14 |
+| `print`, `println` | standard output | backend output hook after ordinary `Display` checking; exported through both the exact prelude and `std.io` surfaces | M14, M18 (done) |
 | `Identity[&T]`, `Identity[&var T]` | identity-keyed wrapper | compiler-known `StableHash` exception via managed address (§4.1, §4.5) | M14 |
 | `std.ffi.ForeignRoot[T]`, `ForeignRootMut[T]` | GC root registration | runtime root-table integration and explicit shared registration state (§10.2) | M17 |
 | `std.ffi.CVoid` | opaque FFI type | fixed correspondence to C `void`, raw-pointer-only usage (§10.1) | M17 |
@@ -423,8 +426,10 @@ are the outcomes the initial driver must support, independent of spelling:
 | Initialize a package | Create a non-destructive hello-world executable skeleton by default (`src/main.elx`) or a library skeleton with `--lib` (`src/lib.elx`) | M18.6 (done) |
 | Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `IMPL.md`) | M4 onward |
 | Select a target | Choose the target architecture/OS the generated C is compiled for | M1 (manifest), M8 (backend) — depends on the open target-matrix decision in §13 above |
-| Select an output directory | Choose where build artifacts (generated C, object files, linked binary) land | M8, M18 |
-| Dump intermediate representations | Tokens, syntax tree, resolved declarations, typed IR, control-flow IR, monomorphization results, generated C (`IMPL.md` Milestone 18) | M18 |
+| Select an output directory | Choose where build artifacts (generated C, object files, linked binary) land | M8, M18 (done) |
+| Dump intermediate representations | Tokens, syntax tree, resolved declarations, typed IR, control-flow IR, monomorphization results, generated C | M18 (done) |
+| Extract public documentation | Emit attached Markdown, public signatures, and source links without requiring unrelated private bodies to check | M18 (done) |
+| Run conformance fixtures | Select fixtures and target/optimization matrices, compare stable output/status expectations, isolate builds, and retain failure artifacts | M18 (done) |
 
 ## 15. Concurrency: explicitly unsupported
 
@@ -606,8 +611,9 @@ or trait methods, enum variants, and associated functions—remains with
 Milestones 5, 7, 11, and 13. Unqualified identifier patterns retain explicit
 `PatternCandidate` binding identities until Milestone 7 can distinguish a
 binding from a unit variant using the scrutinee type. Compiler-provided prelude
-and `std` names have stable builtin identities now; their implementations
-remain Milestone 18 work.
+and `std` names have stable identities; Milestone 18 moved every expressible
+standard declaration into `stdlib/` source and records the remaining intrinsic
+boundary in `src/standard.rs`.
 
 ### 17.5 Milestone 5 exit criteria
 

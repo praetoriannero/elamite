@@ -1,8 +1,11 @@
 //! Compiler library for the Elamite programming language.
 
+pub mod artifact;
 pub mod backend;
 pub mod check;
+pub mod conformance;
 pub mod diagnostics;
+pub mod docs;
 pub mod driver;
 pub mod ident;
 pub mod ir;
@@ -15,6 +18,7 @@ pub mod promotion;
 pub mod resolution;
 pub mod scaffold;
 pub mod source;
+pub mod standard;
 pub mod traits;
 pub mod types;
 

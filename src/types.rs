@@ -761,6 +761,34 @@ pub fn resolve_types(resolved: &ResolvedProgram) -> TypeOutput {
 }
 
 impl TypedProgram {
+    /// Deterministic canonical-type and signature dump for developer tooling.
+    #[must_use]
+    pub fn dump(&self) -> String {
+        let mut output = String::new();
+        for index in 0..self.types.len() {
+            let ty = TypeId(index as u32);
+            output.push_str(&format!("type {index} {:?}\n", self.types.kind(ty)));
+        }
+        for (declaration, ty) in &self.declaration_types {
+            output.push_str(&format!(
+                "declaration {} type {}\n",
+                declaration.index(),
+                ty.index()
+            ));
+        }
+        for (declaration, signature) in &self.function_signatures {
+            output.push_str(&format!(
+                "signature {} {:?}\n",
+                declaration.index(),
+                signature
+            ));
+        }
+        for obligation in &self.obligations {
+            output.push_str(&format!("obligation {obligation:?}\n"));
+        }
+        output
+    }
+
     #[must_use]
     pub fn callable_generic_parameters(
         &self,
