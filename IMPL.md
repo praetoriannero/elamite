@@ -197,11 +197,44 @@ conformance run, and targeted tests that would expose a change in copy
 independence, evaluation order, identity, root lifetime, trap behavior, or
 deterministic output.
 
-Milestone 20 is optional optimization work rather than a gate for the macro
-program below. Individual packages, especially source-map infrastructure, may
-be pulled forward when a macro milestone needs them.
+Milestone 20 is optional optimization work rather than a gate for the test and
+macro programs below. Individual packages, especially source-map
+infrastructure, may be pulled forward when a later milestone needs them.
 
-## 4. Post-conformance macro system
+## 4. Language-native test declarations
+
+### Milestone 21: package test declarations and runner
+
+> Status: Pending normative test-design review.
+>
+> Proposed surface: a module-level declaration written
+> `test test_name:` followed by an ordinary indented statement body.
+> `elamite test` tests the package in the current directory, while
+> `elamite test PATH` tests the package at `PATH`.
+
+**Goal:** Let a package define and execute named Elamite tests without a
+separate fixture manifest or expected-output file, while preserving the
+fixture-based conformance runner used to establish Milestone 19 under a
+distinct command.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **M21.1 — Test contract and command migration** | Specify test placement, naming, visibility, body result, success/failure behavior, assertion/failure facilities, execution order, isolation, dependency handling, and target/optimization behavior in `SPEC.md`; move the existing `elamite test SUITE` fixture runner to `elamite conformance SUITE`; update `LEDGER.md`. | `elamite test [PATH]` is reserved for native package tests, conformance fixtures remain runnable, and both have an unambiguous command and semantic contract before `test` becomes a keyword. |
+| **M21.2 — Keyword and parser support** | Reserve `test`, update the lexer and editor grammar inventories, and parse `test name:` only as a module-level declaration with a required nonempty indented body. | Valid declarations produce syntax with stable spans; parameters, return annotations, modifiers, missing names, empty bodies, and statement-position uses receive focused diagnostics. |
+| **M21.3 — Stable test identities and collection** | Assign stable test identities and collect declarations across the selected package's root, inline, and file-backed modules without treating tests as callable runtime functions or ordinary imports. | Duplicate names and module-qualified identities are deterministic; dependency packages do not contribute tests unless selected directly by the command contract. |
+| **M21.4 — Body checking** | Check each test body with ordinary lexical scope, expression, control-flow, safety, generic, trait, cleanup, and FFI rules, using the test contract's fixed result behavior. | Invalid test bodies report ordinary source diagnostics and cannot reach lowering; valid bodies may access exactly the package declarations permitted by the accepted visibility rules. |
+| **M21.5 — Test harness lowering** | Lower each selected test through ordinary typed/control-flow IR and synthesize test-only native entry points without adding test bodies to normal `check`, `build`, or `run` reachability. | Production artifacts remain byte-equivalent when test declarations are present; test artifacts execute the same semantics as ordinary Elamite code. |
+| **M21.6 — CLI package selection** | Extend the Clap command so `elamite test` defaults to `.`, `elamite test PATH` selects a package, and target/toolchain/optimization options follow the accepted contract. | Invocation works from the package root and from an unrelated directory using an explicit path, with clear diagnostics for a missing or non-package path. |
+| **M21.7 — Isolation, reporting, and filtering** | Run tests with deterministic names and ordering, isolate traps according to the accepted model, continue when possible, provide stable pass/fail summaries and process status, and support exact or substring filtering if accepted. | One failing or trapping test cannot be reported as a compiler crash or conceal independent results; a fully passing package exits successfully. |
+| **M21.8 — Cross-feature and package integration** | Exercise tests in nested modules and tests using private helpers, generics, traits, collections, managed references, `Result`, `defer`, unsafe operations, C imports, and local path dependencies. | Test-only execution does not weaken visibility, safety, coherence, cleanup, GC, or C ABI rules. |
+| **M21.9 — Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, native run tests, trap isolation, debug/release and x86/x86-64 matrix coverage, help/version documentation, and editor-grammar synchronization. | The complete pre-test M19 suite remains green and the accepted test surface is mapped in `LEDGER.md`. |
+
+This milestone is independent of user-defined macros. Its parser and harness
+work may land before macro foundations, and test declarations should then be
+used by later macro conformance suites without becoming a macro expansion
+primitive themselves.
+
+## 5. Post-conformance macro system
 
 Macro work begins after Milestone 19 reaches initial conformance and after the
 corresponding language design is accepted into `SPEC.md`. This roadmap does not
@@ -221,9 +254,9 @@ The implementation must preserve these boundaries throughout the transition:
   and the source invocation that caused it;
 - resource limits and expansion ordering are deterministic and testable.
 
-### Milestone 21: macro expansion foundations
+### Milestone 22: macro expansion foundations
 
-> Status: Pending Milestone 19 and normative macro design.
+> Status: Pending normative macro design; independent of Milestone 21.
 
 **Goal:** Add behavior-neutral representations and pipeline boundaries on which
 user-defined macros can be implemented without destabilizing the existing
@@ -231,56 +264,56 @@ compiler.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M21.1 — Language-contract closure** | Settle definition and invocation forms, delimiter and indentation behavior, expansion roles, macro namespaces, visibility/import rules, expansion order, and deterministic limits in `SPEC.md`; update `LEDGER.md` and close or split the corresponding open issues. | Every implemented macro behavior is owned by a normative rule rather than this roadmap. |
-| **M21.2 — Token-tree representation** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
-| **M21.3 — Expansion identities and provenance** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
-| **M21.4 — Fragment parser entry points** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
-| **M21.5 — Expansion pipeline boundary** | Insert a pass-through expansion phase before name resolution. | Macro-free packages produce equivalent syntax, resolved programs, diagnostics, typed IR, and generated C. |
-| **M21.6 — Macro identities and namespace collection** | Add stable macro declaration identities and the accepted package, module, import, visibility, and namespace rules without folding macro lookup into value or type lookup. | Same-name and cross-package cases resolve according to the accepted namespace model. |
-| **M21.7 — Deterministic expansion scheduler** | Implement the accepted ordering and fixed-point rules for nested and item-producing expansions, including explicit dependency and cycle diagnostics. | Repeated builds schedule and diagnose the same expansions in the same order. |
-| **M21.8 — Resource accounting** | Enforce deterministic recursion, expansion-step, nesting, and generated-output limits. | Limit exhaustion is a stable diagnostic, never a panic or hang. |
-| **M21.9 — Experimental gate** | Keep incomplete user-defined macro behavior behind an explicit unstable compiler gate. | Stable invocations cannot accidentally depend on unfinished behavior. |
-| **M21.10 — Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined expansion is enabled. |
+| **M22.1 — Language-contract closure** | Settle definition and invocation forms, delimiter and indentation behavior, expansion roles, macro namespaces, visibility/import rules, expansion order, and deterministic limits in `SPEC.md`; update `LEDGER.md` and close or split the corresponding open issues. | Every implemented macro behavior is owned by a normative rule rather than this roadmap. |
+| **M22.2 — Token-tree representation** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
+| **M22.3 — Expansion identities and provenance** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
+| **M22.4 — Fragment parser entry points** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
+| **M22.5 — Expansion pipeline boundary** | Insert a pass-through expansion phase before name resolution. | Macro-free packages produce equivalent syntax, resolved programs, diagnostics, typed IR, and generated C. |
+| **M22.6 — Macro identities and namespace collection** | Add stable macro declaration identities and the accepted package, module, import, visibility, and namespace rules without folding macro lookup into value or type lookup. | Same-name and cross-package cases resolve according to the accepted namespace model. |
+| **M22.7 — Deterministic expansion scheduler** | Implement the accepted ordering and fixed-point rules for nested and item-producing expansions, including explicit dependency and cycle diagnostics. | Repeated builds schedule and diagnose the same expansions in the same order. |
+| **M22.8 — Resource accounting** | Enforce deterministic recursion, expansion-step, nesting, and generated-output limits. | Limit exhaustion is a stable diagnostic, never a panic or hang. |
+| **M22.9 — Experimental gate** | Keep incomplete user-defined macro behavior behind an explicit unstable compiler gate. | Stable invocations cannot accidentally depend on unfinished behavior. |
+| **M22.10 — Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined expansion is enabled. |
 
-### Milestone 22: hygienic declarative macros
+### Milestone 23: hygienic declarative macros
 
-> Status: Pending Milestone 21.
+> Status: Pending Milestone 22.
 
 **Goal:** Implement ordinary syntax macros with deterministic matching,
 transcription, hygiene, and cross-package use.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M22.1 — Declarative definitions** | Parse and validate the accepted rule, matcher, metavariable, fragment-specifier, and transcription syntax while keeping macro definitions out of ordinary runtime declarations. | Valid definitions enter the macro namespace and invalid definitions fail before expansion. |
-| **M22.2 — Matching and repetition** | Match token trees with deterministic rule selection, nested repetition, separators, and useful ambiguity/failure diagnostics under the Milestone 21 resource limits. | Matcher success, failure, ambiguity, and nested repetition have focused tests. |
-| **M22.3 — Hygienic transcription** | Attach syntax contexts to generated identifiers and implement the accepted call-site and definition-site lookup behavior; ordinary source identifiers remain in the root context. | Capture and intentional-reference tests demonstrate the specified lookup behavior. |
-| **M22.4 — Fragment-role expansion** | Expand expression, statement, pattern, type, and item macros only in roles permitted by `SPEC.md`, then parse the result through the corresponding fragment entry point. | Every supported role has positive and wrong-role diagnostics. |
-| **M22.5 — Item fixed point** | Support generated declarations, imports, implementations, and further macro invocations using the accepted deterministic collection order. | Duplicate, dependency, nesting, and cycle cases terminate with stable results. |
-| **M22.6 — Modules and packages** | Serialize or otherwise expose the stable macro metadata needed for imports, visibility, aliases, and cross-package expansion without exposing unstable compiler internals. | A downstream package can import and expand a public macro while private macros stay inaccessible. |
-| **M22.7 — Semantic integration** | Route generated syntax through ordinary resolution, generic checking, trait conformance/coherence, safety checking, lowering, and C emission. | Interaction tests cover `defer`, `unsafe`, FFI, generics, traits, and managed storage. |
-| **M22.8 — Built-in compatibility** | Prove behavioral and diagnostic compatibility for the existing built-in macros before optionally reimplementing any of them on the general expansion path. | Existing built-in fixtures pass unchanged; migration is not required. |
-| **M22.9 — Declarative macro conformance** | Add positive, compile-fail, cross-module, cross-package, hygiene, determinism, architecture, nesting, adversarial, and resource-limit suites. | Declarative expansion passes the supported target matrix. |
+| **M23.1 — Declarative definitions** | Parse and validate the accepted rule, matcher, metavariable, fragment-specifier, and transcription syntax while keeping macro definitions out of ordinary runtime declarations. | Valid definitions enter the macro namespace and invalid definitions fail before expansion. |
+| **M23.2 — Matching and repetition** | Match token trees with deterministic rule selection, nested repetition, separators, and useful ambiguity/failure diagnostics under the Milestone 22 resource limits. | Matcher success, failure, ambiguity, and nested repetition have focused tests. |
+| **M23.3 — Hygienic transcription** | Attach syntax contexts to generated identifiers and implement the accepted call-site and definition-site lookup behavior; ordinary source identifiers remain in the root context. | Capture and intentional-reference tests demonstrate the specified lookup behavior. |
+| **M23.4 — Fragment-role expansion** | Expand expression, statement, pattern, type, and item macros only in roles permitted by `SPEC.md`, then parse the result through the corresponding fragment entry point. | Every supported role has positive and wrong-role diagnostics. |
+| **M23.5 — Item fixed point** | Support generated declarations, imports, implementations, and further macro invocations using the accepted deterministic collection order. | Duplicate, dependency, nesting, and cycle cases terminate with stable results. |
+| **M23.6 — Modules and packages** | Serialize or otherwise expose the stable macro metadata needed for imports, visibility, aliases, and cross-package expansion without exposing unstable compiler internals. | A downstream package can import and expand a public macro while private macros stay inaccessible. |
+| **M23.7 — Semantic integration** | Route generated syntax through ordinary resolution, generic checking, trait conformance/coherence, safety checking, lowering, and C emission. | Interaction tests cover `defer`, `unsafe`, FFI, generics, traits, and managed storage. |
+| **M23.8 — Built-in compatibility** | Prove behavioral and diagnostic compatibility for the existing built-in macros before optionally reimplementing any of them on the general expansion path. | Existing built-in fixtures pass unchanged; migration is not required. |
+| **M23.9 — Declarative macro conformance** | Add positive, compile-fail, cross-module, cross-package, hygiene, determinism, architecture, nesting, adversarial, and resource-limit suites. | Declarative expansion passes the supported target matrix. |
 
-### Milestone 23: macro diagnostics, tooling, and stabilization
+### Milestone 24: macro diagnostics, tooling, and stabilization
 
-> Status: Pending Milestone 22.
+> Status: Pending Milestone 23.
 
 **Goal:** Make declarative macros diagnosable, inspectable, reproducible, and
 ready to leave the experimental gate.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M23.1 — Expansion-aware diagnostics** | Render primary generated spans with related invocation and definition spans, bounded expansion backtraces, and stable diagnostic categories. | Nested-expansion snapshots identify both the failure and its source chain. |
-| **M23.2 — Recovery across expansions** | Contain malformed output and nested expansion failures so later independent diagnostics can still be emitted without duplicate cascades. | One failed invocation does not suppress or multiply independent diagnostics. |
-| **M23.3 — Expansion inspection** | Add a CLI inspection mode that shows expanded source or syntax with origin information and deterministic ordering suitable for tests and editor tooling. | Repeated dumps are byte-identical and expose useful provenance. |
-| **M23.4 — Dependency and cache identities** | Define stable hashes for macro definitions, invocations, imported macro metadata, compiler/spec versions, and relevant inputs. | Future incremental compilation can invalidate expansions precisely without changing current clean builds. |
-| **M23.5 — Robustness campaign** | Fuzz matching, transcription, fragment parsing, hygiene, span projection, nesting, and limits; retain regressions for every discovered crash, hang, or nondeterministic result. | The retained corpus completes without an internal failure or unbounded diagnostic cascade. |
-| **M23.6 — Compatibility audit** | Re-run the complete compiler suite with expansion enabled and verify macro-free diagnostic, IR, runtime, and generated-C equivalence on Linux x86 and x86-64. | Existing programs remain unchanged by enabling the expansion pipeline. |
-| **M23.7 — Declarative stabilization** | Document the supported surface and limits, complete `SPEC.md`/`LEDGER.md` coverage, and remove the experimental gate. | Local and cross-package conformance suites pass before the gate is removed. |
+| **M24.1 — Expansion-aware diagnostics** | Render primary generated spans with related invocation and definition spans, bounded expansion backtraces, and stable diagnostic categories. | Nested-expansion snapshots identify both the failure and its source chain. |
+| **M24.2 — Recovery across expansions** | Contain malformed output and nested expansion failures so later independent diagnostics can still be emitted without duplicate cascades. | One failed invocation does not suppress or multiply independent diagnostics. |
+| **M24.3 — Expansion inspection** | Add a CLI inspection mode that shows expanded source or syntax with origin information and deterministic ordering suitable for tests and editor tooling. | Repeated dumps are byte-identical and expose useful provenance. |
+| **M24.4 — Dependency and cache identities** | Define stable hashes for macro definitions, invocations, imported macro metadata, compiler/spec versions, and relevant inputs. | Future incremental compilation can invalidate expansions precisely without changing current clean builds. |
+| **M24.5 — Robustness campaign** | Fuzz matching, transcription, fragment parsing, hygiene, span projection, nesting, and limits; retain regressions for every discovered crash, hang, or nondeterministic result. | The retained corpus completes without an internal failure or unbounded diagnostic cascade. |
+| **M24.6 — Compatibility audit** | Re-run the complete compiler suite with expansion enabled and verify macro-free diagnostic, IR, runtime, and generated-C equivalence on Linux x86 and x86-64. | Existing programs remain unchanged by enabling the expansion pipeline. |
+| **M24.7 — Declarative stabilization** | Document the supported surface and limits, complete `SPEC.md`/`LEDGER.md` coverage, and remove the experimental gate. | Local and cross-package conformance suites pass before the gate is removed. |
 
-### Milestone 24: declarative custom derive generators
+### Milestone 25: declarative custom derive generators
 
-> Status: Pending Milestone 23 and accepted derive design.
+> Status: Pending Milestone 24 and accepted derive design.
 
 **Goal:** Generate ordinary implementations from type structure using bounded
 declarative matching and templates, without granting generators arbitrary
@@ -288,50 +321,50 @@ execution or access to compiler internals.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M24.1 — Derive contract** | Specify derive attachment, ordering, namespace, visibility, allowed targets, structural matching/template rules, duplicate behavior, and interaction with built-in derives in `SPEC.md`. | Each accepted and rejected definition and attachment case is normative and tested. |
-| **M24.2 — Stable structural input** | Expose a versioned structural representation of names, fields, variants, generic parameters, bounds, visibility, and source spans sufficient for derives but independent of internal AST and semantic table layouts. | Generators need no compiler-private representation. |
-| **M24.3 — Derive definitions and lookup** | Parse bounded structural matcher/template definitions and resolve derive generators through the accepted module/package rules with stable identities and deterministic ordering. | Local, imported, renamed, private, malformed, and duplicate generators resolve or diagnose predictably. |
-| **M24.4 — Derive expansion phase** | Match structural input and transcribe ordinary items after input declarations are known and before implementation collection/coherence, preserving provenance and hygiene. | Generated implementations participate in the same collection order on repeated builds without executing arbitrary code. |
-| **M24.5 — Ordinary semantic validation** | Resolve and check generated implementations exactly like handwritten implementations, including orphan, overlap, generic-bound, safety, and object-safety diagnostics. | Generated code cannot bypass an ordinary semantic restriction. |
-| **M24.6 — Built-in derive compatibility** | Retain compiler-supported derives until a general generator matches their semantics, diagnostics, determinism, and cross-package behavior. | Migration remains optional and cannot regress existing derives. |
-| **M24.7 — Derive conformance** | Test generic and nongeneric records/enums, visibility, renamed imports, cross-package generators, duplicate derives, malformed output, hygiene, coherence conflicts, and both target architectures. | Custom derives pass the supported target matrix. |
+| **M25.1 — Derive contract** | Specify derive attachment, ordering, namespace, visibility, allowed targets, structural matching/template rules, duplicate behavior, and interaction with built-in derives in `SPEC.md`. | Each accepted and rejected definition and attachment case is normative and tested. |
+| **M25.2 — Stable structural input** | Expose a versioned structural representation of names, fields, variants, generic parameters, bounds, visibility, and source spans sufficient for derives but independent of internal AST and semantic table layouts. | Generators need no compiler-private representation. |
+| **M25.3 — Derive definitions and lookup** | Parse bounded structural matcher/template definitions and resolve derive generators through the accepted module/package rules with stable identities and deterministic ordering. | Local, imported, renamed, private, malformed, and duplicate generators resolve or diagnose predictably. |
+| **M25.4 — Derive expansion phase** | Match structural input and transcribe ordinary items after input declarations are known and before implementation collection/coherence, preserving provenance and hygiene. | Generated implementations participate in the same collection order on repeated builds without executing arbitrary code. |
+| **M25.5 — Ordinary semantic validation** | Resolve and check generated implementations exactly like handwritten implementations, including orphan, overlap, generic-bound, safety, and object-safety diagnostics. | Generated code cannot bypass an ordinary semantic restriction. |
+| **M25.6 — Built-in derive compatibility** | Retain compiler-supported derives until a general generator matches their semantics, diagnostics, determinism, and cross-package behavior. | Migration remains optional and cannot regress existing derives. |
+| **M25.7 — Derive conformance** | Test generic and nongeneric records/enums, visibility, renamed imports, cross-package generators, duplicate derives, malformed output, hygiene, coherence conflicts, and both target architectures. | Custom derives pass the supported target matrix. |
 
-### Milestone 25: compile-time execution runtime
+### Milestone 26: compile-time execution runtime
 
-> Status: Pending Milestone 24 and accepted execution/security design.
+> Status: Pending Milestone 25 and accepted execution/security design.
 
 **Goal:** Provide a bounded and reproducible host-side execution environment
 for procedural macro code without confusing host and target compilation.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M25.1 — Execution model** | Implement the interpreter, bytecode, native-host, or other model accepted by `SPEC.md`, with an explicit versioned interface rather than direct access to compiler data structures. | Macro programs execute through only the accepted interface. |
-| **M25.2 — Host/target separation** | Compile and identify macro artifacts for the build host while preserving the selected x86 or x86-64 target for the user's package. | Incompatible artifacts are rejected clearly and never linked as target code. |
-| **M25.3 — Token and diagnostic API** | Expose only the versioned token-tree, span, provenance, and diagnostic operations required by procedural macros. | API compatibility has version-skew tests. |
-| **M25.4 — Capability boundary** | Deny filesystem, environment, process, clock, randomness, and network access by default; implement only capabilities explicitly accepted by the language/build design and include them in reproducibility metadata. | Undeclared external access fails as a contained diagnostic. |
-| **M25.5 — Failure isolation and limits** | Contain panics, crashes, invalid results, recursion, excessive work, memory growth, and output growth as bounded diagnostics without corrupting compiler state. | A failed macro cannot crash or hang the compiling process. |
-| **M25.6 — Artifact and cache identity** | Key macro artifacts and results by source, transitive dependencies, host platform, interface/compiler/spec versions, declared capabilities, and all accepted external inputs. | Input changes invalidate exactly the affected artifact or result. |
-| **M25.7 — Runtime validation** | Add reproducibility, isolation, malformed-artifact, version-skew, resource-limit, cache-invalidation, host/target, and concurrent-build tests. | The runtime is deterministic and isolated across repeated builds. |
+| **M26.1 — Execution model** | Implement the interpreter, bytecode, native-host, or other model accepted by `SPEC.md`, with an explicit versioned interface rather than direct access to compiler data structures. | Macro programs execute through only the accepted interface. |
+| **M26.2 — Host/target separation** | Compile and identify macro artifacts for the build host while preserving the selected x86 or x86-64 target for the user's package. | Incompatible artifacts are rejected clearly and never linked as target code. |
+| **M26.3 — Token and diagnostic API** | Expose only the versioned token-tree, span, provenance, and diagnostic operations required by procedural macros. | API compatibility has version-skew tests. |
+| **M26.4 — Capability boundary** | Deny filesystem, environment, process, clock, randomness, and network access by default; implement only capabilities explicitly accepted by the language/build design and include them in reproducibility metadata. | Undeclared external access fails as a contained diagnostic. |
+| **M26.5 — Failure isolation and limits** | Contain panics, crashes, invalid results, recursion, excessive work, memory growth, and output growth as bounded diagnostics without corrupting compiler state. | A failed macro cannot crash or hang the compiling process. |
+| **M26.6 — Artifact and cache identity** | Key macro artifacts and results by source, transitive dependencies, host platform, interface/compiler/spec versions, declared capabilities, and all accepted external inputs. | Input changes invalidate exactly the affected artifact or result. |
+| **M26.7 — Runtime validation** | Add reproducibility, isolation, malformed-artifact, version-skew, resource-limit, cache-invalidation, host/target, and concurrent-build tests. | The runtime is deterministic and isolated across repeated builds. |
 
-### Milestone 26: procedural macros and attributes
+### Milestone 27: procedural macros and attributes
 
-> Status: Pending Milestone 25 and accepted procedural-macro design.
+> Status: Pending Milestone 26 and accepted procedural-macro design.
 
 **Goal:** Support function-like procedural expansion, procedural derives, and
 item attributes on the bounded compile-time runtime.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M26.1 — Function-like procedural macros** | Register, resolve, execute, and parse token-tree transformations in every accepted fragment role with the same provenance, hygiene, scheduling, and limits as declarative macros. | Function-like procedural macros satisfy the declarative interaction matrix. |
-| **M26.2 — Procedural derives** | Feed the stable Milestone 24 structural input to procedural generators and validate their output through ordinary implementation collection and coherence. | Procedural derives cannot observe private compiler structures or bypass coherence. |
-| **M26.3 — Attribute attachment and input** | Parse the accepted attribute grammar, attach attributes to permitted items, preserve raw token input and spans, and reject invalid placement before execution. | Attachment and input are deterministic and independently diagnosable. |
-| **M26.4 — Attribute expansion semantics** | Apply the accepted ordering relative to declarative expansion and derives; allow attributes to replace, remove, or produce items only as specified, then return all output to ordinary collection and checking. | Nested and interacting attributes reach a deterministic fixed point. |
-| **M26.5 — Procedural span and hygiene API** | Support the accepted call-site, definition-site, and generated identifier operations without allowing fabricated physical locations or bypassing visibility. | Span and capture tests exercise every exposed context operation. |
-| **M26.6 — Failure behavior and tooling** | Surface execution failures with bounded expansion backtraces, preserve compiler recovery, and provide useful inspection output when a macro cannot execute. | Failures remain local and explain the invocation/definition chain. |
-| **M26.7 — Cross-package distribution** | Build, discover, version, and cache procedural macro artifacts reproducibly across packages without loading target artifacts into the host compiler. | Clean and cached cross-package builds are equivalent. |
-| **M26.8 — Procedural conformance and stabilization** | Test ordering, nesting, hygiene, generated imports/items/impls, capability denial, crashes, limits, version skew, cross-package use, deterministic rebuilds, and both target architectures. | Procedural macros and attributes leave the experimental surface only after the complete matrix passes. |
+| **M27.1 — Function-like procedural macros** | Register, resolve, execute, and parse token-tree transformations in every accepted fragment role with the same provenance, hygiene, scheduling, and limits as declarative macros. | Function-like procedural macros satisfy the declarative interaction matrix. |
+| **M27.2 — Procedural derives** | Feed the stable Milestone 25 structural input to procedural generators and validate their output through ordinary implementation collection and coherence. | Procedural derives cannot observe private compiler structures or bypass coherence. |
+| **M27.3 — Attribute attachment and input** | Parse the accepted attribute grammar, attach attributes to permitted items, preserve raw token input and spans, and reject invalid placement before execution. | Attachment and input are deterministic and independently diagnosable. |
+| **M27.4 — Attribute expansion semantics** | Apply the accepted ordering relative to declarative expansion and derives; allow attributes to replace, remove, or produce items only as specified, then return all output to ordinary collection and checking. | Nested and interacting attributes reach a deterministic fixed point. |
+| **M27.5 — Procedural span and hygiene API** | Support the accepted call-site, definition-site, and generated identifier operations without allowing fabricated physical locations or bypassing visibility. | Span and capture tests exercise every exposed context operation. |
+| **M27.6 — Failure behavior and tooling** | Surface execution failures with bounded expansion backtraces, preserve compiler recovery, and provide useful inspection output when a macro cannot execute. | Failures remain local and explain the invocation/definition chain. |
+| **M27.7 — Cross-package distribution** | Build, discover, version, and cache procedural macro artifacts reproducibly across packages without loading target artifacts into the host compiler. | Clean and cached cross-package builds are equivalent. |
+| **M27.8 — Procedural conformance and stabilization** | Test ordering, nesting, hygiene, generated imports/items/impls, capability denial, crashes, limits, version skew, cross-package use, deterministic rebuilds, and both target architectures. | Procedural macros and attributes leave the experimental surface only after the complete matrix passes. |
 
-## 5. Deferred concurrency design gate
+## 6. Deferred concurrency design gate
 
 Do not implement task syntax, schedulers, channels, synchronization traits, or
 cross-thread callbacks until `I-015` defines:
@@ -354,7 +387,7 @@ runtime scheduler and synchronization, GC integration, cancellation cleanup,
 foreign-thread entry, and stress/race testing. It should not require weakening
 the sequential semantics established by the initial milestones.
 
-## 6. Recommended delivery checkpoints
+## 7. Recommended delivery checkpoints
 
 Completed checkpoints are omitted with their milestones. The remaining
 delivery checkpoints are:
@@ -362,9 +395,12 @@ delivery checkpoints are:
 1. **Initial conformance checkpoint — Milestone 19:** unsafe code, C
    interoperability, the standard library, and the authoritative demonstration
    satisfy the full initial test matrix.
-2. **Declarative macro checkpoint — Milestone 23:** hygienic declarative
+2. **Language-native test checkpoint — Milestone 21:** package tests run
+   deterministically from the current directory or an explicit package path
+   without changing production artifacts.
+3. **Declarative macro checkpoint — Milestone 24:** hygienic declarative
    macros are stable, diagnosable, and usable across packages.
-3. **Extensible macro checkpoint — Milestone 26:** procedural macros, derives,
+4. **Extensible macro checkpoint — Milestone 27:** procedural macros, derives,
    and attributes are bounded, reproducible, and stable across packages.
 
 These checkpoints are reporting boundaries, not substitutes for the exit

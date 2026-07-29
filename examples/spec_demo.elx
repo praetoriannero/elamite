@@ -358,7 +358,7 @@ pub fn main() -> Result[(), io.IoError]:
 
     // A callback that must carry data uses a trait object instead of a function
     // reference, since a function reference has no captured environment.
-    let adder = AddOffset { offset: 1 }
+    let adder = AddOffset{offset: 1}
     let adder_ref = &adder
     println(f"transform result: {apply_transform(adder_ref, 41)}") // 42
 
