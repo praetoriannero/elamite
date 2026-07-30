@@ -36,6 +36,7 @@ pub struct FunctionInstance {
 pub(super) enum TypePosition {
     Value,
     TraitAllowed,
+    Return,
 }
 
 /// One declared generic capability requirement.
@@ -296,6 +297,7 @@ impl TypedProgram {
         }
         let available = match self.types.kind(ty) {
             TypeKind::Error
+            | TypeKind::Never
             | TypeKind::GenericParameter(_)
             | TypeKind::SelfType(_)
             | TypeKind::InferenceVariable(_)
@@ -516,6 +518,16 @@ pub(super) fn validate_foreign_declarations(
                     typed.types.kind(signature.return_type),
                     TypeKind::Primitive(PrimitiveType::Unit)
                 );
+                if matches!(typed.types.kind(signature.return_type), TypeKind::Never) {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Category::TypeSystem,
+                            "C functions cannot use the Elamite never return type",
+                        )
+                        .with_primary(declaration.span),
+                    );
+                    continue;
+                }
                 if !unit && !typed.is_abi_safe(signature.return_type) {
                     diagnostics.push(
                         Diagnostic::new(

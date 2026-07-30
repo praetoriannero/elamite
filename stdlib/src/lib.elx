@@ -13,6 +13,10 @@ pub enum NumericError:
     OutOfRange
     NotANumber
 
+/// Terminates the process with an unrecoverable diagnostic.
+pub fn panic(message: str) -> !:
+    pass
+
 /// Formats a value into a standard formatter.
 pub trait Display:
     fn fmt(self: &Self, formatter: &var Formatter) -> ()

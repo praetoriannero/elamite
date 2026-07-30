@@ -19,8 +19,8 @@ use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{
     AggregateValue, BinaryOperator, BlockId, CollectionLiteralKind, ControlFlowFunction,
     ControlFlowPlace, ControlFlowProgram, IndexKind, Instruction, IterationKind,
-    LogicalCopyStrategy, RuntimeFormattedPart, Rvalue, TemporaryId, Terminator, TypedEnum,
-    UnaryOperator, logical_copy_strategy,
+    LogicalCopyStrategy, NeverCall, RuntimeFormattedPart, Rvalue, TemporaryId, Terminator,
+    TypedEnum, UnaryOperator, logical_copy_strategy,
 };
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
@@ -370,7 +370,10 @@ fn reachable_blocks(function: &ControlFlowFunction) -> BTreeSet<BlockId> {
                 pending.push(then_block);
                 pending.push(else_block);
             }
-            Terminator::Return(_) | Terminator::Trap { .. } | Terminator::Unreachable => {}
+            Terminator::Return(_)
+            | Terminator::Trap { .. }
+            | Terminator::NeverCall { .. }
+            | Terminator::Unreachable => {}
         }
     }
     reachable
@@ -383,7 +386,8 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
     };
     Some(match operation {
-        StringFrom
+        StandardCall::Panic
+        | StringFrom
         | StandardCall::IdentityFrom { .. }
         | StandardCall::ForeignRootRetain { .. }
         | StandardCall::ForeignRootPointer { .. }

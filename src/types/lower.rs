@@ -360,6 +360,12 @@ impl<'a> TypeBuilder<'a> {
         ty
     }
 
+    fn lower_return_type(&mut self, node: &SyntaxNode, self_type: Option<TypeId>) -> TypeId {
+        let ty = self.lower_type_in(node, self_type, TypePosition::Return);
+        self.annotation_types.insert(node.span, ty);
+        ty
+    }
+
     fn lower_type_in(
         &mut self,
         node: &SyntaxNode,
@@ -368,6 +374,22 @@ impl<'a> TypeBuilder<'a> {
     ) -> TypeId {
         let tokens = direct_tokens(node);
         let first = tokens.first().map(|token| &token.kind);
+        if matches!(first, Some(TokenKind::Bang)) {
+            if position == TypePosition::Return
+                && tokens.len() == 1
+                && direct_children(node, SyntaxKind::Type).is_empty()
+            {
+                return self.types.never();
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "`!` is valid only by itself as a function return type",
+                )
+                .with_primary(node.span),
+            );
+            return self.types.error();
+        }
         if matches!(first, Some(TokenKind::Amp | TokenKind::Star)) {
             let raw = matches!(first, Some(TokenKind::Star));
             let mutable = tokens
@@ -555,7 +577,7 @@ impl<'a> TypeBuilder<'a> {
         // only where a trait is expected (SPEC 6). Rejecting it here keeps an
         // unsized type out of fields, parameters, returns, locals, aliases,
         // and generic arguments rather than deferring the failure to lowering.
-        if position == TypePosition::Value && self.is_trait_type(lowered) {
+        if position != TypePosition::TraitAllowed && self.is_trait_type(lowered) {
             self.diagnostics.push(
                 Diagnostic::new(
                     Category::TypeSystem,
@@ -622,7 +644,7 @@ impl<'a> TypeBuilder<'a> {
         let children = direct_children(node, SyntaxKind::Type);
         let mut parameters = Vec::new();
         let return_type = if let Some(result) = children.last() {
-            self.lower_type(result, None)
+            self.lower_return_type(result, None)
         } else {
             self.types.error()
         };
@@ -684,7 +706,7 @@ impl<'a> TypeBuilder<'a> {
         let return_type = if let Some(node) =
             direct_children(&declaration_data.syntax, SyntaxKind::Type).last()
         {
-            self.lower_type(node, self_type)
+            self.lower_return_type(node, self_type)
         } else {
             self.types.primitive(PrimitiveType::Unit)
         };

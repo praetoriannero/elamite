@@ -19,6 +19,7 @@ pub fn logical_copy_strategy(types: &TypeContext, mut ty: TypeId) -> LogicalCopy
                 ty = *target;
                 continue;
             }
+            TypeKind::Never => LogicalCopyStrategy::PreserveIdentity,
             TypeKind::Primitive(PrimitiveType::String) => LogicalCopyStrategy::OwnedString,
             TypeKind::Primitive(_) => LogicalCopyStrategy::Trivial,
             TypeKind::Tuple(_) | TypeKind::Array { .. } | TypeKind::Nominal { .. } => {

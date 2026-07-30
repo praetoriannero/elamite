@@ -281,7 +281,7 @@ impl<'a> Parser<'a> {
         children.push(node(self.parse_parameters()));
         if self.at_simple(&TokenKind::Arrow) {
             children.push(self.bump());
-            children.push(node(self.parse_type()));
+            children.push(node(self.parse_return_type()));
         }
         match (body, self.at_simple(&TokenKind::Colon)) {
             (FunctionBody::Required | FunctionBody::Optional, true) => {
@@ -375,6 +375,10 @@ impl<'a> Parser<'a> {
     fn parse_type(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = Vec::new();
+        if self.at_simple(&TokenKind::Bang) {
+            children.push(self.bump());
+            return SyntaxNode::new(SyntaxKind::Type, children, fallback);
+        }
         if self.at_simple(&TokenKind::Amp) || self.at_simple(&TokenKind::Star) {
             children.push(self.bump());
             self.eat_keyword(Keyword::Var, &mut children);
@@ -449,10 +453,23 @@ impl<'a> Parser<'a> {
         self.expect_simple(&TokenKind::RParen, children, "expected `)`");
         if self.at_simple(&TokenKind::Arrow) {
             children.push(self.bump());
-            children.push(node(self.parse_type()));
+            children.push(node(self.parse_return_type()));
         } else {
             self.error_here("expected `->` in function type");
         }
+    }
+
+    fn parse_return_type(&mut self) -> SyntaxNode {
+        if !self.at_simple(&TokenKind::Bang) {
+            return self.parse_type();
+        }
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        if !self.at_type_boundary() {
+            self.error_here("`!` must stand alone as a function return type");
+            children.push(node(self.parse_type()));
+        }
+        SyntaxNode::new(SyntaxKind::Type, children, fallback)
     }
 
     fn parse_type_arguments(&mut self) -> SyntaxNode {

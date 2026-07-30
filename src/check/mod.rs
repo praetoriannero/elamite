@@ -238,6 +238,12 @@ impl<'a> Checker<'a> {
         let Some(signature) = self.typed.function_signatures.get(&declaration_id).cloned() else {
             return;
         };
+        if self
+            .resolved
+            .is_standard_declaration(declaration_id, "panic")
+        {
+            return;
+        }
         let syntax = self.resolved.declarations[declaration_id.index()]
             .syntax
             .clone();
@@ -322,19 +328,39 @@ impl<'a> Checker<'a> {
         definitely_returns
     }
 
+    fn is_never_type(&self, ty: TypeId) -> bool {
+        matches!(
+            self.typed
+                .types
+                .kind(self.typed.types.resolve_inference(ty)),
+            TypeKind::Never
+        )
+    }
+
+    fn node_contains_never_expression(&self, node: &SyntaxNode) -> bool {
+        node.direct_nodes().into_iter().any(|child| {
+            self.program
+                .expression_types
+                .get(&child.span)
+                .is_some_and(|ty| self.is_never_type(*ty))
+                || self.node_contains_never_expression(child)
+        })
+    }
+
     fn check_statement(&mut self, node: &SyntaxNode, return_type: TypeId) -> bool {
         match node.kind {
             SyntaxKind::LetStatement => {
                 self.check_let_statement(node);
-                false
+                self.node_contains_never_expression(node)
             }
             SyntaxKind::AssignmentStatement => {
                 self.check_assignment_statement(node);
-                false
+                self.node_contains_never_expression(node)
             }
             SyntaxKind::ExpressionStatement => {
                 if let Some(expression) = child_nodes(node).into_iter().next() {
-                    self.check_expr(expression, ExpectedType::None);
+                    let (ty, _) = self.check_expr(expression, ExpectedType::None);
+                    return self.is_never_type(ty);
                 }
                 false
             }
@@ -410,8 +436,9 @@ impl<'a> Checker<'a> {
             SyntaxKind::IfStatement => self.check_if_statement(node, return_type),
             SyntaxKind::WhileStatement => {
                 let children = child_nodes(node);
+                let mut condition_terminates = false;
                 if let Some(condition) = children.first() {
-                    self.check_condition(condition);
+                    condition_terminates = self.check_condition(condition);
                 }
                 if let Some(block) = children
                     .into_iter()
@@ -424,7 +451,7 @@ impl<'a> Checker<'a> {
                 // A `while` loop may execute zero times (even `while true`
                 // is not specially recognized here), so it never by itself
                 // guarantees a return.
-                false
+                condition_terminates
             }
             SyntaxKind::ForStatement => {
                 let children = child_nodes(node);
@@ -486,7 +513,7 @@ impl<'a> Checker<'a> {
                     self.check_block(block, return_type);
                     self.loop_depth -= 1;
                 }
-                false
+                self.is_never_type(iterable_type)
             }
             SyntaxKind::MatchStatement => self.check_match_statement(node, return_type),
             SyntaxKind::UnsafeBlock => {
@@ -675,6 +702,15 @@ impl<'a> Checker<'a> {
         let expression = child_nodes(node).into_iter().next();
         let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
         let is_unit = self.typed.types.exactly_equal(return_type, unit_type);
+        if self.is_never_type(return_type) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ControlFlow,
+                    "a never-returning function cannot contain an ordinary `return`",
+                )
+                .with_primary(node.span),
+            );
+        }
         match expression {
             Some(expression) => {
                 let (expression_type, _) =
@@ -712,9 +748,12 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_condition(&mut self, node: &SyntaxNode) {
+    fn check_condition(&mut self, node: &SyntaxNode) -> bool {
         let bool_type = self.typed.types.primitive(PrimitiveType::Bool);
         let (condition_type, _) = self.check_expr(node, ExpectedType::Exact(bool_type));
+        if self.is_never_type(condition_type) {
+            return true;
+        }
         if condition_type != self.typed.types.error()
             && !self.typed.types.exactly_equal(condition_type, bool_type)
         {
@@ -726,12 +765,14 @@ impl<'a> Checker<'a> {
                 .with_primary(node.span),
             );
         }
+        false
     }
 
     fn check_if_statement(&mut self, node: &SyntaxNode, return_type: TypeId) -> bool {
         let children = child_nodes(node);
         let mut then_returns = false;
         let mut else_returns = None;
+        let mut condition_terminates = false;
         for child in &children {
             match child.kind {
                 SyntaxKind::Block => then_returns = self.check_block(child, return_type),
@@ -746,10 +787,10 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                _ => self.check_condition(child),
+                _ => condition_terminates = self.check_condition(child),
             }
         }
-        then_returns && else_returns.unwrap_or(false)
+        condition_terminates || (then_returns && else_returns.unwrap_or(false))
     }
 
     fn check_expr(&mut self, node: &SyntaxNode, expected: ExpectedType) -> (TypeId, PlaceKind) {
@@ -775,6 +816,7 @@ impl<'a> Checker<'a> {
             && ty != self.typed.types.error()
             && target != self.typed.types.error()
             && !self.typed.types.exactly_equal(ty, target)
+            && !self.is_never_type(ty)
             && self.is_trait_object_reference(target)
         {
             match self.record_trait_object_coercion(node.span, ty, target) {

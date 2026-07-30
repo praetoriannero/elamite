@@ -32,10 +32,24 @@ impl<'a> CEmitter<'a> {
             }
         }
         for function in &self.program.functions {
-            types.insert(function.return_type);
+            if !matches!(
+                self.typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(function.return_type)),
+                TypeKind::Never
+            ) {
+                types.insert(function.return_type);
+            }
             types.extend(function.parameters.iter().map(|parameter| parameter.ty));
             types.extend(function.local_types.values().copied());
-            types.extend(function.temporary_types.iter().copied());
+            types.extend(function.temporary_types.iter().copied().filter(|ty| {
+                !matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(*ty)),
+                    TypeKind::Never
+                )
+            }));
         }
         types
     }
@@ -436,6 +450,7 @@ impl<'a> CEmitter<'a> {
                 return true;
             }
             match types.kind(types.resolve_inference(ty)) {
+                TypeKind::Never => false,
                 TypeKind::Primitive(primitive) => {
                     // A `String` owns a heap buffer; every other primitive is
                     // a plain scalar.
@@ -590,6 +605,11 @@ impl<'a> CEmitter<'a> {
         span: Option<Span>,
     ) -> Option<String> {
         if matches!(
+            self.typed
+                .types
+                .kind(self.typed.types.resolve_inference(ty)),
+            TypeKind::Never
+        ) || matches!(
             self.typed.types.expanded_primitive(ty),
             Some(PrimitiveType::Unit)
         ) {

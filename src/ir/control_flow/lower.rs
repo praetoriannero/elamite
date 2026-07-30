@@ -114,7 +114,18 @@ impl<'a> FunctionLowerer<'a> {
     fn run(mut self) -> ControlFlowFunction {
         self.lower_scope(&self.function.body);
         if self.is_open(self.current) {
-            self.terminate(Terminator::Return(None));
+            if matches!(
+                self.types.types.kind(
+                    self.types
+                        .types
+                        .resolve_inference(self.function.return_type)
+                ),
+                TypeKind::Never
+            ) {
+                self.terminate(Terminator::Unreachable);
+            } else {
+                self.terminate(Terminator::Return(None));
+            }
         }
         let blocks = self
             .blocks
@@ -674,6 +685,22 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn lower_expression(&mut self, expression: &TypedExpression) -> TemporaryId {
+        if matches!(
+            self.types
+                .types
+                .kind(self.types.types.resolve_inference(expression.ty)),
+            TypeKind::Never
+        ) && let Some(call) = self.lower_never_call(expression)
+        {
+            self.terminate(Terminator::NeverCall {
+                call,
+                span: expression.span,
+            });
+            // Continue lowering structurally unreachable syntax in a detached
+            // block. Reachability pruning removes it before C emission.
+            self.current = self.new_block();
+            return self.temp(expression.ty);
+        }
         let value = match &expression.kind {
             TypedExpressionKind::Constant(constant) => Rvalue::Constant(constant.clone()),
             TypedExpressionKind::FunctionReference(instance) => {
@@ -1069,6 +1096,76 @@ impl<'a> FunctionLowerer<'a> {
             copied
         } else {
             raw
+        }
+    }
+
+    fn lower_never_call(&mut self, expression: &TypedExpression) -> Option<NeverCall> {
+        match &expression.kind {
+            TypedExpressionKind::StandardCall {
+                operation: StandardCall::Panic,
+                arguments,
+            } => Some(NeverCall::Panic {
+                message: self.lower_expression(arguments.first()?),
+            }),
+            TypedExpressionKind::Call {
+                callee: TypedCallee::Function(instance),
+                arguments,
+            } => Some(NeverCall::Direct {
+                instance: instance.clone(),
+                arguments: arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect(),
+            }),
+            TypedExpressionKind::Call {
+                callee:
+                    TypedCallee::Dynamic {
+                        trait_declaration,
+                        slot,
+                    },
+                arguments,
+            } => {
+                let mut arguments = arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect::<Vec<_>>();
+                let receiver = arguments.first().copied()?;
+                arguments.remove(0);
+                Some(NeverCall::Dynamic {
+                    receiver,
+                    trait_declaration: *trait_declaration,
+                    slot: *slot,
+                    arguments,
+                })
+            }
+            TypedExpressionKind::Call {
+                callee: TypedCallee::Indirect(callee),
+                arguments,
+            } => {
+                let raw = matches!(
+                    expanded_kind(&self.types.types, callee.ty),
+                    TypeKind::RawPointer { target, .. }
+                        if matches!(
+                            expanded_kind(&self.types.types, *target),
+                            TypeKind::Function { .. }
+                        )
+                );
+                let callee = self.lower_expression(callee);
+                if raw {
+                    self.emit(Instruction::CheckFunctionPointer {
+                        pointer: callee,
+                        span: expression.span,
+                    });
+                }
+                Some(NeverCall::Indirect {
+                    callee,
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| self.lower_expression(argument))
+                        .collect(),
+                })
+            }
+            _ => None,
         }
     }
 

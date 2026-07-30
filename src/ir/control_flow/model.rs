@@ -203,6 +203,27 @@ pub enum Instruction {
 }
 
 #[derive(Debug, Clone)]
+pub enum NeverCall {
+    Panic {
+        message: TemporaryId,
+    },
+    Direct {
+        instance: FunctionInstance,
+        arguments: Vec<TemporaryId>,
+    },
+    Dynamic {
+        receiver: TemporaryId,
+        trait_declaration: DeclarationId,
+        slot: usize,
+        arguments: Vec<TemporaryId>,
+    },
+    Indirect {
+        callee: TemporaryId,
+        arguments: Vec<TemporaryId>,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub enum Terminator {
     Goto(BlockId),
     Branch {
@@ -213,6 +234,12 @@ pub enum Terminator {
     Return(Option<TemporaryId>),
     Trap {
         kind: TrapKind,
+        span: Span,
+    },
+    /// A call whose canonical return type is `Never`. It has no result
+    /// storage because control cannot continue after it.
+    NeverCall {
+        call: NeverCall,
         span: Span,
     },
     Unreachable,

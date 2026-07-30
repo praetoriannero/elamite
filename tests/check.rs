@@ -363,6 +363,65 @@ fn answer() -> ():
 }
 
 #[test]
+fn checks_never_functions_and_bottom_compatibility() {
+    assert_no_diagnostics(
+        r#"
+fn stop(message: str) -> !:
+    panic(message)
+
+fn require_value(ready: bool) -> i32:
+    if ready:
+        return 42
+    stop("missing value")
+
+fn main() -> ():
+    println(f"{require_value(true)}")
+"#,
+    );
+    assert_has_category(
+        r#"
+fn bad() -> !:
+    pass
+"#,
+        Category::ControlFlow,
+    );
+    assert_has_category(
+        r#"
+fn bad() -> !:
+    return
+"#,
+        Category::ControlFlow,
+    );
+    assert_has_category(
+        r#"
+fn bad() -> !:
+    return panic("nested")
+"#,
+        Category::ControlFlow,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let impossible: ! = panic("stop")
+"#,
+        Category::TypeSystem,
+    );
+    assert_has_category(
+        r#"
+fn stop() -> !:
+    panic("stop")
+
+fn value() -> i32:
+    return 1
+
+fn main() -> ():
+    let callback: &fn() -> i32 = stop
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
 fn checks_struct_construction_field_rules() {
     assert_no_diagnostics(
         r#"

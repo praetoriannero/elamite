@@ -61,6 +61,7 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
     };
     let (name, ty) = match operation {
+        StandardCall::Panic => return "el_panic".to_string(),
         StringFrom => return "el_string_from".to_string(),
         StandardCall::IdentityFrom { wrapper } => ("identity_from", wrapper),
         StandardCall::ForeignRootRetain { handle, .. } => ("foreign_root_retain", handle),

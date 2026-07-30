@@ -167,7 +167,7 @@
 
     "function-builtin": {
       "name": "support.function.builtin.elx",
-      "match": "\\b(println|print)\\b"
+      "match": "\\b(println|print|panic)\\b"
     },
 
     "type-name": {

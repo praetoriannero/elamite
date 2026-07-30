@@ -1,9 +1,10 @@
 # Elamite Compiler Roadmap
 
-> Status: Active — Milestones 0 through 20 are complete and omitted from this
-> forward-looking plan; Milestone 21 is optional candidate work
+> Status: Active — Milestones 0 through 20 and Milestone 22 are complete and
+> omitted from this forward-looking plan; Milestone 21 is optional candidate
+> work
 >
-> Next required work package: M22.1 — normative never-type contract
+> Next required work package: M23.1 — normative test-declaration contract
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -204,38 +205,7 @@ Milestone 21 is optional optimization work rather than a gate for the test and
 macro programs below. Individual packages, especially source-map
 infrastructure, may be pulled forward when a later milestone needs them.
 
-## 4. Restricted never-return type
-
-### Milestone 22: never-return type and explicit panic
-
-> Status: Accepted design; pending implementation.
->
-> Accepted surface: `!` is a restricted never-return type written by itself
-> only in a function or function-reference return position. `!T` is invalid.
-> A function returning `T` still means that normal return produces `T`; it may
-> terminate through an ordinary runtime trap. A function returning `!` has no
-> normally returning path.
-
-**Goal:** Represent deliberate non-returning control flow in the type system
-without introducing a general effect system or changing recoverable
-`Result[T, E]` errors.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **M22.1 — Normative never-type contract** | Specify the restricted spelling, valid return positions, bottom behavior at control-flow joins, reachability rules, function-reference identity, bare-`!` exclusions from value-bearing type positions, and the initial C-ABI exclusion in `SPEC.md`; update `LEDGER.md`. | `!` has one unambiguous meaning—no normal return—and neither `!T` nor a panic-effect interpretation enters the language. |
-| **M22.2 — Syntax and diagnostics** | Parse `!` only after a function or safe/raw function type's return arrow and retain its span; diagnose every other type position and prefixed form without disturbing unary operators or recovery. | Direct and nested function-reference returns snapshot correctly; bare-`!` fields, parameters, locals, aliases, and generic arguments, plus `!i32` and foreign signatures returning `!`, fail at meaningful spans. |
-| **M22.3 — Canonical type and inference** | Add one canonical never type, make a never-returning call terminate its expression path, and allow it to satisfy any expected value only where control cannot continue. | Mixed branches and matches infer from their normally completing paths without manufacturing a value of `!`. |
-| **M22.4 — Body and reachability checking** | Require every `-> !` body to have no reachable fallthrough or ordinary return, and teach normal-return analysis that a direct or indirect call with an exact `!` return terminates that path. | A panicking branch satisfies an enclosing `-> T` function, while a `-> !` function with any normally returning path is rejected. |
-| **M22.5 — Functions, traits, and generics** | Carry `!` through declarations, exact function references, generic substitution, trait conformance, vtables, and bound calls without adding function-type subtyping. | `&fn() -> !` remains distinct from `&fn() -> T`; static and dynamic calls preserve the declared terminating behavior. |
-| **M22.6 — `std.panic`** | Add `std.panic(message: str) -> !` as a compiler-lowered standard declaration. It evaluates its message once, reports `E-RUN-PANIC` with the call-site span, flushes stderr, terminates unsuccessfully, and does not guarantee pending `defer` execution. | Panic is useful in ordinary functions, is recognized as terminating by return analysis, and never masquerades as `Result`. |
-| **M22.7 — IR and C99 lowering** | Represent never-returning calls as terminal control-flow operations with no result storage; lower their C signatures and bodies without C11 `_Noreturn` or a reachable continuation. | Debug/release C99 builds preserve panic messages, source locations, termination, and evaluation order on x86 and x86-64. |
-| **M22.8 — Never-type conformance** | Add parser, type, control-flow, function-reference, generic, trait, panic, cleanup, target, and optimization tests, including negative coverage for every forbidden type position. | The complete M20 suite remains green and no existing `-> T` signature acquires a new annotation requirement merely because its body may trap. |
-
-Milestone 22 deliberately does not make traps catchable. It provides the
-terminating type and `std.panic` foundation that Milestone 23's typed trap
-expectations observe through process isolation.
-
-## 5. Language-native test declarations
+## 4. Language-native test declarations
 
 ### Milestone 23: package tests, typed traps, and runner
 
@@ -295,7 +265,7 @@ work may land before macro foundations, and test declarations should then be
 used by later macro conformance suites without becoming a macro expansion
 primitive themselves.
 
-## 6. Post-conformance macro system
+## 5. Post-conformance macro system
 
 Macro work begins after Milestone 19 reaches initial conformance and after the
 corresponding language design is accepted into `SPEC.md`. This roadmap does not
@@ -425,7 +395,7 @@ item attributes on the bounded compile-time runtime.
 | **M29.7 — Cross-package distribution** | Build, discover, version, and cache procedural macro artifacts reproducibly across packages without loading target artifacts into the host compiler. | Clean and cached cross-package builds are equivalent. |
 | **M29.8 — Procedural conformance and stabilization** | Test ordering, nesting, hygiene, generated imports/items/impls, capability denial, crashes, limits, version skew, cross-package use, deterministic rebuilds, and both target architectures. | Procedural macros and attributes leave the experimental surface only after the complete matrix passes. |
 
-## 7. Deferred concurrency design gate
+## 6. Deferred concurrency design gate
 
 Do not implement task syntax, schedulers, channels, synchronization traits, or
 cross-thread callbacks until `I-015` defines:
@@ -448,7 +418,7 @@ runtime scheduler and synchronization, GC integration, cancellation cleanup,
 foreign-thread entry, and stress/race testing. It should not require weakening
 the sequential semantics established by the initial milestones.
 
-## 8. Recommended delivery checkpoints
+## 7. Recommended delivery checkpoints
 
 Completed checkpoints are omitted with their milestones. The remaining
 delivery checkpoints are:

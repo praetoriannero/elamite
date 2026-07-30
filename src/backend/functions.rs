@@ -99,10 +99,18 @@ impl<'a> CEmitter<'a> {
             let _ = writeln!(self.output, "    *{cell} = {initial};");
         }
         for (index, ty) in function.temporary_types.iter().enumerate() {
+            if matches!(
+                self.typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(*ty)),
+                TypeKind::Never
+            ) {
+                continue;
+            }
             if let Some(c_type) = self.c_type(*ty, Some(function.span)) {
                 let _ = writeln!(
                     self.output,
-                    "    {c_type} t{index} = {};",
+                    "    {c_type} t{index} = {};\n    (void)t{index};",
                     zero_value(*ty, &self.typed.types)
                 );
             }
@@ -1292,6 +1300,55 @@ impl<'a> CEmitter<'a> {
                     "    el_trap(\"{}\", {arguments});",
                     kind.code()
                 );
+            }
+            Terminator::NeverCall { call, span } => {
+                let expression = match call {
+                    NeverCall::Panic { message } => format!(
+                        "el_panic({}, {})",
+                        temporary_name(*message),
+                        self.trap_arguments(*span)
+                    ),
+                    NeverCall::Direct {
+                        instance,
+                        arguments,
+                    } => format!(
+                        "{}({})",
+                        self.function_symbol(instance),
+                        arguments
+                            .iter()
+                            .map(|argument| temporary_name(*argument))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    NeverCall::Dynamic {
+                        receiver,
+                        trait_declaration,
+                        slot,
+                        arguments,
+                    } => {
+                        let receiver = temporary_name(*receiver);
+                        let mut call = format!(
+                            "{receiver}.vtable->{}({receiver}.data",
+                            vtable_slot_name(*slot)
+                        );
+                        for argument in arguments {
+                            let _ = write!(call, ", {}", temporary_name(*argument));
+                        }
+                        let _ = trait_declaration;
+                        call.push(')');
+                        call
+                    }
+                    NeverCall::Indirect { callee, arguments } => format!(
+                        "{}({})",
+                        temporary_name(*callee),
+                        arguments
+                            .iter()
+                            .map(|argument| temporary_name(*argument))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                };
+                let _ = writeln!(self.output, "    {expression};\n    abort();");
             }
             Terminator::Unreachable => self.output.push_str("    abort();\n"),
         }

@@ -110,6 +110,7 @@ pub struct NominalIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeKind {
     Error,
+    Never,
     Primitive(PrimitiveType),
     Nominal {
         identity: NominalIdentity,
@@ -218,6 +219,7 @@ impl Default for TypeContext {
             inference_bindings: Vec::new(),
         };
         context.intern(TypeKind::Error);
+        context.intern(TypeKind::Never);
         for primitive in [
             PrimitiveType::Unit,
             PrimitiveType::Bool,
@@ -293,6 +295,14 @@ impl TypeContext {
     #[must_use]
     pub fn error(&self) -> TypeId {
         TypeId(0)
+    }
+
+    #[must_use]
+    pub fn never(&self) -> TypeId {
+        *self
+            .interned
+            .get(&TypeKind::Never)
+            .expect("the never type is pre-interned")
     }
 
     pub fn primitive(&mut self, primitive: PrimitiveType) -> TypeId {
@@ -675,6 +685,7 @@ impl TypeContext {
 fn same_outer_shape(left: &TypeKind, right: &TypeKind) -> bool {
     match (left, right) {
         (TypeKind::Error, TypeKind::Error)
+        | (TypeKind::Never, TypeKind::Never)
         | (TypeKind::Primitive(_), TypeKind::Primitive(_))
         | (TypeKind::Nominal { .. }, TypeKind::Nominal { .. })
         | (TypeKind::Builtin { .. }, TypeKind::Builtin { .. })
@@ -713,7 +724,8 @@ fn type_discriminants_equal(left: &TypeKind, right: &TypeKind) -> bool {
         }
         (TypeKind::Slice(_), TypeKind::Slice(_))
         | (TypeKind::TraitObject { .. }, TypeKind::TraitObject { .. })
-        | (TypeKind::Error, TypeKind::Error) => true,
+        | (TypeKind::Error, TypeKind::Error)
+        | (TypeKind::Never, TypeKind::Never) => true,
         (
             TypeKind::Reference {
                 mutability: left, ..
@@ -808,6 +820,7 @@ fn type_children(kind: &TypeKind) -> Vec<TypeId> {
             .chain(std::iter::once(*return_type))
             .collect(),
         TypeKind::Error
+        | TypeKind::Never
         | TypeKind::Primitive(_)
         | TypeKind::Foreign { .. }
         | TypeKind::GenericParameter(_)
@@ -856,6 +869,7 @@ fn map_type_children(mut kind: TypeKind, mut map: impl FnMut(TypeId) -> TypeId) 
             *target = map(*target);
         }
         TypeKind::Error
+        | TypeKind::Never
         | TypeKind::Primitive(_)
         | TypeKind::Foreign { .. }
         | TypeKind::GenericParameter(_)

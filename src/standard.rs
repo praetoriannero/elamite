@@ -21,6 +21,7 @@ pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.Display",
     "std.NumericError",
     "std.Option",
+    "std.panic",
     "std.Result",
     "std.io.IoError",
 ];

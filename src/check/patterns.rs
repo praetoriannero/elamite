@@ -9,6 +9,9 @@ impl<'a> Checker<'a> {
             .first()
             .map(|scrutinee| self.check_expr(scrutinee, ExpectedType::None).0)
             .unwrap_or_else(|| self.typed.types.error());
+        if self.is_never_type(scrutinee_type) {
+            return true;
+        }
         let Some(block) = children
             .into_iter()
             .find(|child| child.kind == SyntaxKind::Block)

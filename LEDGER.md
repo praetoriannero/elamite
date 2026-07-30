@@ -55,12 +55,13 @@ to:
 | M29 | Procedural macros and attributes |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 20 are complete (implemented together in one
-frontend pass where applicable; see `ROADMAP.md`); later rows remain planned until
-their milestone status changes in `ROADMAP.md`. The Milestone 19 closure evidence
-is indexed by `docs/release.md` and the section-owned fixture map in
-`tests/fixtures/conformance/README.md`; the Milestone 20 ownership map and
-behavior-neutral baseline are recorded in `docs/architecture.md`.
+tracker. Milestones 0 through 20 and Milestone 22 are complete (implemented
+together in one frontend pass where applicable; see `ROADMAP.md`); later rows
+remain planned until their milestone status changes in `ROADMAP.md`. The
+Milestone 19 closure evidence is indexed by `docs/release.md` and the
+section-owned fixture map in `tests/fixtures/conformance/README.md`; the
+Milestone 20 ownership map and behavior-neutral baseline are recorded in
+`docs/architecture.md`.
 
 ## 0.1 Legacy artifact inventory
 
@@ -254,6 +255,10 @@ removed.
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
 | Named function params need name+type; return type after `->`, omit for unit; non-unit function needs explicit `return expr` on every reachable path; no implicit tail-expression return; bare `return`/fallthrough only for unit functions | M6, M7 (return-path analysis) | — | compile-fail (missing return), compile-pass |
+| Restricted never return `!` is valid only by itself after the return arrow of a function declaration or safe/unsafe/raw function type; `!T` and bare `!` in fields, parameters, locals, aliases, generic arguments, aggregates, and foreign results are invalid | M22 (done) | — | parse/compile-fail (`parses_never_only_as_a_standalone_return_type`, `never_is_canonical_and_restricted_to_callable_returns`) |
+| A `-> !` body has no reachable fallthrough or ordinary `return`; an exact never-returning call terminates its path, produces no value, and is bottom-compatible only because control cannot continue; ordinary runtime traps do not change a `-> T` signature | M22 (done) | — | compile-pass/fail (`checks_never_functions_and_bottom_compatibility`) |
+| Never returns remain exact through function references, raw function pointers, generics, traits, vtables, and bound calls; `&fn() -> !` is distinct from `&fn() -> T` and there is no function-return subtyping | M22 (done) | — | compile-fail, run-pass (`never_returns_survive_function_references_generics_and_trait_dispatch`) |
+| Never-returning calls lower as terminal control-flow operations without result storage; the C99 backend uses `void` signatures and reachable terminal calls without C11 `_Noreturn` | M22 (done) | C runtime | generated-C/run-pass (`never_returns_survive_function_references_generics_and_trait_dispatch`) |
 | No overloading: one function per name per namespace regardless of signature; generics/distinct names are the alternative; doesn't decide inherent-vs-trait collisions | M4 | — | compile-fail (duplicate name) |
 | Safe/unsafe function references are `&fn`/`&unsafe fn`; general raw function pointers are `*fn`/`*unsafe fn`; both are directly callable, but every raw call requires `unsafe:` and traps on null | M11 (references), M17 (raw function pointers, done) | null trap | run-pass (`raw_function_pointers_are_general_and_directly_callable`), compile-fail |
 | Exact function references explicitly convert to matching raw function pointers; function and data pointer domains never cast between each other | M17 (done) | — | compile-pass/fail (`rejects_invalid_c_contracts_and_unsafe_calls`) |
@@ -321,6 +326,7 @@ removed.
 | --- | --- | --- | --- |
 | `Result[T, E]`; postfix `?` valid only in a function returning `Result[U, E]` with the *exact* same error type; operand evaluates once; `Ok(value)` copies value as the postfix expression's value; `Err(error)` copies error and immediately returns `Result.Err(error)` | M15.1–15.3 (done) | — | compile-fail (`postfix_propagation_requires_matching_standard_result_types`), run-pass (`propagation_branches_evaluate_once_and_copy_payloads`) |
 | `?` is the explicit exception to "return uses `return`"; no implicit error conversion (caller converts explicitly, e.g. via `match`); `Option[T]` uses `match`, not `?` | M15.2 (done) | — | compile-fail (`Option` operand, differing errors, non-`Result` operand and function) |
+| `std.panic(message: str) -> !` (prelude `panic`) evaluates its message once, reports `E-RUN-PANIC` with message and call-site location, flushes stderr, exits unsuccessfully, is not `Result`, and does not guarantee pending cleanup | M22 (done) | panic runtime | run-fail (`panic_is_a_never_returning_runtime_terminator`) |
 | No implicit destruction protocol; GC manages memory only; deterministic external cleanup uses lexical `defer` | M15 (done) | — | run-pass (defer suite) |
 | There is no compiler-known cleanup trait or privileged method name; resource types expose ordinary safe unit-returning cleanup methods, and each API specifies its own idempotence, sharing, and error behavior; shared handle identity must be represented explicitly | M15 (done) | — | run-pass (`spec_demo_error_and_cleanup_regions_build_and_run`, `a_returned_shared_handle_observes_its_deferred_close`) |
 | `defer call` registers one safe unit-returning call for block exit; `defer:` defers an indented block of statements as one registration, its body an ordinary lexical scope; both only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block | M3 (parse both forms), M15.4–15.5 (done) | — | compile-fail (`deferred_calls_must_be_safe_and_unit_returning`), run-pass (`deferred_execution_is_static_and_constructs_no_callable`: static per-edge expansion, no callable/environment value) |
@@ -358,6 +364,7 @@ removed.
 | C ABI only initially; `@importc("c_name", "header.h")` marks a module-level bodyless function, opaque type, or foreign struct; generated C includes the authoritative header and uses the exact C spelling while the local Elamite name may differ; manifest include/library paths, libraries, and link options feed deterministic native commands; import has no runtime effect | M17 (done) | C toolchain | compile-pass, integration (`imports_c_symbols_through_attributes`, callback include-path harness) |
 | Opaque foreign type: unknown size/align, usable only behind a raw pointer; foreign struct matches the header type's target C layout, is an ordinary copyable value with ABI-safe fields, can't be generic/derive/have methods/contain an incomplete opaque type directly; mismatch is an unsafe contract violation (UB at the boundary) | M17 (done) | C toolchain | compile-fail (generic foreign struct), integration (`imported_c_structs_use_header_layout_and_field_names`) |
 | ABI-safe scalars: `i8`–`i64`, `u8`–`u64`, `isize`/`usize`, `f32`/`f64`; also raw data pointers, foreign structs of ABI-safe fields, and `*fn`/`*unsafe fn` pointers with ABI-safe signatures; `()` only as a return type (lowers to `void`); fixed-width ints use `stdint.h`; `isize`/`usize` use `intptr_t`/`uintptr_t`; `std.ffi.CVoid` is raw-pointer-only C `void` | M17 (done) | C toolchain | compile-pass/fail, callback integration |
+| Elamite `!` is excluded from imported C function signatures; the initial C interface does not infer or declare foreign non-returning behavior | M22 (done) | — | compile-fail (`never_is_canonical_and_restricted_to_callable_returns`) |
 | Not ABI-safe: `bool`/`char`/`str`/`String`/safe refs/function refs/bare function types/tuples/arrays/ordinary structs+enums/trait objects/std collections/`i128`/`u128`; no implicit marshalling — wrappers explicitly encode text+terminator, pass raw pointer+length, and keep/register backing storage for the foreign-access duration | M17 (done) | — | compile-fail (`rejects_invalid_c_contracts_and_unsafe_calls`) |
 | Every imported foreign function is unsafe to call even with scalar-only signatures, is bodyless, and cannot use Elamite variadic syntax; no C variadics initially; every raw-pointer parameter/result needs a documented foreign contract that the compiler does not infer from a C header | M17 (done) | — | compile-fail and integration |
 

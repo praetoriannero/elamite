@@ -164,6 +164,69 @@ fn canonicalizes_aliases_generic_applications_and_unit() {
 }
 
 #[test]
+fn never_is_canonical_and_restricted_to_callable_returns() {
+    let tree = TestTree::new("never");
+    let package = tree.package(
+        "app",
+        "exe",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn stop() -> !:\n\
+             \x20\x20\x20\x20panic(\"stop\")\n\
+             fn takes(callback: &fn() -> !) -> ():\n\
+             \x20\x20\x20\x20pass\n",
+        )],
+    );
+    let (sources, resolved) = resolve_package(&package);
+    let typed = resolve_types(&resolved.program);
+    assert!(
+        typed.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &typed.diagnostics)
+    );
+    let stop = resolved
+        .program
+        .declarations
+        .iter()
+        .find(|declaration| resolved.program.symbol_text(declaration.name) == "stop")
+        .expect("stop declaration")
+        .id;
+    assert!(matches!(
+        typed
+            .program
+            .types
+            .kind(typed.program.function_signatures[&stop].return_type),
+        TypeKind::Never
+    ));
+
+    for (index, source) in [
+        "type Bad = !\n",
+        "struct Bad:\n    value: !\n",
+        "fn bad(value: !) -> ():\n    pass\n",
+        "fn bad() -> Vec[!]:\n    pass\n",
+        "type Bad = (i32, !)\n",
+        "@importc(\"abort\", \"stdlib.h\")\nfn bad() -> !\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tree = TestTree::new(&format!("never-invalid-{index}"));
+        let package = tree.package("app", "exe", &[], &[("src/main.elx", source)]);
+        let (sources, resolved) = resolve_package(&package);
+        let typed = resolve_types(&resolved.program);
+        let text = diagnostics(&sources, &typed.diagnostics);
+        assert!(
+            typed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.category == Category::TypeSystem),
+            "expected a never-type restriction for `{source}`, got:\n{text}"
+        );
+    }
+}
+
+#[test]
 fn nominal_identity_includes_the_package_instance() {
     let tree = TestTree::new("package-identity");
     tree.package(

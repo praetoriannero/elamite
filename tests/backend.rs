@@ -138,6 +138,109 @@ fn main() -> ():
 }
 
 #[test]
+fn panic_is_a_never_returning_runtime_terminator() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn panic_message() -> str:
+    print("message:")
+    return "the value was missing"
+
+fn cleanup() -> ():
+    print("cleanup")
+
+fn stop(message: str) -> !:
+    std.panic(message)
+
+fn main() -> ():
+    println("before")
+    defer cleanup()
+    stop(panic_message())
+    println("after")
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(stdout, "before\nmessage:");
+    assert_ne!(status, 0);
+    assert!(stderr.contains("E-RUN-PANIC"), "{stderr}");
+    assert!(stderr.contains("the value was missing"), "{stderr}");
+    assert!(stderr.contains("main.elx:10:"), "{stderr}");
+}
+
+#[test]
+fn unreachable_panic_code_does_not_retain_an_unused_runtime_helper() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn dead_code() -> ():
+    return
+    panic("unreachable")
+
+fn main() -> ():
+    println("ok")
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(stdout, "ok\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn never_returns_survive_function_references_generics_and_trait_dispatch() {
+    let source = r#"
+fn halt() -> !:
+    panic("halt")
+
+fn indirect(callback: &fn() -> !) -> !:
+    callback()
+
+fn generic_halt[T](value: T) -> !:
+    panic("generic halt")
+
+trait Stopper:
+    fn stop(self: &Self) -> !
+
+struct Switch:
+    armed: bool
+
+impl Stopper for Switch:
+    fn stop(self: &Self) -> !:
+        panic("dynamic halt")
+
+fn dynamic_halt(value: &Stopper) -> !:
+    value.stop()
+
+fn main() -> ():
+    let raw = halt as *fn() -> !
+    if false:
+        indirect(halt)
+    if false:
+        unsafe:
+            raw()
+    if false:
+        generic_halt(1)
+    if false:
+        let switch = Switch { armed: true }
+        dynamic_halt(&switch)
+    println("ok")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "ok\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+
+    let tree = TestTree::new("never-x86");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(compilation.generated_c.contains("el_panic("));
+    assert!(!compilation.generated_c.contains("_Noreturn"));
+}
+
+#[test]
 fn imports_c_symbols_through_attributes() {
     let source = r#"
 @importc("abs", "stdlib.h")

@@ -7,6 +7,7 @@ use crate::types::TypeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StandardCall {
+    Panic,
     StringFrom,
     IdentityFrom { wrapper: TypeId },
     ForeignRootRetain { handle: TypeId, mutable: bool },

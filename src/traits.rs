@@ -1297,7 +1297,8 @@ fn provides_inner(
                     visiting,
                 ))
         }
-        TypeKind::GenericParameter(_)
+        TypeKind::Never
+        | TypeKind::GenericParameter(_)
         | TypeKind::Alias { .. }
         | TypeKind::Error
         | TypeKind::Slice(_)

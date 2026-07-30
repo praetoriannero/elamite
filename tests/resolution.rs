@@ -843,6 +843,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
             "i64",
             "i8",
             "isize",
+            "panic",
             "print",
             "println",
             "str",

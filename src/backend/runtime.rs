@@ -462,6 +462,29 @@ impl<'a> CEmitter<'a> {
              \x20 (((VALUE) < (MINIMUM) || (VALUE) > (MAXIMUM) || !isfinite((double)(VALUE))) \\\n\
              \x20 ? (el_trap(\"E-RUN-CAST\", (PATH), (LINE), (COLUMN)), (CONVERTED)) : (CONVERTED))\n\n",
         );
+        if self.program.functions.iter().any(|function| {
+            let reachable = reachable_blocks(function);
+            function.blocks.iter().any(|block| {
+                reachable.contains(&block.id)
+                    && matches!(
+                        block.terminator,
+                        Terminator::NeverCall {
+                            call: NeverCall::Panic { .. },
+                            ..
+                        }
+                    )
+            })
+        }) {
+            self.output.push_str(
+                "static void el_panic(el_str message, const char *path, uint32_t line, uint32_t column) {\n\
+                 \x20\x20\x20\x20fprintf(stderr, \"elamite panic [E-RUN-PANIC] at %s:%\" PRIu32 \":%\" PRIu32 \": \", path, line, column);\n\
+                 \x20\x20\x20\x20fwrite(message.bytes, 1U, message.length, stderr);\n\
+                 \x20\x20\x20\x20fputc('\\n', stderr);\n\
+                 \x20\x20\x20\x20fflush(stderr);\n\
+                 \x20\x20\x20\x20exit(101);\n\
+                 }\n\n",
+            );
+        }
         self.emit_checked_integer_helpers();
     }
 

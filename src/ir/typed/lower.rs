@@ -67,6 +67,9 @@ impl<'a> TypedLowerer<'a> {
             .filter(|declaration| {
                 declaration.kind == DeclarationKind::Function
                     && declaration.parent_impl.is_none()
+                    && !self
+                        .resolved
+                        .is_standard_declaration(declaration.id, "panic")
                     && self
                         .typed
                         .callable_generic_parameters(self.resolved, declaration.id)
@@ -1366,7 +1369,8 @@ impl<'a> TypedLowerer<'a> {
                 let mut arguments = Vec::new();
                 let has_receiver = !matches!(
                     operation,
-                    StandardCall::StringFrom
+                    StandardCall::Panic
+                        | StandardCall::StringFrom
                         | StandardCall::IdentityFrom { .. }
                         | StandardCall::ForeignRootRetain { .. }
                         | StandardCall::VecNew { .. }

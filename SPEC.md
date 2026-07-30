@@ -870,6 +870,30 @@ of an expression used as a statement is discarded even when it is the final
 statement in a body. Falling off the end, or using `return` without an
 expression, is valid only for a unit-returning function.
 
+The restricted never-return type is written `!`. It is valid only by itself
+after the return arrow of a named function declaration or a safe, unsafe, or
+raw function type, such as `fn stop() -> !`, `&fn() -> !`, or
+`*unsafe fn() -> !`. It is not a general value-bearing type: a field,
+parameter, local annotation, alias target, generic argument, aggregate
+component, or foreign-function result cannot be `!`. A prefixed form such as
+`!i32` is invalid and does not mean “may panic while returning `i32`.”
+
+A function declared `-> !` has no normally returning path. Its body cannot
+fall through and cannot contain an ordinary `return`, with or without a value.
+Calling a function whose exact return type is `!` terminates that expression
+path and produces no value. Such a call may satisfy an expected type only
+because control cannot continue to observe a result; at a control-flow join,
+normally completing paths determine the joined value type. This bottom
+behavior does not introduce function-type subtyping:
+`&fn() -> !` and `&fn() -> T` are distinct exact types. Generic substitution,
+trait conformance, static dispatch, and trait-object dispatch preserve the
+declared return type exactly.
+
+Ordinary runtime traps do not require or imply `-> !`. A function returning
+`T` continues to mean that every normal return produces `T`, even when some
+executions can terminate through a bounds check, arithmetic trap, explicit
+panic, or another unrecoverable runtime condition.
+
 Elamite does not support function overloading. A declaration namespace may
 contain only one function of a given name, regardless of parameter types,
 return type, or generic parameters. Generic functions and distinct names are
@@ -1327,6 +1351,13 @@ function uses `return`. It performs no implicit error conversion. A caller must
 convert a different error type explicitly, such as with `match`, before
 applying `?`. `Option[T]` is handled with `match` rather than `?`.
 
+`std.panic(message: str) -> !`, also available through the prelude name
+`panic`, deliberately terminates the process. The message expression is
+evaluated exactly once. The runtime reports `E-RUN-PANIC`, the message, and the
+panic call site's source location to standard error, flushes standard error,
+and exits unsuccessfully. Panic is unrecoverable, is not represented by
+`Result`, and does not guarantee that pending deferred calls run.
+
 ~~~elx
 fn increment_result[E](result: Result[i32, E]) -> Result[i32, E]:
     let value = result?
@@ -1404,9 +1435,9 @@ code, and unsafe scopes stay straight-line.
 
 The initial language has no `errdefer` and no conditional error-only deferral. A
 direct unsafe or foreign call cannot be deferred; native cleanup is wrapped in
-a safe unit-returning method. An unrecoverable trap, including a trap during
-deferred execution, and out-of-memory termination do not guarantee that that
-block's remaining deferred statements will run.
+a safe unit-returning method. An explicit panic, an unrecoverable trap
+including one during deferred execution, and out-of-memory termination do not
+guarantee that that block's remaining deferred statements will run.
 
 Leaving a scope does not implicitly call a resource-cleanup method; only an
 explicitly registered deferred call runs. Garbage collection likewise never
@@ -1577,9 +1608,12 @@ The ABI-safe scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`,
 made recursively from ABI-safe fields, and raw `*fn` or `*unsafe fn` pointers
 whose parameters and result are ABI-safe are also ABI-safe. A bare function
 type or safe function reference is not. Unit `()` is permitted only as a
-function return and is lowered to C `void`. The fixed-width integer types use
-the corresponding `stdint.h` ABI types; `isize` and `usize` use `intptr_t` and
-`uintptr_t`. The compiler-known opaque type `std.ffi.CVoid` may be used only
+function return and is lowered to C `void`. The Elamite never return type `!`
+is not permitted in an imported C function signature; the initial interface
+does not infer non-returning behavior from C declarations. The fixed-width
+integer types use the corresponding `stdint.h` ABI types; `isize` and `usize`
+use `intptr_t` and `uintptr_t`. The compiler-known opaque type
+`std.ffi.CVoid` may be used only
 behind a raw pointer and corresponds to C `void`; unsafe raw-pointer casts to
 and from `*std.ffi.CVoid` or `*var std.ffi.CVoid` preserve provenance under
 Section 3.3.

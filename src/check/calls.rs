@@ -387,6 +387,28 @@ impl<'a> Checker<'a> {
         include_receiver: bool,
     ) -> (TypeId, PlaceKind) {
         let selected_self_type = self.pending_self_type.take();
+        if self.resolved.is_standard_declaration(declaration, "panic") {
+            if let Some(explicit) = explicit {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        format!(
+                            "this function requires 0 generic arguments, but {} were supplied",
+                            explicit.len()
+                        ),
+                    )
+                    .with_primary(call_span),
+                );
+            }
+            let Some(signature) = self.typed.function_signatures.get(&declaration).cloned() else {
+                return (self.typed.types.error(), PlaceKind::Value);
+            };
+            self.check_call_arguments(call_span, &signature.parameters, arguments);
+            self.program
+                .calls
+                .insert(call_span, CheckedCall::Standard(StandardCall::Panic));
+            return (signature.return_type, PlaceKind::Value);
+        }
         let generic_parameters = self.callable_parameters(declaration);
         if let Some(explicit) = explicit {
             let Some(mut instance) = self.function_instance_from_expected(
@@ -980,7 +1002,8 @@ impl<'a> Checker<'a> {
     /// recorded by `check_expr`, so compatible checked expressions already
     /// carry the expected trait-object type here.
     pub(super) fn types_compatible(&self, actual: TypeId, expected: TypeId) -> bool {
-        actual == self.typed.types.error()
+        self.is_never_type(actual)
+            || actual == self.typed.types.error()
             || expected == self.typed.types.error()
             || self.typed.types.exactly_equal(actual, expected)
     }

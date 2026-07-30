@@ -195,6 +195,31 @@ fn parses_each_initial_type_form() {
 }
 
 #[test]
+fn parses_never_only_as_a_standalone_return_type() {
+    let accepted = "fn stop() -> !:\n    panic(\"stop\")\n\
+                    type Stopper = &fn() -> !\n";
+    let (sources, output) = parse_text(accepted);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+
+    let (_, output) = parse_text("fn bad() -> !i32:\n    pass\n");
+    assert!(!output.diagnostics.is_empty());
+
+    for misplaced in ["type Bad = !\n", "type Bad = Vec[!]\n"] {
+        let (sources, output) = parse_text(misplaced);
+        assert!(
+            output.diagnostics.is_empty(),
+            "misplaced `!` is a typed diagnostic, not a parse failure:\n{}",
+            diagnostics(&sources, &output.diagnostics)
+        );
+        assert!(output.tree.count(SyntaxKind::Type) >= 1);
+    }
+}
+
+#[test]
 fn parses_each_initial_expression_form() {
     let cases = [
         "name",

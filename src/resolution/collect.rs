@@ -93,12 +93,16 @@ impl<'a> Resolver<'a> {
             let symbol = self.intern(name);
             let id = self.push_builtin(symbol);
             self.program.prelude.insert(symbol, ItemId::Builtin(id));
-            if name == "Formatter" {
+            if matches!(name, "Formatter" | "str") {
                 self.insert_namespace(
                     self.program.std_root,
                     symbol,
                     NamespaceTarget::Item(ItemId::Builtin(id)),
-                    Visibility::Public,
+                    if name == "Formatter" {
+                        Visibility::Public
+                    } else {
+                        Visibility::Package
+                    },
                     None,
                 );
             }
