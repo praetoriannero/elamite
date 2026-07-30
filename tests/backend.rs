@@ -1383,7 +1383,7 @@ fn a_multi_package_build_consumes_reexported_generic_metadata_once() {
     .expect("write middle manifest");
     fs::write(
         middle.join("src/lib.elx"),
-        "pub import leaf.identity as identity\n",
+        "pub use leaf.identity as identity\n",
     )
     .expect("write middle source");
     fs::write(
@@ -1394,7 +1394,7 @@ fn a_multi_package_build_consumes_reexported_generic_metadata_once() {
     .expect("write app manifest");
     fs::write(
         app.join("src/main.elx"),
-        "import middle.identity\nfn main() -> ():\n    println(identity(42))\n",
+        "use middle.identity\nfn main() -> ():\n    println(identity(42))\n",
     )
     .expect("write app source");
 
@@ -3266,7 +3266,7 @@ fn spec_demo_error_and_cleanup_regions_build_and_run() {
     // `io.IoError` propagation. The full demonstration remains Milestone
     // 19.1's fixture.
     let source = r#"
-import std.io
+use std.io
 
 struct DemoResourceState:
     closed: bool

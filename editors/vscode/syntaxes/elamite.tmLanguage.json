@@ -126,7 +126,7 @@
 
     "keyword-declaration": {
       "name": "keyword.control.declaration.elx",
-      "match": "\\b(struct|import|trait|enum|impl|type|mod|fn)\\b"
+      "match": "\\b(struct|trait|enum|impl|type|mod|use|fn)\\b"
     },
 
     "keyword-modifier": {

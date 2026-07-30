@@ -127,9 +127,9 @@ removed.
 | `mod name:` inline nested module; inline and file-backed modules cannot collide; file-backed modules need no bodyless `mod` declaration | M1 (discover file-backed paths), M3 (parse inline modules), M4 (reject collision during collection) | — | compile-fail (duplicate module path) |
 | Path roots `root`, `self`, `super` (error at package root) are keywords; `std` and dependency aliases are ordinary names resolved after lexical bindings, module declarations, imports, and prelude names, so a module may shadow `std` | M4 | — | compile-fail (`super` at root) |
 | Unqualified name lookup: lexical bindings, current-module decls/imports, prelude only — never unrelated modules | M4 | — | compile-fail |
-| `import path` / `import path as name`; not inherited by nested modules; no wildcard/grouped imports; import order has no semantic effect | M3 (parse), M4 (resolve) | — | compile-pass, compile-fail |
+| `use path` / `use path as name`; not inherited by nested modules; no wildcard/grouped `use` declarations; import order has no semantic effect | M3 (parse), M4 (resolve) | — | compile-pass, compile-fail |
 | `pub` visibility on modules/fns/structs/enums/traits/aliases; fields and inherent methods package-private unless individually `pub`; all variants/payload fields of a `pub enum` are public; all methods of a `pub trait` are public | M4 | — | compile-fail (private access across packages) |
-| `pub import path [as name]` re-export; module re-export exposes public contents only; reachability requires an unbroken re-export chain; re-export doesn't change nominal identity or defining package | M4 | — | compile-pass/fail (unreachable public decl) |
+| `pub use path [as name]` re-export; module re-export exposes public contents only; reachability requires an unbroken re-export chain; re-export doesn't change nominal identity or defining package | M4 | — | compile-pass/fail (unreachable public decl) |
 | Public signature may mention only publicly accessible types/traits/aliases/bounds; private members are not part of the public signature | M4, M5 | — | compile-fail |
 | Shared module-item namespace (modules/types/traits/fns/module values/aliases/imports); duplicate declaration or import is an error even for the same target; explicit alias resolves it; local bindings may shadow module items | M4 | — | compile-fail (duplicate entry) |
 | Circular imports within one package are permitted; declarations collected before import/body resolution; imports execute no code and establish no init order; the package dependency graph must be acyclic | M1 (dep-graph acyclicity), M4 (collect-before-resolve) | — | compile-pass (import cycle), compile-fail (package cycle) |
@@ -467,7 +467,7 @@ Every construct in `examples/spec_demo.elx` maps to a section of this ledger:
 
 | `spec_demo.elx` region | Ledger section(s) |
 | --- | --- |
-| `import`, `mod`, `pub`, re-exports, `type` alias | §2.3, §4.4 |
+| `use`, `mod`, `pub`, re-exports, `type` alias | §2.3, §4.4 |
 | `Point(Default, PartialEq)`, `MyType`/`MyBetterType` derive examples | §4.2, §4.3 |
 | `Session` — five `self` receiver forms and `Toggle` trait | §4.2, §6 |
 | `Packet`, `DemoResourceState`, `DemoResource`, `use_demo_resource` (`defer call`), `use_demo_resource_block` (`defer:` block) | §4.2, §8 |
@@ -599,7 +599,8 @@ phase boundary, not an accepted ambiguity in typed programs.
 - [x] Imports, aliases, public re-exports, file-module re-exports, package
   privacy, externally reachable module paths, and unbroken public re-export
   chains are represented without changing the target's original identity.
-  Resolved uses retain the import/re-export spans that supplied their names.
+  Resolved name occurrences retain the import/re-export spans that supplied
+  their names.
 - [x] Public functions, aliases, types, traits, public fields and methods, and
   public enum payloads are checked for less-visible types and bounds. Private
   fields and hidden public declarations do not become externally reachable

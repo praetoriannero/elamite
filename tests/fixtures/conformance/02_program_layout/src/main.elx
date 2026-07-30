@@ -1,4 +1,4 @@
-import root.helper.message
+use root.helper.message
 
 fn main() -> ():
     println(message())

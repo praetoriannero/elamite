@@ -99,7 +99,7 @@ C entry points require the explicit FFI forms in `SPEC.md`.
 - The language has named functions and callable function references, but no
   closures, anonymous function literals, or captures.
 - C variadic functions and foreign ABIs other than `C` are unsupported.
-- Grouped imports are unsupported.
+- Wildcard and grouped `use` declarations are unsupported.
 - The C backend does not yet lower 128-bit integer constants, arithmetic, or
   display, even though `i128` and `u128` remain reserved primitive types.
 - Boehm collection timing is unspecified and is never a deterministic cleanup

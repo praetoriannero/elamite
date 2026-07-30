@@ -26,7 +26,7 @@ pub enum SyntaxKind {
     Attribute,
 
     Module,
-    Import,
+    Use,
     TypeAlias,
     Struct,
     Enum,
@@ -189,7 +189,7 @@ struct Parser<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ItemHead {
     Module,
-    Import,
+    Use,
     TypeAlias,
     Struct,
     Enum,
@@ -238,7 +238,7 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> SyntaxNode {
         match self.classify_item() {
             ItemHead::Module => self.parse_module(),
-            ItemHead::Import => self.parse_import(),
+            ItemHead::Use => self.parse_use(),
             ItemHead::TypeAlias => self.parse_type_alias(),
             ItemHead::Struct => self.parse_struct(false),
             ItemHead::Enum => self.parse_enum(),
@@ -286,7 +286,7 @@ impl<'a> Parser<'a> {
         }
         match self.kind_at(offset) {
             Some(TokenKind::Keyword(Keyword::Mod)) => ItemHead::Module,
-            Some(TokenKind::Keyword(Keyword::Import)) => ItemHead::Import,
+            Some(TokenKind::Keyword(Keyword::Use)) => ItemHead::Use,
             Some(TokenKind::Keyword(Keyword::Type)) => ItemHead::TypeAlias,
             Some(TokenKind::Keyword(Keyword::Struct)) => ItemHead::Struct,
             Some(TokenKind::Keyword(Keyword::Enum)) => ItemHead::Enum,
@@ -307,18 +307,18 @@ impl<'a> Parser<'a> {
         SyntaxNode::new(SyntaxKind::Module, children, fallback)
     }
 
-    fn parse_import(&mut self) -> SyntaxNode {
+    fn parse_use(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
-        self.expect_keyword(Keyword::Import, &mut children, "expected `import`");
+        self.expect_keyword(Keyword::Use, &mut children, "expected `use`");
         self.parse_path_tokens(&mut children);
         if self.at_keyword(Keyword::As) {
             children.push(self.bump());
-            self.expect_identifier(&mut children, "expected import alias");
+            self.expect_identifier(&mut children, "expected alias name");
         }
         self.expect_line_end(&mut children);
-        SyntaxNode::new(SyntaxKind::Import, children, fallback)
+        SyntaxNode::new(SyntaxKind::Use, children, fallback)
     }
 
     fn parse_type_alias(&mut self) -> SyntaxNode {

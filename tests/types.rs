@@ -184,8 +184,8 @@ fn nominal_identity_includes_the_package_instance() {
         &[("left", "../left"), ("right", "../right")],
         &[(
             "src/main.elx",
-            "import left.Value as LeftValue\n\
-             import right.Value as RightValue\n\
+            "use left.Value as LeftValue\n\
+             use right.Value as RightValue\n\
              struct Pair:\n\
              \x20\x20\x20\x20left: LeftValue\n\
              \x20\x20\x20\x20right: RightValue\n",

@@ -196,11 +196,11 @@ fn resolves_circular_imports_after_collecting_declarations() {
         &[(
             "src/lib.elx",
             "pub mod left:\n\
-                 \x20\x20\x20\x20import super.right.Right\n\
+                 \x20\x20\x20\x20use super.right.Right\n\
                  \x20\x20\x20\x20pub struct Left:\n\
                  \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
              pub mod right:\n\
-                 \x20\x20\x20\x20import super.left.Left\n\
+                 \x20\x20\x20\x20use super.left.Left\n\
                  \x20\x20\x20\x20pub struct Right:\n\
                  \x20\x20\x20\x20\x20\x20\x20\x20pass\n",
         )],
@@ -232,8 +232,8 @@ fn duplicate_imports_conflict_even_when_their_targets_are_identical() {
             "src/lib.elx",
             "pub struct Value:\n\
                  \x20\x20\x20\x20pass\n\
-             import self.Value as Alias\n\
-             import self.Value as Alias\n",
+             use self.Value as Alias\n\
+             use self.Value as Alias\n",
         )],
     );
     let (sources, output) = resolve_package(&package);
@@ -306,7 +306,7 @@ fn lookup_does_not_search_other_modules_or_inherit_imports() {
         &[
             (
                 "src/main.elx",
-                "import root.other.Hidden\n\
+                "use root.other.Hidden\n\
                  mod nested:\n\
                  \x20\x20\x20\x20fn bad(value: Hidden):\n\
                  \x20\x20\x20\x20\x20\x20\x20\x20pass\n",
@@ -334,10 +334,7 @@ fn public_reexport_chain_preserves_the_original_identity() {
         "lib",
         &[],
         &[
-            (
-                "src/lib.elx",
-                "pub import root.hidden.Visible as Exported\n",
-            ),
+            ("src/lib.elx", "pub use root.hidden.Visible as Exported\n"),
             (
                 "src/hidden.elx",
                 "pub struct Visible:\n    pass\nstruct Secret:\n    pass\n",
@@ -350,7 +347,7 @@ fn public_reexport_chain_preserves_the_original_identity() {
         &[("dep", "../dep")],
         &[(
             "src/main.elx",
-            "import dep.Exported\nfn consume(value: Exported):\n    pass\n",
+            "use dep.Exported\nfn consume(value: Exported):\n    pass\n",
         )],
     );
     let (sources, output) = resolve_package(&app);
@@ -501,7 +498,7 @@ fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
         "lib",
         &[],
         &[
-            ("src/lib.elx", "pub import root.hidden as hidden\n"),
+            ("src/lib.elx", "pub use root.hidden as hidden\n"),
             (
                 "src/hidden.elx",
                 "pub struct Exposed:\n    pass\nstruct Private:\n    pass\n",
@@ -514,7 +511,7 @@ fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
         &[("dep", "../dep")],
         &[(
             "src/main.elx",
-            "import dep.hidden.Exposed\nfn consume(value: Exposed):\n    pass\n",
+            "use dep.hidden.Exposed\nfn consume(value: Exposed):\n    pass\n",
         )],
     );
     let (sources, output) = resolve_package(&app);
@@ -528,7 +525,7 @@ fn a_file_backed_module_can_be_reexported_under_its_existing_name() {
         "bad_app",
         "exe",
         &[("dep", "../dep")],
-        &[("src/main.elx", "import dep.hidden.Private\n")],
+        &[("src/main.elx", "use dep.hidden.Private\n")],
     );
     let (bad_sources, bad_output) = resolve_package(&bad_app);
     assert!(
@@ -569,8 +566,8 @@ fn reports_milestone_four_visibility_and_namespace_failures() {
                      \x20\x20\x20\x20pass\n\
                  struct Duplicate:\n\
                      \x20\x20\x20\x20pass\n\
-                 import dep.hidden.PublicButHidden\n\
-                 import super.nope\n\
+                 use dep.hidden.PublicButHidden\n\
+                 use super.nope\n\
                  pub fn expose(value: root.private_api.Hidden):\n\
                      \x20\x20\x20\x20pass\n",
             ),
@@ -623,7 +620,7 @@ fn std_resolves_as_an_ordinary_name_and_can_be_shadowed() {
         &[],
         &[(
             "src/main.elx",
-            "import std.io\n\nfn main() -> ():\n    io.println(\"ok\")\n",
+            "use std.io\n\nfn main() -> ():\n    io.println(\"ok\")\n",
         )],
     );
     let (sources, output) = resolve_package(&package);

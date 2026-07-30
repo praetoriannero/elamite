@@ -764,7 +764,7 @@ mod hidden:
         fn secret(self: &Self) -> str:
             return "secret"
 
-import self.hidden.Secret
+use self.hidden.Secret
 
 fn main() -> ():
     let session = Session { value: 1 }

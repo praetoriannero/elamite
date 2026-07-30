@@ -1,17 +1,17 @@
 // The `//` is used to mark a comment
 // Multi-line comments use `//`
 
-// `import` is used to bring in symbols into the current module.
-import std.io
+// `use` is used to bring in symbols into the current module.
+use std.io
 
 // `pub` is used to make a symbol public.
 /// # Diagnostics
 /// Documentation comments attach to the declaration that follows them.
 pub mod diagnostics:
 
-    // `import` is allowed in any module.
-    import std.io
-    import super.UserId
+    // `use` is allowed in any module.
+    use std.io
+    use super.UserId
 
     // The return type of functions can be omitted if it returns
     // the unit type, `()`.
@@ -24,8 +24,8 @@ pub mod diagnostics:
 // Type aliases are possible
 pub type UserId = u64
 
-// Public imports re-export an item without changing its identity.
-pub import root.diagnostics.report as report_diagnostic
+// A public `use` re-exports an item without changing its identity.
+pub use root.diagnostics.report as report_diagnostic
 
 // Aliases expose parameters that remain variable and may specialize others.
 type NameMap[V] = Map[str, V]

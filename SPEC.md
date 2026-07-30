@@ -31,9 +31,10 @@ Elamite source files are UTF-8 text. An identifier begins with an ASCII letter
 or `_` and continues with ASCII letters, decimal digits, or `_`; equivalently,
 it matches `[A-Za-z_][A-Za-z0-9_]*`. Keywords are reserved and cannot be used
 as identifiers. The reserved keywords are `as`, `break`, `continue`, `defer`,
-`else`, `enum`, `false`, `fn`, `for`, `if`, `impl`, `import`, `in`,
+`else`, `enum`, `false`, `fn`, `for`, `if`, `impl`, `in`,
 `let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`, `Self`,
-`struct`, `super`, `trait`, `true`, `type`, `unsafe`, `var`, and `while`.
+`struct`, `super`, `trait`, `true`, `type`, `unsafe`, `use`, `var`, and
+`while`.
 Unicode text remains valid in comments, documentation, and string or character
 contents as permitted by their literal syntax.
 
@@ -109,7 +110,7 @@ respective default roots; the manifest may select a different `.elx` file. The
 directory containing the selected root file is the package's source directory.
 
 The initial resolver supports local path dependencies only. A dependency entry
-uses its manifest key as the import alias and supplies a `path` to a directory
+uses its manifest key as the dependency alias and supplies a `path` to a directory
 containing another `elamite.toml`. The path is resolved relative to the
 depending package's manifest directory.
 
@@ -155,10 +156,11 @@ likewise begins a path into that dependency. An unqualified name is found only
 among lexical bindings, declarations and imports in the current module, and
 prelude names; lookup never searches unrelated modules.
 
-`import path` is permitted at module level, including within an inline module,
-and binds the final path component in that module. `import path as name` uses an
+`use path` is permitted at module level, including within an inline module,
+and binds the final path component in that module. `use path as name` uses an
 explicit local alias. Imports are not inherited by nested modules. Wildcard and
-grouped imports are initially unsupported. Import order has no semantic effect.
+grouped `use` declarations are initially unsupported. Import order has no
+semantic effect.
 
 Declarations are package-private unless prefixed with `pub`: every module in
 the defining package may access a package-private declaration, but dependent
@@ -168,7 +170,7 @@ individually marked `pub`. All variants and variant payload fields of a public
 enum are public. All methods of a public trait are public as defined in Section
 6.
 
-`pub import path` and `pub import path as name` re-export a public declaration
+`pub use path` and `pub use path as name` re-export a public declaration
 under the bound name. A file-backed module namespace may also be re-exported,
 which exposes its public contents beneath that name without exposing its
 package-private contents. A public declaration in a file-backed module is not
@@ -203,20 +205,20 @@ identity used by these rules is the package identity used by nominal types,
 trait coherence, and the orphan rule in Section 6.
 
 ~~~elx
-import std.io
-import root.models.User as InternalUser
-import root.codec.json as json
+use std.io
+use root.models.User as InternalUser
+use root.codec.json as json
 
 pub mod diagnostics:
-    import std.io
-    import super.UserId
+    use std.io
+    use super.UserId
 
     pub fn report(message: String):
         io.println(message)
 
 pub type UserId = u64
-pub import root.models.User
-pub import root.codec as codec
+pub use root.models.User
+pub use root.codec as codec
 ~~~
 
 ## 3. Values, mutability, and references

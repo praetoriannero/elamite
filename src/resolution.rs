@@ -3,6 +3,12 @@
 //! This is the owned identity database for `ROADMAP.md` Milestone 4. It consumes
 //! the package graph and Milestone 3 syntax trees, predeclares every module
 //! item, then resolves imports and bodies without depending on source order.
+//!
+//! Naming convention: the surface declaration is spelled `use`, and the binding
+//! it establishes is an *import*. Names that describe syntax (`Keyword::Use`,
+//! `SyntaxKind::Use`) therefore say "use", while the semantic entities here
+//! (`ImportId`, `Import`, `imports`) say "import" — `use` is a Rust keyword and
+//! cannot name a binding or field.
 
 use lasso::{Rodeo, Spur};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1016,7 +1022,7 @@ impl<'a> Resolver<'a> {
         for item in direct_item_nodes(container) {
             match item.kind {
                 SyntaxKind::Module | SyntaxKind::PassStatement | SyntaxKind::Error => {}
-                SyntaxKind::Import => self.collect_import(module, item),
+                SyntaxKind::Use => self.collect_import(module, item),
                 SyntaxKind::Impl => self.collect_impl(module, item),
                 SyntaxKind::TypeAlias
                 | SyntaxKind::Struct
@@ -1032,8 +1038,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_import(&mut self, module: ModuleId, node: &SyntaxNode) {
-        let Some((path, bound_name, bound_span)) = import_path(node, &mut self.program.symbols)
-        else {
+        let Some((path, bound_name, bound_span)) = use_path(node, &mut self.program.symbols) else {
             return;
         };
         let id = ImportId(self.program.imports.len() as u32);
@@ -1630,7 +1635,7 @@ impl<'a> Resolver<'a> {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::NameResolution,
-                        "import aliases form a cycle without reaching a declaration",
+                        "`use` aliases form a cycle without reaching a declaration",
                     )
                     .with_primary(span),
                 );
@@ -1655,7 +1660,7 @@ impl<'a> Resolver<'a> {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::DeclarationConflict,
-                            "a public import cannot replace an existing file-backed module with a different target",
+                            "a public `use` cannot replace an existing file-backed module with a different target",
                         )
                         .with_primary(span),
                     );
@@ -1663,7 +1668,7 @@ impl<'a> Resolver<'a> {
                 if visibility == Visibility::Public && !self.item_can_be_reexported(result.item) {
                     let mut diagnostic = Diagnostic::new(
                         Category::Visibility,
-                        "a public import cannot re-export a package-private declaration",
+                        "a public `use` cannot re-export a package-private declaration",
                     )
                     .with_primary(span);
                     if let ItemId::Declaration(declaration) = result.item {
@@ -2998,7 +3003,7 @@ impl<'a> Resolver<'a> {
                 );
                 for provenance in reference.provenance {
                     diagnostic = diagnostic
-                        .with_related(provenance, "name was supplied by this import or re-export");
+                        .with_related(provenance, "name was supplied by this `use` or re-export");
                 }
                 self.diagnostics.push(diagnostic);
             }
@@ -3248,11 +3253,8 @@ fn has_keyword(node: &SyntaxNode, keyword: Keyword) -> bool {
     )
 }
 
-fn import_path(
-    node: &SyntaxNode,
-    symbols: &mut Rodeo<Spur>,
-) -> Option<(Vec<PathPart>, Symbol, Span)> {
-    let mut saw_import = false;
+fn use_path(node: &SyntaxNode, symbols: &mut Rodeo<Spur>) -> Option<(Vec<PathPart>, Symbol, Span)> {
+    let mut saw_use = false;
     let mut saw_as = false;
     let mut parts = Vec::new();
     let mut last = None;
@@ -3262,17 +3264,17 @@ fn import_path(
             continue;
         };
         match &token.kind {
-            TokenKind::Keyword(Keyword::Import) => saw_import = true,
-            TokenKind::Keyword(Keyword::As) if saw_import => saw_as = true,
-            TokenKind::Identifier(name) if saw_import && saw_as => {
+            TokenKind::Keyword(Keyword::Use) => saw_use = true,
+            TokenKind::Keyword(Keyword::As) if saw_use => saw_as = true,
+            TokenKind::Identifier(name) if saw_use && saw_as => {
                 alias = Some((Symbol(symbols.get_or_intern(name)), token.span));
             }
-            TokenKind::Identifier(name) if saw_import => {
+            TokenKind::Identifier(name) if saw_use => {
                 let symbol = Symbol(symbols.get_or_intern(name));
                 parts.push(PathPart::Name(symbol));
                 last = Some((symbol, token.span));
             }
-            TokenKind::Keyword(keyword) if saw_import => {
+            TokenKind::Keyword(keyword) if saw_use => {
                 let part = match keyword {
                     Keyword::Root => PathPart::Root,
                     Keyword::SelfValue => PathPart::SelfModule,

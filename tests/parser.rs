@@ -82,7 +82,7 @@ fn parses_the_authoritative_demonstration() {
 fn snapshots_declarations_and_type_forms() {
     let source = r#"/// Public facade
 pub mod facade:
-    pub import root.inner.Value as Value
+    pub use root.inner.Value as Value
 
 pub type Callback[T: Display + Hash] = &unsafe fn(&T, ...String) -> Result[(), Error]
 

@@ -115,9 +115,9 @@ fn recognizes_and_decodes_literals() {
 
 #[test]
 fn recognizes_every_reserved_keyword() {
-    let source = "as break continue defer else enum false fn for if impl import in \
+    let source = "as break continue defer else enum false fn for if impl in \
                   let match mod null pass pub return root self Self struct super trait true \
-                  type unsafe var while\n";
+                  type unsafe use var while\n";
     let output = lex_text(source);
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     assert_eq!(
@@ -137,8 +137,9 @@ fn recognizes_every_reserved_keyword() {
 fn removed_and_contextual_words_are_ordinary_identifiers() {
     // `dyn` was removed with the trait-object syntax change, and `std` names
     // the standard-library package as an ordinary name. `extern` was removed
-    // when C interop moved to item attributes.
-    let output = lex_text("dyn std extern\n");
+    // when C interop moved to item attributes, and `import` when the module
+    // import declaration was respelled `use`.
+    let output = lex_text("dyn std extern import\n");
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     assert_eq!(
         count(&output.tokens, |kind| matches!(kind, TokenKind::Keyword(_))),
@@ -149,7 +150,7 @@ fn removed_and_contextual_words_are_ordinary_identifiers() {
             kind,
             TokenKind::Identifier(_)
         )),
-        3
+        4
     );
 }
 

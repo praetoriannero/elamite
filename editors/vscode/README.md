@@ -62,7 +62,7 @@ than the separate `storage.type` color most grammars give them:
 | Keywords | Scope |
 | --- | --- |
 | `if` `else` `while` `for` `in` `match` `return` `break` `continue` `defer` `pass` | `keyword.control.elx` |
-| `fn` `struct` `enum` `trait` `impl` `type` `mod` `import` | `keyword.control.declaration.elx` |
+| `fn` `struct` `enum` `trait` `impl` `type` `mod` `use` | `keyword.control.declaration.elx` |
 | `pub` `unsafe` `let` `var` | `keyword.control.modifier.elx` |
 
 Themes select scopes by dot-separated prefix, so all three resolve to whatever

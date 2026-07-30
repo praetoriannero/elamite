@@ -2,18 +2,18 @@
 source: tests/parser.rs
 expression: render(&output.tree)
 ---
-File @ 0..677
-  Module @ 0..76
+File @ 0..674
+  Module @ 0..73
     Documentation @ 0..18
       DocComment("Public facade")
     Keyword(Pub)
     Keyword(Mod)
     Identifier("facade")
-    Block @ 32..76
+    Block @ 32..73
       Colon
-      Import @ 38..75
+      Use @ 38..72
         Keyword(Pub)
-        Keyword(Import)
+        Keyword(Use)
         Keyword(Root)
         Dot
         Identifier("inner")
@@ -21,202 +21,202 @@ File @ 0..677
         Identifier("Value")
         Keyword(As)
         Identifier("Value")
-  TypeAlias @ 76..162
+  TypeAlias @ 73..159
     Keyword(Pub)
     Keyword(Type)
     Identifier("Callback")
-    GenericParameters @ 93..112
+    GenericParameters @ 90..109
       LBracket
-      GenericParameter @ 94..111
+      GenericParameter @ 91..108
         Identifier("T")
         Colon
-        Type @ 97..104
+        Type @ 94..101
           Identifier("Display")
         Plus
-        Type @ 107..111
+        Type @ 104..108
           Identifier("Hash")
       RBracket
     Assign
-    Type @ 115..161
+    Type @ 112..158
       Amp
       Keyword(Unsafe)
-      Type @ 123..161
+      Type @ 120..158
         Keyword(Fn)
         LParen
-        Type @ 126..128
+        Type @ 123..125
           Amp
-          Type @ 127..128
+          Type @ 124..125
             Identifier("T")
         Comma
         Ellipsis
-        Type @ 133..139
+        Type @ 130..136
           Identifier("String")
         RParen
         Arrow
-        Type @ 144..161
+        Type @ 141..158
           Identifier("Result")
-          TypeArguments @ 150..161
+          TypeArguments @ 147..158
             LBracket
-            Type @ 151..153
+            Type @ 148..150
               LParen
               RParen
             Comma
-            Type @ 155..160
+            Type @ 152..157
               Identifier("Error")
             RBracket
-  Struct @ 163..240
+  Struct @ 160..237
     Keyword(Pub)
     Keyword(Struct)
     Identifier("Pair")
-    GenericParameters @ 178..181
+    GenericParameters @ 175..178
       LBracket
-      GenericParameter @ 179..180
+      GenericParameter @ 176..177
         Identifier("T")
       RBracket
-    DeriveList @ 181..201
+    DeriveList @ 178..198
       LParen
       Identifier("Default")
       Comma
       Identifier("PartialEq")
       RParen
-    Block @ 201..240
+    Block @ 198..237
       Colon
-      Field @ 207..219
+      Field @ 204..216
         Keyword(Pub)
         Identifier("left")
         Colon
-        Type @ 217..218
+        Type @ 214..215
           Identifier("T")
-      Field @ 223..239
+      Field @ 220..236
         Identifier("right")
         Colon
-        Type @ 230..238
+        Type @ 227..235
           LBracket
-          Type @ 231..233
+          Type @ 228..230
             Identifier("u8")
           Semicolon
-          LiteralExpression @ 235..237
+          LiteralExpression @ 232..234
             IntegerLiteral { raw: "16", radix: 10, suffix: None }
           RBracket
-  Enum @ 240..314
+  Enum @ 237..311
     Keyword(Pub)
     Keyword(Enum)
     Identifier("Message")
-    Block @ 256..314
+    Block @ 253..311
       Colon
-      EnumVariant @ 262..267
+      EnumVariant @ 259..264
         Identifier("Quit")
-      EnumVariant @ 271..286
+      EnumVariant @ 268..283
         Identifier("Move")
         LParen
-        Type @ 276..279
+        Type @ 273..276
           Identifier("i32")
         Comma
-        Type @ 281..284
+        Type @ 278..281
           Identifier("i32")
         RParen
-      EnumVariant @ 290..313
+      EnumVariant @ 287..310
         Identifier("Write")
         LBrace
-        Field @ 298..310
+        Field @ 295..307
           Identifier("text")
           Colon
-          Type @ 304..310
+          Type @ 301..307
             Identifier("String")
         RBrace
-  Trait @ 314..373
+  Trait @ 311..370
     Keyword(Trait)
     Identifier("Show")
-    GenericParameters @ 324..327
+    GenericParameters @ 321..324
       LBracket
-      GenericParameter @ 325..326
+      GenericParameter @ 322..323
         Identifier("T")
       RBracket
-    Block @ 327..373
+    Block @ 324..370
       Colon
-      Function @ 333..372
+      Function @ 330..369
         Keyword(Fn)
         Identifier("show")
-        Parameters @ 340..364
+        Parameters @ 337..361
           LParen
-          Parameter @ 341..352
+          Parameter @ 338..349
             Keyword(SelfValue)
             Colon
-            Type @ 347..352
+            Type @ 344..349
               Amp
-              Type @ 348..352
+              Type @ 345..349
                 Keyword(SelfType)
           Comma
-          Parameter @ 354..363
+          Parameter @ 351..360
             Identifier("value")
             Colon
-            Type @ 361..363
+            Type @ 358..360
               Amp
-              Type @ 362..363
+              Type @ 359..360
                 Identifier("T")
           RParen
         Arrow
-        Type @ 368..371
+        Type @ 365..368
           Identifier("str")
-  Impl @ 373..475
+  Impl @ 370..472
     Keyword(Impl)
-    GenericParameters @ 377..386
+    GenericParameters @ 374..383
       LBracket
-      GenericParameter @ 378..385
+      GenericParameter @ 375..382
         Identifier("T")
         Colon
-        Type @ 381..385
+        Type @ 378..382
           Identifier("Show")
       RBracket
-    Type @ 387..394
+    Type @ 384..391
       Identifier("Show")
-      TypeArguments @ 391..394
+      TypeArguments @ 388..391
         LBracket
-        Type @ 392..393
+        Type @ 389..390
           Identifier("T")
         RBracket
     Keyword(For)
-    Type @ 399..406
+    Type @ 396..403
       Identifier("Pair")
-      TypeArguments @ 403..406
+      TypeArguments @ 400..403
         LBracket
-        Type @ 404..405
+        Type @ 401..402
           Identifier("T")
         RBracket
-    Block @ 406..475
+    Block @ 403..472
       Colon
-      Function @ 412..475
+      Function @ 409..472
         Keyword(Fn)
         Identifier("show")
-        Parameters @ 419..443
+        Parameters @ 416..440
           LParen
-          Parameter @ 420..431
+          Parameter @ 417..428
             Keyword(SelfValue)
             Colon
-            Type @ 426..431
+            Type @ 423..428
               Amp
-              Type @ 427..431
+              Type @ 424..428
                 Keyword(SelfType)
           Comma
-          Parameter @ 433..442
+          Parameter @ 430..439
             Identifier("value")
             Colon
-            Type @ 440..442
+            Type @ 437..439
               Amp
-              Type @ 441..442
+              Type @ 438..439
                 Identifier("T")
           RParen
         Arrow
-        Type @ 447..450
+        Type @ 444..447
           Identifier("str")
-        Block @ 450..475
+        Block @ 447..472
           Colon
-          ReturnStatement @ 460..474
+          ReturnStatement @ 457..471
             Keyword(Return)
-            LiteralExpression @ 467..473
+            LiteralExpression @ 464..470
               StringLiteral("pair")
-  ForeignType @ 475..527
-    Attribute @ 475..514
+  ForeignType @ 472..524
+    Attribute @ 472..511
       At
       Identifier("importc")
       LParen
@@ -226,8 +226,8 @@ File @ 0..677
       RParen
     Keyword(Type)
     Identifier("Handle")
-  Struct @ 528..598
-    Attribute @ 528..559
+  Struct @ 525..595
+    Attribute @ 525..556
       At
       Identifier("importc")
       LParen
@@ -237,20 +237,20 @@ File @ 0..677
       RParen
     Keyword(Struct)
     Identifier("CPoint")
-    Block @ 573..598
+    Block @ 570..595
       Colon
-      Field @ 579..586
+      Field @ 576..583
         Identifier("x")
         Colon
-        Type @ 582..585
+        Type @ 579..582
           Identifier("f64")
-      Field @ 590..597
+      Field @ 587..594
         Identifier("y")
         Colon
-        Type @ 593..596
+        Type @ 590..593
           Identifier("f64")
-  Function @ 598..677
-    Attribute @ 598..626
+  Function @ 595..674
+    Attribute @ 595..623
       At
       Identifier("importc")
       LParen
@@ -260,28 +260,28 @@ File @ 0..677
       RParen
     Keyword(Fn)
     Identifier("open")
-    Parameters @ 634..661
+    Parameters @ 631..658
       LParen
-      Parameter @ 635..660
+      Parameter @ 632..657
         Identifier("callback")
         Colon
-        Type @ 645..660
+        Type @ 642..657
           Star
-          Type @ 646..660
+          Type @ 643..657
             Keyword(Fn)
             LParen
-            Type @ 649..652
+            Type @ 646..649
               Star
-              Type @ 650..652
+              Type @ 647..649
                 Identifier("u8")
             RParen
             Arrow
-            Type @ 657..660
+            Type @ 654..657
               Identifier("i32")
       RParen
     Arrow
-    Type @ 665..676
+    Type @ 662..673
       Star
       Keyword(Var)
-      Type @ 670..676
+      Type @ 667..673
         Identifier("Handle")
