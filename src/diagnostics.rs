@@ -1,11 +1,11 @@
 //! Structured compiler diagnostics: a stable category, a plain-language
-//! message, an optional primary span, and related spans, per `IMPL.md` §2.3.
+//! message, an optional primary span, and related spans, per `ROADMAP.md` §2.3.
 
 use crate::source::Span;
 
 /// A stable, matchable diagnostic category. New variants may be added as
 /// later milestones introduce new failure classes; an existing variant's
-/// meaning must not change once tests depend on it (`IMPL.md` §2.3).
+/// meaning must not change once tests depend on it (`ROADMAP.md` §2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     /// `elamite.toml` is missing, unreadable, malformed, or fails manifest

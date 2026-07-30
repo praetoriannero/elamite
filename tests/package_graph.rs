@@ -1,5 +1,5 @@
 //! Integration tests for `elamite::package` and `elamite::manifest`, backed
-//! by fixture packages under `tests/fixtures/packages/`. Covers `IMPL.md`
+//! by fixture packages under `tests/fixtures/packages/`. Covers `ROADMAP.md`
 //! Milestone 1's validation list: single-file executable/library packages,
 //! nested file-backed modules, custom root paths, missing roots, malformed
 //! manifests, invalid module components, cyclic package dependencies, resolved

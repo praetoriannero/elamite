@@ -1,4 +1,4 @@
-//! Trait implementation checking (`IMPL.md` Milestone 13).
+//! Trait implementation checking (`ROADMAP.md` Milestone 13).
 //!
 //! This pass validates declarations rather than bodies: whether each
 //! `impl Trait for Type` supplies exactly the trait's methods with exact
@@ -942,7 +942,7 @@ pub fn trait_name(resolved: &ResolvedProgram, typed: &TypedProgram, trait_type: 
 /// ordered by name.
 ///
 /// Ordering by name rather than declaration order keeps the layout stable
-/// against source reordering, which `IMPL.md` 2.2 requires of anything that
+/// against source reordering, which `ROADMAP.md` 2.2 requires of anything that
 /// reaches generated output. Default methods participate (`SPEC.md` 6).
 #[must_use]
 pub fn vtable_slots(

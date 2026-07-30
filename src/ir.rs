@@ -1,4 +1,4 @@
-//! Typed high-level IR and explicit control-flow IR (`IMPL.md` Milestones
+//! Typed high-level IR and explicit control-flow IR (`ROADMAP.md` Milestones
 //! 8-11).
 //!
 //! The high-level form owns selected declaration and type identities while
@@ -508,7 +508,7 @@ pub struct TypedFunction {
     pub body: Vec<TypedStatement>,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
     /// Locals whose address is taken, and which therefore need managed storage
-    /// rather than a C stack slot (`IMPL.md` Milestone 10). Conservative: every
+    /// rather than a C stack slot (`ROADMAP.md` Milestone 10). Conservative: every
     /// address-taken local is promoted.
     pub promoted_locals: BTreeSet<LocalBindingId>,
     /// Whether the body allocates a managed cell for a referenced composite

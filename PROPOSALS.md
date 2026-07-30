@@ -16,7 +16,7 @@
 This document combines the motivating ideas for these features with the
 implementation, safety, tooling, and language-design considerations they
 introduce. Accepted decisions should eventually move into `SPEC.md`, their
-implementation work into `IMPL.md`, and unresolved decisions into `ISSUES.md`.
+implementation work into `ROADMAP.md`, and unresolved decisions into `ISSUES.md`.
 
 ## 1. Attribute-based foreign declarations
 

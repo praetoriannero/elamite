@@ -1,6 +1,6 @@
 # Initial conformance release audit
 
-This file is the evidence index for `IMPL.md` Milestone 19. The initial release
+This file is the evidence index for `ROADMAP.md` Milestone 19. The initial release
 is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 
 | Gate | Evidence |

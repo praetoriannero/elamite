@@ -1929,7 +1929,7 @@ fn main() -> ():
 
 #[test]
 fn sustained_allocation_churn_is_reclaimed() {
-    // IMPL Milestone 10: collection is best-effort and its *timing* is not a
+    // ROADMAP.md Milestone 10: collection is best-effort and its *timing* is not a
     // conformance requirement, so this asserts only that a program allocating
     // far more than it retains completes normally rather than exhausting
     // memory.
@@ -1994,7 +1994,7 @@ fn main() -> ():
 
 #[test]
 fn dynamic_dispatch_selects_by_concrete_type_through_one_trait() {
-    // IMPL Milestone 13: vtable dispatch with several concrete types behind one
+    // ROADMAP.md Milestone 13: vtable dispatch with several concrete types behind one
     // trait object. Default methods participate in the vtable and an
     // implementation may override them.
     let source = r#"

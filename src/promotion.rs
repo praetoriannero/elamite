@@ -1,11 +1,11 @@
-//! Storage-promotion analysis (`IMPL.md` Milestone 10).
+//! Storage-promotion analysis (`ROADMAP.md` Milestone 10).
 //!
 //! A safe reference names storage, so any local whose address is taken must
 //! live in managed storage rather than on the C stack: the reference may
 //! outlive the frame, and the collector must be able to reach the target.
 //!
 //! This pass answers one question per function — which locals have their
-//! address taken — and is deliberately conservative, per `IMPL.md` Milestone
+//! address taken — and is deliberately conservative, per `ROADMAP.md` Milestone
 //! 10: every such local is promoted, with precise escape analysis left to
 //! Milestone 20. Because references point into their container's storage
 //! rather than at a boxed subvalue (`SPEC.md` §3.2), taking a reference through
@@ -22,7 +22,7 @@ use crate::resolution::{LocalBindingId, NameTarget, ResolvedProgram};
 /// order.
 ///
 /// The result is a `BTreeSet` because promotion decides storage layout, and
-/// `IMPL.md` §2.2 requires identical source to produce identical output.
+/// `ROADMAP.md` §2.2 requires identical source to produce identical output.
 #[must_use]
 pub fn address_taken_locals(
     resolved: &ResolvedProgram,

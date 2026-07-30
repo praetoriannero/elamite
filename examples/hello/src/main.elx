@@ -1,24 +1,2 @@
 fn main():
     println("Hello, Elamite!")
-    main2()
-
-pub trait MyTrait:
-    fn foo(self: &Self) -> ():
-        self.bar()
-
-    fn bar(self: &Self) -> ():
-        println("bar!")
-
-struct MyStruct:
-    x: u32
-    fn new() -> Self:
-        return Self{x: 42}
-
-impl MyTrait for MyStruct: 
-    pass
-
-pub fn main2():
-    var ms = MyStruct.new()
-    ms.bar()
-    ms.x = 18
-    println(f"{ms.x}")

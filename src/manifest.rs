@@ -1,4 +1,4 @@
-//! Loads and validates an `elamite.toml` package manifest, per `IMPL.md`
+//! Loads and validates an `elamite.toml` package manifest, per `ROADMAP.md`
 //! Milestone 1 and `SPEC.md` §2.3.
 
 use std::collections::BTreeMap;
@@ -121,7 +121,7 @@ impl Manifest {
     /// touching the filesystem (`sources.add_text` registers text directly).
     ///
     /// Every validation failure is collected rather than stopping at the
-    /// first one, per `IMPL.md` §2.3's "continue after locally recoverable
+    /// first one, per `ROADMAP.md` §2.3's "continue after locally recoverable
     /// errors" rule.
     pub fn parse(file: FileId, sources: &SourceManager) -> Result<Manifest, Vec<Diagnostic>> {
         let text = sources.text(file);

@@ -1,4 +1,4 @@
-//! Core expression, function, method, and control-flow checker (`IMPL.md`
+//! Core expression, function, method, and control-flow checker (`ROADMAP.md`
 //! Milestones 6, 7, 11, and 12).
 //!
 //! This module type-checks the pre-trait subset of the language: module-level
@@ -15,7 +15,7 @@
 //! binding, and match exhaustiveness/reachability (Milestone 7).
 //!
 //! Milestones 6 and 7 are implemented together in one pass rather than as
-//! separate modules: `IMPL.md` assigns pattern typing to Milestone 7, but a
+//! separate modules: `ROADMAP.md` assigns pattern typing to Milestone 7, but a
 //! match arm's body (Milestone 6 territory) needs its pattern bindings typed
 //! at the exact point Milestone 6 already visits it, so splitting the two
 //! into a second full tree-walk would either duplicate this module's

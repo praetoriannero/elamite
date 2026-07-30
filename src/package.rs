@@ -1,5 +1,5 @@
 //! Package identity, file-backed module-path derivation, and the resolved
-//! package dependency graph, per `IMPL.md` Milestone 1 and `SPEC.md` §2.3.
+//! package dependency graph, per `ROADMAP.md` Milestone 1 and `SPEC.md` §2.3.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -181,7 +181,7 @@ fn collect_elx_files(dir: &Path, out: &mut Vec<PathBuf>, diagnostics: &mut Vec<D
 /// "Every *other* `.elx` file beneath the source directory...").
 ///
 /// Discovery order is deterministic: entries are sorted before they can
-/// affect output, per `IMPL.md` §2.2.
+/// affect output, per `ROADMAP.md` §2.2.
 pub fn discover_modules(
     source_dir: &Path,
     root_file: &Path,
@@ -227,7 +227,7 @@ pub fn discover_modules(
 /// A resolved graph of packages: the root package under compilation plus
 /// every (transitive) dependency, keyed by [`PackageId`].
 ///
-/// `IMPL.md` Milestone 1: "Separate dependency resolution from compilation.
+/// `ROADMAP.md` Milestone 1: "Separate dependency resolution from compilation.
 /// The compiler pipeline should consume a resolved package graph so that a
 /// future resolver can be replaced without changing semantic analysis." This
 /// graph is that consumed artifact; [`PackageGraph::resolve`] implements the

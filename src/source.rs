@@ -1,5 +1,5 @@
 //! Owns decoded source text, assigns stable file IDs, and converts byte
-//! offsets to line/column positions, per `IMPL.md` §2.1 and Milestone 1.
+//! offsets to line/column positions, per `ROADMAP.md` §2.1 and Milestone 1.
 //!
 //! Source files are assumed to be UTF-8 text; `SPEC.md` does not state this
 //! explicitly, but every text-level construct it defines (`str`, `String`,

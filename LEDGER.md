@@ -5,7 +5,7 @@
 > Basis: `SPEC.md` version 0.4.0-draft and `examples/spec_demo.elx`
 >
 > Purpose: turn the specification into an implementable checklist, per the
-> completed [`IMPL.md`](IMPL.md) Milestone 0. This document assigns no new
+> completed [`ROADMAP.md`](ROADMAP.md) Milestone 0. This document assigns no new
 > semantics. When it conflicts with `SPEC.md`, the specification wins and this
 > ledger must be corrected.
 
@@ -14,11 +14,11 @@
 Each row maps one normative rule (or a small cluster of tightly related rules)
 to:
 
-- **Pass** — the `IMPL.md` milestone(s) expected to implement it, using the
+- **Pass** — the `ROADMAP.md` milestone(s) expected to implement it, using the
   short tags below.
 - **Runtime** — what the generated program depends on at run time, if
   anything (`—` means purely a compile-time rule with no runtime footprint).
-- **Tests** — which `IMPL.md` §2.4 test layer(s) should cover it: *parse*,
+- **Tests** — which `ROADMAP.md` §2.4 test layer(s) should cover it: *parse*,
   *compile-pass*, *compile-fail*, *run-pass*, or *integration*.
 
 | Tag | Milestone |
@@ -44,22 +44,30 @@ to:
 | M18 | Prelude, standard library, and developer tooling |
 | M19 | Conformance, hardening, and initial release gate |
 | M20 | Post-conformance optimization |
+| M21 | Never-return type and explicit panic |
+| M22 | Package tests, typed traps, and runner |
+| M23 | Macro expansion foundations |
+| M24 | Hygienic declarative macros |
+| M25 | Macro diagnostics, tooling, and stabilization |
+| M26 | Declarative custom derive generators |
+| M27 | Compile-time execution runtime |
+| M28 | Procedural macros and attributes |
 
 This ledger maps ownership of work rather than serving as the sole completion
 tracker. Milestones 0 through 19 are complete (implemented together in one
-frontend pass where applicable; see `IMPL.md`); later rows remain planned until
-their milestone status changes in `IMPL.md`. The Milestone 19 closure evidence
+frontend pass where applicable; see `ROADMAP.md`); later rows remain planned until
+their milestone status changes in `ROADMAP.md`. The Milestone 19 closure evidence
 is indexed by `docs/release.md` and the section-owned fixture map in
 `tests/fixtures/conformance/README.md`.
 
 ## 0.1 Legacy artifact inventory
 
-`IMPL.md` Milestone 0 calls for inventorying legacy grammar, compiler
+`ROADMAP.md` Milestone 0 calls for inventorying legacy grammar, compiler
 components, examples, and fixtures, preserving useful test cases. As of this
 ledger, **there is nothing to inventory**: the prior Python implementation
 (`src/elamite/*.py`), both Lark grammars (`elamite.lark`, `elx.lark`), and
 `examples/spec_alt_demo.elx` were fully removed in the same commit that
-introduced the Rust skeleton and `IMPL.md`. No legacy test fixtures, parser
+introduced the Rust skeleton and `ROADMAP.md`. No legacy test fixtures, parser
 output, or grammar files survive to migrate or reconcile. This closes that
 part of Milestone 0's exit criteria by observation rather than by migration
 work.
@@ -405,7 +413,7 @@ any compiler awareness at all.
 
 ## 13. Target assumptions
 
-Per `IMPL.md` Milestone 0, the initial supported-target assumptions:
+Per `ROADMAP.md` Milestone 0, the initial supported-target assumptions:
 
 | Assumption | Value | Status |
 | --- | --- | --- |
@@ -418,7 +426,7 @@ Per `IMPL.md` Milestone 0, the initial supported-target assumptions:
 
 ## 14. Command-level outcomes
 
-Per `IMPL.md` Milestone 0, exact command spelling is a tooling decision; these
+Per `ROADMAP.md` Milestone 0, exact command spelling is a tooling decision; these
 are the outcomes the initial driver must support, independent of spelling:
 
 | Outcome | Description | Pass |
@@ -426,7 +434,7 @@ are the outcomes the initial driver must support, independent of spelling:
 | Check a package | Run resolution + type checking without generating C or linking; report diagnostics | M4–M7 |
 | Build a package | Full pipeline through C generation, C-compiler invocation, and linking; produce an executable or library artifact | M8 (initial), M17–M18 (complete) |
 | Initialize a package | Create a non-destructive hello-world executable skeleton by default (`src/main.elx`) or a library skeleton with `--lib` (`src/lib.elx`) | M18.6 (done) |
-| Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `IMPL.md`) | M4 onward |
+| Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `ROADMAP.md`) | M4 onward |
 | Select a target | Choose the target architecture/OS the generated C is compiled for | M1 (manifest), M8 (backend) — depends on the open target-matrix decision in §13 above |
 | Select an output directory | Choose where build artifacts (generated C, object files, linked binary) land | M8, M18 (done) |
 | Dump intermediate representations | Tokens, syntax tree, resolved declarations, typed IR, control-flow IR, monomorphization results, generated C | M18 (done) |
@@ -435,7 +443,7 @@ are the outcomes the initial driver must support, independent of spelling:
 
 ## 15. Concurrency: explicitly unsupported
 
-Per `IMPL.md` §5 and [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution),
+Per `ROADMAP.md` §7 and [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution),
 no task syntax, scheduler, channel, synchronization trait, or cross-thread
 callback exists in the initial language, and none should be implemented until
 I-015 resolves the questions listed there. Concretely:
@@ -448,7 +456,7 @@ I-015 resolves the questions listed there. Concretely:
   the initial language, and it is a restriction, not a capability — see the
   §10.3 table above.
 - When I-015 is resolved, concurrency is added as a new vertical slice per
-  `IMPL.md` §5 (syntax/resolution → static transfer checks → CFG lowering →
+  `ROADMAP.md` §7 (syntax/resolution → static transfer checks → CFG lowering →
   runtime scheduler/synchronization → GC integration → cancellation cleanup →
   foreign-thread entry → stress/race testing), not as incremental patches to
   the milestones above.
@@ -477,7 +485,7 @@ without a ledger entry.
 
 ## 17. Milestone 0 exit criteria
 
-Per `IMPL.md`:
+Per `ROADMAP.md`:
 
 - [x] **Every construct in the authoritative demonstration has a ledger
   entry.** See §16 above.
@@ -489,7 +497,7 @@ Per `IMPL.md`:
 - [x] **The specification can be mapped without claiming the compiler is
   implemented.** When these criteria were met no row claimed anything was
   built—every row's status was "planned." Rows now reach "complete" only as
-  their owning milestone's status changes in `IMPL.md`; see §0.
+  their owning milestone's status changes in `ROADMAP.md`; see §0.
 
 Both tooling gaps surfaced by this exercise are now decided (§13): the C
 compiler requirement is **C99**, and the supported OS/architecture matrix is
@@ -841,19 +849,19 @@ ledger follows the same split.
 | Concern | Crate | Reasoning | Milestone |
 | --- | --- | --- | --- |
 | Manifest parsing | `toml` + `serde` | Already adopted at M1; TOML parsing is infrastructure, not language-compiler work | M1 (done) |
-| Diagnostic rendering | `codespan-reporting` | Our `Diagnostic`/`Category`/`Span` shape (§0 legend; `IMPL.md` §2.3) already matches its `Diagnostic`/`Label`/`Files` model directly. Retrofitted into M1 immediately (`SourceManager` implements `Files`, `manifest.rs` captures real spans via `toml::Spanned` and `toml::de::Error::span()`, `main.rs` renders with `term::emit_to_write_style`) rather than left as a future intention — this is real span-based rustc-style output today, not just a plan | M1 (retrofitted), all later milestones |
-| Snapshot testing | `insta` | `IMPL.md` explicitly asks for "golden token streams," "a syntax-tree dump... stable enough to serve as a debugging tool," and snapshot-compared parse tests (§2.4) — exactly insta's purpose, and the standard choice in this niche (rust-analyzer, ruff, and biome all use it for the same purpose) | M2 onward |
-| Property testing | `proptest` | `IMPL.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
+| Diagnostic rendering | `codespan-reporting` | Our `Diagnostic`/`Category`/`Span` shape (§0 legend; `ROADMAP.md` §2.3) already matches its `Diagnostic`/`Label`/`Files` model directly. Retrofitted into M1 immediately (`SourceManager` implements `Files`, `manifest.rs` captures real spans via `toml::Spanned` and `toml::de::Error::span()`, `main.rs` renders with `term::emit_to_write_style`) rather than left as a future intention — this is real span-based rustc-style output today, not just a plan | M1 (retrofitted), all later milestones |
+| Snapshot testing | `insta` | `ROADMAP.md` explicitly asks for "golden token streams," "a syntax-tree dump... stable enough to serve as a debugging tool," and snapshot-compared parse tests (§2.4) — exactly insta's purpose, and the standard choice in this niche (rust-analyzer, ruff, and biome all use it for the same purpose) | M2 onward |
+| Property testing | `proptest` | `ROADMAP.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
 | Retained parser fuzz corpus | `proptest` plus checked-in malformed inputs | M19 combines the existing arbitrary-Unicode parser property test with seeded indentation, delimiter, escape, formatted-string, and recovery inputs; this keeps failures reproducible without making libFuzzer a normal build dependency | M19 (done; `tests/robustness.rs`) |
-| Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`IMPL.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
-| CLI surface | `clap` (derive) | `IMPL.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
+| Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`ROADMAP.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
+| CLI surface | `clap` (derive) | `ROADMAP.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
 
 ### 18.2 Deferred, not rejected
 
 | Concern | Crate | Why not yet | Reconsider at |
 | --- | --- | --- | --- |
-| Incremental/query-based compilation | `salsa` | `IMPL.md` §1 and Milestone 20 both explicitly defer incremental compilation until after conformance tests exist; adopting it now would be premature architecture. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) is already salsa-shaped, so adopting it later should not require restructuring the ID system — only wrapping it in salsa's query/tracked-struct machinery | M20 |
-| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). Elamite's goal through M19 is "compiles to C," not powering an editor — `IMPL.md`'s own Milestone 20 candidate list ("language-server support") is the only place this becomes relevant | M20, only if language-server support is pursued |
+| Incremental/query-based compilation | `salsa` | `ROADMAP.md` §1 and Milestone 20 both explicitly defer incremental compilation until after conformance tests exist; adopting it now would be premature architecture. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) is already salsa-shaped, so adopting it later should not require restructuring the ID system — only wrapping it in salsa's query/tracked-struct machinery | M20 |
+| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). Elamite's goal through M19 is "compiles to C," not powering an editor — `ROADMAP.md`'s own Milestone 20 candidate list ("language-server support") is the only place this becomes relevant | M20, only if language-server support is pursued |
 | Semantic-version-aware manifest validation | `semver` | `Manifest` currently only checks the `version` field is non-empty (`SPEC.md` §2.3 doesn't mandate a version grammar); version comparison matters only if a future resolver adds version selection beyond the normative initial local-path model | when such a resolver is designed |
 
 ### 18.3 Explicitly not adopted for the core grammar
@@ -867,7 +875,7 @@ ledger follows the same split.
   hand-written regardless of whether `logos` handles token shapes underneath
   it. Spike both before committing to either.
 - **Parser generators** (`pest`, `lalrpop`, `chumsky`) — rejected for the core
-  grammar. Every diagnostic-quality requirement in `IMPL.md` §2.3
+  grammar. Every diagnostic-quality requirement in `ROADMAP.md` §2.3
   ("Compile-fail tests should assert stable diagnostic categories and
   meaningful spans") and Milestone 3's parser-recovery validation list is
   easier to hit with a hand-written recursive-descent/Pratt parser that
@@ -890,7 +898,7 @@ ledger follows the same split.
   `&'arena T` lifetime parameters threading through every IR type, directly
   contradicting the already-established cross-cutting rule "Represent compiler
   relationships with stable IDs and owned tables instead of long-lived
-  references between phase data" (`IMPL.md` §2.1, `AGENTS.md`). A plain
+  references between phase data" (`ROADMAP.md` §2.1, `AGENTS.md`). A plain
   `Vec`-backed store with a newtype index (`NodeId(u32)`) needs no dependency
   at all and matches that rule directly; `slotmap` or `id-arena` remain
   available if generational-key safety is ever worth the dependency, but
@@ -925,7 +933,7 @@ container's storage, and replacing the container writes through it.
 - Promotion is per-function and conservative: a local whose address is taken
   is promoted to managed storage, whole. Taking a reference into an aggregate
   promotes the containing local. Precise escape analysis stays an M20
-  optimization, per `IMPL.md` Milestone 10.
+  optimization, per `ROADMAP.md` Milestone 10.
 - The collector must trace **interior pointers**, since a reference into an
   aggregate points inside a managed allocation rather than at its base. Boehm
   provides this (`GC_ALL_INTERIOR_POINTERS`, enabled by default in most

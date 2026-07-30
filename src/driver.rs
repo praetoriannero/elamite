@@ -36,7 +36,7 @@ impl Optimization {
     fn compiler_flag(self) -> &'static str {
         match self {
             Self::Debug => "-O0",
-            Self::Release => "-O2",
+            Self::Release => "-O3",
         }
     }
 }
