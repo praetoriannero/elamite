@@ -22,7 +22,7 @@
   dispatch belong to `src/check.rs` and `src/backend.rs`.
 - `src/promotion.rs` decides which locals need managed storage. It answers only
   "is this local's address taken", deliberately conservatively; precise escape
-  analysis is Milestone 20 work and belongs there, not here.
+  analysis is Milestone 21 work and belongs there, not here.
 - `examples/` holds Elamite source examples. `SPEC.md` is the language design;
   `ROADMAP.md` is the compiler roadmap; `LEDGER.md` maps every normative `SPEC.md`
   rule to an implementation milestone; and `ISSUES.md` records unresolved

@@ -43,15 +43,16 @@ to:
 | M17 | C ABI, foreign roots, and callbacks |
 | M18 | Prelude, standard library, and developer tooling |
 | M19 | Conformance, hardening, and initial release gate |
-| M20 | Post-conformance optimization |
-| M21 | Never-return type and explicit panic |
-| M22 | Package tests, typed traps, and runner |
-| M23 | Macro expansion foundations |
-| M24 | Hygienic declarative macros |
-| M25 | Macro diagnostics, tooling, and stabilization |
-| M26 | Declarative custom derive generators |
-| M27 | Compile-time execution runtime |
-| M28 | Procedural macros and attributes |
+| M20 | Compiler architecture refactor |
+| M21 | Post-conformance optimization |
+| M22 | Never-return type and explicit panic |
+| M23 | Package tests, typed traps, and runner |
+| M24 | Macro expansion foundations |
+| M25 | Hygienic declarative macros |
+| M26 | Macro diagnostics, tooling, and stabilization |
+| M27 | Declarative custom derive generators |
+| M28 | Compile-time execution runtime |
+| M29 | Procedural macros and attributes |
 
 This ledger maps ownership of work rather than serving as the sole completion
 tracker. Milestones 0 through 19 are complete (implemented together in one
@@ -159,7 +160,7 @@ removed.
 | Collection interiors are never addressable for reference formation; value-context collection access returns an independent copy | M6, M14 | — | compile-fail |
 | Array/`Vec` element and `Map` value may be assignable places via a mutable collection path (replace/compound-assign/nested-mutate) without a reference escaping; `Map` keys/`Set` elements are never mutable places | M6, M14 | — | run-pass |
 | References are valid struct fields, enum payloads, parameter types, and return types (no closure captures — closures do not exist) | M5 | — | compile-pass |
-| A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is M20) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
+| A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is M21) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
 | A reference formed directly from a binding targets that binding's storage cell and observes later assignment; promotion preserves this | M10 (done) | Boehm GC | run-pass (`references_observe_storage_through_binding_and_path`) |
 | A reference into a nested aggregate points to that subvalue's storage within its container, so replacing the container is observable through the reference, and mutation through the reference is visible in the container (§19) | M10 (done) | Boehm GC (interior pointers) | run-pass (`city` example) |
 | A reference into an aggregate keeps its whole container reachable | M10 (done; `GC_set_all_interior_pointers(1)` before `GC_INIT`) | Boehm GC (interior pointers) | run-pass (`an_interior_reference_keeps_its_whole_container_reachable`) |
@@ -338,7 +339,7 @@ removed.
 | Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | run-pass (`runtime_stress_is_stable_across_repeated_debug_and_release_runs` constructs a managed cycle); reclamation timing remains intentionally unasserted |
 | No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes resource-cleanup methods; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
 | Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, retries the allocation, then terminates with an OOM diagnostic only if the retry fails; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path; retry closure audited at M19) | Boehm GC | generated-C integration (`managed_storage_engages_the_collector_prelude_and_link_inputs` asserts collect → retry → terminal ordering); forced host OOM remains nondeterministic |
-| No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, M20 | Boehm GC (nonportable extensions) | optional tooling, not required |
+| No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, M21 | Boehm GC (nonportable extensions) | optional tooling, not required |
 
 ## 10. Unsafe operations and C interoperability (§10)
 
@@ -861,8 +862,8 @@ ledger follows the same split.
 
 | Concern | Crate | Why not yet | Reconsider at |
 | --- | --- | --- | --- |
-| Incremental/query-based compilation | `salsa` | `ROADMAP.md` §1 and Milestone 20 both explicitly defer incremental compilation until after conformance tests exist; adopting it now would be premature architecture. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) is already salsa-shaped, so adopting it later should not require restructuring the ID system — only wrapping it in salsa's query/tracked-struct machinery | M20 |
-| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). Elamite's goal through M19 is "compiles to C," not powering an editor — `ROADMAP.md`'s own Milestone 20 candidate list ("language-server support") is the only place this becomes relevant | M20, only if language-server support is pursued |
+| Incremental/query-based compilation | `salsa` | `ROADMAP.md` §1 and Milestone 21 both explicitly defer incremental compilation until after conformance tests and the M20 phase-boundary refactor exist; adopting it earlier would be premature. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) remains salsa-shaped, so later adoption should wrap explicit phase inputs in query/tracked-struct machinery rather than replace the identity system | M21 |
+| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). M20 gives the hand-written parser a phase-neutral syntax boundary but deliberately does not adopt a new tree library; `ROADMAP.md`'s Milestone 21 source-map/editor candidate is the first reason to reconsider that representation | M21, only if editor or language-server work requires it |
 | Semantic-version-aware manifest validation | `semver` | `Manifest` currently only checks the `version` field is non-empty (`SPEC.md` §2.3 doesn't mandate a version grammar); version comparison matters only if a future resolver adds version selection beyond the normative initial local-path model | when such a resolver is designed |
 
 ### 18.3 Explicitly not adopted for the core grammar
@@ -933,7 +934,7 @@ container's storage, and replacing the container writes through it.
   part of the program does with it.
 - Promotion is per-function and conservative: a local whose address is taken
   is promoted to managed storage, whole. Taking a reference into an aggregate
-  promotes the containing local. Precise escape analysis stays an M20
+  promotes the containing local. Precise escape analysis stays an M21
   optimization, per `ROADMAP.md` Milestone 10.
 - The collector must trace **interior pointers**, since a reference into an
   aggregate points inside a managed allocation rather than at its base. Boehm
