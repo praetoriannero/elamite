@@ -1441,7 +1441,7 @@ fn a_multi_package_build_consumes_reexported_generic_metadata_once() {
 fn command_line_run_builds_and_executes_a_package() {
     let tree = TestTree::new("cli");
     tree.executable("fn main() -> ():\n    println(\"from cli\")\n");
-    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("run")
         .arg(&tree.root)
         .arg(format!("--out-dir={}", tree.root.join("cli-out").display()))
@@ -1460,7 +1460,7 @@ fn command_line_run_builds_and_executes_a_package() {
 fn command_line_check_honors_the_selected_pointer_width() {
     let tree = TestTree::new("cli-target");
     tree.executable("fn main() -> ():\n    let value: usize = 4294967296\n    println(value)\n");
-    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("check")
         .arg(&tree.root)
         .arg("--target=x86")
@@ -1476,7 +1476,7 @@ fn command_line_check_honors_the_selected_pointer_width() {
 
 #[test]
 fn command_line_help_lists_the_supported_workflows() {
-    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("--help")
         .output()
         .expect("run Elamite help");
@@ -1492,7 +1492,7 @@ fn command_line_help_lists_the_supported_workflows() {
 
 #[test]
 fn command_line_version_reports_the_specification_revision() {
-    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("--version")
         .output()
         .expect("run compiler version command");
@@ -1500,7 +1500,7 @@ fn command_line_version_reports_the_specification_revision() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         format!(
-            "elamite {} (SPEC {})\n",
+            "elamc {} (SPEC {})\n",
             elamite::version(),
             elamite::spec_revision()
         )
@@ -1509,7 +1509,7 @@ fn command_line_version_reports_the_specification_revision() {
 
 #[test]
 fn command_line_rejects_an_unknown_target_with_clap_guidance() {
-    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .args(["check", "--target=arm64"])
         .output()
         .expect("run Elamite with an invalid target");
@@ -1523,7 +1523,7 @@ fn command_line_rejects_an_unknown_target_with_clap_guidance() {
 fn command_line_init_creates_a_runnable_hello_world_package() {
     let tree = TestTree::new("cli-init");
     let package = tree.root.join("hello");
-    let initialized = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let initialized = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("init")
         .arg(&package)
         .output()
@@ -1536,7 +1536,7 @@ fn command_line_init_creates_a_runnable_hello_world_package() {
     assert!(package.join("elamite.toml").is_file());
     assert!(package.join("src/main.elx").is_file());
 
-    let executed = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let executed = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("run")
         .arg(&package)
         .output()
@@ -1556,7 +1556,7 @@ fn command_line_init_creates_a_runnable_hello_world_package() {
 fn command_line_init_can_create_a_library_package() {
     let tree = TestTree::new("cli-init-lib");
     let package = tree.root.join("hello_lib");
-    let initialized = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let initialized = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("init")
         .arg(&package)
         .arg("--lib")
@@ -1571,7 +1571,7 @@ fn command_line_init_can_create_a_library_package() {
     assert!(package.join("src/lib.elx").is_file());
     assert!(!package.join("src/main.elx").exists());
 
-    let built = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let built = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("build")
         .arg(&package)
         .output()

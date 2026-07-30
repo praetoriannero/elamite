@@ -27,6 +27,9 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
+`cargo build` produces the compiler executable `elamc`. The language, its `.elx`
+sources, and `elamite.toml` manifests keep the Elamite name.
+
 Check, build, run, or inspect a package with:
 
 ```sh

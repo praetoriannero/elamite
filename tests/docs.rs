@@ -78,7 +78,7 @@ fn command_line_documentation_emits_markdown() {
          pub fn identity[T](value: T) -> T:\n\
          \x20\x20\x20\x20return value\n",
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_elamite"))
+    let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("doc")
         .arg(&package.root)
         .output()

@@ -15,7 +15,7 @@ is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 | Diagnostics | `malformed_semantic_inputs_stop_at_diagnostics_without_internal_leaks` and the focused compile-fail suites |
 | Performance | `benchmarks/m19-baseline.sh` and `benchmarks/m19-baseline.tsv` |
 | Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib/Boehm prerequisites, unsupported concurrency, and foreign-thread restrictions |
-| Version identity | `elamite --version` reports both the compiler version and `SPEC.md` revision; `command_line_version_reports_the_specification_revision` locks the format |
+| Version identity | `elamc --version` reports both the compiler version and `SPEC.md` revision; `command_line_version_reports_the_specification_revision` locks the format |
 | Rights/notices | `LICENSE`, `THIRD_PARTY_NOTICES.md`, `Cargo.lock`, and `publish = false` |
 
 Run the local release gates with:

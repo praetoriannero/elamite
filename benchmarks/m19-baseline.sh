@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-compiler="${ELAMITE_BIN:-target/release/elamite}"
+compiler="${ELAMC_BIN:-target/release/elamc}"
 if [[ ! -x "$compiler" ]]; then
     cargo build --release
 fi

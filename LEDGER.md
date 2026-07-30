@@ -886,7 +886,7 @@ ledger follows the same split.
 - **`cc` crate for invoking the C backend's compiler** — a likely-looking but
   wrong fit. `cc::Build` is designed for `build.rs`-time compilation of C
   source into a Cargo build (`OUT_DIR`, `TARGET`, `CC` env conventions set by
-  Cargo). Milestone 8/17's job is different: the *elamite compiler binary*,
+  Cargo). Milestone 8/17's job is different: the *`elamc` compiler binary*,
   once already built, spawns a C compiler as a subprocess against *user*
   generated C at the user's build time — that's plain `std::process::Command`
   with computed arguments, not a Cargo build-script concern. The one place

@@ -22,7 +22,7 @@ use elamite::source::SourceManager;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "elamite",
+    name = "elamc",
     version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.4.0-draft)"),
     about = "The Elamite programming language compiler",
     arg_required_else_help = true
@@ -285,7 +285,7 @@ fn initialize_package(arguments: InitArgs) -> ExitCode {
     match init_package(&arguments.path, arguments.name.as_deref(), target_kind) {
         Ok(package) => {
             println!("initialized {}", package.directory.display());
-            println!("run with: elamite run {}", package.directory.display());
+            println!("run with: elamc run {}", package.directory.display());
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -440,7 +440,7 @@ fn compile_package(request: CompileRequest) -> ExitCode {
             };
             let source_module_count = root.modules.len() + 1;
             println!(
-                "elamite {} \u{2014} {} {} ({} source module{}, {} package{}, {} declaration{}, {} canonical types)",
+                "elamc {} \u{2014} {} {} ({} source module{}, {} package{}, {} declaration{}, {} canonical types)",
                 elamite::version(),
                 root.manifest.name,
                 root.manifest.version,

@@ -1,4 +1,4 @@
-//! Package scaffolding used by the `elamite init` command.
+//! Package scaffolding used by the `elamc init` command.
 
 use std::fmt;
 use std::fs::{self, OpenOptions};

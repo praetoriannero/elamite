@@ -28,18 +28,19 @@ needed for x86 builds.
 ## Commands
 
 ```sh
-elamite init hello
-elamite init hello_lib --lib
-elamite check path/to/package --target=x86_64
-elamite build path/to/package --release --keep-c
-elamite run path/to/package
-elamite dump typed-ir path/to/package
-elamite doc path/to/package
-elamite test path/to/suite --filter=case-name
+elamc init hello
+elamc init hello_lib --lib
+elamc check path/to/package --target=x86_64
+elamc build path/to/package --release --keep-c
+elamc run path/to/package
+elamc dump typed-ir path/to/package
+elamc doc path/to/package
+elamc test path/to/suite --filter=case-name
 ```
 
-`elamite --version` reports both the compiler version and the targeted
-`SPEC.md` revision.
+The installed executable is named `elamc`; `elamite` remains the language and
+manifest name. `elamc --version` reports both the compiler version and the
+targeted `SPEC.md` revision.
 
 `check` runs all semantic passes without lowering or native tools. `build` and
 `run` accept `--out-dir`, `--cc`, `--release`, `--keep-c`, and either supported
@@ -69,7 +70,7 @@ An `expected.x86.*` or `expected.x86_64.*` file overrides its portable
 Build output is isolated in a unique temporary directory. Successful output is
 removed; failing output, including generated C, is retained and reported.
 
-Run `elamite --help` or `elamite <command> --help` for the authoritative flag
+Run `elamc --help` or `elamc <command> --help` for the authoritative flag
 spelling.
 
 ## Compiler interfaces
