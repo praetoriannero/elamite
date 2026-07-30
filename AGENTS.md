@@ -41,7 +41,8 @@
   emission, and the executable entry shim.
 - `src/promotion.rs` decides which locals need managed storage. It answers only
   "is this local's address taken", deliberately conservatively; precise escape
-  analysis is Milestone 21 work and belongs there, not here.
+  analysis belongs to the **Post-conformance optimization** milestone, not
+  here.
 - `examples/` holds Elamite source examples. `SPEC.md` is the language design;
   `ROADMAP.md` is the compiler roadmap; `LEDGER.md` maps every normative `SPEC.md`
   rule to an implementation milestone; and `ISSUES.md` records unresolved
@@ -111,21 +112,41 @@ Append new entries to `ISSUES.md`; use `I-X.Y` for a sub-issue related to
 `I-X`. Do not implement or change surface grammar while its design review is
 active.
 
-The language uses a **minimal function model**: safe function values are
-references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), and their general raw
-counterparts are `*fn(P) -> R` and `*unsafe fn(P) -> R`. Both are directly
-callable; every raw-function call requires `unsafe:` and a runtime null check.
-Exact function references may explicitly convert to matching raw function
-pointers, but function and data pointer domains never cast between each other.
-There are no closures, anonymous `fn` literals, captures, or `move`. Ordinary
-stateful Elamite callbacks use `&Trait`, formed automatically from a concrete
-safe reference when that exact trait-object type is expected (or explicitly
-with `as &Trait`); C callbacks carry registered state through a separate raw
-context pointer. Recursion uses named functions. Keep `SPEC.md`,
-`examples/spec_demo.elx`, and `ISSUES.md` consistent with this direction, and
-do not reintroduce closures, capture, anonymous function literals, or `move`
-unless the design decision is explicitly reopened. When this direction
-changes, update this rule.
+The currently implemented language uses a **minimal function model**: safe
+function values are references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), and
+their general raw counterparts are `*fn(P) -> R` and
+`*unsafe fn(P) -> R`. Both are directly callable; every raw-function call
+requires `unsafe:` and a runtime null check. Exact function references may
+explicitly convert to matching raw function pointers, but function and data
+pointer domains never cast between each other.
+
+`ROADMAP.md` **Explicit-capture closures** records the accepted design for
+separate, explicit-capture safe closures. Do not implement its anonymous `fn`
+literals, captures, or `Callable` integration until the **Normative closure
+contract** package has moved that contract into `SPEC.md`, `LEDGER.md`, and the
+authoritative example. The accepted design has no implicit captures, `move`,
+generic closure literals, unsafe closures, or closure-to-function-pointer
+conversion. Until that milestone lands, ordinary stateful Elamite callbacks
+continue to use `&Trait`, formed automatically from a concrete safe reference
+when that exact trait-object type is expected (or explicitly with `as &Trait`);
+C callbacks carry registered state through a separate raw context pointer, and
+recursion uses named functions.
+
+`ROADMAP.md` **Standard-library concurrency** records the accepted concurrency
+direction. It adds no concurrency syntax: native threads are created through
+`std.thread`, and channels, copy-based mutexes, and sequentially consistent
+atomic cells live in `std.sync`. Do not implement these declarations, the
+structural `Transfer` capability, runtime thread entry, or broader callback
+behavior until the **Normative concurrency contract** package has made the
+complete contract normative. Until then, retain `SPEC.md` §10.3's
+single-runtime-thread callback restriction.
+
+`ROADMAP.md` **Tuple destructuring and positional fields** records the accepted
+tuple-binding and positional-field design. Do not extend `let`/`var` to tuple
+patterns or parse numeric postfix fields such as `.0` until the **Normative
+tuple-access contract** package has specified their exact shape, copying,
+scope, place, tokenization, and receiver rules in `SPEC.md` and `LEDGER.md`.
+Existing tuple patterns remain match-only until that gate lands.
 
 Deterministic cleanup uses a lexical, block-scoped `defer` statement in two
 forms: `defer call` defers one safe unit-returning call, and `defer:` defers an

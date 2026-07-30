@@ -1,7 +1,7 @@
 //! Behavior-neutral expansion boundary.
 //!
 //! Milestone 20 makes the parsed-to-resolved phase edge explicit. User-defined
-//! expansion remains disabled until Milestone 24, so the current phase retains
+//! expansion remains disabled until **Macro expansion foundations**, so the current phase retains
 //! parsed units exactly and contributes no diagnostics.
 
 use crate::parsed::{ParsedPackage, ParsedPackageOutput};

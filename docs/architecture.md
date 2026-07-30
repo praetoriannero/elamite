@@ -32,7 +32,7 @@ directly.
 
 The expansion pass is intentionally a typed pass-through until the macro
 milestones. Future native-language test discovery and execution belongs to the
-Milestone 23 runner and remains separate from the existing conformance fixture
+package-test runner and remains separate from the existing conformance fixture
 runner.
 
 ## Behavior-neutral baseline

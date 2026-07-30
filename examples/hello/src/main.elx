@@ -1,2 +1,6 @@
+fn return_tuple() -> (i32, i32):
+    return (0, 42)
+
 fn main():
-    println("Hello, Elamite!")
+    let a = return_tuple()
+    println(f"{a.0}, {a.1}")

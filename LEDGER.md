@@ -14,14 +14,15 @@
 Each row maps one normative rule (or a small cluster of tightly related rules)
 to:
 
-- **Pass** — the `ROADMAP.md` milestone(s) expected to implement it, using the
-  short tags below.
+- **Pass** — the `ROADMAP.md` milestone(s) expected to implement it. Completed
+  historical work retains the legacy short tags below; planned work uses its
+  descriptive milestone name.
 - **Runtime** — what the generated program depends on at run time, if
   anything (`—` means purely a compile-time rule with no runtime footprint).
 - **Tests** — which `ROADMAP.md` §2.4 test layer(s) should cover it: *parse*,
   *compile-pass*, *compile-fail*, *run-pass*, or *integration*.
 
-| Tag | Milestone |
+| Legacy tag | Completed milestone |
 | --- | --- |
 | M0  | Specification migration and feature ledger (this document) |
 | M1  | Compiler driver and package graph |
@@ -44,24 +45,16 @@ to:
 | M18 | Prelude, standard library, and developer tooling |
 | M19 | Conformance, hardening, and initial release gate |
 | M20 | Compiler architecture refactor |
-| M21 | Post-conformance optimization |
 | M22 | Never-return type and explicit panic |
-| M23 | Package tests, typed traps, and runner |
-| M24 | Macro expansion foundations |
-| M25 | Hygienic declarative macros |
-| M26 | Macro diagnostics, tooling, and stabilization |
-| M27 | Declarative custom derive generators |
-| M28 | Compile-time execution runtime |
-| M29 | Procedural macros and attributes |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 20 and Milestone 22 are complete (implemented
-together in one frontend pass where applicable; see `ROADMAP.md`); later rows
-remain planned until their milestone status changes in `ROADMAP.md`. The
-Milestone 19 closure evidence is indexed by `docs/release.md` and the
-section-owned fixture map in `tests/fixtures/conformance/README.md`; the
-Milestone 20 ownership map and behavior-neutral baseline are recorded in
-`docs/architecture.md`.
+tracker. The legacy tags cover completed milestones 0 through 20 and 22
+(implemented together in one frontend pass where applicable; see
+`ROADMAP.md`). All remaining work is tracked by stable names rather than new
+numbers. The initial-conformance closure evidence is indexed by
+`docs/release.md` and the section-owned fixture map in
+`tests/fixtures/conformance/README.md`; the compiler-architecture ownership map
+and behavior-neutral baseline are recorded in `docs/architecture.md`.
 
 ## 0.1 Legacy artifact inventory
 
@@ -162,7 +155,7 @@ removed.
 | Collection interiors are never addressable for reference formation; value-context collection access returns an independent copy | M6, M14 | — | compile-fail |
 | Array/`Vec` element and `Map` value may be assignable places via a mutable collection path (replace/compound-assign/nested-mutate) without a reference escaping; `Map` keys/`Set` elements are never mutable places | M6, M14 | — | run-pass |
 | References are valid struct fields, enum payloads, parameter types, and return types (no closure captures — closures do not exist) | M5 | — | compile-pass |
-| A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is M21) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
+| A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is **Post-conformance optimization**) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
 | A reference formed directly from a binding targets that binding's storage cell and observes later assignment; promotion preserves this | M10 (done) | Boehm GC | run-pass (`references_observe_storage_through_binding_and_path`) |
 | A reference into a nested aggregate points to that subvalue's storage within its container, so replacing the container is observable through the reference, and mutation through the reference is visible in the container (§19) | M10 (done) | Boehm GC (interior pointers) | run-pass (`city` example) |
 | A reference into an aggregate keeps its whole container reachable | M10 (done; `GC_set_all_interior_pointers(1)` before `GC_INIT`) | Boehm GC (interior pointers) | run-pass (`an_interior_reference_keeps_its_whole_container_reachable`) |
@@ -346,7 +339,7 @@ removed.
 | Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | run-pass (`runtime_stress_is_stable_across_repeated_debug_and_release_runs` constructs a managed cycle); reclamation timing remains intentionally unasserted |
 | No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes resource-cleanup methods; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
 | Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, retries the allocation, then terminates with an OOM diagnostic only if the retry fails; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path; retry closure audited at M19) | Boehm GC | generated-C integration (`managed_storage_engages_the_collector_prelude_and_link_inputs` asserts collect → retry → terminal ordering); forced host OOM remains nondeterministic |
-| No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, M21 | Boehm GC (nonportable extensions) | optional tooling, not required |
+| No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, **Post-conformance optimization** | Boehm GC (nonportable extensions) | optional tooling, not required |
 
 ## 10. Unsafe operations and C interoperability (§10)
 
@@ -450,25 +443,26 @@ are the outcomes the initial driver must support, independent of spelling:
 | Extract public documentation | Emit attached Markdown, public signatures, and source links without requiring unrelated private bodies to check | M18 (done) |
 | Run conformance fixtures | Select fixtures and target/optimization matrices, compare stable output/status expectations, isolate builds, and retain failure artifacts | M18 (done) |
 
-## 15. Concurrency: explicitly unsupported
+## 15. Concurrency: planned, not yet normative
 
-Per `ROADMAP.md` §7 and [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution),
-no task syntax, scheduler, channel, synchronization trait, or cross-thread
-callback exists in the initial language, and none should be implemented until
-I-015 resolves the questions listed there. Concretely:
+`ROADMAP.md` §7 **Standard-library concurrency** records the accepted design.
+Until its **Normative concurrency contract** package makes that contract
+normative, no thread API, channel, synchronization type, transfer capability,
+or broader cross-thread callback rule exists in the language. Concretely:
 
 - No lexical or grammatical form in `SPEC.md` reserves task/async/await
-  syntax — there is nothing to parse and nothing to mark "unsupported" in the
-  grammar; the absence is the marker.
+  syntax. **Standard-library concurrency** deliberately retains that absence
+  and plans ordinary declarations in `std.thread` and `std.sync`.
 - §10.3's callback thread restriction (foreign invocation only on a thread
   already executing Elamite code) is the *only* concurrency-adjacent rule in
   the initial language, and it is a restriction, not a capability — see the
   §10.3 table above.
-- When I-015 is resolved, concurrency is added as a new vertical slice per
-  `ROADMAP.md` §7 (syntax/resolution → static transfer checks → CFG lowering →
-  runtime scheduler/synchronization → GC integration → cancellation cleanup →
-  foreign-thread entry → stress/race testing), not as incremental patches to
-  the milestones above.
+- **Normative concurrency contract** owns the normative resolution of
+  [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution). Later
+  packages in that milestone add structural transfer checking, standard
+  declarations, transfer-copy and thread lowering, native runtime
+  synchronization, collector integration, the restricted registered-thread
+  callback extension, and stress/race testing as one vertical slice.
 
 ## 16. Demonstration coverage
 
@@ -870,8 +864,8 @@ ledger follows the same split.
 
 | Concern | Crate | Why not yet | Reconsider at |
 | --- | --- | --- | --- |
-| Incremental/query-based compilation | `salsa` | `ROADMAP.md` §1 and Milestone 21 both explicitly defer incremental compilation until after conformance tests and the M20 phase-boundary refactor exist; adopting it earlier would be premature. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) remains salsa-shaped, so later adoption should wrap explicit phase inputs in query/tracked-struct machinery rather than replace the identity system | M21 |
-| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). M20 gives the hand-written parser a phase-neutral syntax boundary but deliberately does not adopt a new tree library; `ROADMAP.md`'s Milestone 21 source-map/editor candidate is the first reason to reconsider that representation | M21, only if editor or language-server work requires it |
+| Incremental/query-based compilation | `salsa` | `ROADMAP.md` §1 and **Post-conformance optimization** both explicitly defer incremental compilation until after conformance tests and the M20 phase-boundary refactor exist; adopting it earlier would be premature. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) remains salsa-shaped, so later adoption should wrap explicit phase inputs in query/tracked-struct machinery rather than replace the identity system | **Post-conformance optimization** |
+| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). M20 gives the hand-written parser a phase-neutral syntax boundary but deliberately does not adopt a new tree library; `ROADMAP.md`'s **Source maps and editor diagnostics** candidate is the first reason to reconsider that representation | **Post-conformance optimization**, only if editor or language-server work requires it |
 | Semantic-version-aware manifest validation | `semver` | `Manifest` currently only checks the `version` field is non-empty (`SPEC.md` §2.3 doesn't mandate a version grammar); version comparison matters only if a future resolver adds version selection beyond the normative initial local-path model | when such a resolver is designed |
 
 ### 18.3 Explicitly not adopted for the core grammar
@@ -942,8 +936,9 @@ container's storage, and replacing the container writes through it.
   part of the program does with it.
 - Promotion is per-function and conservative: a local whose address is taken
   is promoted to managed storage, whole. Taking a reference into an aggregate
-  promotes the containing local. Precise escape analysis stays an M21
-  optimization, per `ROADMAP.md` Milestone 10.
+  promotes the containing local. Precise escape analysis stays in
+  **Post-conformance optimization**, after the legacy M10 storage-promotion
+  boundary.
 - The collector must trace **interior pointers**, since a reference into an
   aggregate points inside a managed allocation rather than at its base. Boehm
   provides this (`GC_ALL_INTERIOR_POINTERS`, enabled by default in most

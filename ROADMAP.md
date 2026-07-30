@@ -1,10 +1,10 @@
 # Elamite Compiler Roadmap
 
-> Status: Active — Milestones 0 through 20 and Milestone 22 are complete and
-> omitted from this forward-looking plan; Milestone 21 is optional candidate
-> work
+> Status: Active — completed legacy work is omitted from this forward-looking
+> plan; remaining milestones and work packages use stable descriptive names
 >
-> Next required work package: M23.1 — normative test-declaration contract
+> Next required work package: **Package tests, typed traps, and runner** —
+> **Normative test and trap contract**
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -30,9 +30,10 @@ document defines an implementation order, not new language semantics. When it
 conflicts with the specification, the specification wins and this plan must be
 updated.
 
-Concurrency is not part of the initial implementation plan. It has a separate
-design gate at the end of this document because its memory and task model
-remains unresolved in `ISSUES.md`.
+Concurrency is not part of the initial implementation plan. The
+**Standard-library concurrency** milestone records the accepted post-closure
+native-thread and synchronization design; its normative specification is
+blocked by **Explicit-capture closures**.
 
 ## 1. Implementation strategy
 
@@ -42,7 +43,7 @@ The compiler should be built as a sequence of complete, testable layers:
 manifest and source files
     -> tokens
     -> parsed package syntax
-    -> expanded package syntax (pass-through until Milestone 24)
+    -> expanded package syntax (pass-through until Macro expansion foundations)
     -> resolved declarations
     -> typed high-level IR
     -> explicit control-flow IR
@@ -151,8 +152,8 @@ A milestone is complete only when:
 
 Only milestones with outstanding or candidate work remain below. Within an
 active milestone, completed work packages stay marked until the whole milestone
-is complete. Outstanding work is divided into ordered packages named
-`M<N>.<task>`.
+is complete. Outstanding work is divided into ordered, descriptively named
+packages.
 
 Each work package should normally fit in one focused change and must:
 
@@ -172,44 +173,48 @@ intermediate semantics that contradict it.
 
 ## 3. Active implementation roadmap
 
-### Milestone 21: post-conformance optimization
+### Post-conformance optimization
 
 > Status: Candidate work; select a measured problem before implementation.
+>
+> Blocked by: **None**.
 
 **Goal:** Improve implementation quality without changing language behavior.
 
 Candidate work packages are independent proposals, not a promise to implement
-all of them in numeric order:
+all of them in table order:
 
 | Task | Candidate change | Required semantic guard |
 | --- | --- | --- |
-| **M21.1 — Optimization benchmark gate** | Choose a measured problem, record a reproducible before-state, and define the expected improvement before changing lowering. | Full M20 refactor-closure baseline remains available for comparison. |
-| **M21.2 — Precise escape analysis** | Keep proven nonescaping address-taken storage on the stack while retaining conservative promotion as the fallback. | Escaping, interior, returned, trait-object, and deferred references preserve root lifetime and identity. |
-| **M21.3 — Copy elision** | Elide backend copies or reuse storage when independence cannot become observable. This is not a source-level move operation. | Mutation, alias, evaluation-order, return, pattern, and cleanup tests remain unchanged. |
-| **M21.4 — Copy-on-write text** | Replace eager `String` copies with COW storage behind the existing logical-copy interface. | First mutation detaches exactly once; independent copies, explicit aliases, and evaluation order retain specified behavior. |
-| **M21.5 — Copy-on-write collections** | Add COW independently for `Vec`, `Map`, and `Set`, one collection at a time. | Mutation, indexing places, iteration snapshots, hashes, and returned removed values remain independent. |
-| **M21.6 — Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and copy semantics do not change. |
-| **M21.7 — Devirtualization** | Replace a trait-object call with static dispatch only when the concrete target is proven and evaluation is unchanged. | Vtable-visible behavior, target identity, object safety, and source-order evaluation remain intact. |
-| **M21.8 — Incremental queries** | Introduce stable query boundaries for parsing, resolution, typing, and lowering. | Cache keys include all semantic inputs and clean/incremental outputs are byte-identical. |
-| **M21.9 — Dependency artifact cache** | Reuse built package artifacts by deterministic package identity, target, options, compiler/spec revision, and dependency keys. | Stale artifacts cannot cross package instances or target widths. |
-| **M21.10 — Parallel package compilation** | Schedule independent package nodes concurrently after deterministic dependency resolution. | Diagnostics, symbols, artifacts, and link-input ordering remain deterministic. |
-| **M21.11 — Source maps and editor diagnostics** | Improve generated-source mapping and expose machine-readable diagnostics suitable for editor tooling. | CLI diagnostics retain stable categories/spans and no language-server dependency enters semantic layers. |
-| **M21.12 — Optional analyses** | Add warnings for locally provable resource leaks and suspicious raw-pointer contracts. | Warnings are conservative, independently suppressible, and never become required compile errors. |
+| **Optimization benchmark gate** | Choose a measured problem, record a reproducible before-state, and define the expected improvement before changing lowering. | The complete compiler-architecture refactor baseline remains available for comparison. |
+| **Precise escape analysis** | Keep proven nonescaping address-taken storage on the stack while retaining conservative promotion as the fallback. | Escaping, interior, returned, trait-object, and deferred references preserve root lifetime and identity. |
+| **Copy elision** | Elide backend copies or reuse storage when independence cannot become observable. This is not a source-level move operation. | Mutation, alias, evaluation-order, return, pattern, and cleanup tests remain unchanged. |
+| **Copy-on-write text** | Replace eager `String` copies with COW storage behind the existing logical-copy interface. | First mutation detaches exactly once; independent copies, explicit aliases, and evaluation order retain specified behavior. |
+| **Copy-on-write collections** | Add COW independently for `Vec`, `Map`, and `Set`, one collection at a time. | Mutation, indexing places, iteration snapshots, hashes, and returned removed values remain independent. |
+| **Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and copy semantics do not change. |
+| **Devirtualization** | Replace a trait-object call with static dispatch only when the concrete target is proven and evaluation is unchanged. | Vtable-visible behavior, target identity, object safety, and source-order evaluation remain intact. |
+| **Incremental queries** | Introduce stable query boundaries for parsing, resolution, typing, and lowering. | Cache keys include all semantic inputs and clean/incremental outputs are byte-identical. |
+| **Dependency artifact cache** | Reuse built package artifacts by deterministic package identity, target, options, compiler/spec revision, and dependency keys. | Stale artifacts cannot cross package instances or target widths. |
+| **Parallel package compilation** | Schedule independent package nodes concurrently after deterministic dependency resolution. | Diagnostics, symbols, artifacts, and link-input ordering remain deterministic. |
+| **Source maps and editor diagnostics** | Improve generated-source mapping and expose machine-readable diagnostics suitable for editor tooling. | CLI diagnostics retain stable categories/spans and no language-server dependency enters semantic layers. |
+| **Optional analyses** | Add warnings for locally provable resource leaks and suspicious raw-pointer contracts. | Warnings are conservative, independently suppressible, and never become required compile errors. |
 
 Every selected package requires before-and-after measurements, a full
 conformance run, and targeted tests that would expose a change in copy
 independence, evaluation order, identity, root lifetime, trap behavior, or
 deterministic output.
 
-Milestone 21 is optional optimization work rather than a gate for the test and
-macro programs below. Individual packages, especially source-map
+**Post-conformance optimization** is optional work rather than a gate for the
+test and macro programs below. Individual packages, especially source-map
 infrastructure, may be pulled forward when a later milestone needs them.
 
 ## 4. Language-native test declarations
 
-### Milestone 23: package tests, typed traps, and runner
+### Package tests, typed traps, and runner
 
 > Status: Accepted design; pending normative specification and implementation.
+>
+> Blocked by: **None**.
 >
 > Accepted surface: a module-level declaration written `test test_name:`
 > followed by a nonempty ordinary statement body. An isolated expected-trap
@@ -248,17 +253,17 @@ The accepted contract has these boundaries:
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M23.1 — Normative test and trap contract** | Record the accepted declaration, namespace, body, visibility, assertion, failure, typed-trap, expected-block isolation/state, output, ordering, selection, process-status, dependency, target, and optimization rules in `SPEC.md`; update `LEDGER.md`; move the fixture command to `elamc conformance SUITE`. | Native tests and conformance fixtures have distinct commands, and every accepted or rejected construct has one normative outcome before either new keyword is reserved. |
-| **M23.2 — Extensible runtime traps** | Add `std.testing.RuntimeTrap` with deterministic `code(self: &Self) -> str` and `message(self: &Self) -> String` methods, a standard `BuiltinTrap` implementation covering `Panic` and every stable `E-RUN-*` category except OOM, and `std.trap[T: RuntimeTrap](reason: T) -> !`. Identify a trap by its concrete nominal type plus `code()`. | User-owned types may implement the trait under ordinary coherence, unrelated types cannot collide on code text, built-in checks map exactly to standard values, and raising a custom trap remains unrecoverable. |
-| **M23.3 — Assertion facilities** | Add `std.testing.assert(condition: bool) -> ()` and `std.testing.fail[T: Display](message: T) -> !` with exact-once argument evaluation, call-site diagnostics, and failure behavior distinct from `BuiltinTrap.Panic`. Keep both callable as ordinary terminating assertions outside test declarations. | Boolean assertions and explicit failure produce structured diagnostics without requiring optional arguments, overloading, or macros. |
-| **M23.4 — Test and expectation syntax** | Reserve `test` and `expect`, update lexer/editor inventories, parse tests only at module level, and parse expected-trap blocks only in test bodies under the accepted nesting and escaping-control restrictions. | Valid syntax retains stable spans; modifiers, signatures, empty bodies, statement-position tests, invalid selectors, nested expectations, and escaping control receive focused diagnostics. |
-| **M23.5 — Stable identities and collection** | Assign stable test identities across root, inline, and file-backed modules, share the module-item namespace, and collect only the selected package's tests without treating them as callable declarations or imports. | Duplicate names and qualified identities are deterministic, package-private helpers remain accessible, and dependency packages contribute no tests. |
-| **M23.6 — Body and selector checking** | Check selected test bodies with ordinary lexical, expression, flow, safety, generic, trait, cleanup, and FFI rules; enforce the implicit unit contract and require every `expect` selector to implement `RuntimeTrap`. | Invalid tests cannot reach lowering, a bare return passes, value return and `?` fail, and static errors inside an expectation remain static errors. |
-| **M23.7 — Expected-trap isolation** | Lower each `expect` body to an isolated child execution, transport the exact nominal trap identity, code, message, and source span back to its parent, and prevent child-local mutations from becoming parent state. | Exact traps pass; normal completion, mismatched traps, assertions, abnormal exits, OOM, and undefined behavior fail without terminating the containing test runner. |
-| **M23.8 — Test harness lowering** | Lower selected tests through ordinary typed/control-flow IR and synthesize test-only native entry points without adding test bodies or helpers to normal `check`, `build`, or `run` reachability. | Test execution matches ordinary Elamite semantics and production artifacts remain byte-equivalent. |
-| **M23.9 — CLI, reporting, and filtering** | Make `elamc test [PATH]` select a package, support exact or substring filtering plus accepted target/toolchain/optimization options, capture output, run all selected tests after failures, and report deterministic names and summaries. | All pass or zero tests exits zero, test failure exits one, compile/configuration/empty-filter selection errors exit two, and invocation works from any directory. |
-| **M23.10 — Cross-feature integration** | Exercise nested modules, private helpers, generics, traits, collections, managed references, `Result`, `defer`, unsafe operations, C imports, custom `RuntimeTrap` types, and local path dependencies. | Test-only behavior does not weaken visibility, safety, coherence, cleanup, GC, or C ABI rules. |
-| **M23.11 — Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, native run and abnormal-process tests, debug/release and x86/x86-64 matrix coverage, help/version documentation, and editor-grammar synchronization. | The complete pre-test M22 suite remains green and the accepted test/trap surface is mapped in `LEDGER.md`. |
+| **Normative test and trap contract** | Record the accepted declaration, namespace, body, visibility, assertion, failure, typed-trap, expected-block isolation/state, output, ordering, selection, process-status, dependency, target, and optimization rules in `SPEC.md`; update `LEDGER.md`; move the fixture command to `elamc conformance SUITE`. | Native tests and conformance fixtures have distinct commands, and every accepted or rejected construct has one normative outcome before either new keyword is reserved. |
+| **Extensible runtime traps** | Add `std.testing.RuntimeTrap` with deterministic `code(self: &Self) -> str` and `message(self: &Self) -> String` methods, a standard `BuiltinTrap` implementation covering `Panic` and every stable `E-RUN-*` category except OOM, and `std.trap[T: RuntimeTrap](reason: T) -> !`. Identify a trap by its concrete nominal type plus `code()`. | User-owned types may implement the trait under ordinary coherence, unrelated types cannot collide on code text, built-in checks map exactly to standard values, and raising a custom trap remains unrecoverable. |
+| **Assertion facilities** | Add `std.testing.assert(condition: bool) -> ()` and `std.testing.fail[T: Display](message: T) -> !` with exact-once argument evaluation, call-site diagnostics, and failure behavior distinct from `BuiltinTrap.Panic`. Keep both callable as ordinary terminating assertions outside test declarations. | Boolean assertions and explicit failure produce structured diagnostics without requiring optional arguments, overloading, or macros. |
+| **Test and expectation syntax** | Reserve `test` and `expect`, update lexer/editor inventories, parse tests only at module level, and parse expected-trap blocks only in test bodies under the accepted nesting and escaping-control restrictions. | Valid syntax retains stable spans; modifiers, signatures, empty bodies, statement-position tests, invalid selectors, nested expectations, and escaping control receive focused diagnostics. |
+| **Stable identities and collection** | Assign stable test identities across root, inline, and file-backed modules, share the module-item namespace, and collect only the selected package's tests without treating them as callable declarations or imports. | Duplicate names and qualified identities are deterministic, package-private helpers remain accessible, and dependency packages contribute no tests. |
+| **Body and selector checking** | Check selected test bodies with ordinary lexical, expression, flow, safety, generic, trait, cleanup, and FFI rules; enforce the implicit unit contract and require every `expect` selector to implement `RuntimeTrap`. | Invalid tests cannot reach lowering, a bare return passes, value return and `?` fail, and static errors inside an expectation remain static errors. |
+| **Expected-trap isolation** | Lower each `expect` body to an isolated child execution, transport the exact nominal trap identity, code, message, and source span back to its parent, and prevent child-local mutations from becoming parent state. | Exact traps pass; normal completion, mismatched traps, assertions, abnormal exits, OOM, and undefined behavior fail without terminating the containing test runner. |
+| **Test harness lowering** | Lower selected tests through ordinary typed/control-flow IR and synthesize test-only native entry points without adding test bodies or helpers to normal `check`, `build`, or `run` reachability. | Test execution matches ordinary Elamite semantics and production artifacts remain byte-equivalent. |
+| **CLI, reporting, and filtering** | Make `elamc test [PATH]` select a package, support exact or substring filtering plus accepted target/toolchain/optimization options, capture output, run all selected tests after failures, and report deterministic names and summaries. | All pass or zero tests exits zero, test failure exits one, compile/configuration/empty-filter selection errors exit two, and invocation works from any directory. |
+| **Cross-feature integration** | Exercise nested modules, private helpers, generics, traits, collections, managed references, `Result`, `defer`, unsafe operations, C imports, custom `RuntimeTrap` types, and local path dependencies. | Test-only behavior does not weaken visibility, safety, coherence, cleanup, GC, or C ABI rules. |
+| **Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, native run and abnormal-process tests, debug/release and x86/x86-64 matrix coverage, help/version documentation, and editor-grammar synchronization. | The complete pre-test suite remains green and the accepted test/trap surface is mapped in `LEDGER.md`. |
 
 This milestone is independent of user-defined macros. Its parser and harness
 work may land before macro foundations, and test declarations should then be
@@ -267,7 +272,7 @@ primitive themselves.
 
 ## 5. Post-conformance macro system
 
-Macro work begins after Milestone 19 reaches initial conformance and after the
+Macro work begins after the completed initial-conformance milestone and after the
 corresponding language design is accepted into `SPEC.md`. This roadmap does not
 itself define stable macro syntax. Until those design changes land, the
 currently reserved `@name` space and compiler-supported built-in macros retain
@@ -285,9 +290,12 @@ The implementation must preserve these boundaries throughout the transition:
   and the source invocation that caused it;
 - resource limits and expansion ordering are deterministic and testable.
 
-### Milestone 24: macro expansion foundations
+### Macro expansion foundations
 
-> Status: Pending normative macro design; independent of Milestone 23.
+> Status: Pending normative macro design.
+>
+> Blocked by: **None**. It is independent of **Package tests, typed traps, and
+> runner**.
 
 **Goal:** Add behavior-neutral representations and pipeline boundaries on which
 user-defined macros can be implemented without destabilizing the existing
@@ -295,56 +303,62 @@ compiler.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M24.1 — Language-contract closure** | Settle definition and invocation forms, delimiter and indentation behavior, expansion roles, macro namespaces, visibility/import rules, expansion order, and deterministic limits in `SPEC.md`; update `LEDGER.md` and close or split the corresponding open issues. | Every implemented macro behavior is owned by a normative rule rather than this roadmap. |
-| **M24.2 — Token-tree representation** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
-| **M24.3 — Expansion identities and provenance** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
-| **M24.4 — Fragment parser entry points** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
-| **M24.5 — Expansion pipeline boundary** | Replace M20's pass-through seam with an owned expansion result before name resolution. | Macro-free packages produce equivalent syntax, resolved programs, diagnostics, typed IR, and generated C. |
-| **M24.6 — Macro identities and namespace collection** | Add stable macro declaration identities and the accepted package, module, import, visibility, and namespace rules without folding macro lookup into value or type lookup. | Same-name and cross-package cases resolve according to the accepted namespace model. |
-| **M24.7 — Deterministic expansion scheduler** | Implement the accepted ordering and fixed-point rules for nested and item-producing expansions, including explicit dependency and cycle diagnostics. | Repeated builds schedule and diagnose the same expansions in the same order. |
-| **M24.8 — Resource accounting** | Enforce deterministic recursion, expansion-step, nesting, and generated-output limits. | Limit exhaustion is a stable diagnostic, never a panic or hang. |
-| **M24.9 — Experimental gate** | Keep incomplete user-defined macro behavior behind an explicit unstable compiler gate. | Stable invocations cannot accidentally depend on unfinished behavior. |
-| **M24.10 — Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined expansion is enabled. |
+| **Language-contract closure** | Settle definition and invocation forms, delimiter and indentation behavior, expansion roles, macro namespaces, visibility/import rules, expansion order, and deterministic limits in `SPEC.md`; update `LEDGER.md` and close or split the corresponding open issues. | Every implemented macro behavior is owned by a normative rule rather than this roadmap. |
+| **Token-tree representation** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
+| **Expansion identities and provenance** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
+| **Fragment parser entry points** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
+| **Expansion pipeline boundary** | Replace the compiler-architecture refactor's pass-through seam with an owned expansion result before name resolution. | Macro-free packages produce equivalent syntax, resolved programs, diagnostics, typed IR, and generated C. |
+| **Macro identities and namespace collection** | Add stable macro declaration identities and the accepted package, module, import, visibility, and namespace rules without folding macro lookup into value or type lookup. | Same-name and cross-package cases resolve according to the accepted namespace model. |
+| **Deterministic expansion scheduler** | Implement the accepted ordering and fixed-point rules for nested and item-producing expansions, including explicit dependency and cycle diagnostics. | Repeated builds schedule and diagnose the same expansions in the same order. |
+| **Resource accounting** | Enforce deterministic recursion, expansion-step, nesting, and generated-output limits. | Limit exhaustion is a stable diagnostic, never a panic or hang. |
+| **Experimental gate** | Keep incomplete user-defined macro behavior behind an explicit unstable compiler gate. | Stable invocations cannot accidentally depend on unfinished behavior. |
+| **Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined expansion is enabled. |
 
-### Milestone 25: hygienic declarative macros
+### Hygienic declarative macros
 
-> Status: Pending Milestone 24.
+> Status: Pending.
+>
+> Blocked by: **Macro expansion foundations**.
 
 **Goal:** Implement ordinary syntax macros with deterministic matching,
 transcription, hygiene, and cross-package use.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M25.1 — Declarative definitions** | Parse and validate the accepted rule, matcher, metavariable, fragment-specifier, and transcription syntax while keeping macro definitions out of ordinary runtime declarations. | Valid definitions enter the macro namespace and invalid definitions fail before expansion. |
-| **M25.2 — Matching and repetition** | Match token trees with deterministic rule selection, nested repetition, separators, and useful ambiguity/failure diagnostics under the Milestone 24 resource limits. | Matcher success, failure, ambiguity, and nested repetition have focused tests. |
-| **M25.3 — Hygienic transcription** | Attach syntax contexts to generated identifiers and implement the accepted call-site and definition-site lookup behavior; ordinary source identifiers remain in the root context. | Capture and intentional-reference tests demonstrate the specified lookup behavior. |
-| **M25.4 — Fragment-role expansion** | Expand expression, statement, pattern, type, and item macros only in roles permitted by `SPEC.md`, then parse the result through the corresponding fragment entry point. | Every supported role has positive and wrong-role diagnostics. |
-| **M25.5 — Item fixed point** | Support generated declarations, imports, implementations, and further macro invocations using the accepted deterministic collection order. | Duplicate, dependency, nesting, and cycle cases terminate with stable results. |
-| **M25.6 — Modules and packages** | Serialize or otherwise expose the stable macro metadata needed for imports, visibility, aliases, and cross-package expansion without exposing unstable compiler internals. | A downstream package can import and expand a public macro while private macros stay inaccessible. |
-| **M25.7 — Semantic integration** | Route generated syntax through ordinary resolution, generic checking, trait conformance/coherence, safety checking, lowering, and C emission. | Interaction tests cover `defer`, `unsafe`, FFI, generics, traits, and managed storage. |
-| **M25.8 — Built-in compatibility** | Prove behavioral and diagnostic compatibility for the existing built-in macros before optionally reimplementing any of them on the general expansion path. | Existing built-in fixtures pass unchanged; migration is not required. |
-| **M25.9 — Declarative macro conformance** | Add positive, compile-fail, cross-module, cross-package, hygiene, determinism, architecture, nesting, adversarial, and resource-limit suites. | Declarative expansion passes the supported target matrix. |
+| **Declarative definitions** | Parse and validate the accepted rule, matcher, metavariable, fragment-specifier, and transcription syntax while keeping macro definitions out of ordinary runtime declarations. | Valid definitions enter the macro namespace and invalid definitions fail before expansion. |
+| **Matching and repetition** | Match token trees with deterministic rule selection, nested repetition, separators, and useful ambiguity/failure diagnostics under the **Macro expansion foundations** resource limits. | Matcher success, failure, ambiguity, and nested repetition have focused tests. |
+| **Hygienic transcription** | Attach syntax contexts to generated identifiers and implement the accepted call-site and definition-site lookup behavior; ordinary source identifiers remain in the root context. | Capture and intentional-reference tests demonstrate the specified lookup behavior. |
+| **Fragment-role expansion** | Expand expression, statement, pattern, type, and item macros only in roles permitted by `SPEC.md`, then parse the result through the corresponding fragment entry point. | Every supported role has positive and wrong-role diagnostics. |
+| **Item fixed point** | Support generated declarations, imports, implementations, and further macro invocations using the accepted deterministic collection order. | Duplicate, dependency, nesting, and cycle cases terminate with stable results. |
+| **Modules and packages** | Serialize or otherwise expose the stable macro metadata needed for imports, visibility, aliases, and cross-package expansion without exposing unstable compiler internals. | A downstream package can import and expand a public macro while private macros stay inaccessible. |
+| **Semantic integration** | Route generated syntax through ordinary resolution, generic checking, trait conformance/coherence, safety checking, lowering, and C emission. | Interaction tests cover `defer`, `unsafe`, FFI, generics, traits, and managed storage. |
+| **Built-in compatibility** | Prove behavioral and diagnostic compatibility for the existing built-in macros before optionally reimplementing any of them on the general expansion path. | Existing built-in fixtures pass unchanged; migration is not required. |
+| **Declarative macro conformance** | Add positive, compile-fail, cross-module, cross-package, hygiene, determinism, architecture, nesting, adversarial, and resource-limit suites. | Declarative expansion passes the supported target matrix. |
 
-### Milestone 26: macro diagnostics, tooling, and stabilization
+### Macro diagnostics, tooling, and stabilization
 
-> Status: Pending Milestone 25.
+> Status: Pending.
+>
+> Blocked by: **Hygienic declarative macros**.
 
 **Goal:** Make declarative macros diagnosable, inspectable, reproducible, and
 ready to leave the experimental gate.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M26.1 — Expansion-aware diagnostics** | Render primary generated spans with related invocation and definition spans, bounded expansion backtraces, and stable diagnostic categories. | Nested-expansion snapshots identify both the failure and its source chain. |
-| **M26.2 — Recovery across expansions** | Contain malformed output and nested expansion failures so later independent diagnostics can still be emitted without duplicate cascades. | One failed invocation does not suppress or multiply independent diagnostics. |
-| **M26.3 — Expansion inspection** | Add a CLI inspection mode that shows expanded source or syntax with origin information and deterministic ordering suitable for tests and editor tooling. | Repeated dumps are byte-identical and expose useful provenance. |
-| **M26.4 — Dependency and cache identities** | Define stable hashes for macro definitions, invocations, imported macro metadata, compiler/spec versions, and relevant inputs. | Future incremental compilation can invalidate expansions precisely without changing current clean builds. |
-| **M26.5 — Robustness campaign** | Fuzz matching, transcription, fragment parsing, hygiene, span projection, nesting, and limits; retain regressions for every discovered crash, hang, or nondeterministic result. | The retained corpus completes without an internal failure or unbounded diagnostic cascade. |
-| **M26.6 — Compatibility audit** | Re-run the complete compiler suite with expansion enabled and verify macro-free diagnostic, IR, runtime, and generated-C equivalence on Linux x86 and x86-64. | Existing programs remain unchanged by enabling the expansion pipeline. |
-| **M26.7 — Declarative stabilization** | Document the supported surface and limits, complete `SPEC.md`/`LEDGER.md` coverage, and remove the experimental gate. | Local and cross-package conformance suites pass before the gate is removed. |
+| **Expansion-aware diagnostics** | Render primary generated spans with related invocation and definition spans, bounded expansion backtraces, and stable diagnostic categories. | Nested-expansion snapshots identify both the failure and its source chain. |
+| **Recovery across expansions** | Contain malformed output and nested expansion failures so later independent diagnostics can still be emitted without duplicate cascades. | One failed invocation does not suppress or multiply independent diagnostics. |
+| **Expansion inspection** | Add a CLI inspection mode that shows expanded source or syntax with origin information and deterministic ordering suitable for tests and editor tooling. | Repeated dumps are byte-identical and expose useful provenance. |
+| **Dependency and cache identities** | Define stable hashes for macro definitions, invocations, imported macro metadata, compiler/spec versions, and relevant inputs. | Future incremental compilation can invalidate expansions precisely without changing current clean builds. |
+| **Robustness campaign** | Fuzz matching, transcription, fragment parsing, hygiene, span projection, nesting, and limits; retain regressions for every discovered crash, hang, or nondeterministic result. | The retained corpus completes without an internal failure or unbounded diagnostic cascade. |
+| **Compatibility audit** | Re-run the complete compiler suite with expansion enabled and verify macro-free diagnostic, IR, runtime, and generated-C equivalence on Linux x86 and x86-64. | Existing programs remain unchanged by enabling the expansion pipeline. |
+| **Declarative stabilization** | Document the supported surface and limits, complete `SPEC.md`/`LEDGER.md` coverage, and remove the experimental gate. | Local and cross-package conformance suites pass before the gate is removed. |
 
-### Milestone 27: declarative custom derive generators
+### Declarative custom derive generators
 
-> Status: Pending Milestone 26 and accepted derive design.
+> Status: Pending accepted derive design.
+>
+> Blocked by: **Macro diagnostics, tooling, and stabilization**.
 
 **Goal:** Generate ordinary implementations from type structure using bounded
 declarative matching and templates, without granting generators arbitrary
@@ -352,95 +366,377 @@ execution or access to compiler internals.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M27.1 — Derive contract** | Specify derive attachment, ordering, namespace, visibility, allowed targets, structural matching/template rules, duplicate behavior, and interaction with built-in derives in `SPEC.md`. | Each accepted and rejected definition and attachment case is normative and tested. |
-| **M27.2 — Stable structural input** | Expose a versioned structural representation of names, fields, variants, generic parameters, bounds, visibility, and source spans sufficient for derives but independent of internal AST and semantic table layouts. | Generators need no compiler-private representation. |
-| **M27.3 — Derive definitions and lookup** | Parse bounded structural matcher/template definitions and resolve derive generators through the accepted module/package rules with stable identities and deterministic ordering. | Local, imported, renamed, private, malformed, and duplicate generators resolve or diagnose predictably. |
-| **M27.4 — Derive expansion phase** | Match structural input and transcribe ordinary items after input declarations are known and before implementation collection/coherence, preserving provenance and hygiene. | Generated implementations participate in the same collection order on repeated builds without executing arbitrary code. |
-| **M27.5 — Ordinary semantic validation** | Resolve and check generated implementations exactly like handwritten implementations, including orphan, overlap, generic-bound, safety, and object-safety diagnostics. | Generated code cannot bypass an ordinary semantic restriction. |
-| **M27.6 — Built-in derive compatibility** | Retain compiler-supported derives until a general generator matches their semantics, diagnostics, determinism, and cross-package behavior. | Migration remains optional and cannot regress existing derives. |
-| **M27.7 — Derive conformance** | Test generic and nongeneric records/enums, visibility, renamed imports, cross-package generators, duplicate derives, malformed output, hygiene, coherence conflicts, and both target architectures. | Custom derives pass the supported target matrix. |
+| **Derive contract** | Specify derive attachment, ordering, namespace, visibility, allowed targets, structural matching/template rules, duplicate behavior, and interaction with built-in derives in `SPEC.md`. | Each accepted and rejected definition and attachment case is normative and tested. |
+| **Stable structural input** | Expose a versioned structural representation of names, fields, variants, generic parameters, bounds, visibility, and source spans sufficient for derives but independent of internal AST and semantic table layouts. | Generators need no compiler-private representation. |
+| **Derive definitions and lookup** | Parse bounded structural matcher/template definitions and resolve derive generators through the accepted module/package rules with stable identities and deterministic ordering. | Local, imported, renamed, private, malformed, and duplicate generators resolve or diagnose predictably. |
+| **Derive expansion phase** | Match structural input and transcribe ordinary items after input declarations are known and before implementation collection/coherence, preserving provenance and hygiene. | Generated implementations participate in the same collection order on repeated builds without executing arbitrary code. |
+| **Ordinary semantic validation** | Resolve and check generated implementations exactly like handwritten implementations, including orphan, overlap, generic-bound, safety, and object-safety diagnostics. | Generated code cannot bypass an ordinary semantic restriction. |
+| **Built-in derive compatibility** | Retain compiler-supported derives until a general generator matches their semantics, diagnostics, determinism, and cross-package behavior. | Migration remains optional and cannot regress existing derives. |
+| **Derive conformance** | Test generic and nongeneric records/enums, visibility, renamed imports, cross-package generators, duplicate derives, malformed output, hygiene, coherence conflicts, and both target architectures. | Custom derives pass the supported target matrix. |
 
-### Milestone 28: compile-time execution runtime
+### Compile-time execution runtime
 
-> Status: Pending Milestone 27 and accepted execution/security design.
+> Status: Pending accepted execution/security design.
+>
+> Blocked by: **Declarative custom derive generators**.
 
 **Goal:** Provide a bounded and reproducible host-side execution environment
 for procedural macro code without confusing host and target compilation.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M28.1 — Execution model** | Implement the interpreter, bytecode, native-host, or other model accepted by `SPEC.md`, with an explicit versioned interface rather than direct access to compiler data structures. | Macro programs execute through only the accepted interface. |
-| **M28.2 — Host/target separation** | Compile and identify macro artifacts for the build host while preserving the selected x86 or x86-64 target for the user's package. | Incompatible artifacts are rejected clearly and never linked as target code. |
-| **M28.3 — Token and diagnostic API** | Expose only the versioned token-tree, span, provenance, and diagnostic operations required by procedural macros. | API compatibility has version-skew tests. |
-| **M28.4 — Capability boundary** | Deny filesystem, environment, process, clock, randomness, and network access by default; implement only capabilities explicitly accepted by the language/build design and include them in reproducibility metadata. | Undeclared external access fails as a contained diagnostic. |
-| **M28.5 — Failure isolation and limits** | Contain panics, crashes, invalid results, recursion, excessive work, memory growth, and output growth as bounded diagnostics without corrupting compiler state. | A failed macro cannot crash or hang the compiling process. |
-| **M28.6 — Artifact and cache identity** | Key macro artifacts and results by source, transitive dependencies, host platform, interface/compiler/spec versions, declared capabilities, and all accepted external inputs. | Input changes invalidate exactly the affected artifact or result. |
-| **M28.7 — Runtime validation** | Add reproducibility, isolation, malformed-artifact, version-skew, resource-limit, cache-invalidation, host/target, and concurrent-build tests. | The runtime is deterministic and isolated across repeated builds. |
+| **Execution model** | Implement the interpreter, bytecode, native-host, or other model accepted by `SPEC.md`, with an explicit versioned interface rather than direct access to compiler data structures. | Macro programs execute through only the accepted interface. |
+| **Host/target separation** | Compile and identify macro artifacts for the build host while preserving the selected x86 or x86-64 target for the user's package. | Incompatible artifacts are rejected clearly and never linked as target code. |
+| **Token and diagnostic API** | Expose only the versioned token-tree, span, provenance, and diagnostic operations required by procedural macros. | API compatibility has version-skew tests. |
+| **Capability boundary** | Deny filesystem, environment, process, clock, randomness, and network access by default; implement only capabilities explicitly accepted by the language/build design and include them in reproducibility metadata. | Undeclared external access fails as a contained diagnostic. |
+| **Failure isolation and limits** | Contain panics, crashes, invalid results, recursion, excessive work, memory growth, and output growth as bounded diagnostics without corrupting compiler state. | A failed macro cannot crash or hang the compiling process. |
+| **Artifact and cache identity** | Key macro artifacts and results by source, transitive dependencies, host platform, interface/compiler/spec versions, declared capabilities, and all accepted external inputs. | Input changes invalidate exactly the affected artifact or result. |
+| **Runtime validation** | Add reproducibility, isolation, malformed-artifact, version-skew, resource-limit, cache-invalidation, host/target, and concurrent-build tests. | The runtime is deterministic and isolated across repeated builds. |
 
-### Milestone 29: procedural macros and attributes
+### Procedural macros and attributes
 
-> Status: Pending Milestone 28 and accepted procedural-macro design.
+> Status: Pending accepted procedural-macro design.
+>
+> Blocked by: **Compile-time execution runtime**.
 
 **Goal:** Support function-like procedural expansion, procedural derives, and
 item attributes on the bounded compile-time runtime.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **M29.1 — Function-like procedural macros** | Register, resolve, execute, and parse token-tree transformations in every accepted fragment role with the same provenance, hygiene, scheduling, and limits as declarative macros. | Function-like procedural macros satisfy the declarative interaction matrix. |
-| **M29.2 — Procedural derives** | Feed the stable Milestone 27 structural input to procedural generators and validate their output through ordinary implementation collection and coherence. | Procedural derives cannot observe private compiler structures or bypass coherence. |
-| **M29.3 — Attribute attachment and input** | Parse the accepted attribute grammar, attach attributes to permitted items, preserve raw token input and spans, and reject invalid placement before execution. | Attachment and input are deterministic and independently diagnosable. |
-| **M29.4 — Attribute expansion semantics** | Apply the accepted ordering relative to declarative expansion and derives; allow attributes to replace, remove, or produce items only as specified, then return all output to ordinary collection and checking. | Nested and interacting attributes reach a deterministic fixed point. |
-| **M29.5 — Procedural span and hygiene API** | Support the accepted call-site, definition-site, and generated identifier operations without allowing fabricated physical locations or bypassing visibility. | Span and capture tests exercise every exposed context operation. |
-| **M29.6 — Failure behavior and tooling** | Surface execution failures with bounded expansion backtraces, preserve compiler recovery, and provide useful inspection output when a macro cannot execute. | Failures remain local and explain the invocation/definition chain. |
-| **M29.7 — Cross-package distribution** | Build, discover, version, and cache procedural macro artifacts reproducibly across packages without loading target artifacts into the host compiler. | Clean and cached cross-package builds are equivalent. |
-| **M29.8 — Procedural conformance and stabilization** | Test ordering, nesting, hygiene, generated imports/items/impls, capability denial, crashes, limits, version skew, cross-package use, deterministic rebuilds, and both target architectures. | Procedural macros and attributes leave the experimental surface only after the complete matrix passes. |
+| **Function-like procedural macros** | Register, resolve, execute, and parse token-tree transformations in every accepted fragment role with the same provenance, hygiene, scheduling, and limits as declarative macros. | Function-like procedural macros satisfy the declarative interaction matrix. |
+| **Procedural derives** | Feed the stable **Declarative custom derive generators** structural input to procedural generators and validate their output through ordinary implementation collection and coherence. | Procedural derives cannot observe private compiler structures or bypass coherence. |
+| **Attribute attachment and input** | Parse the accepted attribute grammar, attach attributes to permitted items, preserve raw token input and spans, and reject invalid placement before execution. | Attachment and input are deterministic and independently diagnosable. |
+| **Attribute expansion semantics** | Apply the accepted ordering relative to declarative expansion and derives; allow attributes to replace, remove, or produce items only as specified, then return all output to ordinary collection and checking. | Nested and interacting attributes reach a deterministic fixed point. |
+| **Procedural span and hygiene API** | Support the accepted call-site, definition-site, and generated identifier operations without allowing fabricated physical locations or bypassing visibility. | Span and capture tests exercise every exposed context operation. |
+| **Failure behavior and tooling** | Surface execution failures with bounded expansion backtraces, preserve compiler recovery, and provide useful inspection output when a macro cannot execute. | Failures remain local and explain the invocation/definition chain. |
+| **Cross-package distribution** | Build, discover, version, and cache procedural macro artifacts reproducibly across packages without loading target artifacts into the host compiler. | Clean and cached cross-package builds are equivalent. |
+| **Procedural conformance and stabilization** | Test ordering, nesting, hygiene, generated imports/items/impls, capability denial, crashes, limits, version skew, cross-package use, deterministic rebuilds, and both target architectures. | Procedural macros and attributes leave the experimental surface only after the complete matrix passes. |
 
-## 6. Deferred concurrency design gate
+## 6. Closures
 
-Do not implement task syntax, schedulers, channels, synchronization traits, or
-cross-thread callbacks until `I-015` defines:
+### Explicit-capture closures
 
-- whether execution is only cooperative or may be parallel;
-- which values may cross a task boundary;
-- how safe references, mutable aliases, raw pointers, trait objects, function
-  references, and resource handles behave across that boundary;
-- the data-race and memory-ordering model;
-- structured task lifetime, cancellation, and the cleanup behavior of `defer`;
-- task failure and recoverable error propagation;
-- GC registration and root scanning for runtime-created and foreign-created
-  threads;
-- synchronization primitives and any compiler-recognized transfer capability;
-- callback rules when C invokes Elamite from another or concurrent thread.
+> Status: Accepted design; pending normative specification and implementation.
+>
+> Blocked by: **None**. **Standard-library concurrency** is blocked by this
+> milestone because spawned thread bodies rely on closures.
 
-After those rules are normative, concurrency should be added as a new vertical
-slice: syntax and resolution, static transfer checks, control-flow lowering,
-runtime scheduler and synchronization, GC integration, cancellation cleanup,
-foreign-thread entry, and stress/race testing. It should not require weakening
-the sequential semantics established by the initial milestones.
+**Goal:** Add locally defined, state-carrying safe callables with explicit
+capture boundaries, ordinary Elamite copy and alias semantics, and no implicit
+capture or caller-visible unsafe contract.
 
-## 7. Recommended delivery checkpoints
+The accepted surface has these boundaries:
 
-Completed checkpoints are omitted with their milestones. The remaining
-delivery checkpoints are:
+- a captureless closure is written `fn(parameters):` or
+  `fn(parameters) -> Return:`; it has no capture brackets and cannot refer to
+  an enclosing local binding;
+- a capturing closure inserts a nonempty capture list before its parameter
+  list, as in
+  `fn[value, &shared, &var mutable, *pointer, *var write_pointer](parameters):`;
+  every enclosing local used by the body must be named by exactly one capture,
+  while module declarations, imports, types, and named functions need no
+  capture;
+- captures are constructed once, from left to right, when evaluation reaches
+  the closure expression. A plain capture takes an independent logical copy,
+  `&name` forms a shared reference to the binding's storage, and `&var name`
+  forms a mutable reference to mutable binding storage. Captures may use an
+  explicit local alias to avoid collisions with parameters or other bindings;
+- `*pointer` copies a `*T` pointer and may deliberately downgrade a `*var T`
+  pointer to `*T`; `*var pointer` requires and preserves `*var T`. Neither form
+  dereferences the pointer or keeps its pointee alive, and a directly captured
+  raw-pointer binding must use one of these explicit forms;
+- raw-pointer capture, copying, storage, passing, and comparison, including
+  comparison with `null`, remain safe. Postfix field access such as
+  `pointer.value` automatically dereferences the pointer and therefore requires
+  an ordinary `unsafe:` block, performs the required null and alignment checks,
+  and permits a write only through `*var T`. A raw-pointer receiver method
+  taking `self: *Self` or `self: *var Self` still receives the pointer without
+  dereference;
+- a captured binding cannot be rebound inside the closure. Mutation through
+  `&var T` or `*var T` changes the referenced storage, while ordinary captured
+  values remain the closure's private snapshots and copy independently when
+  the closure value is copied;
+- closure parameters retain explicit types. The return annotation is optional:
+  an expected callable result and explicit `return` expressions determine the
+  inferred result, reachable fallthrough contributes `()`, and there is still
+  no implicit tail-expression return;
+- all closures are safe callables. There is no `unsafe fn[...]` closure form;
+  a closure may perform an unsafe-only operation only within an explicit
+  `unsafe:` block whose author establishes the complete invariant internally.
+  A caller-dependent unsafe contract remains a named `unsafe fn`;
+- closure literals introduce no generic parameters and are not variadic.
+  They may occur inside a generic declaration and may be passed to a generic
+  higher-order function, but each resulting closure type is concrete after
+  ordinary substitution and monomorphization;
+- every closure expression has a distinct anonymous nominal type that
+  implements the standard `Callable[Arguments, Return]` trait. Ordinary call
+  syntax invokes that trait, arguments are represented by their exact tuple,
+  and generic code may accept an inferred concrete callable or erase it behind
+  `&Callable[Arguments, Return]`;
+- named function references remain thin, stateless `&fn` or `*fn` values.
+  Function references may participate in the same callable APIs, but closures,
+  including captureless closures, never convert to function references or C
+  callbacks; and
+- a closure cannot capture its own initializing binding, perform anonymous
+  recursion, redirect control into an enclosing function, or inherit an
+  enclosing `unsafe:` or `defer` control context. `return`, postfix `?`, `!`
+  termination, and `defer` otherwise apply within the closure's own function
+  boundary under their ordinary rules.
 
-1. **Initial conformance checkpoint — Milestone 19:** unsafe code, C
-   interoperability, the standard library, and the authoritative demonstration
-   satisfy the full initial test matrix.
-2. **Architecture checkpoint — Milestone 20:** compiler phase ownership,
-   package parsing, canonical type lowering, IR layering, target configuration,
-   and C emission have explicit behavior-neutral boundaries suitable for the
-   remaining language and tooling work.
-3. **Never-return checkpoint — Milestone 22:** restricted `!` returns and
-   `std.panic` provide typed, non-returning control flow without changing
-   ordinary `-> T` signatures or introducing catchable traps.
-4. **Language-native test checkpoint — Milestone 23:** package tests run
-   deterministically from the current directory or an explicit package path
-   without changing production artifacts, and isolated expectations verify
-   built-in and user-defined runtime traps.
-5. **Declarative macro checkpoint — Milestone 26:** hygienic declarative
-   macros are stable, diagnosable, and usable across packages.
-6. **Extensible macro checkpoint — Milestone 29:** procedural macros, derives,
-   and attributes are bounded, reproducible, and stable across packages.
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Normative closure contract** | Record closure syntax, capture forms and aliases, evaluation order, name visibility, inferred returns, callable behavior, copying, safety, escape, control-flow, and exclusion rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected closure form has one normative outcome before anonymous `fn` expressions are enabled. |
+| **Syntax and editor support** | Parse safe closure expressions with optional nonempty capture lists, typed parameters, optional return annotations, and ordinary indented bodies; update traversal and editor inventories without admitting generic, unsafe, variadic, or declaration-position forms. | Snapshots preserve capture-kind and body spans, and malformed lists, modifiers, parameters, aliases, and body indentation receive focused diagnostics. |
+| **Capture resolution** | Assign stable identities to closure expressions and environment bindings, resolve every outer-local use through one explicit capture, and distinguish declarations that require no capture. | Missing, duplicate, self-initializing, shadowing, alias-collision, and inaccessible captures are deterministic errors with related spans. |
+| **Capture typing and construction** | Type-check value, shared-reference, mutable-reference, const-pointer, and mutable-pointer captures; require addressability and mutability where appropriate; record exact-once left-to-right construction and any `*var T` to `*T` downgrade. | Capture types and evaluation order are explicit in typed facts, direct raw-pointer captures cannot bypass `*`/`*var`, and no capture operation itself enters an unsafe context. |
+| **Callable types and return inference** | Give each closure expression a unique anonymous nominal type, add the ordinary user-implementable `Callable[Arguments, Return]` contract and call-syntax selection, infer omitted closure results, and preserve exact annotated results including `!`. | Distinct expressions remain distinct types, all return paths agree, fallthrough is unit, generic callable parameters infer concrete closure types, and erased calls retain exact argument and result types. |
+| **Body, safety, and control checking** | Check a closure as its own safe function boundary with immutable capture bindings, explicit unsafe blocks, ordinary return/error/defer rules, and no inherited unsafe or escaping control context. | Raw-pointer comparisons compile safely; automatic raw-pointer field access requires `unsafe:`, mutable access requires `*var`, and unsafe closure declarations and anonymous recursion are rejected. |
+| **Copy, alias, and escape semantics** | Extend logical-copy recording and promotion analysis to anonymous environments so value fields copy independently, explicit references and pointers preserve identity, and escaping references to captured storage or closure values remain rooted where required. | Later outer rebinding affects only reference captures, copied closures expose independent value state, aliases remain aliases, and a raw pointer alone never roots its pointee. |
+| **Typed and control-flow IR lowering** | Represent closure construction, environment access, static callable invocation, erased callable dispatch, return flow, traps, and deferred cleanup without embedding syntax or name-resolution facts in later IR. | Construction and argument evaluation order are explicit, closure-local exits cannot target an outer body, and existing named-function lowering is unchanged. |
+| **C99 environment and call emission** | Emit deterministic private environment layouts and static body functions, pass an environment pointer on direct calls, and reuse ordinary trait-object vtables for erased calls while retaining GC-visible roots. | Capturing and captureless closures work on x86 and x86-64, generated C remains C99, symbols are deterministic, and no closure is emitted as a plain C function pointer. |
+| **Cross-feature integration** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Closure support does not weaken coherence, copy independence, visibility, safety, cleanup, trap behavior, or production/test reachability. |
+| **Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `LEDGER.md`. |
+
+Private evolving captured state, implicit or default capture, arbitrary
+initialized captures, generic closure literals, unsafe closures, variadic
+closures, recursive anonymous closures, callable equality or hashing,
+`CallableMut`/`CallableOnce`, captureless conversion to `&fn` or `*fn`, and C
+callback conversion are outside this milestone. A later proposal must define
+their interaction with logical copying, erasure, cleanup, and concurrency
+before adding any of them.
+
+## 7. Native threads and synchronization
+
+### Standard-library concurrency
+
+> Status: Accepted design; pending normative specification.
+>
+> Blocked by: **Explicit-capture closures**.
+>
+> This milestone adds no thread, task, `concurrent`, `async`, or `await`
+> grammar. Closures supply executable bodies, and ordinary declarations in
+> `std.thread` and `std.sync` expose every concurrency operation.
+
+**Goal:** Add safe native parallelism using independent transfer copies and
+explicit synchronized identity, without adding ownership, a borrow checker,
+implicit shared aliases, catchable thread traps, or nondeterministic cleanup.
+
+The accepted thread and transfer contract is:
+
+- `std.thread.spawn` accepts a safe zero-argument callable, evaluates it once,
+  copies its environment across the thread boundary, starts one native thread
+  eagerly, and returns `Result[std.thread.Thread[R],
+  std.thread.SpawnError]`. Operating-system thread-creation failure is
+  recoverable; allocation failure retains the existing fatal OOM behavior;
+- a spawned callable and its result must satisfy the compiler-recognized
+  structural `Transfer` capability: an independent logical copy may be used on
+  another thread while the source remains usable. Primitives, strings,
+  ordinary aggregates, and collections satisfy `Transfer` recursively;
+  function references satisfy it; and a closure satisfies it exactly when
+  every capture does;
+- `&T`, `&var T`, `*T`, `*var T`, and `&Trait` do not satisfy `Transfer`.
+  Consequently, closures with reference or raw-pointer captures remain valid
+  closures but cannot be spawned safely. Concurrency-aware standard handles
+  satisfy `Transfer`, and an expert FFI wrapper may opt in only through an
+  explicit unsafe `Transfer` implementation whose author guarantees that
+  concurrent copies are sound;
+- a transfer copy must be physically safe for independent concurrent use.
+  The initial implementation deeply detaches ordinary value storage at the
+  boundary; COW backing may remain shared only after its reference counts,
+  reads, and detach-on-write operations are thread-safe;
+- `Thread[R]` is a copyable identity handle. All copies name the same native
+  thread and cached result; the runtime performs the OS join once, while each
+  `join()` returns an independent logical copy. Joining oneself traps, and
+  ordinary cyclic joins may deadlock. A thread handle is transferable when its
+  result is transferable;
+- threads are joinable and never implicitly detached. Losing every source
+  handle does not stop a thread. After the program entry function returns
+  normally and completes its deferred cleanup, runtime shutdown waits for all
+  remaining Elamite-created threads. There is initially no cancellation,
+  interruption, or detach operation;
+- a thread body is its own safe function boundary. Its `defer` registrations
+  run on ordinary completion, including postfix `?`; a returned `Result` is
+  simply `Thread[Result[T, E]]`. A runtime trap, `std.panic`, or OOM reached on
+  any thread terminates the complete process and is not converted into a join
+  result or a catchable thread failure; and
+- safe Elamite programs are data-race free. Scheduling, fairness, relative
+  completion, and cross-thread output order are unspecified. Standard output
+  calls are internally synchronized so one call is not corrupted by another,
+  but call order remains nondeterministic. Unsynchronized concurrent access
+  constructed through unsafe code or FFI is undefined behavior.
+
+The accepted `std.sync` foundation is:
+
+- `std.sync.channel[T](capacity: usize)` creates a bounded multi-producer,
+  multi-consumer channel and returns a `Sender[T]` and `Receiver[T]`; capacity
+  zero is a rendezvous channel, while a separately named
+  `unbounded_channel[T]()` may allocate without a fixed capacity;
+- sending makes a transfer copy and returns a recoverable closed-channel
+  result. Blocking receive returns `Option[T]`, with `None` only after closure
+  and draining; nonblocking send and receive report full, empty, and closed
+  states distinctly. Sender and receiver copies share synchronized endpoint
+  identity;
+- channel closure is explicit and idempotent. Garbage collection or loss of
+  the last visible sender does not close a channel, because Elamite has no
+  deterministic destruction. Closing one endpoint state affects all copies
+  according to the normative channel contract;
+- `std.sync.Mutex[T]` is a copyable synchronized identity handle for a
+  transferable value. It exposes copy-based `new`, `read`, `replace`, and
+  atomic `update` operations; neither the mutex nor a guard exposes `&T` or
+  `&var T`, so no reference into protected storage can escape after unlocking.
+  The update callable receives an independent `T` and returns its replacement
+  while the mutex remains locked;
+- `std.sync.AtomicBool`, `AtomicI32`, and `AtomicUsize` are copyable handles to
+  shared atomic cells rather than independent scalar values. All initial
+  atomic, mutex, channel, spawn, completion, and join operations use a
+  sequentially consistent memory model with the documented synchronization
+  edges; weaker ordering arguments are not exposed; and
+- blocking synchronization may deadlock and the runtime need not detect
+  general cycles. Self-join is the only initially required deadlock trap.
+  Mutex poisoning is unnecessary because an unrecoverable trap terminates the
+  process rather than unwinding through another thread.
+
+Every runtime-created thread is registered with the collector before executing
+Elamite code, exposes its stack and active transfer environments as roots, and
+unregisters only after publishing its result. C code may synchronously call
+back into Elamite on the same registered thread that entered C, including a
+spawned Elamite thread. A foreign-created thread still cannot enter Elamite,
+and asynchronous or concurrent callbacks originating on such a thread remain
+undefined behavior until a later design introduces an explicit attachment
+trampoline and concurrency contract.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Normative concurrency contract** | Record the thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, the standard-library documentation, and close or split I-015. | Every concurrency operation and exclusion has one normative result before any standard declaration or runtime hook is enabled. |
+| **Structural transfer capability** | Add canonical `Transfer` facts and generic bounds, structural derivation for ordinary values, conditional derivation for closures and standard handles, explicit exclusions for reference/pointer/trait-object aliases, and the accepted unsafe FFI opt-in. | Spawn inputs and results cannot hide an unapproved alias; diagnostics identify the exact nontransferable capture, field, element, or generic obligation. |
+| **Standard concurrency declarations** | Add the accepted `std.thread` and `std.sync` modules and source declarations for thread handles, spawn errors, channels and endpoint outcomes, mutexes, and atomic cells, keeping only representation and lowering hooks intrinsic. | All APIs resolve and type-check through ordinary module, generic, trait, visibility, and standard-library paths. |
+| **Transfer-copy lowering** | Lower cross-thread arguments, results, channel messages, and synchronized cell values through an explicit transfer-copy operation that recursively detaches ordinary backing storage while preserving approved synchronized handles. | Mutation on either side cannot observe shared ordinary storage, explicit synchronized identity remains shared, and evaluation occurs exactly once. |
+| **Native thread lifecycle** | Implement eager Linux native-thread creation, runtime identity, recoverable creation failure, synchronized result publication, copyable handles, single OS join, repeated logical-result copies, self-join detection, and shutdown waiting on x86 and x86-64. | Successful, failed, nested, multiply joined, handle-discarded, self-joined, and entry-return cases match the accepted lifecycle without implicit detach or cancellation. |
+| **Thread body and failure integration** | Lower spawned `Callable[(), R]` bodies as safe function boundaries with ordinary return, `Result`, `!`, trap, panic, and `defer` behavior; synchronize complete output calls without imposing an order. | Normal results and recoverable errors cross predictably, while a trap on any thread terminates the process and never becomes a join value. |
+| **Channel implementation** | Implement bounded and unbounded synchronized queues, rendezvous behavior, transfer-copy sends, blocking and nonblocking operations, explicit idempotent closure, draining, and copyable endpoint identity. | MPMC stress, full/empty/closed distinctions, close races, wakeups, ordering within one sender, and abandoned-handle behavior are deterministic where specified and race-free. |
+| **Mutex implementation** | Implement copyable `Mutex[T]` identity and copy-based `new`, `read`, `replace`, and callback-driven atomic `update` without exposing protected-storage references. | Concurrent updates do not lose changes, returned values are independent, callback traps remain process-fatal, recursive locking may deadlock, and no safe reference escapes. |
+| **Sequentially consistent atomics** | Implement shared `AtomicBool`, `AtomicI32`, and target-width `AtomicUsize` cells with the accepted load, store, exchange, compare-exchange, and integer read-modify-write operations without emitting C11 `_Atomic` into the C99 backend. | Operations are sequentially consistent on both targets, copies retain cell identity, runtime/compiler hooks preserve C99 output, and target-width behavior never assumes 64-bit atomics on x86. |
+| **Collector and root integration** | Register and unregister runtime-created threads, scan their stacks, queues, environments, synchronized handles, and unpublished/published results, and make shutdown cooperate with collection. | Stress collection cannot reclaim reachable cross-thread state, raw pointers acquire no rooting behavior, and completed thread state is reclaimable after all roots disappear. |
+| **C callback boundary** | Permit synchronous same-registered-thread reentry from C on the initializer or an Elamite-created thread while retaining the prohibition on foreign-created-thread and asynchronous foreign entry. | Nested registered callbacks preserve roots and traps never unwind through C; unsupported foreign-thread entry remains explicitly documented and tested where a harness can detect it. |
+| **Concurrency conformance** | Add compile-pass/fail transfer cases, runtime lifecycle and synchronization tests, trap-process tests, high-contention and repeated stress suites, sanitizer-capable native harnesses, debug/release coverage, and the Linux x86/x86-64 matrix. | The complete pre-concurrency suite remains green, safe suites show no races or hangs under their bounded contracts, and every normative concurrency rule is mapped in `LEDGER.md`. |
+
+Cooperative tasks, executors, `async`/`await`, futures, detached execution,
+cancellation, interruption, timeouts, thread-local storage, relaxed atomics,
+guards exposing protected references, scoped reference transfer, parallel
+iterators, scheduling or fairness guarantees, automatic deadlock detection,
+and foreign-thread attachment are outside this milestone.
+
+## 8. Tuple binding and positional access
+
+### Tuple destructuring and positional fields
+
+> Status: Accepted design; pending normative specification and implementation.
+>
+> Blocked by: **None**. It may be delivered after its **Normative tuple-access
+> contract** package without waiting for macros, closures, or concurrency.
+
+**Goal:** Let local bindings destructure tuple values and let tuple components
+participate in ordinary postfix field access and place semantics without
+introducing general refutable binding patterns or destructuring assignment.
+
+~~~elx
+let pair = (1, "one")
+let (number, name) = pair
+println(pair.0)
+
+var mutable_pair = (2, "two")
+mutable_pair.0 = 3
+~~~
+
+The accepted surface has these boundaries:
+
+- `let (x, y) = value` binds independent logical copies of the two components,
+  while `var (x, y) = value` creates two independently rebindable local places.
+  The initializer is evaluated exactly once before any new name enters scope,
+  and the source value remains usable under ordinary copy semantics;
+- binding patterns may nest tuple patterns and use `_`, including the unit and
+  one-element forms `let () = unit` and `let (only,) = singleton`. Every
+  binding pattern must be irrefutable: literals, alternatives, enum variants,
+  record patterns, dereference patterns, and guards remain valid only where
+  the existing pattern grammar permits them;
+- the initializer must have an exact tuple type with the same shape and arity.
+  A binding annotation, when present, applies to the complete tuple pattern,
+  as in `let (x, y): (i32, String) = value`. Duplicate binding names,
+  non-tuple values, shape or arity mismatches, and refutable subpatterns are
+  compile-time errors with component-specific spans;
+- all names introduced by one destructuring declaration enter scope together
+  after the initializer. `let` components are non-rebindable, `var` components
+  are independently rebindable, `_` creates no binding, and ordinary lexical
+  shadowing rules apply to the complete declaration;
+- `tuple.0`, `tuple.1`, and subsequent zero-based decimal selectors access
+  tuple components. A selector is a canonical unsuffixed decimal index with no
+  sign, radix prefix, separator, or leading zero except `.0`; it must be
+  statically within the tuple's arity. Numeric selectors do not select struct
+  fields or tuple-like enum payloads;
+- positional access has the same highest postfix precedence and left-to-right
+  composition as named field access, so expressions such as
+  `value.0.name`, `values.1[index]`, and `callback().0` evaluate their receiver
+  exactly once. Existing floating literals retain their tokenization and
+  meaning;
+- in value context, positional access returns an ordinary logical copy of the
+  selected component, preserving any explicit aliases stored within it. On an
+  addressable mutable tuple path, the selected component is an assignable and
+  addressable place, so `pair.0 = value`, compound assignment, nested mutation,
+  `&pair.0`, and `&var pair.0` follow the same mutability, reachability, and
+  promotion rules as named aggregate fields; and
+- safe-reference and raw-pointer receivers follow the language's ordinary
+  member-access adaptation and safety rules. Positional access adds no
+  implicit conversion, bounds trap, dynamic index, tuple method namespace, or
+  special behavior for references stored as tuple elements.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Normative tuple-access contract** | Record local tuple-binding syntax, irrefutability, annotations, scope, copy and mutability behavior, numeric selectors, place semantics, receiver adaptation, tokenization, and exclusions in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected binding or selector has one normative outcome before either parser path is enabled. |
+| **Binding and selector syntax** | Reuse tuple-pattern syntax after `let` and `var`, parse optional whole-pattern annotations, and extend postfix parsing with canonical numeric selectors without changing floating-literal lexing or named fields. | Snapshots cover unit, singleton, nested and multiline bindings, `.0` chains, malformed indices, leading zeros, suffixes, missing initializers, and parser recovery. |
+| **Binding resolution and scope** | Allocate stable local identities for every destructured name, resolve the initializer before introducing them simultaneously, preserve lexical shadowing, and diagnose duplicates at their binding spans. | Initializers cannot see newly declared names, `_` allocates no identity, nested declarations bind deterministically, and unrelated match-pattern resolution remains unchanged. |
+| **Shape, type, and place checking** | Require an exact irrefutable tuple shape, propagate expected types from a whole-pattern annotation, infer each binding type, and classify positional selections as values or mutable/addressable places through ordinary receiver adaptation. | Arity, type, selector-range, receiver-type, immutability, and invalid-reference diagnostics identify the relevant tuple component without cascading. |
+| **Copy and control-flow lowering** | Evaluate a destructuring initializer once into a temporary, lower component bindings left-to-right through existing logical-copy operations, and lower numeric selections to typed tuple-field places in control-flow IR. | Ordinary fields copy independently, explicit aliases retain identity, `var` components are separate places, and side-effecting receivers and initializers execute once. |
+| **C99 tuple-field emission** | Emit positional reads, writes, addresses, nested places, and copy helpers through the existing deterministic tuple layout without exposing backend field names as language syntax. | Unit, singleton, heterogeneous, generic, nested, referenced, and mutable tuple cases emit valid C99 on x86 and x86-64. |
+| **Cross-feature integration** | Exercise destructuring and numeric fields with generics, function returns, `Result`, loops, `match`, closures when available, references, raw-pointer unsafe access, collections, `defer`, and thread/channel tuple results when available. | Tuple access does not weaken copy independence, mutability, safety, promotion, pattern exhaustiveness, transfer, cleanup, or evaluation order. |
+| **Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, run-pass tests, generated-C assertions, formatting and documentation examples, editor synchronization if needed, and the Linux x86/x86-64 matrix. | The pre-tuple-access suite remains green, existing match patterns and floating literals are unchanged, and every normative tuple-access rule is mapped in `LEDGER.md`. |
+
+Destructuring assignment, tuple patterns in parameters or loop headers,
+record or enum destructuring declarations, refutable `let`, rest patterns such
+as `..`, dynamically computed tuple indices, and user-defined numeric fields
+are outside this milestone.
+
+## 9. Recommended delivery checkpoints
+
+Delivery checkpoints are:
+
+- **Initial conformance:** unsafe code, C interoperability, the standard
+  library, and the authoritative demonstration satisfy the full initial test
+  matrix.
+- **Compiler architecture refactor:** compiler phase ownership, package
+  parsing, canonical type lowering, IR layering, target configuration, and C
+  emission have explicit behavior-neutral boundaries suitable for the
+  remaining language and tooling work.
+- **Never-return type and explicit panic:** restricted `!` returns and
+  `std.panic` provide typed, non-returning control flow without changing
+  ordinary `-> T` signatures or introducing catchable traps.
+- **Package tests, typed traps, and runner:** package tests run
+  deterministically from the current directory or an explicit package path
+  without changing production artifacts, and isolated expectations verify
+  built-in and user-defined runtime traps.
+- **Macro diagnostics, tooling, and stabilization:** hygienic declarative
+  macros are stable, diagnosable, and usable across packages.
+- **Procedural macros and attributes:** procedural macros, derives, and
+  attributes are bounded, reproducible, and stable across packages.
+- **Explicit-capture closures:** safe anonymous callables preserve explicit
+  capture, logical-copy, alias, raw-pointer, escape, and function boundary
+  rules across both supported targets.
+- **Standard-library concurrency:** native threads exchange only transfer-safe
+  copies or synchronized handles, retain process-wide trap and cleanup rules,
+  and pass the race, GC, and target conformance matrices.
+- **Tuple destructuring and positional fields:** local tuple bindings and
+  positional fields preserve exact tuple shape, logical-copy, place,
+  reference, and evaluation-order semantics on both targets.
 
 These checkpoints are reporting boundaries, not substitutes for the exit
 criteria of the individual milestones.

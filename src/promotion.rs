@@ -7,7 +7,7 @@
 //! This pass answers one question per function — which locals have their
 //! address taken — and is deliberately conservative, per `ROADMAP.md` Milestone
 //! 10: every such local is promoted, with precise escape analysis left to
-//! Milestone 21. Because references point into their container's storage
+//! **Post-conformance optimization**. Because references point into their container's storage
 //! rather than at a boxed subvalue (`SPEC.md` §3.2), taking a reference through
 //! a path promotes the *root* local of that path and nothing else; no
 //! whole-program field analysis is involved.
