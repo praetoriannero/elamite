@@ -79,3 +79,19 @@ while future non-moving, cycle-reclaiming strategies can implement the same
 contract without changing language lowering. A program that needs no managed
 storage links no collector at all. Building one that does requires a Boehm
 development package (`libgc-dev` on Debian- and Ubuntu-family systems).
+
+## License
+
+Elamite is available under the [MIT License](LICENSE). Copyright (c) 2026
+Elamite contributors.
+
+Third-party components retain their respective copyright and license terms;
+Elamite's MIT license does not replace them. Rust dependencies are recorded in
+`Cargo.lock`. Generated native programs may also link the
+Boehm-Demers-Weiser garbage collector when managed storage is required.
+Distributions that bundle these components must retain the license files and
+notices supplied by their authors.
+
+The repository currently has `publish = false` and does not produce a bundled
+third-party binary distribution. Repeat the dependency-license audit if that
+packaging policy changes.

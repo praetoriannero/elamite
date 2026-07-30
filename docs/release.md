@@ -16,7 +16,7 @@ is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 | Performance | `benchmarks/m19-baseline.sh` and `benchmarks/m19-baseline.tsv` |
 | Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib/Boehm prerequisites, unsupported concurrency, and foreign-thread restrictions |
 | Version identity | `elamc --version` reports both the compiler version and `SPEC.md` revision; `command_line_version_reports_the_specification_revision` locks the format |
-| Rights/notices | `LICENSE`, `THIRD_PARTY_NOTICES.md`, `Cargo.lock`, and `publish = false` |
+| Rights/notices | MIT `LICENSE`, Cargo `license = "MIT"`, the README third-party notice, `Cargo.lock`, and `publish = false` |
 
 Run the local release gates with:
 

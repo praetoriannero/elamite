@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "The Elamite programming language compiler"
+license = "MIT"
 publish = false
 
 # The library crate keeps the language's name; the installed executable is
