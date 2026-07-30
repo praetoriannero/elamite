@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::backend::Target;
+use crate::config::Target;
 use crate::diagnostics::Diagnostic;
 use crate::driver::{BuildOptions, Optimization, build, run_with_environment};
 use crate::package::PackageGraph;

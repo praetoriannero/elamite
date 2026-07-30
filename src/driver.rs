@@ -4,8 +4,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::backend::{COptions, Target, emit_c};
+use crate::backend::{COptions, emit_c};
 use crate::check::check_for_target;
+pub use crate::config::Optimization;
+use crate::config::Target;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{ControlFlowProgram, TypedIrProgram, lower_control_flow, lower_typed_ir};
 use crate::manifest::TargetKind;
@@ -13,12 +15,6 @@ use crate::package::PackageGraph;
 use crate::resolution::{DeclarationId, DeclarationKind, ResolvedProgram, resolve};
 use crate::source::SourceManager;
 use crate::types::{TypedProgram, resolve_types};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Optimization {
-    Debug,
-    Release,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DumpStage {
@@ -30,15 +26,6 @@ pub enum DumpStage {
     ControlFlow,
     Monomorphized,
     GeneratedC,
-}
-
-impl Optimization {
-    fn compiler_flag(self) -> &'static str {
-        match self {
-            Self::Debug => "-O0",
-            Self::Release => "-O3",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -187,38 +174,22 @@ fn dump_source_stage(
     sources: &mut SourceManager,
     stage: DumpStage,
 ) -> Result<String, Vec<Diagnostic>> {
-    let mut files = graph
-        .packages
-        .values()
-        .flat_map(|package| {
-            std::iter::once(package.manifest_dir.join(&package.manifest.root))
-                .chain(package.modules.values().cloned())
-        })
-        .collect::<Vec<_>>();
-    files.sort();
-    files.dedup();
-
+    let parsed = crate::parsed::parse_user_package(graph, sources);
     let mut output = String::new();
-    let mut diagnostics = Vec::new();
-    for path in files {
-        let file = match sources.load_file(&path) {
-            Ok(file) => file,
-            Err(error) => {
-                diagnostics.push(Diagnostic::new(Category::Toolchain, error.to_string()));
-                continue;
-            }
-        };
-        let lexed = crate::lexer::lex(file, sources.text(file));
-        diagnostics.extend(lexed.diagnostics);
-        output.push_str(&format!("file {} {}\n", file.index(), path.display()));
+    for unit in parsed.package.units {
+        output.push_str(&format!(
+            "file {} {}\n",
+            unit.file.index(),
+            unit.path.display()
+        ));
         match stage {
             DumpStage::Tokens => {
-                for token in lexed.tokens {
+                for token in unit.tokens {
                     let position = sources.line_col(token.span.file, token.span.start);
                     output.push_str(&format!(
                         "  {:?} @ {}:{}:{} {}..{}\n",
                         token.kind,
-                        path.display(),
+                        unit.path.display(),
                         position.line,
                         position.column,
                         token.span.start,
@@ -227,9 +198,7 @@ fn dump_source_stage(
                 }
             }
             DumpStage::Syntax => {
-                let parsed = crate::parser::parse(&lexed.tokens);
-                diagnostics.extend(parsed.diagnostics);
-                for line in parsed.tree.dump().lines() {
+                for line in unit.tree.dump().lines() {
                     output.push_str("  ");
                     output.push_str(line);
                     output.push('\n');
@@ -238,10 +207,10 @@ fn dump_source_stage(
             _ => unreachable!("only token and syntax stages use source dumping"),
         }
     }
-    if diagnostics.is_empty() {
+    if parsed.diagnostics.is_empty() {
         Ok(output)
     } else {
-        Err(diagnostics)
+        Err(parsed.diagnostics)
     }
 }
 

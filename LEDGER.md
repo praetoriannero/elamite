@@ -55,11 +55,12 @@ to:
 | M29 | Procedural macros and attributes |
 
 This ledger maps ownership of work rather than serving as the sole completion
-tracker. Milestones 0 through 19 are complete (implemented together in one
+tracker. Milestones 0 through 20 are complete (implemented together in one
 frontend pass where applicable; see `ROADMAP.md`); later rows remain planned until
 their milestone status changes in `ROADMAP.md`. The Milestone 19 closure evidence
 is indexed by `docs/release.md` and the section-owned fixture map in
-`tests/fixtures/conformance/README.md`.
+`tests/fixtures/conformance/README.md`; the Milestone 20 ownership map and
+behavior-neutral baseline are recorded in `docs/architecture.md`.
 
 ## 0.1 Legacy artifact inventory
 

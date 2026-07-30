@@ -5,11 +5,10 @@
 //! types, checked bodies, lowering, or code generation, so an unrelated
 //! private-body error cannot erase otherwise valid public documentation.
 
-use crate::lexer::TokenKind;
 use crate::package::PackageId;
-use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::resolution::{DeclarationKind, ResolvedProgram};
 use crate::source::{SourceManager, Span};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiItem {

@@ -7,9 +7,16 @@
   `ROADMAP.md`.
 - `src/main.rs` is the command-line entry point. Keep language behavior in the
   library so it can be exercised directly by tests and other tools.
-- `src/resolution.rs` owns stable module, declaration, member, generic, impl,
-  import, and lexical-binding identities. Keep type-dependent member selection
-  in later semantic passes rather than folding it into name lookup.
+- `src/syntax.rs` owns phase-neutral tokens, syntax trees, and generic traversal.
+  `src/parsed.rs` owns package-wide loading and parsing, and `src/expansion.rs`
+  is the parsed-to-resolved expansion boundary. Keep lexing and parsing
+  hand-written and separate.
+- `src/resolution/model.rs` owns stable module, declaration, member, generic,
+  impl, import, and lexical-binding identities and result tables.
+  `src/resolution/collect.rs`, `imports.rs`, `bodies.rs`, and `visibility.rs`
+  own their corresponding algorithms behind the `resolution` façade. Keep
+  type-dependent member selection in later semantic passes rather than
+  folding it into name lookup.
   `src/standard.rs` owns the exact intrinsic inventory and includes the shipped
   sources from `stdlib/`; resolution loads those declarations through the
   ordinary lexer/parser/collection path. Prefer adding a standard type in
@@ -19,7 +26,19 @@
   needs a representation or lowering hook that Elamite source cannot express.
 - `src/traits.rs` validates trait implementations: conformance, coherence, and
   object safety. It checks declarations, not bodies — bound-call selection and
-  dispatch belong to `src/check.rs` and `src/backend.rs`.
+  dispatch belong to `src/check/` and `src/backend/`.
+- `src/types/context.rs`, `model.rs`, and `lower.rs` separately own canonical
+  type storage, typed-program facts, and source-type lowering behind the
+  `types` façade. Add new source type forms to the single lowering path.
+- `src/check/` owns body-checking orchestration and checked facts; keep mutually
+  dependent expression and statement walking together. Pure containment and
+  exhaustiveness analyses belong in focused child modules.
+- `src/ir/typed/` and `src/ir/control_flow/` each own their data model and
+  lowering. Shared operation and trap vocabulary belongs in
+  `src/operations.rs` and `src/ir/traps.rs`, not in the checker or backend.
+- `src/config.rs` owns target and optimization policy. `src/backend/` owns only
+  C naming, type/layout emission, runtime helpers, function/control-flow
+  emission, and the executable entry shim.
 - `src/promotion.rs` decides which locals need managed storage. It answers only
   "is this local's address taken", deliberately conservatively; precise escape
   analysis is Milestone 21 work and belongs there, not here.

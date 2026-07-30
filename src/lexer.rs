@@ -7,6 +7,9 @@
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ident::is_valid_identifier;
 use crate::source::{FileId, Span};
+pub use crate::syntax::{
+    FormattedSegment, FormattedSegmentKind, Keyword, NumericSuffix, Token, TokenKind,
+};
 
 /// One complete lexing result. Tokens are retained even when diagnostics were
 /// produced so later tooling can inspect or recover from the valid remainder.
@@ -14,158 +17,6 @@ use crate::source::{FileId, Span};
 pub struct LexOutput {
     pub tokens: Vec<Token>,
     pub diagnostics: Vec<Diagnostic>,
-}
-
-/// A source token with its exact byte span.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Token {
-    pub kind: TokenKind,
-    pub span: Span,
-}
-
-/// Reserved source words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Keyword {
-    As,
-    Break,
-    Continue,
-    Defer,
-    Else,
-    Enum,
-    False,
-    Fn,
-    For,
-    If,
-    Impl,
-    In,
-    Let,
-    Match,
-    Mod,
-    Null,
-    Pass,
-    Pub,
-    Return,
-    Root,
-    SelfValue,
-    SelfType,
-    Struct,
-    Super,
-    Trait,
-    True,
-    Type,
-    Unsafe,
-    Use,
-    Var,
-    While,
-}
-
-/// A concrete numeric suffix. Literal range and contextual materialization are
-/// later type-checking work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericSuffix {
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Isize,
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    Usize,
-    F32,
-    F64,
-}
-
-/// One portion of a formatted string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FormattedSegment {
-    pub kind: FormattedSegmentKind,
-    pub span: Span,
-}
-
-/// Formatted-string text is decoded by the lexer. Interpolation source is
-/// retained verbatim with its span and token stream so the parser can attach
-/// its expression subtree without losing the original source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FormattedSegmentKind {
-    Text(String),
-    Expression { source: String, tokens: Vec<Token> },
-}
-
-/// All tokens needed by the initial surface language.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TokenKind {
-    Identifier(String),
-    Keyword(Keyword),
-    IntegerLiteral {
-        raw: String,
-        radix: u8,
-        suffix: Option<NumericSuffix>,
-    },
-    FloatLiteral {
-        raw: String,
-        suffix: Option<NumericSuffix>,
-    },
-    StringLiteral(String),
-    CharacterLiteral(String),
-    FormattedString(Vec<FormattedSegment>),
-    DocComment(String),
-
-    Newline,
-    Indent,
-    Dedent,
-    Eof,
-
-    LParen,
-    RParen,
-    LBracket,
-    RBracket,
-    LBrace,
-    RBrace,
-    Comma,
-    Semicolon,
-    Colon,
-    Dot,
-    DotDot,
-    Ellipsis,
-    At,
-    Question,
-    Arrow,
-
-    Assign,
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-    Amp,
-    Pipe,
-    Caret,
-    Tilde,
-    Bang,
-    Shl,
-    Shr,
-    EqEq,
-    NotEq,
-    Less,
-    LessEq,
-    Greater,
-    GreaterEq,
-    AndAnd,
-    OrOr,
-    PlusAssign,
-    MinusAssign,
-    StarAssign,
-    SlashAssign,
-    PercentAssign,
-    AmpAssign,
-    PipeAssign,
-    CaretAssign,
-    ShlAssign,
-    ShrAssign,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

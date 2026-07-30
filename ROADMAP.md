@@ -1,9 +1,9 @@
 # Elamite Compiler Roadmap
 
-> Status: Active — Milestones 0 through 19 are complete and omitted from this
-> forward-looking plan; Milestone 20 is next
+> Status: Active — Milestones 0 through 20 are complete and omitted from this
+> forward-looking plan; Milestone 21 is optional candidate work
 >
-> Next work package: M20.1 — architecture baseline and invariants
+> Next required work package: M22.1 — normative never-type contract
 >
 > Basis: `SPEC.md` version 0.4.0-draft and
 > `examples/spec_demo.elx`
@@ -170,41 +170,6 @@ may proceed in parallel. A work package is not a new language-design authority:
 intermediate semantics that contradict it.
 
 ## 3. Active implementation roadmap
-
-### Milestone 20: compiler architecture refactor
-
-> Status: Accepted maintenance plan; next.
-
-**Goal:** Make the existing compiler phases easier to extend without changing
-language behavior, diagnostics, generated C, public command behavior, or the
-supported target matrix.
-
-This milestone is a behavior-neutral structural gate before further language
-work. It preserves the existing phase names and their public façades while
-turning only the modules with demonstrated internal seams into module
-directories. Broad `frontend`/`middle` directory churn, arbitrary line-count
-splits, empty scaffolding for later features, and simultaneous semantic changes
-are out of scope.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **M20.1 — Architecture baseline and invariants** | Record representative token, syntax, resolution, type, typed-IR, control-flow, generated-C, diagnostic, native-runtime, and public-library behavior before moving code. Identify the imports and re-exports that must remain stable during each split. | The full M19 suite is green; representative dumps and generated C are retained as byte-comparison baselines; each later package has an explicit behavior-neutral guard. |
-| **M20.2 — Shared syntax ownership** | Move token and syntax-tree data plus common traversal operations behind a phase-neutral syntax boundary, while keeping lexing and parsing as separate hand-written phases and preserving existing public paths through façades or re-exports. Remove duplicated child/token/path traversal helpers from semantic passes as they migrate to the shared boundary. | Lexer and parser snapshots are byte-identical, recovery and spans are unchanged, and later passes no longer treat `types` or another semantic phase as the owner of generic syntax traversal. |
-| **M20.3 — Explicit parsed-package phase** | Introduce an owned parsed-package result for user and shipped standard-library sources. Make resolution consume that result instead of loading, lexing, and parsing files internally; make token/syntax dumps use the same pipeline. Leave a typed pass-through boundary where future expansion can run before resolution without implementing macro behavior. | Macro-free packages retain identical syntax, resolution, diagnostics, IR, and generated C; standard declarations still enter later passes through the ordinary source path; parsing is a separately invocable package phase suitable for future queries. |
-| **M20.4 — Canonical type subsystem** | Separate canonical type data/interning, typed-program data, and source-type lowering behind one `types` façade. Remove the checker's reduced duplicate type-annotation lowerer by resolving all accepted type annotations through one implementation or one reusable lowering service. | Every existing type form and diagnostic remains unchanged, local and declaration annotations agree by construction, and the later never-return implementation has one source-type lowering path to extend. |
-| **M20.5 — Typed and control-flow IR split** | Divide typed IR, typed lowering, control-flow IR, and control-flow lowering into focused modules behind the existing `ir` façade. Keep shared operation and trap vocabulary at the earliest phase that owns it. | Typed and control-flow dumps are byte-identical, lowering order and logical-copy markers are unchanged, and each representation can evolve without editing the other's data-definition module. |
-| **M20.6 — Checker decomposition** | Keep one body-checking orchestration context, but extract checked-output models and cohesive pattern/exhaustiveness, call/member-selection, containment, and other pure analyses into focused modules. Do not split mutually dependent expression and statement walking merely to reduce file length. | Diagnostic categories, spans, ordering, inference, trait selection, and checked facts are unchanged; no new phase cycle or duplicate semantic decision is introduced. |
-| **M20.7 — Resolution data and algorithm boundary** | Separate stable resolution identities/tables from collection, import resolution, body resolution, and visibility algorithms behind the existing `resolution` façade. Preserve macro lookup as a future distinct expansion concern rather than adding it to value/type lookup. | Stable IDs, namespace behavior, import provenance, dumps, and deterministic ordering are unchanged; later test identities and macro metadata can be added without enlarging one resolver implementation and data-model file. |
-| **M20.8 — Target and compiler configuration boundary** | Move target identity and pointer-width policy out of the C backend, and centralize the compiler-owned configuration shared by checking, lowering, native builds, conformance, and future test execution. Do not introduce host/target macro execution yet. | x86 and x86-64 checks/builds select the same flags and layouts as before; debug remains `-O0`, release remains `-O3`, and the backend no longer owns target facts used by earlier phases. |
-| **M20.9 — Layered C backend** | Split target-independent naming, type/layout emission, runtime/helper emission, function/control-flow emission, and entry emission behind the existing `backend` façade. Make backend-visible standard operations owned by IR or another phase-neutral contract so the backend does not depend on checker internals. | Representative generated C is byte-identical, helper reachability and ordering are unchanged, native libraries are linked under the same conditions, and the backend consumes control-flow IR rather than checker-owned selections. |
-| **M20.10 — Extension seams and test organization** | Define ownership for the future native-test runner and expansion system without creating empty placeholder modules: M23 test execution remains distinct from conformance fixtures, and M24 expansion remains a pass between parsed syntax and resolution. Split oversized integration-test files along the same behavioral boundaries where that improves navigation. | No test or macro syntax is enabled early; `check`, `build`, `run`, and conformance behavior is unchanged; later milestones have an explicit module and pipeline destination rather than growing `main`, `driver`, parser, or resolver opportunistically. |
-| **M20.11 — Refactor closure** | Update repository guidance and module documentation to the resulting ownership map; run formatting, all-target checks/tests/clippy, the complete conformance matrix, and byte comparisons for the M20.1 baselines. Remove temporary compatibility re-exports only when all in-repository consumers have an intentional replacement and the library API decision is documented. | The compiler is behaviorally equivalent to the M19 baseline, no stale file-ownership guidance remains, and M21 or M22 can begin without reopening a structural package from this milestone. |
-
-Each package should be a focused move or dependency correction. A package that
-needs a language rule, changes a diagnostic outcome, changes generated C, or
-alters runtime behavior must stop and leave that work to its owning later
-milestone. The M20.1 baseline is recorded before structural edits so refactoring
-cannot be confused with a later optimization result.
 
 ### Milestone 21: post-conformance optimization
 

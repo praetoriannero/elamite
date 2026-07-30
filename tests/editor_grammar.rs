@@ -238,7 +238,7 @@ fn grammar_highlights_exactly_the_standard_inventory() {
 
 #[test]
 fn grammar_accepts_exactly_the_known_foreign_attributes() {
-    let resolution = read("src/resolution.rs");
+    let resolution = read("src/resolution/collect.rs");
     let expected: BTreeSet<String> = resolution
         .lines()
         .filter(|line| line.contains("ForeignDirection::"))
@@ -257,7 +257,7 @@ fn grammar_accepts_exactly_the_known_foreign_attributes() {
     // matches the resolver rejecting it, so this list must stay exact.
     assert_eq!(
         expected, actual,
-        "the VS Code grammar's attribute list disagrees with src/resolution.rs"
+        "the VS Code grammar's attribute list disagrees with src/resolution/collect.rs"
     );
 }
 

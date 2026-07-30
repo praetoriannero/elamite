@@ -3,22 +3,27 @@
 pub mod artifact;
 pub mod backend;
 pub mod check;
+pub mod config;
 pub mod conformance;
 pub mod diagnostics;
 pub mod docs;
 pub mod driver;
+pub mod expansion;
 pub mod ident;
 pub mod ir;
 pub mod lexer;
 pub mod manifest;
 pub mod memory;
+pub mod operations;
 pub mod package;
+pub mod parsed;
 pub mod parser;
 pub mod promotion;
 pub mod resolution;
 pub mod scaffold;
 pub mod source;
 pub mod standard;
+pub mod syntax;
 pub mod traits;
 pub mod types;
 

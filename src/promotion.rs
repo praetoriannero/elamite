@@ -14,9 +14,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::lexer::{Token, TokenKind};
-use crate::parser::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::resolution::{LocalBindingId, NameTarget, ResolvedProgram};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 
 /// Locals whose address is taken somewhere in `body`, in stable identity
 /// order.

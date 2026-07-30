@@ -11,9 +11,9 @@ use codespan_reporting::term::{
     self,
     termcolor::{ColorChoice, StandardStream},
 };
-use elamite::backend::Target;
+use elamite::config::{Optimization, Target};
 use elamite::diagnostics::Diagnostic;
-use elamite::driver::{BuildOptions, DumpStage, Optimization, build, check_frontend, dump, run};
+use elamite::driver::{BuildOptions, DumpStage, build, check_frontend, dump, run};
 use elamite::manifest::TargetKind;
 use elamite::package::PackageGraph;
 use elamite::resolution::resolve;

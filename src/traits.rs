@@ -139,19 +139,19 @@ fn check_derivations(
     }
 }
 
-fn derivation_entries(syntax: &crate::parser::SyntaxNode) -> Vec<(String, Span)> {
-    let Some(list) = crate::types::direct_child(syntax, crate::parser::SyntaxKind::DeriveList)
+fn derivation_entries(syntax: &crate::syntax::SyntaxNode) -> Vec<(String, Span)> {
+    let Some(list) = crate::syntax::direct_child(syntax, crate::syntax::SyntaxKind::DeriveList)
     else {
         return Vec::new();
     };
     list.children
         .iter()
         .filter_map(|child| match child {
-            crate::parser::SyntaxElement::Token(token) => match &token.kind {
+            crate::syntax::SyntaxElement::Token(token) => match &token.kind {
                 crate::lexer::TokenKind::Identifier(name) => Some((name.clone(), token.span)),
                 _ => None,
             },
-            crate::parser::SyntaxElement::Node(_) => None,
+            crate::syntax::SyntaxElement::Node(_) => None,
         })
         .collect()
 }
@@ -238,7 +238,7 @@ fn trait_methods(
         };
         let data = &resolved.declarations[method.index()];
         let has_default =
-            crate::types::direct_child(&data.syntax, crate::parser::SyntaxKind::Block).is_some();
+            crate::syntax::direct_child(&data.syntax, crate::syntax::SyntaxKind::Block).is_some();
         methods.insert(
             resolved.symbol_text(*symbol).to_string(),
             (*method, has_default),
@@ -1022,15 +1022,15 @@ pub fn vtable_entry(
 #[must_use]
 pub fn derives(resolved: &ResolvedProgram, declaration: DeclarationId, trait_name: &str) -> bool {
     let syntax = &resolved.declarations[declaration.index()].syntax;
-    let Some(list) = crate::types::direct_child(syntax, crate::parser::SyntaxKind::DeriveList)
+    let Some(list) = crate::syntax::direct_child(syntax, crate::syntax::SyntaxKind::DeriveList)
     else {
         return false;
     };
     list.children.iter().any(|child| match child {
-        crate::parser::SyntaxElement::Token(token) => {
+        crate::syntax::SyntaxElement::Token(token) => {
             matches!(&token.kind, crate::lexer::TokenKind::Identifier(name) if name == trait_name)
         }
-        crate::parser::SyntaxElement::Node(_) => false,
+        crate::syntax::SyntaxElement::Node(_) => false,
     })
 }
 
