@@ -11,6 +11,8 @@ implementation.
   the `Callable` interface.
 - [`examples/raylib`](examples/raylib) demonstrates desktop graphics through
   Elamite's C interoperability layer.
+- [`examples/sdl`](examples/sdl) demonstrates an SDL2 window and animation
+  through a narrow C99 interoperability shim.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.

@@ -1,0 +1,11 @@
+[package]
+name = "sdl_demo"
+version = "0.1.0"
+target_kind = "exe"
+
+[native]
+include_paths = ["native/include"]
+# Link options are passed to the C compiler from the directory where the
+# Elamite driver is invoked. Keep SDL after the shim so static and as-needed
+# linkers resolve the shim's SDL references correctly.
+link_options = ["examples/sdl/native/elamite_sdl_demo.c", "-lSDL2"]

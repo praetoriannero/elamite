@@ -1,0 +1,48 @@
+@importc("elamite_sdl_app", "elamite_sdl_demo.h")
+type NativeSdlApp
+
+@importc("elamite_sdl_open", "elamite_sdl_demo.h")
+fn native_open(width: i32, height: i32) -> *var NativeSdlApp
+
+@importc("elamite_sdl_poll", "elamite_sdl_demo.h")
+fn native_poll(app: *var NativeSdlApp) -> i32
+
+@importc("elamite_sdl_draw", "elamite_sdl_demo.h")
+fn native_draw(app: *var NativeSdlApp)
+
+@importc("elamite_sdl_close", "elamite_sdl_demo.h")
+fn native_close(app: *var NativeSdlApp)
+
+struct SdlDemo:
+    handle: *var NativeSdlApp
+
+    fn open(width: i32, height: i32) -> Self:
+        unsafe:
+            let handle = native_open(width, height)
+            if handle == null:
+                panic("SDL could not create a window and renderer")
+            return Self { handle: handle }
+
+    fn is_running(self: &var Self) -> bool:
+        unsafe:
+            return native_poll(self.handle) != 0
+
+    fn draw(self: &var Self) -> ():
+        unsafe:
+            native_draw(self.handle)
+
+    fn close(self: &var Self) -> ():
+        if self.handle == null:
+            return
+
+        unsafe:
+            native_close(self.handle)
+        self.handle = null
+
+fn main() -> ():
+    var demo = SdlDemo.open(960, 540)
+    defer demo.close()
+
+    println("SDL window opened; press Escape or close the window to exit.")
+    while demo.is_running():
+        demo.draw()
