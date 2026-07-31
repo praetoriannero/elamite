@@ -37,6 +37,8 @@ pub struct ParsedUnit {
     pub path: PathBuf,
     pub file: FileId,
     pub span: Span,
+    /// Complete physical source retained for lossless expansion token trees.
+    pub source: String,
     pub tokens: Vec<Token>,
     pub tree: SyntaxNode,
 }
@@ -163,6 +165,7 @@ fn parse_unit(
         path,
         file,
         span,
+        source: source.to_string(),
         tokens: lexed.tokens,
         tree: parsed.tree,
     });

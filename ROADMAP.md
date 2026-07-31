@@ -4,9 +4,9 @@
 > plan; remaining milestones and work packages use stable descriptive names
 >
 > Next required work package: **Macro expansion foundations** —
-> **Language-contract closure**
+> **Compile-time identities and namespace collection**
 >
-> Basis: `SPEC.md` version 0.7.0-draft and
+> Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
 
 This document breaks the remaining initial Elamite compiler work and planned
@@ -43,7 +43,7 @@ The compiler should be built as a sequence of complete, testable layers:
 manifest and source files
     -> tokens
     -> parsed package syntax
-    -> expanded package syntax (pass-through until Macro expansion foundations)
+    -> expanded package syntax (lossless token trees; rewriting still disabled)
     -> resolved declarations
     -> typed high-level IR
     -> explicit control-flow IR
@@ -57,8 +57,9 @@ Each representation should have one clear responsibility:
 - Tokens preserve source spans and indentation events.
 - Parsed package syntax owns the token-preserving trees for every user and
   shipped standard-library module without performing semantic checks.
-- Expanded package syntax is a behavior-neutral pass-through until macro work
-  begins, then remains the sole input to ordinary name resolution.
+- Expanded package syntax owns the lossless token-tree view and forwards the
+  parsed syntax unchanged until macro rewriting begins; it remains the sole
+  input to ordinary name resolution.
 - Resolution assigns stable identities to packages, modules, declarations,
   fields, variants, traits, and lexical bindings.
 - Typed high-level IR records types, selected declarations, implicit receiver
@@ -208,13 +209,15 @@ deterministic output.
 test and macro programs below. Individual packages, especially source-map
 infrastructure, may be pulled forward when a later milestone needs them.
 
-## 5. Post-conformance macro system
+## 5. Post-conformance compile-time syntax generation
 
-Macro work begins after the completed initial-conformance milestone and after the
-corresponding language design is accepted into `SPEC.md`. This roadmap does not
-itself define stable macro syntax. Until those design changes land, the
-currently reserved `@name` space and compiler-supported built-in macros retain
-their existing behavior.
+Macro work begins after the completed initial-conformance milestone.
+`SPEC.md` §12 owns the accepted interpreter-backed `macro`, `attr`, and
+`derive` declarations, the versioned `std.ast` interface, `quote:` and `$`
+interpolation, `++` concatenation, hygiene, scheduling, and deterministic
+resource limits. Until implementation reaches each gated package, the existing
+compiler-supported collection macros, FFI attributes, and compact built-in
+derive syntax retain their behavior.
 
 The implementation must preserve these boundaries throughout the transition:
 
@@ -226,130 +229,95 @@ The implementation must preserve these boundaries throughout the transition:
   lowering, and backend rules;
 - expansion provenance is retained so diagnostics identify both generated code
   and the source invocation that caused it;
+- compile-time execution has no ambient capabilities and cannot observe target
+  state or mutable compiler internals; and
 - resource limits and expansion ordering are deterministic and testable.
 
 ### Macro expansion foundations
 
-> Status: Pending normative macro design.
+> Status: In progress — revised compile-time design accepted in `SPEC.md`
+> 0.9.0-draft.
 >
 > Blocked by: **None**. It is independent of **Package tests, typed traps, and
 > runner**.
 
 **Goal:** Add behavior-neutral representations and pipeline boundaries on which
-user-defined macros can be implemented without destabilizing the existing
-compiler.
+user-defined macros, attributes, and derives can be implemented without
+destabilizing the existing compiler.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Language-contract closure** | Settle definition and invocation forms, delimiter and indentation behavior, expansion roles, macro namespaces, visibility/import rules, expansion order, and deterministic limits in `SPEC.md`; update `LEDGER.md` and close or split the corresponding open issues. | Every implemented macro behavior is owned by a normative rule rather than this roadmap. |
-| **Token-tree representation** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
-| **Expansion identities and provenance** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
-| **Fragment parser entry points** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
-| **Expansion pipeline boundary** | Replace the compiler-architecture refactor's pass-through seam with an owned expansion result before name resolution. | Macro-free packages produce equivalent syntax, resolved programs, diagnostics, typed IR, and generated C. |
-| **Macro identities and namespace collection** | Add stable macro declaration identities and the accepted package, module, import, visibility, and namespace rules without folding macro lookup into value or type lookup. | Same-name and cross-package cases resolve according to the accepted namespace model. |
-| **Deterministic expansion scheduler** | Implement the accepted ordering and fixed-point rules for nested and item-producing expansions, including explicit dependency and cycle diagnostics. | Repeated builds schedule and diagnose the same expansions in the same order. |
-| **Resource accounting** | Enforce deterministic recursion, expansion-step, nesting, and generated-output limits. | Limit exhaustion is a stable diagnostic, never a panic or hang. |
+| **Language-contract revision (done)** | Replace token matcher/transcriber rules with interpreter-backed `derive`, `attr`, and `macro` declarations over `std.ast`; settle `@` invocation and attachment forms, `quote:`, `$` interpolation, `++`, namespaces, execution order, hygiene, capabilities, and deterministic limits in `SPEC.md`. | Every implemented compile-time behavior is owned by a normative rule rather than this roadmap. |
+| **Token-tree representation (done)** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
+| **Expansion identities and provenance (done)** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
+| **Fragment parser entry points (done)** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
+| **Expansion pipeline boundary (done)** | Replace the compiler-architecture refactor's pass-through seam with expansion-owned unit identities, lossless token trees, provenance, and an owned package result consumed before name resolution. | Macro-free packages preserve their source inputs and the explicit parse → expand → resolve path is equivalent to the normal resolver entry point; the complete downstream suite preserves diagnostics, typed IR, runtime behavior, and generated C. |
+| **Compile-time identities and namespace collection** | Add stable macro, attribute, and derive declaration identities plus the accepted package, module, import, visibility, and separate-namespace rules without folding lookup into ordinary value or type resolution. | Same-name, renamed, private, re-exported, and cross-package declarations resolve predictably. |
+| **Deterministic expansion scheduler** | Implement the structural fixed-point queue and dependency graph, including attribute-before-derive ordering, outermost-first function macros, generated-item re-entry, cycle diagnostics, and stable recovery nodes. | Repeated builds schedule and diagnose the same expansions in the same order. |
+| **Resource accounting seam** | Give the scheduler shared depth, execution, generated-node, interpreter-fuel, and live-value budgets before execution exists. | Limit charging is stable and cannot be bypassed by nested or generated work. |
 | **Experimental gate** | Keep incomplete user-defined macro behavior behind an explicit unstable compiler gate. | Stable invocations cannot accidentally depend on unfinished behavior. |
-| **Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined expansion is enabled. |
+| **Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined compile-time execution is enabled. |
 
-### Hygienic declarative macros
+### Compile-time AST and interpreter
 
 > Status: Pending.
 >
 > Blocked by: **Macro expansion foundations**.
 
-**Goal:** Implement ordinary syntax macros with deterministic matching,
-transcription, hygiene, and cross-package use.
+**Goal:** Implement the target-independent `std.ast` façade, quotation, and a
+bounded interpreter for ordinary safe Elamite compile-time code.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Declarative definitions** | Parse and validate the accepted rule, matcher, metavariable, fragment-specifier, and transcription syntax while keeping macro definitions out of ordinary runtime declarations. | Valid definitions enter the macro namespace and invalid definitions fail before expansion. |
-| **Matching and repetition** | Match token trees with deterministic rule selection, nested repetition, separators, and useful ambiguity/failure diagnostics under the **Macro expansion foundations** resource limits. | Matcher success, failure, ambiguity, and nested repetition have focused tests. |
-| **Hygienic transcription** | Attach syntax contexts to generated identifiers and implement the accepted call-site and definition-site lookup behavior; ordinary source identifiers remain in the root context. | Capture and intentional-reference tests demonstrate the specified lookup behavior. |
-| **Fragment-role expansion** | Expand expression, statement, pattern, type, and item macros only in roles permitted by `SPEC.md`, then parse the result through the corresponding fragment entry point. | Every supported role has positive and wrong-role diagnostics. |
-| **Item fixed point** | Support generated declarations, imports, implementations, and further macro invocations using the accepted deterministic collection order. | Duplicate, dependency, nesting, and cycle cases terminate with stable results. |
-| **Modules and packages** | Serialize or otherwise expose the stable macro metadata needed for imports, visibility, aliases, and cross-package expansion without exposing unstable compiler internals. | A downstream package can import and expand a public macro while private macros stay inaccessible. |
-| **Semantic integration** | Route generated syntax through ordinary resolution, generic checking, trait conformance/coherence, safety checking, lowering, and C emission. | Interaction tests cover `defer`, `unsafe`, FFI, generics, traits, and managed storage. |
-| **Built-in compatibility** | Prove behavioral and diagnostic compatibility for the existing built-in macros before optionally reimplementing any of them on the general expansion path. | Existing built-in fixtures pass unchanged; migration is not required. |
-| **Declarative macro conformance** | Add positive, compile-fail, cross-module, cross-package, hygiene, determinism, architecture, nesting, adversarial, and resource-limit suites. | Declarative expansion passes the supported target matrix. |
+| **Versioned `std.ast` façade** | Define opaque immutable structural syntax values, stable accessors and `with_` transforms, builders, persistent AST lists, origin handles, pattern variants, and `std.ast.error` without exposing compiler-owned nodes or tables. | Interface-version tests cover every admitted value, transform, invalid construction, and version mismatch. |
+| **Quote and interpolation syntax** | Lex and parse typed `quote:` bodies, `$name`, and `$(expression)` with scalar insertion, collection splicing, expected-role inference, and full structural validation. | Every AST role has positive, ambiguous-role, wrong-role, malformed, nesting, and indentation tests. |
+| **Concatenation operator** | Add binary `++` at additive precedence for strings, supported sequences, and AST lists while keeping numeric `+` separate and rejecting arbitrary AST-expression concatenation. | Lexer, parser, checker, runtime, formatter, and editor tests agree on the new operator. |
+| **Compile-time checking and lowering** | Check compile-time signatures and bodies through the ordinary language front end, reject runtime-only and unsafe capabilities, and lower the admitted subset to a versioned interpreter representation. | Invalid signatures and operations fail before execution with ordinary source spans. |
+| **Bounded interpreter** | Execute safe Elamite control flow, values, pattern matching, functions, and `std.ast` intrinsics deterministically with explicit fuel and live-value accounting. | Repeated execution is identical; recursion, loops, allocation, panics, and invalid intrinsics are contained diagnostics. |
+| **Capability and host/target boundary** | Deny FFI and ambient filesystem, environment, process, network, clock, randomness, target, runtime, and compiler-internal access; keep compile-time execution independent of the selected output target. | Capability probes fail predictably and x86/x86-64 builds expand identically. |
+| **Artifact and dependency identity** | Serialize or rebuild public compile-time bodies and `std.ast` ABI metadata with identities keyed by source, transitive compile-time dependencies, and compiler/spec/interface versions. | Clean, cached, local, and cross-package execution produce equivalent results and reject version skew. |
+| **Interpreter validation** | Add unit, property, fuzz, adversarial, reproducibility, limit, recovery, host/target, version-skew, and cross-package suites. | The interpreter cannot hang, crash, escape its capability boundary, or mutate compiler state. |
 
-### Macro diagnostics, tooling, and stabilization
+### Interpreter-backed macros, attributes, and derives
 
 > Status: Pending.
 >
-> Blocked by: **Hygienic declarative macros**.
+> Blocked by: **Compile-time AST and interpreter**.
 
-**Goal:** Make declarative macros diagnosable, inspectable, reproducible, and
+**Goal:** Expose all three accepted declaration forms on the shared `std.ast`
+and interpreter foundation with deterministic staging and ordinary semantic
+validation.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Declaration syntax and lookup** | Parse `[pub] macro`, `[pub] attr`, and `[pub] derive` signatures and bodies, including one final homogeneous variadic AST parameter where §12 permits it; collect physical declarations/imports in separate namespaces with stable identities, visibility, aliases, and re-exports. | Local, duplicate, renamed, private, malformed, variadic-placement, and cross-package cases resolve or diagnose predictably. |
+| **Function-like macros** | Parse `@path(...)` in expression, pattern, type, whole-statement, and module-item roles; construct fixed and variadic typed AST arguments, execute the declaration, and validate the declared return role. | Each role has successful, zero/many variadic, empty, wrong-role, trailing, nested, and recovery coverage. |
+| **Structural attributes** | Attach `@attr(path)`/`@attr(path(...))` to accepted definitions, supply the typed target implicitly, pack any final variadic explicit AST arguments, run top-to-bottom, and admit same-kind replacement or validated `ItemList` output. | Field/method addition, fixed/variadic arguments, replacement, removal, sibling emission, bad target, and interacting attributes behave deterministically. |
+| **Trait derives** | Run `@derive(...)` after attributes, validate the exact trait and target identity of each returned `Implementation`, and retain the original definition. | Struct/enum, generic, duplicate, bad-output, orphan, overlap, bound, and coherence cases use ordinary diagnostics. |
+| **Quote hygiene and provenance** | Assign definition-site contexts to literal quote syntax, preserve interpolated contexts and origin chains, and deny fabricated physical locations or caller contexts. | Capture, shadowing, private helper, nested expansion, and diagnostic snapshots demonstrate the specified contexts. |
+| **Fixed-point integration** | Re-enter generated ordinary items, imports, attachments, and invocations through the deterministic scheduler while forbidding generated compile-time declarations/imports. | Attribute/derive/macro nesting and cycles terminate in stable source/provenance order. |
+| **Ordinary semantic integration** | Route all generated syntax through normal resolution, visibility, generics, trait conformance/coherence, safety, cleanup, checking, lowering, and C emission. | Generated code cannot bypass any handwritten-code restriction. |
+| **Built-in compatibility and migration** | Preserve `@vec`/`@map`/`@set`, FFI attributes, and compact compiler derives; implement the attached form for built-in derives and migrate internals only after output and diagnostics are equivalent. | Existing fixtures remain unchanged and attached built-in derives gain equivalent coverage. |
+| **Expansion conformance** | Add compile-pass/fail, run-pass, cross-module/package, hygiene, determinism, architecture, nesting, adversarial, capability, and resource-limit suites. | All three forms pass the Linux x86 and x86-64 matrix behind the gate. |
+
+### Compile-time diagnostics, tooling, and stabilization
+
+> Status: Pending.
+>
+> Blocked by: **Interpreter-backed macros, attributes, and derives**.
+
+**Goal:** Make generated syntax diagnosable, inspectable, reproducible, and
 ready to leave the experimental gate.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Expansion-aware diagnostics** | Render primary generated spans with related invocation and definition spans, bounded expansion backtraces, and stable diagnostic categories. | Nested-expansion snapshots identify both the failure and its source chain. |
-| **Recovery across expansions** | Contain malformed output and nested expansion failures so later independent diagnostics can still be emitted without duplicate cascades. | One failed invocation does not suppress or multiply independent diagnostics. |
-| **Expansion inspection** | Add a CLI inspection mode that shows expanded source or syntax with origin information and deterministic ordering suitable for tests and editor tooling. | Repeated dumps are byte-identical and expose useful provenance. |
-| **Dependency and cache identities** | Define stable hashes for macro definitions, invocations, imported macro metadata, compiler/spec versions, and relevant inputs. | Future incremental compilation can invalidate expansions precisely without changing current clean builds. |
-| **Robustness campaign** | Fuzz matching, transcription, fragment parsing, hygiene, span projection, nesting, and limits; retain regressions for every discovered crash, hang, or nondeterministic result. | The retained corpus completes without an internal failure or unbounded diagnostic cascade. |
-| **Compatibility audit** | Re-run the complete compiler suite with expansion enabled and verify macro-free diagnostic, IR, runtime, and generated-C equivalence on Linux x86 and x86-64. | Existing programs remain unchanged by enabling the expansion pipeline. |
-| **Declarative stabilization** | Document the supported surface and limits, complete `SPEC.md`/`LEDGER.md` coverage, and remove the experimental gate. | Local and cross-package conformance suites pass before the gate is removed. |
-
-### Declarative custom derive generators
-
-> Status: Pending accepted derive design.
->
-> Blocked by: **Macro diagnostics, tooling, and stabilization**.
-
-**Goal:** Generate ordinary implementations from type structure using bounded
-declarative matching and templates, without granting generators arbitrary
-execution or access to compiler internals.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **Derive contract** | Specify derive attachment, ordering, namespace, visibility, allowed targets, structural matching/template rules, duplicate behavior, and interaction with built-in derives in `SPEC.md`. | Each accepted and rejected definition and attachment case is normative and tested. |
-| **Stable structural input** | Expose a versioned structural representation of names, fields, variants, generic parameters, bounds, visibility, and source spans sufficient for derives but independent of internal AST and semantic table layouts. | Generators need no compiler-private representation. |
-| **Derive definitions and lookup** | Parse bounded structural matcher/template definitions and resolve derive generators through the accepted module/package rules with stable identities and deterministic ordering. | Local, imported, renamed, private, malformed, and duplicate generators resolve or diagnose predictably. |
-| **Derive expansion phase** | Match structural input and transcribe ordinary items after input declarations are known and before implementation collection/coherence, preserving provenance and hygiene. | Generated implementations participate in the same collection order on repeated builds without executing arbitrary code. |
-| **Ordinary semantic validation** | Resolve and check generated implementations exactly like handwritten implementations, including orphan, overlap, generic-bound, safety, and object-safety diagnostics. | Generated code cannot bypass an ordinary semantic restriction. |
-| **Built-in derive compatibility** | Retain compiler-supported derives until a general generator matches their semantics, diagnostics, determinism, and cross-package behavior. | Migration remains optional and cannot regress existing derives. |
-| **Derive conformance** | Test generic and nongeneric records/enums, visibility, renamed imports, cross-package generators, duplicate derives, malformed output, hygiene, coherence conflicts, and both target architectures. | Custom derives pass the supported target matrix. |
-
-### Compile-time execution runtime
-
-> Status: Pending accepted execution/security design.
->
-> Blocked by: **Declarative custom derive generators**.
-
-**Goal:** Provide a bounded and reproducible host-side execution environment
-for procedural macro code without confusing host and target compilation.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **Execution model** | Implement the interpreter, bytecode, native-host, or other model accepted by `SPEC.md`, with an explicit versioned interface rather than direct access to compiler data structures. | Macro programs execute through only the accepted interface. |
-| **Host/target separation** | Compile and identify macro artifacts for the build host while preserving the selected x86 or x86-64 target for the user's package. | Incompatible artifacts are rejected clearly and never linked as target code. |
-| **Token and diagnostic API** | Expose only the versioned token-tree, span, provenance, and diagnostic operations required by procedural macros. | API compatibility has version-skew tests. |
-| **Capability boundary** | Deny filesystem, environment, process, clock, randomness, and network access by default; implement only capabilities explicitly accepted by the language/build design and include them in reproducibility metadata. | Undeclared external access fails as a contained diagnostic. |
-| **Failure isolation and limits** | Contain panics, crashes, invalid results, recursion, excessive work, memory growth, and output growth as bounded diagnostics without corrupting compiler state. | A failed macro cannot crash or hang the compiling process. |
-| **Artifact and cache identity** | Key macro artifacts and results by source, transitive dependencies, host platform, interface/compiler/spec versions, declared capabilities, and all accepted external inputs. | Input changes invalidate exactly the affected artifact or result. |
-| **Runtime validation** | Add reproducibility, isolation, malformed-artifact, version-skew, resource-limit, cache-invalidation, host/target, and concurrent-build tests. | The runtime is deterministic and isolated across repeated builds. |
-
-### Procedural macros and attributes
-
-> Status: Pending accepted procedural-macro design.
->
-> Blocked by: **Compile-time execution runtime**.
-
-**Goal:** Support function-like procedural expansion, procedural derives, and
-item attributes on the bounded compile-time runtime.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **Function-like procedural macros** | Register, resolve, execute, and parse token-tree transformations in every accepted fragment role with the same provenance, hygiene, scheduling, and limits as declarative macros. | Function-like procedural macros satisfy the declarative interaction matrix. |
-| **Procedural derives** | Feed the stable **Declarative custom derive generators** structural input to procedural generators and validate their output through ordinary implementation collection and coherence. | Procedural derives cannot observe private compiler structures or bypass coherence. |
-| **Attribute attachment and input** | Parse the accepted attribute grammar, attach attributes to permitted items, preserve raw token input and spans, and reject invalid placement before execution. | Attachment and input are deterministic and independently diagnosable. |
-| **Attribute expansion semantics** | Apply the accepted ordering relative to declarative expansion and derives; allow attributes to replace, remove, or produce items only as specified, then return all output to ordinary collection and checking. | Nested and interacting attributes reach a deterministic fixed point. |
-| **Procedural span and hygiene API** | Support the accepted call-site, definition-site, and generated identifier operations without allowing fabricated physical locations or bypassing visibility. | Span and capture tests exercise every exposed context operation. |
-| **Failure behavior and tooling** | Surface execution failures with bounded expansion backtraces, preserve compiler recovery, and provide useful inspection output when a macro cannot execute. | Failures remain local and explain the invocation/definition chain. |
-| **Cross-package distribution** | Build, discover, version, and cache procedural macro artifacts reproducibly across packages without loading target artifacts into the host compiler. | Clean and cached cross-package builds are equivalent. |
-| **Procedural conformance and stabilization** | Test ordering, nesting, hygiene, generated imports/items/impls, capability denial, crashes, limits, version skew, cross-package use, deterministic rebuilds, and both target architectures. | Procedural macros and attributes leave the experimental surface only after the complete matrix passes. |
+| **Expansion-aware diagnostics** | Render generated primary locations with attachment/invocation and definition spans, bounded execution backtraces, `std.ast.error` messages, and stable categories. | Nested snapshots identify both the failure and its complete source chain. |
+| **Recovery across executions** | Contain invalid output and nested execution failures so independent diagnostics continue without duplicate cascades or partial syntax. | One failed execution does not suppress or multiply unrelated diagnostics. |
+| **Expansion inspection** | Add a CLI mode showing expanded syntax, compile-time execution order, and origin information deterministically for tests and editor tooling. | Repeated dumps are byte-identical and make attribute/derive/macro staging visible. |
+| **Dependency and cache identities** | Define stable hashes for declarations, invocations, attachments, imported metadata, interpreter artifacts, compiler/spec/AST versions, and every admitted input. | Input changes invalidate exactly the affected artifact or result. |
+| **Robustness campaign** | Fuzz quotation, interpolation, AST transforms, interpreter execution, hygiene, span handling, nesting, and every limit; retain all crash, hang, escape, and nondeterminism regressions. | The retained corpus finishes without an internal failure or unbounded cascade. |
+| **Compatibility audit** | Verify macro-free diagnostic, IR, runtime, and generated-C equivalence and built-in behavior on Linux x86 and x86-64. | Enabling the expansion pipeline changes only programs using the new surface. |
+| **Stabilization** | Complete documentation and ledger coverage, freeze the initial `std.ast` ABI, decide the long-term compact-derive compatibility policy, and remove `--unstable-macros`. | Local and cross-package conformance suites pass before the gate is removed. |
 
 ## 6. Closures
 
@@ -583,10 +551,9 @@ Delivery checkpoints are:
   deterministically from the current directory or an explicit package path
   without changing production artifacts, and isolated expectations verify
   built-in and user-defined runtime traps.
-- **Macro diagnostics, tooling, and stabilization:** hygienic declarative
-  macros are stable, diagnosable, and usable across packages.
-- **Procedural macros and attributes:** procedural macros, derives, and
-  attributes are bounded, reproducible, and stable across packages.
+- **Compile-time diagnostics, tooling, and stabilization:** interpreter-backed
+  macros, attributes, and derives are bounded, reproducible, diagnosable, and
+  stable across packages through the versioned `std.ast` interface.
 - **Explicit-capture closures:** safe anonymous callables preserve explicit
   capture, logical-copy, alias, raw-pointer, escape, and function boundary
   rules across both supported targets.

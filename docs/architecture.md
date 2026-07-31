@@ -30,9 +30,29 @@ their established public paths. Compatibility re-exports for `Target` from
 users already import them there; new compiler code should use `config`
 directly.
 
-The expansion pass is intentionally a typed pass-through until the macro
-milestones. Native-language test discovery and execution lives in
-`src/testing.rs` and remains separate from the conformance fixture runner.
+The expansion pass now builds a lossless nested token-tree view containing
+exact source spellings, layout tokens, and stable origin identities beside each
+unchanged syntax tree. Parsed units are consumed into expansion-owned unit
+identities, and resolution accepts only the owned expansion result. Its
+append-only provenance table distinguishes
+physical spans from spanless generated output and records definition,
+invocation, and nested-expansion chains. Execution and rewriting remain
+disabled. Strict expression, statement, pattern, type, and item fragment entry
+points reuse the ordinary parser through `src/expansion/fragment.rs`, including
+full-consumption checks and existing recovery. Generated token parsing waits
+for origin-aware generated-syntax integration rather than projecting an origin
+onto physical bytes, so macro-free syntax and every downstream phase still
+receive the behavior-neutral baseline.
+
+The accepted next layers expose an opaque, versioned, pre-resolution `std.ast`
+façade to a bounded interpreter for ordinary safe compile-time Elamite code.
+`macro`, `attr`, and `derive` share that runtime and the same provenance model;
+`quote:` plus `$` interpolation creates syntax with definition-site hygiene,
+while interpolated values retain their context. The interpreter and AST façade
+must remain outside compiler-private parsed, resolved, and typed data models and
+must not gain ambient host or target capabilities.
+Native-language test discovery and execution lives in `src/testing.rs` and
+remains separate from the conformance fixture runner.
 
 ## Behavior-neutral baseline
 

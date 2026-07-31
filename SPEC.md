@@ -2,7 +2,7 @@
 
 > Status: Draft
 >
-> Version: 0.7.0-draft
+> Version: 0.9.0-draft
 >
 > The current [specification demonstration](examples/spec_demo.elx) is the
 > authoritative surface-language example. This document describes that design;
@@ -30,11 +30,11 @@ programs should not use collection timing for resource cleanup.
 Elamite source files are UTF-8 text. An identifier begins with an ASCII letter
 or `_` and continues with ASCII letters, decimal digits, or `_`; equivalently,
 it matches `[A-Za-z_][A-Za-z0-9_]*`. Keywords are reserved and cannot be used
-as identifiers. The reserved keywords are `as`, `break`, `continue`, `defer`,
-`else`, `enum`, `expect`, `false`, `fn`, `for`, `if`, `impl`, `in`,
-`let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`, `Self`,
-`struct`, `super`, `test`, `trait`, `true`, `type`, `unsafe`, `use`, `var`, and
-`while`.
+as identifiers. The reserved keywords are `as`, `attr`, `break`, `continue`,
+`defer`, `derive`, `else`, `enum`, `expect`, `false`, `fn`, `for`, `if`,
+`impl`, `in`, `let`, `macro`, `match`, `mod`, `null`, `pass`, `pub`, `quote`,
+`return`, `root`, `self`, `Self`, `struct`, `super`, `test`, `trait`, `true`,
+`type`, `unsafe`, `use`, `var`, and `while`.
 Unicode text remains valid in comments, documentation, and string or character
 contents as permitted by their literal syntax.
 
@@ -63,11 +63,14 @@ indentation level. The body ends at the next dedent. Dedentation must return to
 a previously established block indentation level. EOF closes every remaining
 open block.
 
-This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `test`,
-`expect`, `if`, `else`, `match`, `for`, `while`, `unsafe`, and function
-declarations with bodies. Brace-delimited bodies and same-line bodies are
-invalid everywhere. An empty body is also invalid; `pass` is the explicit
-no-op statement when a body must otherwise be empty.
+This body form is used for `mod`, `attr`, `derive`, `macro`, `quote`, `struct`,
+`enum`, `trait`, `impl`, `test`, `expect`, `if`, `else`, `match`, `for`,
+`while`, `unsafe`, and function declarations with bodies. Brace-delimited
+bodies and same-line bodies are invalid everywhere. Compile-time declaration
+bodies contain ordinary Elamite statements; a `quote:` body contains syntax in
+the expected `std.ast` role under Section 12. An empty body is also invalid;
+`pass` is the explicit no-op statement when an ordinary body must otherwise be
+empty.
 
 Blank lines and ordinary comment-only lines do not affect indentation.
 Documentation comments use the indentation of the declaration they document
@@ -175,10 +178,10 @@ semantic effect.
 Declarations are package-private unless prefixed with `pub`: every module in
 the defining package may access a package-private declaration, but dependent
 packages may not. `pub` applies to modules, functions, structs, enums, traits,
-and type aliases. Fields and inherent methods are package-private unless
-individually marked `pub`. All variants and variant payload fields of a public
-enum are public. All methods of a public trait are public as defined in Section
-6.
+type aliases, macros, attributes, and derives. Fields and inherent methods are
+package-private unless individually marked `pub`. All variants and variant
+payload fields of a public enum are public. All methods of a public trait are
+public as defined in Section 6.
 
 `pub use path` and `pub use path as name` re-export a public declaration
 under the bound name. A file-backed module namespace may also be re-exported,
@@ -198,7 +201,8 @@ Modules, types, traits, functions, module-level values, aliases, and imports
 share one module-item namespace. Defining or importing the same name twice in a
 module is an error even when both imports resolve to the same item; an explicit
 alias resolves the conflict. Function-local lexical bindings may shadow
-module-item names.
+module-item names. Macros, attributes, and derives use the separate namespaces
+and explicit imports defined in Section 12.1.
 
 Circular imports between modules of one package are permitted. The compiler
 collects module declarations before resolving imports and bodies. Imports
@@ -626,10 +630,10 @@ A fixed array type is `[T; N]`, where `N` is a compile-time nonnegative `usize`
 value. `[first, second]` constructs an array. The compiler-handled built-in
 macro forms `@vec[first, second]`, `@map{key: value, ...}`, and
 `@set{value, ...}` construct a `Vec`, `Map`, and `Set`, respectively. The
-`@name` namespace is reserved for macro invocation; these three built-ins are
-the only macro forms in the initial language, and user-defined macros are not
-yet supported. The lowercase macro names are distinct from the `Vec[T]`,
-`Map[K, V]`, and `Set[T]` type names.
+`@name` namespace is reserved for macro invocation. These three built-ins are
+available without the experimental user-macro gate described in Section 12.
+Their lowercase macro names are distinct from the `Vec[T]`, `Map[K, V]`, and
+`Set[T]` type names.
 
 Literal elements and map entries are evaluated left-to-right. Their types must
 produce one exact element, key, or value type after contextual literal
@@ -791,22 +795,29 @@ let root = Chain { value: 2, next: Option.Some(&leaf) }
 
 ### 4.3 `Default` derivation and initializers
 
-Structs and enums place an optional derive list in parentheses immediately after
-the declaration name and any generic parameter list, as in
-`struct Wrapper[T](Default, PartialEq):`. These parentheses are reserved for a
-nonempty, comma-separated list of compiler-supported derivable traits. Duplicate
-entries are invalid. User-defined traits may be implemented normally but cannot
-define custom derive behavior. A derived implementation has no visibility
-modifier separate from its type declaration.
+The general derivation form is an attached `@derive(...)` attribute immediately
+before a struct or enum. Its argument is a nonempty, comma-separated list of
+derive names, as in `@derive(Default, PartialEq)`. Duplicate entries are
+invalid, including duplicates introduced through aliases. Section 12 defines
+user-written derive declarations, lookup, execution order, and validation.
+
+The existing compact form places compiler-supported derives in parentheses
+immediately after the declaration name and any generic parameter list, as in
+`struct Wrapper[T](Default, PartialEq):`. It remains an ungated compatibility
+form for the compiler-supported derive inventory. It cannot name a user-written
+derive. Mixing compact and attached derivation on one declaration is invalid.
+A derived implementation has no visibility modifier separate from its type
+declaration.
 
 `Default` is a built-in trait with the associated function
-`fn default() -> Self`. `struct Name(Default):` derives an implementation that
-supplies `Self.default()` by calling `default()` for each field. Derivation is
-valid only when every field type implements `Default`. For a generic struct,
-the derived implementation exists conditionally when the field types it uses
-satisfy that requirement; derivation does not add bounds to the type declaration
-itself. `Default` derivation is struct-only. An enum may implement `Default`
-manually, but no variant is selected implicitly.
+`fn default() -> Self`. `@derive(Default)` on a struct, or the compact
+`struct Name(Default):` form, derives an implementation that supplies
+`Self.default()` by calling `default()` for each field. Derivation is valid only
+when every field type implements `Default`. For a generic struct, the derived
+implementation exists conditionally when the field types it uses satisfy that
+requirement; derivation does not add bounds to the type declaration itself.
+`Default` derivation is struct-only. An enum may implement `Default` manually,
+but no variant is selected implicitly.
 
 A `new` method may call `default()` to construct an instance. `new` is an
 ordinary associated-function name, not a keyword or allocation expression. A
@@ -1378,8 +1389,10 @@ statically unreachable arm is a compile-time error.
 Control-flow constructs, `unsafe` blocks, and indented bodies are statements,
 not value-producing expressions. They complete with unit but cannot appear in
 a context that requires a value. Assignment and compound assignment are also
-statements and cannot be nested inside expressions. Elamite has no `++` or `--`
-operators. Compound assignment evaluates its destination place exactly once.
+statements and cannot be nested inside expressions. Elamite has no increment or
+decrement operator; `++` is instead a binary concatenation operator and `--` is
+not an operator. Compound assignment evaluates its destination place exactly
+once.
 
 Expression evaluation is left-to-right. A call evaluates its callee or receiver
 first and then each argument in source order. `&&` and `||` require `bool` and
@@ -1391,13 +1404,20 @@ user-overloadable; comparison operators use the traits defined in Section 4.5.
 be smaller than the bit width of the left operand. Chained comparisons such as
 `a < b < c` are invalid.
 
+Binary `++` concatenates two values of the same concatenable type. It supports
+`str`, `String`, and sequence-like standard-library values, including the
+compile-time AST list types in Section 12.2. It creates a new logical value and
+evaluates its left operand before its right operand. It is distinct from
+numeric `+` and is not a general operation on two `std.ast.Expression` values;
+an expression tree is composed with `quote:` and interpolation instead.
+
 Operator precedence from highest to lowest is:
 
 1. Field access, calls, indexing, and postfix `?`.
 2. Unary `!`, `~`, `+`, `-`, dereference, `&`, and `&var`.
 3. `as`.
 4. `*`, `/`, and `%`.
-5. `+` and `-`.
+5. `+`, `-`, and `++`.
 6. `<<` and `>>`.
 7. Bitwise `&`.
 8. Bitwise `^`.
@@ -1965,3 +1985,304 @@ fn main() -> Result[(), String]:
     println(counter.value)
     return Result.Ok(())
 ~~~
+
+## 12. Compile-time syntax generation
+
+Elamite has three user-defined compile-time declarations: `macro` produces
+syntax at an explicit invocation, `attr` transforms an attached definition,
+and `derive` produces an implementation for an attached struct or enum. Their
+bodies are ordinary Elamite code executed by the compiler's bounded
+compile-time interpreter. They operate on the public `std.ast` model rather
+than token matcher/transcriber rules or compiler-private syntax structures.
+
+All user-defined compile-time declarations and their uses remain behind
+`--unstable-macros` until the stabilization milestone removes the gate. The
+compiler-handled `@vec`, `@map`, and `@set` forms and compiler-defined
+`@importc` and `@exportc` attributes remain ungated.
+
+### 12.1 Declarations, namespaces, and visibility
+
+A compile-time declaration is a documented module-level declaration with an
+optional `pub` modifier, a typed parameter list, a return type, and an ordinary
+statement body:
+
+~~~elx
+pub macro make_pair(
+    left: std.ast.Expression,
+    right: std.ast.Expression,
+) -> std.ast.Expression:
+    let pair: std.ast.Expression = quote:
+        ($left, $right)
+    return pair
+
+pub attr named(
+    target: std.ast.StructDefinition,
+    name: str,
+) -> std.ast.StructDefinition:
+    return target.with_name(std.ast.identifier(name))
+
+pub derive Comparable(
+    target: std.ast.StructDefinition,
+) -> std.ast.Implementation:
+    std.ast.error(target, "example derive body omitted")
+~~~
+
+`macro` and `attr` declarations bind their declared names in separate macro and
+attribute namespaces. A `derive Trait` declaration resolves `Trait` through the
+ordinary type namespace and binds the generator under that spelling in a
+separate derive namespace. The generated implementation must target that exact
+trait identity. Duplicate bindings are diagnosed independently in each
+namespace.
+
+Imports use `use macro path`, `use attr path`, and `use derive path`, with the
+ordinary `as`, `pub use`, visibility, re-export, reachability, and
+noninheritance rules from Section 2.3. Unqualified function-like macro lookup
+falls back to the macro prelude containing `vec`, `map`, and `set`. A public
+compile-time declaration is distributed as versioned compile-time metadata; it
+does not become a runtime declaration or C symbol.
+
+Compile-time declarations and their namespace imports must occur in physical
+package source. Generated syntax cannot define or import a `macro`, `attr`, or
+`derive`, so expansion cannot mutate its own compile-time environment. These
+declarations cannot be local, generic, `unsafe`, foreign, or members of
+structs, enums, traits, or implementations. Their signatures may use only the
+compile-time value types admitted by `std.ast` and the compile-time interpreter;
+they cannot accept or return runtime references, raw pointers, or function
+values.
+
+A macro may use the ordinary homogeneous variadic syntax on its final
+parameter, for example `arguments: ...std.ast.Expression`. It accepts zero or
+more trailing syntax arguments and binds them as `[std.ast.Expression]` in the
+body. An attribute may likewise use one final variadic parameter after its
+implicit target and any fixed explicit parameters. A derive has exactly its one
+implicit target parameter and is never variadic. AST sequences interpolate by
+splicing in collection position under Section 12.3, so matcher-specific
+repetition syntax is unnecessary.
+
+### 12.2 The `std.ast` model
+
+`std.ast` is a versioned, compile-time-only intrinsic interface. Its values do
+not exist at runtime and are not aliases for the compiler's internal parsed,
+resolved, or typed AST. They are opaque, immutable owned values with stable
+accessors, `with_` transformation methods, structured constructors, pattern
+variants, and persistent list types. The initial interface includes at least:
+
+- `Item`, `StructDefinition`, `EnumDefinition`, `FunctionDefinition`,
+  `Implementation`, and `FieldDefinition`;
+- `Expression`, `StatementList`, `ItemList`, `MemberList`, `Pattern`, and
+  `TypeSyntax`; and
+- `Identifier` plus opaque origin information suitable for diagnostics.
+
+The model represents pre-resolution structural syntax: written names and type
+syntax, visibility, generic syntax, fields, variants, parameters, bodies,
+documentation, attributes, and provenance. It does not expose inferred types,
+resolved trait selection, layouts, target properties, runtime values, mutable
+compiler tables, or arbitrary compiler internals. A later read-only semantic
+reflection API, if any, is separate and cannot generate syntax in the same
+compilation phase.
+
+AST values can be inspected with ordinary pattern matching, for example
+`std.ast.Expression.Call(call)`, and transformed without mutation. Builders
+such as `std.ast.literal(value)` and `std.ast.identifier(text)` validate their
+input. `std.ast.error(node, message)` emits a compile-time diagnostic at the
+node's origin and does not return. User code cannot fabricate a physical span
+or call-site syntax context.
+
+### 12.3 Quotation, interpolation, and concatenation
+
+`quote:` introduces an indentation-delimited AST expression. Its expected
+`std.ast` type determines whether the quoted body is an expression, pattern,
+type, statement list, member list, item, or item list. The expected role may
+come from a binding annotation, parameter, or return position; an ambiguous or
+incompatible quotation is a compile-time error.
+
+Inside a quote, `$name` interpolates one named AST value and
+`$(compile_time_expression)` evaluates and interpolates one computed AST value.
+In a collection position an AST list is spliced into the surrounding list; a
+scalar inserts one node. `$` has no interpolation meaning outside `quote:` and
+is otherwise invalid source syntax.
+
+~~~elx
+let members: std.ast.MemberList = quote:
+    id: u64
+
+    pub fn identifier(self: &Self) -> u64:
+        return self.id
+
+let all_members = target.members() ++ members
+let result = target.with_members(all_members)
+~~~
+
+Literal syntax written in a quote receives the declaration's definition-site
+syntax context. Interpolated syntax retains its existing context and origin.
+Consequently, literal generated bindings do not accidentally capture caller
+bindings, while interpolated caller-selected names continue to name the
+caller's declarations. `++` concatenates AST list values as specified in
+Section 7; it does not combine arbitrary expression nodes.
+
+### 12.4 Function-like macros
+
+A function-like macro is invoked as `@path(...)`. Its arguments are parsed as
+syntax according to the declaration's parameter types and are not evaluated as
+runtime expressions. The declaration's return type fixes its expansion role:
+
+| Return type | Permitted invocation role |
+| --- | --- |
+| `std.ast.Expression` | one expression |
+| `std.ast.Pattern` | one pattern |
+| `std.ast.TypeSyntax` | one type |
+| `std.ast.StatementList` | one complete statement position |
+| `std.ast.Item` or `std.ast.ItemList` | one complete module-item position |
+
+A return type and invocation position that disagree are diagnosed before
+execution. Empty output is valid only for statement and item lists. Returned
+syntax is validated in its complete role and then receives every ordinary
+visibility, coherence, safety, checking, lowering, and backend rule.
+
+~~~elx
+macro trace_call(
+    expression: std.ast.Expression,
+) -> std.ast.StatementList:
+    match expression:
+        std.ast.Expression.Call(call):
+            let description = "calling " ++ call.callee().display()
+            let message = std.ast.literal(description)
+
+            let statements: std.ast.StatementList = quote:
+                println($message)
+                $expression
+            return statements
+        _:
+            std.ast.error(
+                expression,
+                "`trace_call` requires a function or method call",
+            )
+
+@trace_call(load_user(42))
+~~~
+
+### 12.5 Attributes
+
+An attribute declaration's first parameter is the implicitly supplied attached
+definition. Its type selects the allowed target kind; remaining parameters are
+bound from explicit arguments in `@attr(path(...))`. With no explicit arguments
+the short form is `@attr(path)`. A same-definition-kind return replaces the
+attached definition. `std.ast.ItemList` may replace it with zero or more module
+items, allowing an attribute to remove the item or add siblings. Every returned
+item is structurally validated before expansion continues.
+
+Attached attributes execute from top to bottom. Each attribute receives the
+complete output definition of the preceding attribute. An attribute may add or
+change fields, variants, functions, visibility, documentation, and ordinary
+attributes, but cannot bypass privacy or any later semantic check.
+
+~~~elx
+attr identifiable(
+    target: std.ast.StructDefinition,
+) -> std.ast.StructDefinition:
+    let additions: std.ast.MemberList = quote:
+        id: u64
+
+        pub fn identifier(self: &Self) -> u64:
+            return self.id
+
+    let members = target.members() ++ additions
+    return target.with_members(members)
+
+@attr(identifiable)
+struct Entity:
+    name: String
+~~~
+
+### 12.6 Derives
+
+A derive declaration has exactly one target parameter, typed as
+`std.ast.StructDefinition` or `std.ast.EnumDefinition`, and returns
+`std.ast.Implementation`. `@derive(Name, ...)` retains the original definition
+and invokes the selected generators in source order. All ordinary attributes on
+that definition finish first, so derives observe fields, variants, methods, and
+other structure added by attributes.
+
+The returned implementation must implement the exact trait named by the derive
+declaration for the exact attached type. It may not replace the type or emit
+unrelated items. The compiler rejects a mismatched target or trait before
+ordinary implementation collection; a valid result then undergoes the same
+orphan, overlap, conformance, bound, visibility, and safety checks as a
+handwritten implementation.
+
+~~~elx
+trait FieldCount:
+    fn field_count() -> usize
+
+derive FieldCount(
+    target: std.ast.StructDefinition,
+) -> std.ast.Implementation:
+    let target_type = target.type_syntax()
+    let count = std.ast.literal(target.fields().length())
+
+    let implementation: std.ast.Implementation = quote:
+        impl FieldCount for $target_type:
+            fn field_count() -> usize:
+                return $count
+    return implementation
+
+@derive(FieldCount)
+struct User:
+    name: String
+    active: bool
+~~~
+
+### 12.7 Expansion order, hygiene, and provenance
+
+The compiler first collects physical compile-time declarations and imports for
+the selected acyclic package graph. Expansion then uses a deterministic fixed
+point ordered by package identity, module path, and source/provenance order.
+For each definition, attached attributes run top-to-bottom and derives then run
+left-to-right. Function-like invocations expand outermost-first and then
+left-to-right; generated ordinary items re-enter the same attachment and
+invocation scheduler. Ordinary imports produced by expansion participate in
+name resolution only after expansion is complete.
+
+Each execution receives a fresh syntax context. Quote literals use
+definition-site context and interpolated nodes retain their prior context.
+Definition-site paths, including macro and helper names, resolve from the
+defining module; interpolated invocations retain their invocation context.
+Hygiene changes lookup context, not access rules.
+
+Every generated node retains an origin chain containing the compile-time
+declaration, attachment or invocation, and enclosing executions. Diagnostics
+use generated primary locations with related physical invocation and
+definition spans. Generated origins are never projected onto fabricated byte
+offsets in a physical source file.
+
+Re-entering the same compile-time declaration identity with the same role and
+structurally equal input on one active execution chain is a cycle diagnostic.
+Recursion with changing input is permitted only until it terminates or reaches
+a resource limit. Invalid output, cycles, or nontermination are user-facing
+compile-time errors rather than internal compiler failures.
+
+### 12.8 Compile-time execution and limits
+
+The compile-time interpreter implements deterministic safe Elamite semantics
+for the subset admitted by compile-time signatures. It has no `unsafe`, FFI,
+filesystem, environment, process, network, clock, randomness,
+target-introspection, runtime-state, or compiler-internal access. Its result is
+therefore a function of the resolved package graph, compile-time source and
+dependencies, compiler/specification and `std.ast` interface versions, and the
+fixed limits below. Host execution never changes the selected x86 or x86-64
+target semantics of the generated program.
+
+One selected package-graph compilation permits:
+
+- at most 128 simultaneously active compile-time executions;
+- at most 65,536 total macro, attribute, and derive executions;
+- at most 1,048,576 generated AST nodes in aggregate;
+- at most 1,048,576 interpreter steps for one execution; and
+- at most 64 MiB of live compile-time values for one execution.
+
+The scheduler determines which execution consumes each shared budget. An
+execution that exceeds a limit emits a diagnostic at its attachment or
+invocation and produces no partial syntax; the compiler may insert an explicit
+error node to continue independent diagnostics. Panics, invalid results,
+version skew, and resource exhaustion are contained in the same way and cannot
+corrupt compiler state or become runtime behavior.

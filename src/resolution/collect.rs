@@ -243,7 +243,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    pub(super) fn install_parsed_units(
+    pub(super) fn install_expanded_units(
         &mut self,
         io_module: ModuleId,
         ffi_module: ModuleId,
@@ -251,18 +251,18 @@ impl<'a> Resolver<'a> {
     ) {
         for unit in std::mem::take(&mut self.expanded.units) {
             let module = match unit.identity {
-                ParsedUnitIdentity::Standard(StandardModule::Root) => self.program.std_root,
-                ParsedUnitIdentity::Standard(StandardModule::Io) => io_module,
-                ParsedUnitIdentity::Standard(StandardModule::Ffi) => ffi_module,
-                ParsedUnitIdentity::Standard(StandardModule::Testing) => testing_module,
-                ParsedUnitIdentity::PackageRoot(package) => self.program.package_roots[&package],
-                ParsedUnitIdentity::PackageModule { package, path } => {
+                ExpandedUnitIdentity::Standard(StandardModule::Root) => self.program.std_root,
+                ExpandedUnitIdentity::Standard(StandardModule::Io) => io_module,
+                ExpandedUnitIdentity::Standard(StandardModule::Ffi) => ffi_module,
+                ExpandedUnitIdentity::Standard(StandardModule::Testing) => testing_module,
+                ExpandedUnitIdentity::PackageRoot(package) => self.program.package_roots[&package],
+                ExpandedUnitIdentity::PackageModule { package, path } => {
                     self.program.module_keys[&(package, path.components().to_vec())]
                 }
             };
             self.program.modules[module.index()].source_file = Some(unit.file);
             self.program.modules[module.index()].span = Some(unit.span);
-            self.parsed_units.push(ParsedUnit {
+            self.expanded_units.push(ResolutionUnit {
                 module,
                 tree: unit.tree,
             });
@@ -271,7 +271,7 @@ impl<'a> Resolver<'a> {
 
     pub(super) fn discover_inline_modules(&mut self) {
         let units = self
-            .parsed_units
+            .expanded_units
             .iter()
             .map(|unit| (unit.module, unit.tree.clone()))
             .collect::<Vec<_>>();
@@ -343,7 +343,7 @@ impl<'a> Resolver<'a> {
                 visibility,
                 Some(span),
             );
-            self.inline_units.push(ParsedUnit {
+            self.inline_units.push(ResolutionUnit {
                 module,
                 tree: item.clone(),
             });
@@ -353,7 +353,7 @@ impl<'a> Resolver<'a> {
 
     pub(super) fn collect_all_declarations(&mut self) {
         let units = self
-            .parsed_units
+            .expanded_units
             .iter()
             .chain(&self.inline_units)
             .map(|unit| (unit.module, unit.tree.clone()))
@@ -362,7 +362,7 @@ impl<'a> Resolver<'a> {
             self.collect_container(module, &tree);
         }
         let units = self
-            .parsed_units
+            .expanded_units
             .iter()
             .chain(&self.inline_units)
             .map(|unit| (unit.module, unit.tree.clone()))

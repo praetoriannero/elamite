@@ -38,7 +38,7 @@ pub const fn version() -> &'static str {
 /// Returns the language specification revision targeted by this compiler.
 #[must_use]
 pub const fn spec_revision() -> &'static str {
-    "0.7.0-draft"
+    "0.9.0-draft"
 }
 
 #[cfg(test)]
@@ -46,6 +46,6 @@ mod tests {
     #[test]
     fn release_identity_is_defined() {
         assert!(!super::version().is_empty());
-        assert_eq!(super::spec_revision(), "0.7.0-draft");
+        assert_eq!(super::spec_revision(), "0.9.0-draft");
     }
 }

@@ -22,10 +22,10 @@ use lasso::{Rodeo, Spur};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostics::{Category, Diagnostic};
-use crate::expansion::{ExpandedPackage, ExpansionOutput, expand};
+use crate::expansion::{ExpandedPackage, ExpandedUnitIdentity, ExpansionOutput, expand};
 use crate::ident::is_valid_identifier;
 use crate::package::{PackageGraph, PackageId};
-use crate::parsed::{ParsedUnitIdentity, StandardModule, parse_package};
+use crate::parsed::{StandardModule, parse_package};
 use crate::source::{FileId, SourceManager, Span};
 use crate::syntax::{
     Keyword, SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind, child_nodes,
@@ -34,7 +34,7 @@ use crate::syntax::{
 use model::{Builtin, ImportState, NamespaceTarget, PathPart};
 
 #[derive(Debug)]
-struct ParsedUnit {
+struct ResolutionUnit {
     module: ModuleId,
     tree: SyntaxNode,
 }
@@ -91,8 +91,8 @@ struct Resolver<'a> {
     program: ResolvedProgram,
     diagnostics: Vec<Diagnostic>,
     expanded: ExpandedPackage,
-    parsed_units: Vec<ParsedUnit>,
-    inline_units: Vec<ParsedUnit>,
+    expanded_units: Vec<ResolutionUnit>,
+    inline_units: Vec<ResolutionUnit>,
     resolve_test_bodies: bool,
 }
 
@@ -141,7 +141,7 @@ impl<'a> Resolver<'a> {
             program,
             diagnostics,
             expanded,
-            parsed_units: Vec::new(),
+            expanded_units: Vec::new(),
             inline_units: Vec::new(),
             resolve_test_bodies,
         }
@@ -150,7 +150,7 @@ impl<'a> Resolver<'a> {
     fn run(mut self) -> ResolutionOutput {
         let (io_module, ffi_module, testing_module) = self.install_standard_library_names();
         self.create_file_module_graph();
-        self.install_parsed_units(io_module, ffi_module, testing_module);
+        self.install_expanded_units(io_module, ffi_module, testing_module);
         self.discover_inline_modules();
         self.collect_all_declarations();
         self.check_exported_c_symbol_conflicts();

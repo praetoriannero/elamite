@@ -186,6 +186,32 @@ deferred past initial conformance, not rejected — see `LEDGER.md` §18 for the
 full adopted/deferred/rejected list and reasoning, including why the `cc`
 crate is *not* the right tool for invoking the C backend's compiler.
 
+`SPEC.md` §12 owns the accepted compile-time syntax-generation contract. The
+three documented module-level declaration forms are `[pub] macro`, `[pub]
+attr`, and `[pub] derive`; their ordinary safe Elamite bodies execute in the
+bounded compile-time interpreter over the versioned, opaque, pre-resolution
+`std.ast` façade. Function-like calls use `@path(...)`, attached transforms use
+`@attr(path(...))`, and derivation uses `@derive(...)`. Quotation is `quote:`;
+`$name`/`$(expression)` interpolate AST values, and `++` concatenates strings,
+supported sequences, and AST lists rather than arbitrary expression nodes.
+Macros may use one final homogeneous variadic AST parameter; attributes may do
+so after their implicit target and fixed explicit parameters; derives remain
+fixed at one target parameter.
+Attributes run before derives on one definition, then generated ordinary items
+and function-like macros follow the deterministic fixed-point scheduler. Keep
+all user-defined forms behind `--unstable-macros` until stabilization.
+
+Do not fold compile-time execution or expansion into the lexer, ordinary
+parser, resolver, checker, or backend. Token trees and provenance belong at the
+parsed-to-expanded boundary in `src/expansion.rs`,
+`src/expansion/token_tree.rs`, and `src/expansion/provenance.rs`; custom
+fragment grammar remains owned by `src/parser.rs`, and
+`src/expansion/fragment.rs` only adapts token trees to those entry points. The
+compile-time interpreter has no ambient capabilities or mutable compiler-table
+access. Never expose compiler-private AST nodes through `std.ast` or project a
+generated origin onto a physical `Span`; keep generated input separate until
+the expanded-syntax representation owns origin-aware locations.
+
 Recent commits use short, lowercase descriptive subjects, such as `repo
 cleanup`. Keep commits focused and imperative. Pull requests should summarize
 the behavior change, link relevant issues, identify grammar/spec impact, and

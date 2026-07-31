@@ -2,7 +2,9 @@
 //!
 //! The parser implements `ROADMAP.md` Milestone 3. It constructs a structural
 //! syntax tree and deliberately performs no name resolution, type inference,
-//! visibility checking, receiver validation, or safety checking.
+//! visibility checking, receiver validation, or safety checking. Complete
+//! fragment entry points reuse the same grammar and recovery machinery for
+//! macro expansion.
 
 use std::mem::discriminant;
 
@@ -18,10 +20,41 @@ pub struct ParseOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Grammar role required of one complete token fragment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FragmentKind {
+    Expression,
+    Statement,
+    Pattern,
+    Type,
+    Item,
+}
+
+impl FragmentKind {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Expression => "expression",
+            Self::Statement => "statement",
+            Self::Pattern => "pattern",
+            Self::Type => "type",
+            Self::Item => "item",
+        }
+    }
+}
+
 /// Parses a complete token stream produced by [`crate::lexer::lex`].
 #[must_use]
 pub fn parse(tokens: &[Token]) -> ParseOutput {
     Parser::new(tokens).parse_file()
+}
+
+/// Parses exactly one complete fragment from an EOF-terminated token stream.
+///
+/// The ordinary parser grammar and recovery paths are reused. Any token left
+/// before EOF produces a syntax diagnostic instead of being silently ignored.
+#[must_use]
+pub fn parse_fragment(tokens: &[Token], kind: FragmentKind) -> ParseOutput {
+    Parser::new(tokens).parse_complete_fragment(kind)
 }
 
 struct Parser<'a> {
@@ -76,6 +109,29 @@ impl<'a> Parser<'a> {
         }
         ParseOutput {
             tree: SyntaxNode::new(SyntaxKind::File, children, fallback),
+            diagnostics: self.diagnostics,
+        }
+    }
+
+    fn parse_complete_fragment(mut self, kind: FragmentKind) -> ParseOutput {
+        let tree = match kind {
+            FragmentKind::Expression => self.parse_expression(),
+            FragmentKind::Statement => self.parse_statement(),
+            FragmentKind::Pattern => self.parse_pattern(),
+            FragmentKind::Type => self.parse_type(),
+            FragmentKind::Item => self.parse_item(),
+        };
+        if !self.at_eof() {
+            self.error_here(format!(
+                "unexpected trailing tokens after complete {} fragment",
+                kind.description()
+            ));
+            while !self.at_eof() {
+                self.bump();
+            }
+        }
+        ParseOutput {
+            tree,
             diagnostics: self.diagnostics,
         }
     }
