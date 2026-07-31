@@ -1,0 +1,60 @@
+// Explicit-capture closures are safe anonymous callables. Locals from the
+// enclosing function are available only when they appear in the capture list.
+
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+fn invoke(callback: &Callable[(i32,), i32], value: i32) -> i32:
+    return callback(value)
+
+fn make_adder(offset: i32) -> &Callable[(i32,), i32]:
+    let add = fn[offset](value: i32) -> i32:
+        return value + offset
+    return &add
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main():
+    // A captureless closure has no brackets.
+    let square = fn(value: i32) -> i32:
+        return value * value
+    println(f"square: {square(6)}")
+
+    // A plain capture is an independent logical copy made when the closure is
+    // created. Rebinding the outer variable does not change that snapshot.
+    var offset = 4
+    let add = fn[offset](value: i32):
+        return value + offset
+    offset = 100
+    println(f"value capture: {add(3)}")
+
+    // Copying a closure recursively copies its captured values.
+    let copied_add = add
+    println(f"copied closure: {copied_add(5)}")
+
+    // `as` gives the captured value a closure-local name.
+    let double_then_add = fn[add as finish](value: i32):
+        return finish(value * 2)
+    println(f"capture alias: {double_then_add(5)}")
+
+    // A mutable reference capture preserves identity and can update the
+    // original storage. The capture binding itself still cannot be rebound.
+    var total = 10
+    let accumulate = fn[&var total as state](value: i32) -> i32:
+        *state += value
+        return *state
+    println(f"reference capture: {accumulate(7)}")
+    println(f"outer total: {total}")
+
+    // Closure types satisfy exact Callable bounds and can also be erased
+    // behind a matching Callable trait-object reference.
+    println(f"generic callable: {apply(add, 6)}")
+    println(f"erased callable: {invoke(&add, 8)}")
+
+    // Named safe functions participate in the same Callable APIs.
+    println(f"named callable: {apply(increment, 41)}")
+
+    // Managed closure environments can escape the function that creates them.
+    let add_twenty = make_adder(20)
+    println(f"escaping closure: {add_twenty(2)}")

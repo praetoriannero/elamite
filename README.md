@@ -7,6 +7,8 @@ implementation.
 - [`SPEC.md`](SPEC.md) defines the language.
 - [`examples/spec_demo.elx`](examples/spec_demo.elx) is the authoritative
   surface-language example.
+- [`examples/closures`](examples/closures) demonstrates explicit captures and
+  the `Callable` interface.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.
