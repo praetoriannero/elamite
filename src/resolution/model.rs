@@ -119,6 +119,7 @@ pub enum DeclarationKind {
     Enum,
     Trait,
     Function,
+    Test,
     ForeignType,
     ForeignStruct,
     ForeignFunction,
@@ -154,6 +155,9 @@ pub struct Declaration {
     pub generic_parameters: Vec<GenericParameterId>,
     pub externally_reachable: bool,
     pub foreign_binding: Option<ForeignBinding>,
+    /// True only for tests owned by the package selected by
+    /// [`crate::resolution::resolve_for_tests`].
+    pub test_selected: bool,
 }
 
 /// One `impl Trait for Type` block.

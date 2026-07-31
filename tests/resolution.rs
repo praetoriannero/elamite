@@ -847,6 +847,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
             "print",
             "println",
             "str",
+            "trap",
             "u128",
             "u16",
             "u32",
@@ -862,7 +863,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
         .iter()
         .filter(|module| module.origin == elamite::resolution::ModuleOrigin::Standard)
         .collect::<Vec<_>>();
-    assert_eq!(standard_modules.len(), 3);
+    assert_eq!(standard_modules.len(), 4);
     for module in standard_modules {
         assert!(
             module.source_file.is_some(),

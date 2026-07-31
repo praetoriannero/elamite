@@ -80,6 +80,30 @@ fn render(sources: &SourceManager, diagnostics: &[Diagnostic]) -> String {
         .join("\n")
 }
 
+#[test]
+fn production_c_is_unchanged_when_tests_are_appended() {
+    let tree = TestTree::new("test-artifact-equivalence");
+    let production = "pub fn answer() -> i32:\n    return 42\n";
+    tree.library(production);
+
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let without_tests = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)))
+        .generated_c;
+
+    tree.library(&format!(
+        "{production}\ntest ignored_by_production_build:\n    missing_test_only_name()\n"
+    ));
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let with_tests = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)))
+        .generated_c;
+
+    assert_eq!(without_tests, with_tests);
+}
+
 fn build_and_run(source: &str, optimization: Optimization) -> (String, String, i32) {
     let tree = TestTree::new("run");
     tree.executable(source);
@@ -1585,7 +1609,16 @@ fn command_line_help_lists_the_supported_workflows() {
         .expect("run Elamite help");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["check", "build", "run", "init", "dump", "doc", "test"] {
+    for command in [
+        "check",
+        "build",
+        "run",
+        "init",
+        "dump",
+        "doc",
+        "test",
+        "conformance",
+    ] {
         assert!(
             stdout.contains(command),
             "missing `{command}` in:\n{stdout}"
@@ -1817,6 +1850,7 @@ fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
         &COptions {
             target: Target::X86_64,
             entry: compilation.entry,
+            test_entries: None,
         },
     );
 

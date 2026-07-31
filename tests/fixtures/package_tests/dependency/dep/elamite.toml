@@ -1,0 +1,5 @@
+[package]
+name = "test_dependency"
+version = "0.1.0"
+target_kind = "lib"
+

@@ -1,0 +1,52 @@
+/// A value that identifies one defined, observable runtime trap.
+pub trait RuntimeTrap:
+    fn code(self: &Self) -> str
+    fn message(self: &Self) -> String
+
+/// Every stable compiler/runtime trap category except allocation failure.
+pub enum BuiltinTrap:
+    Panic
+    IntegerOverflow
+    DivisionByZero
+    InvalidShift
+    IndexOutOfBounds
+    MissingMapKey
+    InvalidNumericConversion
+    NullPointer
+    MisalignedPointer
+    ClosedHandle
+
+impl RuntimeTrap for BuiltinTrap:
+    fn code(self: &Self) -> str:
+        match *self:
+            BuiltinTrap.Panic:
+                return "E-RUN-PANIC"
+            BuiltinTrap.IntegerOverflow:
+                return "E-RUN-OVERFLOW"
+            BuiltinTrap.DivisionByZero:
+                return "E-RUN-DIVZERO"
+            BuiltinTrap.InvalidShift:
+                return "E-RUN-SHIFT"
+            BuiltinTrap.IndexOutOfBounds:
+                return "E-RUN-INDEX"
+            BuiltinTrap.MissingMapKey:
+                return "E-RUN-KEY"
+            BuiltinTrap.InvalidNumericConversion:
+                return "E-RUN-CAST"
+            BuiltinTrap.NullPointer:
+                return "E-RUN-NULL"
+            BuiltinTrap.MisalignedPointer:
+                return "E-RUN-ALIGN"
+            BuiltinTrap.ClosedHandle:
+                return "E-RUN-CLOSED"
+
+    fn message(self: &Self) -> String:
+        return String.from(self.code())
+
+/// Fails unless `condition` is true.
+pub fn assert(condition: bool) -> ():
+    pass
+
+/// Terminates with a formatted assertion failure.
+pub fn fail[T: Display](message: T) -> !:
+    pass

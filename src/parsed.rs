@@ -18,6 +18,7 @@ pub enum StandardModule {
     Root,
     Io,
     Ffi,
+    Testing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,11 @@ fn parse_package_inner(
                 ParsedUnitIdentity::Standard(StandardModule::Ffi),
                 PathBuf::from("<std>/ffi.elx"),
                 crate::standard::FFI_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Testing),
+                PathBuf::from("<std>/testing.elx"),
+                crate::standard::TESTING_SOURCE,
             ),
         ] {
             let file = sources.add_text(path.clone(), source.to_string());

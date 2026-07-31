@@ -31,6 +31,8 @@ jobs:
       - run: sudo dpkg --add-architecture i386
       - run: sudo apt-get update
       - run: sudo apt-get install -y gcc-multilib libc6-dev-i386 libgc-dev libgc-dev:i386
-      - run: cargo run -- test examples/spec_demo --target=${{ matrix.target }} --all-modes
-      - run: cargo run -- test tests/fixtures/conformance --target=${{ matrix.target }} --all-modes
+      - run: cargo run -- conformance examples/spec_demo --target=${{ matrix.target }} --all-modes
+      - run: cargo run -- conformance tests/fixtures/conformance --target=${{ matrix.target }} --all-modes
+      - run: cargo run -- test tests/fixtures/package_tests/basic --target=${{ matrix.target }}
+      - run: cargo run -- test tests/fixtures/package_tests/basic --target=${{ matrix.target }} --release
       - run: cargo run -- run examples/c_ffi --target=${{ matrix.target }} --release

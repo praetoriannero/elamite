@@ -2,7 +2,7 @@
 
 > Status: Active — Milestone 0 deliverable, maintained as milestones complete
 >
-> Basis: `SPEC.md` version 0.4.0-draft and `examples/spec_demo.elx`
+> Basis: `SPEC.md` version 0.5.0-draft and `examples/spec_demo.elx`
 >
 > Purpose: turn the specification into an implementable checklist, per the
 > completed [`ROADMAP.md`](ROADMAP.md) Milestone 0. This document assigns no new
@@ -320,6 +320,11 @@ removed.
 | `Result[T, E]`; postfix `?` valid only in a function returning `Result[U, E]` with the *exact* same error type; operand evaluates once; `Ok(value)` copies value as the postfix expression's value; `Err(error)` copies error and immediately returns `Result.Err(error)` | M15.1–15.3 (done) | — | compile-fail (`postfix_propagation_requires_matching_standard_result_types`), run-pass (`propagation_branches_evaluate_once_and_copy_payloads`) |
 | `?` is the explicit exception to "return uses `return`"; no implicit error conversion (caller converts explicitly, e.g. via `match`); `Option[T]` uses `match`, not `?` | M15.2 (done) | — | compile-fail (`Option` operand, differing errors, non-`Result` operand and function) |
 | `std.panic(message: str) -> !` (prelude `panic`) evaluates its message once, reports `E-RUN-PANIC` with message and call-site location, flushes stderr, exits unsuccessfully, is not `Result`, and does not guarantee pending cleanup | M22 (done) | panic runtime | run-fail (`panic_is_a_never_returning_runtime_terminator`) |
+| Module-level private non-callable `test name:` declarations share the item namespace, have an implicit unit result, may use package-private helpers, and are ignored by production body checking/lowering; dependency tests are not discovered | **Package tests, typed traps, and runner** (done) | test harness only | parse, compile-fail, integration |
+| `RuntimeTrap`, `BuiltinTrap`, and `std.trap` provide nominal-type-plus-code trap identity; built-in defined traps map to standard variants, OOM remains unobservable, and raising remains process-fatal | **Package tests, typed traps, and runner** (done) | structured trap runtime | compile-pass/fail, run-fail |
+| `std.testing.assert(bool)` and `fail[T: Display](T)` evaluate arguments once and produce a structured non-trap assertion failure, callable inside or outside tests | **Package tests, typed traps, and runner** (done) | assertion runtime | compile-fail, run-fail |
+| `expect(selector):` is test-only, requires `RuntimeTrap`, evaluates its selector once, runs a non-nested non-escaping body in an isolated process, and passes only for an exact typed trap; completion, mismatch, assertion, OOM, signal, or crash fails | **Package tests, typed traps, and runner** (done) | child-process isolation | compile-fail, integration |
+| `elamc test [PACKAGE]` selects only that package's tests in qualified-name order and isolates every test; zero tests succeeds, an empty explicit filter is a selection error, all selected tests run, and status 0/1/2 distinguishes pass/test failure/command failure; fixtures use `elamc conformance SUITE` | **Package tests, typed traps, and runner** (done) | native process runner | integration |
 | No implicit destruction protocol; GC manages memory only; deterministic external cleanup uses lexical `defer` | M15 (done) | — | run-pass (defer suite) |
 | There is no compiler-known cleanup trait or privileged method name; resource types expose ordinary safe unit-returning cleanup methods, and each API specifies its own idempotence, sharing, and error behavior; shared handle identity must be represented explicitly | M15 (done) | — | run-pass (`spec_demo_error_and_cleanup_regions_build_and_run`, `a_returned_shared_handle_observes_its_deferred_close`) |
 | `defer call` registers one safe unit-returning call for block exit; `defer:` defers an indented block of statements as one registration, its body an ordinary lexical scope; both only in an executable body; registration occurs only when control reaches it; not a function value/closure, no captured environment, cannot escape its block | M3 (parse both forms), M15.4–15.5 (done) | — | compile-fail (`deferred_calls_must_be_safe_and_unit_returning`), run-pass (`deferred_execution_is_static_and_constructs_no_callable`: static per-edge expansion, no callable/environment value) |
@@ -442,6 +447,7 @@ are the outcomes the initial driver must support, independent of spelling:
 | Dump intermediate representations | Tokens, syntax tree, resolved declarations, typed IR, control-flow IR, monomorphization results, generated C | M18 (done) |
 | Extract public documentation | Emit attached Markdown, public signatures, and source links without requiring unrelated private bodies to check | M18 (done) |
 | Run conformance fixtures | Select fixtures and target/optimization matrices, compare stable output/status expectations, isolate builds, and retain failure artifacts | M18 (done) |
+| Run package tests | Discover selected-package `test` declarations, check and compile test-only bodies, run each in isolation with deterministic filtering/reporting, and distinguish test failure from command failure | **Package tests, typed traps, and runner** (done) |
 
 ## 15. Concurrency: planned, not yet normative
 

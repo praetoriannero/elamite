@@ -131,7 +131,9 @@ impl<'a> TypeBuilder<'a> {
         for declaration in &self.resolved.declarations {
             if matches!(
                 declaration.kind,
-                DeclarationKind::Function | DeclarationKind::ForeignFunction
+                DeclarationKind::Function
+                    | DeclarationKind::Test
+                    | DeclarationKind::ForeignFunction
             ) {
                 self.lower_function_signature(declaration.id);
             }
@@ -267,7 +269,9 @@ impl<'a> TypeBuilder<'a> {
                     complete: true,
                 })
             }
-            DeclarationKind::Function | DeclarationKind::ForeignFunction => {
+            DeclarationKind::Function
+            | DeclarationKind::Test
+            | DeclarationKind::ForeignFunction => {
                 self.diagnostics.push(
                     Diagnostic::new(Category::TypeSystem, "a function name is not a type")
                         .with_primary(span),

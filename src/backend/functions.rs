@@ -231,6 +231,16 @@ impl<'a> CEmitter<'a> {
             Instruction::PrintNewline { .. } => {
                 self.output.push_str("    fputc('\\n', stdout);\n");
             }
+            Instruction::CompleteExpectation { .. } => {
+                self.output.push_str("    el_expect_complete();\n");
+            }
+            Instruction::WaitExpectation { span } => {
+                let _ = writeln!(
+                    self.output,
+                    "    el_expect_wait({});",
+                    self.trap_arguments(*span)
+                );
+            }
         }
     }
 
@@ -286,6 +296,15 @@ impl<'a> CEmitter<'a> {
                 operation,
                 arguments,
             } => {
+                if matches!(operation, StandardCall::Assert) {
+                    let condition = arguments
+                        .first()
+                        .map_or_else(|| "false".to_string(), |value| temporary_name(*value));
+                    return Some(format!(
+                        "el_assert({condition}, {})",
+                        self.trap_arguments(span)
+                    ));
+                }
                 if matches!(operation, StandardCall::ForeignRootRetain { .. }) {
                     let value = arguments
                         .first()
@@ -437,6 +456,40 @@ impl<'a> CEmitter<'a> {
                 format!(
                     "({object}){{ (void *){}, &{table} }}",
                     temporary_name(*value)
+                )
+            }
+            Rvalue::BeginExpectation {
+                selector,
+                selector_type,
+                trait_declaration,
+            } => {
+                let Some(code) = crate::traits::vtable_entry(
+                    self.resolved,
+                    self.typed,
+                    *trait_declaration,
+                    *selector_type,
+                    "code",
+                ) else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::CodeGeneration,
+                            "an expected trap has no `RuntimeTrap.code` implementation",
+                        )
+                        .with_primary(span),
+                    );
+                    return None;
+                };
+                let code = FunctionInstance {
+                    declaration: code.declaration,
+                    arguments: code.arguments,
+                    self_type: code.self_type,
+                };
+                format!(
+                    "el_expect_begin(UINT32_C({}), {}(&{}), {})",
+                    selector_type.index(),
+                    self.function_symbol(&code),
+                    temporary_name(*selector),
+                    self.trap_arguments(span)
                 )
             }
             Rvalue::DynamicCall {
@@ -1308,6 +1361,80 @@ impl<'a> CEmitter<'a> {
                         temporary_name(*message),
                         self.trap_arguments(*span)
                     ),
+                    NeverCall::AssertionFail { value, value_type } => {
+                        let formatter = format!("el_failure_formatter_{}", value.index());
+                        let _ = writeln!(
+                            self.output,
+                            "    {{ el_formatter {formatter} = {{NULL, 0U, 0U}};"
+                        );
+                        self.emit_formatter_value(
+                            &formatter,
+                            &temporary_name(*value),
+                            *value_type,
+                            *span,
+                        );
+                        let _ = writeln!(
+                            self.output,
+                            "    el_assert_fail(el_fmt_finish(&{formatter}), {}); }}",
+                            self.trap_arguments(*span)
+                        );
+                        "abort()".to_string()
+                    }
+                    NeverCall::TypedTrap {
+                        reason,
+                        reason_type,
+                        trait_declaration,
+                    } => {
+                        let code = crate::traits::vtable_entry(
+                            self.resolved,
+                            self.typed,
+                            *trait_declaration,
+                            *reason_type,
+                            "code",
+                        );
+                        let message = crate::traits::vtable_entry(
+                            self.resolved,
+                            self.typed,
+                            *trait_declaration,
+                            *reason_type,
+                            "message",
+                        );
+                        let (Some(code), Some(message)) = (code, message) else {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::CodeGeneration,
+                                    "a typed trap has no complete `RuntimeTrap` implementation",
+                                )
+                                .with_primary(*span),
+                            );
+                            return;
+                        };
+                        let suffix = reason.index();
+                        let reason = temporary_name(*reason);
+                        let code = FunctionInstance {
+                            declaration: code.declaration,
+                            arguments: code.arguments,
+                            self_type: code.self_type,
+                        };
+                        let message = FunctionInstance {
+                            declaration: message.declaration,
+                            arguments: message.arguments,
+                            self_type: message.self_type,
+                        };
+                        let _ = writeln!(
+                            self.output,
+                            "    {{ el_str el_trap_code_{suffix} = {}(&{reason});\n\
+                             \x20\x20\x20\x20el_string el_trap_message_{suffix} = {}(&{reason});\n\
+                             \x20\x20\x20\x20el_typed_trap(UINT32_C({}), el_trap_code_{suffix}, \
+                             (el_str){{el_trap_message_{suffix}.bytes, \
+                             el_trap_message_{suffix}.length}}, {}); }}",
+                            self.function_symbol(&code),
+                            self.function_symbol(&message),
+                            reason_type.index(),
+                            self.trap_arguments(*span),
+                        );
+                        "abort()".to_string()
+                    }
                     NeverCall::Direct {
                         instance,
                         arguments,

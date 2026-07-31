@@ -1,0 +1,38 @@
+struct CustomTrap:
+    detail: i32
+
+pub fn assertion_is_available_to_production_code() -> ():
+    std.testing.assert(true)
+
+impl std.testing.RuntimeTrap for CustomTrap:
+    fn code(self: &Self) -> str:
+        return "custom"
+
+    fn message(self: &Self) -> String:
+        return String.from(f"custom {self.detail}")
+
+test assertions_pass:
+    std.testing.assert(true)
+
+test bare_return_passes:
+    return
+
+test builtin_trap_is_expected:
+    expect(std.testing.BuiltinTrap.Panic):
+        panic("expected")
+
+test compiler_trap_is_typed:
+    var maximum: i8 = 127
+    expect(std.testing.BuiltinTrap.IntegerOverflow):
+        maximum = maximum + 1
+
+test expected_body_state_is_isolated:
+    var value = 1
+    expect(std.testing.BuiltinTrap.Panic):
+        value = 2
+        panic("expected")
+    std.testing.assert(value == 1)
+
+test custom_trap_is_expected:
+    expect(CustomTrap { detail: 7 }):
+        std.trap(CustomTrap { detail: 7 })

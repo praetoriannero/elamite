@@ -397,3 +397,8 @@ pub fn main() -> Result[(), io.IoError]:
     return Result.Ok(())
 
 // Boehm GC provides non-moving managed memory; it never invokes user cleanup.
+
+test standard_testing_region:
+    std.testing.assert(increment(41) == 42)
+    expect(std.testing.BuiltinTrap.Panic):
+        panic("expected by the package test")

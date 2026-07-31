@@ -3,42 +3,113 @@
 //! The checker selects these operations, IR preserves them, and the backend
 //! lowers them. No one phase owns their shared vocabulary.
 
+use crate::resolution::DeclarationId;
 use crate::types::TypeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StandardCall {
     Panic,
+    Assert,
+    Fail {
+        value_type: TypeId,
+    },
+    Trap {
+        reason_type: TypeId,
+        trait_declaration: DeclarationId,
+    },
     StringFrom,
-    IdentityFrom { wrapper: TypeId },
-    ForeignRootRetain { handle: TypeId, mutable: bool },
-    ForeignRootPointer { handle: TypeId, mutable: bool },
-    ForeignRootClose { handle: TypeId },
-    FormatterWrite { formatter: TypeId },
-    ArrayLen { collection: TypeId },
-    ArrayGet { collection: TypeId },
-    VecNew { collection: TypeId },
-    VecLen { collection: TypeId },
-    VecIsEmpty { collection: TypeId },
-    VecGet { collection: TypeId },
-    VecAppend { collection: TypeId },
-    VecInsert { collection: TypeId },
-    VecRemove { collection: TypeId },
-    VecClear { collection: TypeId },
-    MapNew { collection: TypeId },
-    MapLen { collection: TypeId },
-    MapIsEmpty { collection: TypeId },
-    MapContainsKey { collection: TypeId },
-    MapGet { collection: TypeId },
-    MapInsert { collection: TypeId },
-    MapRemove { collection: TypeId },
-    MapClear { collection: TypeId },
-    SetNew { collection: TypeId },
-    SetLen { collection: TypeId },
-    SetIsEmpty { collection: TypeId },
-    SetContains { collection: TypeId },
-    SetInsert { collection: TypeId },
-    SetRemove { collection: TypeId },
-    SetClear { collection: TypeId },
+    IdentityFrom {
+        wrapper: TypeId,
+    },
+    ForeignRootRetain {
+        handle: TypeId,
+        mutable: bool,
+    },
+    ForeignRootPointer {
+        handle: TypeId,
+        mutable: bool,
+    },
+    ForeignRootClose {
+        handle: TypeId,
+    },
+    FormatterWrite {
+        formatter: TypeId,
+    },
+    ArrayLen {
+        collection: TypeId,
+    },
+    ArrayGet {
+        collection: TypeId,
+    },
+    VecNew {
+        collection: TypeId,
+    },
+    VecLen {
+        collection: TypeId,
+    },
+    VecIsEmpty {
+        collection: TypeId,
+    },
+    VecGet {
+        collection: TypeId,
+    },
+    VecAppend {
+        collection: TypeId,
+    },
+    VecInsert {
+        collection: TypeId,
+    },
+    VecRemove {
+        collection: TypeId,
+    },
+    VecClear {
+        collection: TypeId,
+    },
+    MapNew {
+        collection: TypeId,
+    },
+    MapLen {
+        collection: TypeId,
+    },
+    MapIsEmpty {
+        collection: TypeId,
+    },
+    MapContainsKey {
+        collection: TypeId,
+    },
+    MapGet {
+        collection: TypeId,
+    },
+    MapInsert {
+        collection: TypeId,
+    },
+    MapRemove {
+        collection: TypeId,
+    },
+    MapClear {
+        collection: TypeId,
+    },
+    SetNew {
+        collection: TypeId,
+    },
+    SetLen {
+        collection: TypeId,
+    },
+    SetIsEmpty {
+        collection: TypeId,
+    },
+    SetContains {
+        collection: TypeId,
+    },
+    SetInsert {
+        collection: TypeId,
+    },
+    SetRemove {
+        collection: TypeId,
+    },
+    SetClear {
+        collection: TypeId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

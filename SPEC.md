@@ -2,7 +2,7 @@
 
 > Status: Draft
 >
-> Version: 0.4.0-draft
+> Version: 0.5.0-draft
 >
 > The current [specification demonstration](examples/spec_demo.elx) is the
 > authoritative surface-language example. This document describes that design;
@@ -31,9 +31,9 @@ Elamite source files are UTF-8 text. An identifier begins with an ASCII letter
 or `_` and continues with ASCII letters, decimal digits, or `_`; equivalently,
 it matches `[A-Za-z_][A-Za-z0-9_]*`. Keywords are reserved and cannot be used
 as identifiers. The reserved keywords are `as`, `break`, `continue`, `defer`,
-`else`, `enum`, `false`, `fn`, `for`, `if`, `impl`, `in`,
+`else`, `enum`, `expect`, `false`, `fn`, `for`, `if`, `impl`, `in`,
 `let`, `match`, `mod`, `null`, `pass`, `pub`, `return`, `root`, `self`, `Self`,
-`struct`, `super`, `trait`, `true`, `type`, `unsafe`, `use`, `var`, and
+`struct`, `super`, `test`, `trait`, `true`, `type`, `unsafe`, `use`, `var`, and
 `while`.
 Unicode text remains valid in comments, documentation, and string or character
 contents as permitted by their literal syntax.
@@ -63,8 +63,8 @@ indentation level. The body ends at the next dedent. Dedentation must return to
 a previously established block indentation level. EOF closes every remaining
 open block.
 
-This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `if`,
-`else`, `match`, `for`, `while`, `unsafe`, and function
+This body form is used for `mod`, `struct`, `enum`, `trait`, `impl`, `test`,
+`expect`, `if`, `else`, `match`, `for`, `while`, `unsafe`, and function
 declarations with bodies. Brace-delimited bodies and same-line bodies are
 invalid everywhere. An empty body is also invalid; `pass` is the explicit
 no-op statement when a body must otherwise be empty.
@@ -1357,6 +1357,106 @@ evaluated exactly once. The runtime reports `E-RUN-PANIC`, the message, and the
 panic call site's source location to standard error, flushes standard error,
 and exits unsuccessfully. Panic is unrecoverable, is not represented by
 `Result`, and does not guarantee that pending deferred calls run.
+
+### 8.1 Package tests and typed runtime traps
+
+A module-level test declaration is written `test name:` followed by a nonempty
+ordinary statement body. A test is private and non-callable, has no parameters,
+generic parameters, return annotation, attributes, `pub`, or `unsafe`
+modifier, and shares the ordinary module-item namespace. Its stable qualified
+name consists of its package-relative module path and declared name. Tests may
+use private declarations from their own package under the ordinary visibility
+rules. Tests in dependencies are parsed and collected but are never discovered
+or executed for the selected package.
+
+A test has an implicit unit result. Reaching the end or executing bare `return`
+passes. Returning a value and applying postfix `?` are compile-time errors.
+Except for the `expect` construct below, its body follows every ordinary
+lexical, typing, trait, safety, FFI, control-flow, copying, and cleanup rule.
+Normal `check`, `build`, and `run` parse and collect tests so namespace
+conflicts are diagnosed, but do not resolve, type-check, lower, or emit their
+bodies. Adding tests therefore does not alter a production artifact.
+
+The standard module `std.testing` declares:
+
+~~~elx
+pub trait RuntimeTrap:
+    fn code(self: &Self) -> str
+    fn message(self: &Self) -> String
+
+pub enum BuiltinTrap:
+    Panic
+    IntegerOverflow
+    DivisionByZero
+    InvalidShift
+    IndexOutOfBounds
+    MissingMapKey
+    InvalidNumericConversion
+    NullPointer
+    MisalignedPointer
+    ClosedHandle
+
+pub fn assert(condition: bool) -> ()
+pub fn fail[T: Display](message: T) -> !
+~~~
+
+`std.trap[T: std.testing.RuntimeTrap](reason: T) -> !` raises an
+unrecoverable typed trap. The argument, then `code()` and `message()`, are each
+evaluated exactly once. A trap identity is the concrete nominal type of
+`reason` together with the exact bytes returned by `code()`; equal code text
+from different nominal types does not create equal identities. Trap codes and
+messages must be deterministic for deterministic program inputs. Raising a
+trap flushes standard error and terminates unsuccessfully without unwinding or
+guaranteeing pending `defer` execution.
+
+`BuiltinTrap` implements `RuntimeTrap`. Its variants represent
+`E-RUN-PANIC`, `E-RUN-OVERFLOW`, `E-RUN-DIVZERO`, `E-RUN-SHIFT`,
+`E-RUN-INDEX`, `E-RUN-KEY`, `E-RUN-CAST`, `E-RUN-NULL`, `E-RUN-ALIGN`, and
+`E-RUN-CLOSED`, respectively. Allocation failure is deliberately absent:
+out-of-memory termination is not an observable runtime trap. Every built-in
+runtime check raises the corresponding `BuiltinTrap` identity. `std.panic`
+raises `BuiltinTrap.Panic` while retaining its supplied message.
+
+`std.testing.assert(condition)` evaluates `condition` exactly once and returns
+unit when true. False terminates with a structured assertion failure carrying
+the call-site location. `std.testing.fail(message)` evaluates and formats its
+single `Display` argument exactly once, then terminates with the same assertion
+failure category. Assertion failure is not a `RuntimeTrap`, cannot satisfy
+`expect`, and does not guarantee pending cleanup. Both functions remain
+ordinary callable facilities outside test declarations.
+
+An expected-trap statement is written `expect(selector):` followed by a
+nonempty ordinary statement body. It is permitted only directly or indirectly
+inside a test body. `selector` is evaluated exactly once in the parent test and
+its concrete type must implement `RuntimeTrap`. The body executes in a fresh
+child process whose initial state is a process copy taken after selector
+evaluation. Child mutations, output-buffer state, and cleanup registrations do
+not become parent state.
+
+The expectation passes only when the child raises the exact nominal trap
+identity and code selected by `selector`. Normal completion, a different
+typed trap, assertion failure, OOM, a signal, a foreign crash, or any other
+abnormal exit fails the expectation without terminating the parent test
+runner. Static errors remain static errors: an `expect` body does not legalize
+invalid indexing, conversions, unsafe operations, or other rejected source.
+An expectation may not contain another `expect`, and `return`, `break`,
+`continue`, postfix `?`, or control escaping its body is invalid.
+
+`elamc test [PACKAGE]` discovers tests only in the selected package. It checks
+the selected test bodies, orders them by qualified name, and executes every
+test behind a fresh process boundary. Tests cannot communicate through
+in-process mutable state; output from each process is captured and reported
+with that test. Exact-name and substring filters preserve qualified-name order.
+No tests is a successful run, while an explicitly supplied filter matching
+nothing is a command-selection error.
+
+The test command accepts the same target, optimization, C compiler, native
+flag, and output-directory policy as a native build. A passing run, including
+zero discovered tests, exits zero. One or more test failures exit one after all
+selected tests have run. Compilation, configuration, toolchain, or empty-filter
+selection errors exit two. The legacy fixture matrix is a separate developer
+command, `elamc conformance SUITE`, and is not affected by package test
+discovery.
 
 ~~~elx
 fn increment_result[E](result: Result[i32, E]) -> Result[i32, E]:

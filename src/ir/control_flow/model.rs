@@ -163,6 +163,11 @@ pub enum Rvalue {
         element_type: TypeId,
     },
     Aggregate(AggregateValue),
+    BeginExpectation {
+        selector: TemporaryId,
+        selector_type: TypeId,
+        trait_declaration: DeclarationId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -200,12 +205,27 @@ pub enum Instruction {
     PrintNewline {
         span: Span,
     },
+    CompleteExpectation {
+        span: Span,
+    },
+    WaitExpectation {
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum NeverCall {
     Panic {
         message: TemporaryId,
+    },
+    AssertionFail {
+        value: TemporaryId,
+        value_type: TypeId,
+    },
+    TypedTrap {
+        reason: TemporaryId,
+        reason_type: TypeId,
+        trait_declaration: DeclarationId,
     },
     Direct {
         instance: FunctionInstance,

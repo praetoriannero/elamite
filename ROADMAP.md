@@ -3,10 +3,10 @@
 > Status: Active — completed legacy work is omitted from this forward-looking
 > plan; remaining milestones and work packages use stable descriptive names
 >
-> Next required work package: **Package tests, typed traps, and runner** —
-> **Normative test and trap contract**
+> Next required work package: **Tuple destructuring and positional fields** —
+> **Normative tuple-access contract**
 >
-> Basis: `SPEC.md` version 0.4.0-draft and
+> Basis: `SPEC.md` version 0.5.0-draft and
 > `examples/spec_demo.elx`
 
 This document breaks the remaining initial Elamite compiler work and planned
@@ -207,68 +207,6 @@ deterministic output.
 **Post-conformance optimization** is optional work rather than a gate for the
 test and macro programs below. Individual packages, especially source-map
 infrastructure, may be pulled forward when a later milestone needs them.
-
-## 4. Language-native test declarations
-
-### Package tests, typed traps, and runner
-
-> Status: Accepted design; pending normative specification and implementation.
->
-> Blocked by: **None**.
->
-> Accepted surface: a module-level declaration written `test test_name:`
-> followed by a nonempty ordinary statement body. An isolated expected-trap
-> block is written `expect(trap_value):` and accepts a value whose concrete type
-> implements `std.testing.RuntimeTrap`. `elamc test` defaults to the current
-> package, while the existing fixture runner moves to `elamc conformance`.
-
-**Goal:** Let a package define and execute named Elamite tests, assertions,
-intentional user-defined traps, and exact expectations for defined runtime
-traps without making traps recoverable in production code or changing
-production artifacts.
-
-The accepted contract has these boundaries:
-
-- tests are private, non-callable module items with no parameters, generics,
-  return annotation, attributes, or modifiers; their names share the ordinary
-  module-item namespace;
-- a test has an implicit unit result: fallthrough and bare `return` pass, while
-  value returns and postfix `?` are invalid;
-- tests may access package-private declarations in the selected package, but
-  dependency tests are not discovered and dependency visibility is unchanged;
-- normal `check`, `build`, and `run` parse and collect test declarations but do
-  not check or lower their bodies, and production artifacts remain
-  byte-equivalent when tests are present;
-- each test and each `expect` body execute behind a fresh process boundary;
-  exact expected traps pass, normal completion or a different trap fails, and
-  assertion failure, undefined behavior, foreign crashes, signals, and OOM
-  never match a runtime-trap expectation;
-- assertion failure and every expected or unexpected trap retain the existing
-  rule that pending `defer` execution is not guaranteed;
-- tests run in deterministic qualified-name order but cannot communicate
-  in-process state; a package with zero tests succeeds, while an explicit
-  filter matching nothing is a command error; and
-- only defined Elamite traps are observable. Compile-time-invalid operations
-  remain compile-time errors, and `expect` cannot legalize them.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **Normative test and trap contract** | Record the accepted declaration, namespace, body, visibility, assertion, failure, typed-trap, expected-block isolation/state, output, ordering, selection, process-status, dependency, target, and optimization rules in `SPEC.md`; update `LEDGER.md`; move the fixture command to `elamc conformance SUITE`. | Native tests and conformance fixtures have distinct commands, and every accepted or rejected construct has one normative outcome before either new keyword is reserved. |
-| **Extensible runtime traps** | Add `std.testing.RuntimeTrap` with deterministic `code(self: &Self) -> str` and `message(self: &Self) -> String` methods, a standard `BuiltinTrap` implementation covering `Panic` and every stable `E-RUN-*` category except OOM, and `std.trap[T: RuntimeTrap](reason: T) -> !`. Identify a trap by its concrete nominal type plus `code()`. | User-owned types may implement the trait under ordinary coherence, unrelated types cannot collide on code text, built-in checks map exactly to standard values, and raising a custom trap remains unrecoverable. |
-| **Assertion facilities** | Add `std.testing.assert(condition: bool) -> ()` and `std.testing.fail[T: Display](message: T) -> !` with exact-once argument evaluation, call-site diagnostics, and failure behavior distinct from `BuiltinTrap.Panic`. Keep both callable as ordinary terminating assertions outside test declarations. | Boolean assertions and explicit failure produce structured diagnostics without requiring optional arguments, overloading, or macros. |
-| **Test and expectation syntax** | Reserve `test` and `expect`, update lexer/editor inventories, parse tests only at module level, and parse expected-trap blocks only in test bodies under the accepted nesting and escaping-control restrictions. | Valid syntax retains stable spans; modifiers, signatures, empty bodies, statement-position tests, invalid selectors, nested expectations, and escaping control receive focused diagnostics. |
-| **Stable identities and collection** | Assign stable test identities across root, inline, and file-backed modules, share the module-item namespace, and collect only the selected package's tests without treating them as callable declarations or imports. | Duplicate names and qualified identities are deterministic, package-private helpers remain accessible, and dependency packages contribute no tests. |
-| **Body and selector checking** | Check selected test bodies with ordinary lexical, expression, flow, safety, generic, trait, cleanup, and FFI rules; enforce the implicit unit contract and require every `expect` selector to implement `RuntimeTrap`. | Invalid tests cannot reach lowering, a bare return passes, value return and `?` fail, and static errors inside an expectation remain static errors. |
-| **Expected-trap isolation** | Lower each `expect` body to an isolated child execution, transport the exact nominal trap identity, code, message, and source span back to its parent, and prevent child-local mutations from becoming parent state. | Exact traps pass; normal completion, mismatched traps, assertions, abnormal exits, OOM, and undefined behavior fail without terminating the containing test runner. |
-| **Test harness lowering** | Lower selected tests through ordinary typed/control-flow IR and synthesize test-only native entry points without adding test bodies or helpers to normal `check`, `build`, or `run` reachability. | Test execution matches ordinary Elamite semantics and production artifacts remain byte-equivalent. |
-| **CLI, reporting, and filtering** | Make `elamc test [PATH]` select a package, support exact or substring filtering plus accepted target/toolchain/optimization options, capture output, run all selected tests after failures, and report deterministic names and summaries. | All pass or zero tests exits zero, test failure exits one, compile/configuration/empty-filter selection errors exit two, and invocation works from any directory. |
-| **Cross-feature integration** | Exercise nested modules, private helpers, generics, traits, collections, managed references, `Result`, `defer`, unsafe operations, C imports, custom `RuntimeTrap` types, and local path dependencies. | Test-only behavior does not weaken visibility, safety, coherence, cleanup, GC, or C ABI rules. |
-| **Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, native run and abnormal-process tests, debug/release and x86/x86-64 matrix coverage, help/version documentation, and editor-grammar synchronization. | The complete pre-test suite remains green and the accepted test/trap surface is mapped in `LEDGER.md`. |
-
-This milestone is independent of user-defined macros. Its parser and harness
-work may land before macro foundations, and test declarations should then be
-used by later macro conformance suites without becoming a macro expansion
-primitive themselves.
 
 ## 5. Post-conformance macro system
 

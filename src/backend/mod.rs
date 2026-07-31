@@ -36,6 +36,8 @@ pub struct COptions {
     pub target: Target,
     /// `Some` emits the C runtime entry shim; `None` emits a library unit.
     pub entry: Option<DeclarationId>,
+    /// `Some` emits a test-selection entry shim, including for an empty list.
+    pub test_entries: Option<Vec<(DeclarationId, String)>>,
 }
 
 impl Default for COptions {
@@ -43,6 +45,7 @@ impl Default for COptions {
         Self {
             target: Target::host(),
             entry: None,
+            test_entries: None,
         }
     }
 }
@@ -387,6 +390,9 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
     };
     Some(match operation {
         StandardCall::Panic
+        | StandardCall::Assert
+        | StandardCall::Fail { .. }
+        | StandardCall::Trap { .. }
         | StringFrom
         | StandardCall::IdentityFrom { .. }
         | StandardCall::ForeignRootRetain { .. }

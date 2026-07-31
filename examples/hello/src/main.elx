@@ -2,5 +2,9 @@ fn return_tuple() -> (i32, i32):
     return (0, 42)
 
 fn main():
-    let a = return_tuple()
-    println(f"{a.0}, {a.1}")
+    println("")
+
+use std.testing.assert as assert
+
+test temp:
+    assert(1 == 1)    

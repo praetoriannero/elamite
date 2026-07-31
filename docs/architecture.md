@@ -31,9 +31,8 @@ users already import them there; new compiler code should use `config`
 directly.
 
 The expansion pass is intentionally a typed pass-through until the macro
-milestones. Future native-language test discovery and execution belongs to the
-package-test runner and remains separate from the existing conformance fixture
-runner.
+milestones. Native-language test discovery and execution lives in
+`src/testing.rs` and remains separate from the conformance fixture runner.
 
 ## Behavior-neutral baseline
 

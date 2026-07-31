@@ -73,10 +73,17 @@ pub fn resolve(graph: &PackageGraph, sources: &mut SourceManager) -> ResolutionO
     resolve_expanded(graph, expand(parse_package(graph, sources)))
 }
 
+/// Resolves production declarations plus test bodies owned by the selected
+/// root package. Dependency test bodies remain deliberately unresolved.
+#[must_use]
+pub fn resolve_for_tests(graph: &PackageGraph, sources: &mut SourceManager) -> ResolutionOutput {
+    Resolver::new(graph, expand(parse_package(graph, sources)), true).run()
+}
+
 /// Collects and resolves one already expanded package.
 #[must_use]
 pub fn resolve_expanded(graph: &PackageGraph, expanded: ExpansionOutput) -> ResolutionOutput {
-    Resolver::new(graph, expanded).run()
+    Resolver::new(graph, expanded, false).run()
 }
 
 struct Resolver<'a> {
@@ -86,10 +93,11 @@ struct Resolver<'a> {
     expanded: ExpandedPackage,
     parsed_units: Vec<ParsedUnit>,
     inline_units: Vec<ParsedUnit>,
+    resolve_test_bodies: bool,
 }
 
 impl<'a> Resolver<'a> {
-    fn new(graph: &'a PackageGraph, expanded: ExpansionOutput) -> Self {
+    fn new(graph: &'a PackageGraph, expanded: ExpansionOutput, resolve_test_bodies: bool) -> Self {
         let ExpansionOutput {
             package: expanded,
             diagnostics,
@@ -134,13 +142,14 @@ impl<'a> Resolver<'a> {
             expanded,
             parsed_units: Vec::new(),
             inline_units: Vec::new(),
+            resolve_test_bodies,
         }
     }
 
     fn run(mut self) -> ResolutionOutput {
-        let (io_module, ffi_module) = self.install_standard_library_names();
+        let (io_module, ffi_module, testing_module) = self.install_standard_library_names();
         self.create_file_module_graph();
-        self.install_parsed_units(io_module, ffi_module);
+        self.install_parsed_units(io_module, ffi_module, testing_module);
         self.discover_inline_modules();
         self.collect_all_declarations();
         self.check_exported_c_symbol_conflicts();

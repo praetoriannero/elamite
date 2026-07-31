@@ -481,7 +481,9 @@ pub(super) fn validate_foreign_declarations(
                     }
                 }
             }
-            DeclarationKind::ForeignFunction | DeclarationKind::Function => {
+            DeclarationKind::ForeignFunction
+            | DeclarationKind::Function
+            | DeclarationKind::Test => {
                 let Some(signature) = typed.function_signatures.get(&declaration.id) else {
                     continue;
                 };
@@ -538,7 +540,10 @@ pub(super) fn validate_foreign_declarations(
                     );
                 }
                 if binding.direction == ForeignDirection::Export
-                    && declaration.kind != DeclarationKind::Function
+                    && !matches!(
+                        declaration.kind,
+                        DeclarationKind::Function | DeclarationKind::Test
+                    )
                 {
                     diagnostics.push(
                         Diagnostic::new(

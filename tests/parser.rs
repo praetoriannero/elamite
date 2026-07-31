@@ -79,6 +79,31 @@ fn parses_the_authoritative_demonstration() {
 }
 
 #[test]
+fn parses_native_tests_and_expected_trap_blocks() {
+    let source =
+        "test bounds:\n    expect(std.testing.BuiltinTrap.IndexOutOfBounds):\n        pass\n";
+    let (sources, output) = parse_text(source);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.tree.count(SyntaxKind::Test), 1);
+    assert_eq!(output.tree.count(SyntaxKind::ExpectStatement), 1);
+}
+
+#[test]
+fn rejects_test_modifiers_signatures_and_empty_bodies() {
+    for source in [
+        "pub test visible:\n    pass\n",
+        "test parameters():\n    pass\n",
+    ] {
+        let (_sources, output) = parse_text(source);
+        assert!(!output.diagnostics.is_empty(), "{source}");
+    }
+}
+
+#[test]
 fn snapshots_declarations_and_type_forms() {
     let source = r#"/// Public facade
 pub mod facade:

@@ -78,6 +78,17 @@ pub struct RunResult {
     pub stderr: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TestCase {
+    pub declaration: DeclarationId,
+    pub name: String,
+}
+
+pub struct TestBuild {
+    pub artifact: BuildArtifact,
+    pub cases: Vec<TestCase>,
+}
+
 /// Frontend result for `check`: everything needed to report diagnostics or
 /// summarize a package, without lowering or invoking a toolchain.
 pub struct FrontendOutput {
@@ -249,7 +260,11 @@ pub fn compile(
         &resolved,
         &typed,
         sources,
-        &COptions { target, entry },
+        &COptions {
+            target,
+            entry,
+            test_entries: None,
+        },
     );
     if !c_output.diagnostics.is_empty() {
         return Err(c_output.diagnostics);
@@ -265,6 +280,90 @@ pub fn compile(
     })
 }
 
+/// Compiles test bodies owned by the selected root package and emits a
+/// test-only entry shim. Production compilation continues to use [`compile`].
+pub fn compile_tests(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+) -> Result<(Compilation, Vec<TestCase>), Vec<Diagnostic>> {
+    let resolution = crate::resolution::resolve_for_tests(graph, sources);
+    if !resolution.diagnostics.is_empty() {
+        return Err(resolution.diagnostics);
+    }
+    let resolved = resolution.program;
+    let mut type_output = resolve_types(&resolved);
+    if !type_output.diagnostics.is_empty() {
+        return Err(type_output.diagnostics);
+    }
+    let trait_output = crate::traits::check_traits(&resolved, &mut type_output.program);
+    if !trait_output.diagnostics.is_empty() {
+        return Err(trait_output.diagnostics);
+    }
+    let checked = check_for_target(&resolved, &mut type_output.program, target.pointer_bits());
+    if !checked.diagnostics.is_empty() {
+        return Err(checked.diagnostics);
+    }
+    let mut typed = type_output.program;
+    let high_level = lower_typed_ir(&resolved, &mut typed, &checked.program);
+    if !high_level.diagnostics.is_empty() {
+        return Err(high_level.diagnostics);
+    }
+    let control_flow = lower_control_flow(&high_level.program, &typed);
+    let mut cases = resolved
+        .declarations
+        .iter()
+        .filter(|declaration| {
+            declaration.kind == DeclarationKind::Test && declaration.test_selected
+        })
+        .map(|declaration| {
+            let module = &resolved.modules[declaration.module.index()];
+            let mut components = module
+                .path
+                .iter()
+                .map(|component| resolved.symbol_text(*component).to_string())
+                .collect::<Vec<_>>();
+            components.push(resolved.symbol_text(declaration.name).to_string());
+            TestCase {
+                declaration: declaration.id,
+                name: components.join("."),
+            }
+        })
+        .collect::<Vec<_>>();
+    cases.sort_by(|left, right| left.name.cmp(&right.name));
+    let c_output = emit_c(
+        &control_flow,
+        &resolved,
+        &typed,
+        sources,
+        &COptions {
+            target,
+            entry: None,
+            test_entries: Some(
+                cases
+                    .iter()
+                    .map(|case| (case.declaration, case.name.clone()))
+                    .collect(),
+            ),
+        },
+    );
+    if !c_output.diagnostics.is_empty() {
+        return Err(c_output.diagnostics);
+    }
+    Ok((
+        Compilation {
+            resolved,
+            typed,
+            high_level_ir: high_level.program,
+            control_flow_ir: control_flow,
+            generated_c: c_output.source,
+            entry: None,
+            native_libraries: c_output.native_libraries,
+        },
+        cases,
+    ))
+}
+
 /// Generates C, invokes the selected C99 compiler, and produces an executable
 /// or a relocatable object for a library package.
 pub fn build(
@@ -273,6 +372,27 @@ pub fn build(
     options: &BuildOptions,
 ) -> Result<BuildArtifact, Vec<Diagnostic>> {
     let compilation = compile(graph, sources, options.target)?;
+    build_compilation(graph, sources, options, compilation, false)
+}
+
+/// Builds one executable containing the selected package's test declarations.
+pub fn build_tests(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    options: &BuildOptions,
+) -> Result<TestBuild, Vec<Diagnostic>> {
+    let (compilation, cases) = compile_tests(graph, sources, options.target)?;
+    let artifact = build_compilation(graph, sources, options, compilation, true)?;
+    Ok(TestBuild { artifact, cases })
+}
+
+fn build_compilation(
+    graph: &PackageGraph,
+    sources: &SourceManager,
+    options: &BuildOptions,
+    compilation: Compilation,
+    force_executable: bool,
+) -> Result<BuildArtifact, Vec<Diagnostic>> {
     let root = &graph.packages[&graph.root];
     std::fs::create_dir_all(&options.output_directory).map_err(|error| {
         vec![Diagnostic::new(
@@ -293,9 +413,9 @@ pub fn build(
         )]
     })?;
 
-    let artifact_path = match root.manifest.target_kind {
-        TargetKind::Executable => options.output_directory.join(&stem),
-        TargetKind::Library => options.output_directory.join(format!("{stem}.o")),
+    let artifact_path = match (root.manifest.target_kind, force_executable) {
+        (_, true) | (TargetKind::Executable, false) => options.output_directory.join(&stem),
+        (TargetKind::Library, false) => options.output_directory.join(format!("{stem}.o")),
     };
     let (metadata, metadata_path, dependency_metadata_paths) =
         materialize_package_metadata(graph, &compilation.resolved, sources, options, &stem)?;
@@ -313,7 +433,7 @@ pub fn build(
         .arg(options.optimization.compiler_flag())
         .arg(options.target.compiler_flag());
     command.args(&options.c_flags);
-    if root.manifest.target_kind == TargetKind::Library {
+    if root.manifest.target_kind == TargetKind::Library && !force_executable {
         command.arg("-c");
     }
     for package in &metadata {
@@ -325,7 +445,7 @@ pub fn build(
         }
     }
     command.arg(&c_path).arg("-o").arg(&artifact_path);
-    if root.manifest.target_kind == TargetKind::Executable {
+    if root.manifest.target_kind == TargetKind::Executable || force_executable {
         for package in &metadata {
             for library in &package.native_libraries {
                 command.arg(format!("-l{library}"));

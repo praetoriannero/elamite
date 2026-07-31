@@ -1,0 +1,24 @@
+fn expectation_outside_test() -> ():
+    expect(std.testing.BuiltinTrap.Panic):
+        panic("invalid")
+
+fn test_is_not_callable() -> ():
+    invalid_return()
+
+fn recoverable() -> Result[i32, str]:
+    return Result.Ok(1)
+
+test invalid_return:
+    return 1
+
+test propagation_cannot_escape:
+    recoverable()?
+
+test nested_expectation:
+    expect(std.testing.BuiltinTrap.Panic):
+        expect(std.testing.BuiltinTrap.Panic):
+            panic("nested")
+
+test invalid_selector:
+    expect(1):
+        pass

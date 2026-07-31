@@ -55,7 +55,11 @@ impl<'a> Resolver<'a> {
                 self.resolve_non_body_syntax(&variant, module, &generics, false, false);
             }
         }
-        if kind == DeclarationKind::Function {
+        if kind == DeclarationKind::Function
+            || (kind == DeclarationKind::Test
+                && self.resolve_test_bodies
+                && self.program.modules[module.index()].package.as_ref() == Some(&self.graph.root))
+        {
             self.resolve_function_body(declaration, &syntax, module, &generics, self_allowed);
         }
     }
@@ -453,6 +457,15 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
+            SyntaxKind::ExpectStatement => {
+                for child in child_nodes(node) {
+                    if child.kind == SyntaxKind::Block {
+                        self.resolve_block(child, module, generics, scopes, self_allowed, true);
+                    } else {
+                        self.resolve_expression(child, module, generics, scopes, self_allowed);
+                    }
+                }
+            }
             SyntaxKind::BreakStatement
             | SyntaxKind::ContinueStatement
             | SyntaxKind::PassStatement => {}
@@ -819,6 +832,16 @@ impl<'a> Resolver<'a> {
                     }
                 } else {
                     self.lookup_module_name(module, name, false, token.span)
+                        .or_else(|| {
+                            self.program
+                                .prelude
+                                .get(&name)
+                                .copied()
+                                .map(|item| LookupResult {
+                                    item,
+                                    provenance: Vec::new(),
+                                })
+                        })
                         .or_else(|| self.standard_package_root(name))
                 }
             }

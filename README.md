@@ -64,10 +64,16 @@ Compilation commands accept `--target=x86` or `--target=x86_64`. `build` and
 Clap-generated interface. Executable packages produce a native executable;
 library packages produce a relocatable object and public metadata.
 
-Run package conformance fixtures with:
+Run language-native package tests with:
 
 ```sh
-cargo run -- test path/to/suite
+cargo run -- test path/to/package
+```
+
+Run compiler conformance fixtures separately with:
+
+```sh
+cargo run -- conformance path/to/suite
 ```
 
 The runner supports fixture filtering, target and optimization matrices,

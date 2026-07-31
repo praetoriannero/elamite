@@ -387,7 +387,9 @@ impl<'a> Checker<'a> {
         include_receiver: bool,
     ) -> (TypeId, PlaceKind) {
         let selected_self_type = self.pending_self_type.take();
-        if self.resolved.is_standard_declaration(declaration, "panic") {
+        if self.resolved.is_standard_declaration(declaration, "panic")
+            || self.resolved.is_standard_declaration(declaration, "assert")
+        {
             if let Some(explicit) = explicit {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -404,9 +406,14 @@ impl<'a> Checker<'a> {
                 return (self.typed.types.error(), PlaceKind::Value);
             };
             self.check_call_arguments(call_span, &signature.parameters, arguments);
+            let operation = if self.resolved.is_standard_declaration(declaration, "panic") {
+                StandardCall::Panic
+            } else {
+                StandardCall::Assert
+            };
             self.program
                 .calls
-                .insert(call_span, CheckedCall::Standard(StandardCall::Panic));
+                .insert(call_span, CheckedCall::Standard(operation));
             return (signature.return_type, PlaceKind::Value);
         }
         let generic_parameters = self.callable_parameters(declaration);
@@ -449,9 +456,10 @@ impl<'a> Checker<'a> {
                     .with_primary(call_span),
                 );
             }
-            self.program
-                .calls
-                .insert(call_span, CheckedCall::Direct(instance));
+            let call = self
+                .testing_intrinsic_call(declaration, &instance)
+                .map_or_else(|| CheckedCall::Direct(instance), CheckedCall::Standard);
+            self.program.calls.insert(call_span, call);
             return (signature.return_type, PlaceKind::Value);
         }
 
@@ -595,10 +603,29 @@ impl<'a> Checker<'a> {
                 .with_primary(call_span),
             );
         }
-        self.program
-            .calls
-            .insert(call_span, CheckedCall::Direct(instance));
+        let call = self
+            .testing_intrinsic_call(declaration, &instance)
+            .map_or_else(|| CheckedCall::Direct(instance), CheckedCall::Standard);
+        self.program.calls.insert(call_span, call);
         (signature.return_type, PlaceKind::Value)
+    }
+
+    fn testing_intrinsic_call(
+        &self,
+        declaration: DeclarationId,
+        instance: &FunctionInstance,
+    ) -> Option<StandardCall> {
+        let value_type = instance.arguments.first().copied()?;
+        if self.resolved.is_standard_declaration(declaration, "fail") {
+            return Some(StandardCall::Fail { value_type });
+        }
+        if self.resolved.is_standard_declaration(declaration, "trap") {
+            return Some(StandardCall::Trap {
+                reason_type: value_type,
+                trait_declaration: self.resolved.standard_declaration("RuntimeTrap")?,
+            });
+        }
+        None
     }
 
     pub(super) fn report_call_arity(
@@ -1066,6 +1093,17 @@ impl<'a> Checker<'a> {
                             expected,
                             false,
                         );
+                    }
+                    if declaration.kind == DeclarationKind::Test {
+                        self.diagnostics.push(
+                            Diagnostic::new(Category::Call, "a test declaration is not callable")
+                                .with_primary(node.span)
+                                .with_related(declaration.span, "test declared here"),
+                        );
+                        for argument in arguments {
+                            self.check_expr(argument, ExpectedType::None);
+                        }
+                        return (self.typed.types.error(), PlaceKind::Value);
                     }
                 }
                 NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))

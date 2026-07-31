@@ -282,6 +282,52 @@ impl<'a> FunctionLowerer<'a> {
                     scope.push(body.clone());
                 }
             }
+            TypedStatementKind::Expect {
+                selector,
+                trait_declaration,
+                body,
+            } => {
+                let selector_value = self.lower_expression(selector);
+                let bool_type = self
+                    .types
+                    .types
+                    .id_for_kind(&TypeKind::Primitive(PrimitiveType::Bool))
+                    .expect("bool is always canonical");
+                let in_child = self.temp(bool_type);
+                self.emit(Instruction::Assign {
+                    destination: in_child,
+                    value: Rvalue::BeginExpectation {
+                        selector: selector_value,
+                        selector_type: selector.ty,
+                        trait_declaration: *trait_declaration,
+                    },
+                    span: statement.span,
+                });
+                let child = self.new_block();
+                let parent = self.new_block();
+                let join = self.new_block();
+                self.terminate(Terminator::Branch {
+                    condition: in_child,
+                    then_block: child,
+                    else_block: parent,
+                });
+
+                self.current = child;
+                self.lower_scope(body);
+                if self.is_open(self.current) {
+                    self.emit(Instruction::CompleteExpectation {
+                        span: statement.span,
+                    });
+                    self.terminate(Terminator::Unreachable);
+                }
+
+                self.current = parent;
+                self.emit(Instruction::WaitExpectation {
+                    span: statement.span,
+                });
+                self.terminate(Terminator::Goto(join));
+                self.current = join;
+            }
             TypedStatementKind::Break => {
                 if let Some((break_block, _, base)) = self.loops.last().copied() {
                     // `break` exits every scope down to the loop body and no
@@ -1106,6 +1152,25 @@ impl<'a> FunctionLowerer<'a> {
                 arguments,
             } => Some(NeverCall::Panic {
                 message: self.lower_expression(arguments.first()?),
+            }),
+            TypedExpressionKind::StandardCall {
+                operation: StandardCall::Fail { value_type },
+                arguments,
+            } => Some(NeverCall::AssertionFail {
+                value: self.lower_expression(arguments.first()?),
+                value_type: *value_type,
+            }),
+            TypedExpressionKind::StandardCall {
+                operation:
+                    StandardCall::Trap {
+                        reason_type,
+                        trait_declaration,
+                    },
+                arguments,
+            } => Some(NeverCall::TypedTrap {
+                reason: self.lower_expression(arguments.first()?),
+                reason_type: *reason_type,
+                trait_declaration: *trait_declaration,
             }),
             TypedExpressionKind::Call {
                 callee: TypedCallee::Function(instance),

@@ -1,0 +1,6 @@
+pub fn answer() -> i32:
+    return 42
+
+test invalid_until_selected:
+    missing_name()
+

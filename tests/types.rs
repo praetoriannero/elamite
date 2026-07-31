@@ -582,7 +582,12 @@ fn exposes_layout_place_obligation_reference_and_abi_queries() {
     let constrained = declaration("constrained");
     let parameter = constrained.generic_parameters[0];
     assert_eq!(typed.program.obligations_for(parameter).count(), 1);
-    let implementation_parameter = resolved.program.impls[0].generic_parameters[0];
+    let implementation_parameter = resolved
+        .program
+        .impls
+        .iter()
+        .find_map(|implementation| implementation.generic_parameters.first().copied())
+        .expect("test source has a generic implementation");
     assert_eq!(
         typed
             .program

@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
 use codespan_reporting::term::{
     self,
-    termcolor::{ColorChoice, StandardStream},
+    termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor},
 };
 use elamite::config::{Optimization, Target};
 use elamite::diagnostics::Diagnostic;
@@ -23,7 +23,7 @@ use elamite::source::SourceManager;
 #[derive(Debug, Parser)]
 #[command(
     name = "elamc",
-    version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.4.0-draft)"),
+    version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.5.0-draft)"),
     about = "The Elamite programming language compiler",
     arg_required_else_help = true
 )]
@@ -46,8 +46,10 @@ enum Command {
     Dump(DumpArgs),
     /// Extract public API documentation as Markdown.
     Doc(DocArgs),
-    /// Run package conformance fixtures.
-    Test(TestArgs),
+    /// Compile and run language-native package tests.
+    Test(PackageTestArgs),
+    /// Run compiler conformance fixtures.
+    Conformance(ConformanceArgs),
 }
 
 #[derive(Debug, Args)]
@@ -126,7 +128,17 @@ struct DocArgs {
 }
 
 #[derive(Debug, Args)]
-struct TestArgs {
+struct PackageTestArgs {
+    #[command(flatten)]
+    build: BuildArgs,
+
+    /// Run only exact or qualified test names containing this text.
+    #[arg(long, value_name = "TEXT")]
+    filter: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ConformanceArgs {
     /// Suite directory, or one package fixture directory.
     #[arg(value_name = "SUITE")]
     suite: PathBuf,
@@ -272,7 +284,8 @@ fn main() -> ExitCode {
         Command::Init(arguments) => initialize_package(arguments),
         Command::Dump(arguments) => dump_package(arguments),
         Command::Doc(arguments) => document_package(arguments),
-        Command::Test(arguments) => test_packages(arguments),
+        Command::Test(arguments) => test_package(arguments),
+        Command::Conformance(arguments) => test_packages(arguments),
     }
 }
 
@@ -342,7 +355,7 @@ fn document_package(arguments: DocArgs) -> ExitCode {
     }
 }
 
-fn test_packages(arguments: TestArgs) -> ExitCode {
+fn test_packages(arguments: ConformanceArgs) -> ExitCode {
     let targets = if arguments.all_targets {
         vec![Target::X86, Target::X86_64]
     } else {
@@ -384,6 +397,139 @@ fn test_packages(arguments: TestArgs) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+fn test_package(arguments: PackageTestArgs) -> ExitCode {
+    let request = CompileRequest::build(CompileCommand::Build, arguments.build);
+    let manifest_path = request.package_dir.join("elamite.toml");
+    let mut sources = SourceManager::new();
+    let graph = match PackageGraph::resolve(&manifest_path, &mut sources) {
+        Ok(graph) => graph,
+        Err(diagnostics) => {
+            render_diagnostics(&sources, &diagnostics);
+            return ExitCode::from(2);
+        }
+    };
+    let report = elamite::testing::run_package(
+        &graph,
+        &mut sources,
+        &elamite::testing::TestOptions {
+            build: BuildOptions {
+                target: request.target,
+                optimization: request.optimization,
+                output_directory: request.output_directory.join("tests"),
+                keep_generated_c: request.keep_generated_c,
+                c_compiler: request.c_compiler,
+                c_flags: request.c_flags,
+            },
+            filter: arguments.filter,
+            runtime_environment: Vec::new(),
+        },
+    );
+    let report = match report {
+        Ok(report) => report,
+        Err(elamite::testing::TestError::Diagnostics(diagnostics)) => {
+            render_diagnostics(&sources, &diagnostics);
+            return ExitCode::from(2);
+        }
+        Err(elamite::testing::TestError::Selection(message)) => {
+            eprintln!("error: {message}");
+            return ExitCode::from(2);
+        }
+        Err(elamite::testing::TestError::Execution(diagnostic)) => {
+            render_diagnostics(&sources, &[diagnostic]);
+            return ExitCode::from(2);
+        }
+    };
+    render_package_test_report(&report);
+    if report.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn render_package_test_report(report: &elamite::testing::TestReport) {
+    let stdout = StandardStream::stdout(ColorChoice::Auto);
+    let stderr = StandardStream::stderr(ColorChoice::Auto);
+    let mut stdout = stdout.lock();
+    let mut stderr = stderr.lock();
+    let name_width = report
+        .results
+        .iter()
+        .map(|result| result.name.len())
+        .max()
+        .unwrap_or(0);
+
+    let _ = writeln!(
+        stdout,
+        "running {} test{}",
+        report.results.len(),
+        if report.results.len() == 1 { "" } else { "s" }
+    );
+    for result in &report.results {
+        let _ = write!(stdout, "test {:name_width$} ... ", result.name);
+        let (status, color) = if result.passed {
+            ("ok", Color::Green)
+        } else {
+            ("FAILED", Color::Red)
+        };
+        let _ = write_colored(&mut stdout, status, color, !result.passed);
+        let _ = writeln!(stdout);
+        let _ = write_captured_output(&mut stdout, "stdout", &result.stdout);
+        let _ = stdout.flush();
+        let _ = write_captured_output(&mut stderr, "stderr", &result.stderr);
+        let _ = stderr.flush();
+    }
+
+    let passed = report.results.iter().filter(|result| result.passed).count();
+    let _ = writeln!(stdout);
+    let _ = write!(stdout, "test result: ");
+    let _ = write_colored(
+        &mut stdout,
+        if report.success() { "ok" } else { "FAILED" },
+        if report.success() {
+            Color::Green
+        } else {
+            Color::Red
+        },
+        !report.success(),
+    );
+    let _ = writeln!(
+        stdout,
+        ". {} passed; {} failed",
+        passed,
+        report.results.len() - passed
+    );
+}
+
+fn write_colored(
+    writer: &mut impl WriteColor,
+    text: &str,
+    color: Color,
+    bold: bool,
+) -> std::io::Result<()> {
+    writer.set_color(ColorSpec::new().set_fg(Some(color)).set_bold(bold))?;
+    write!(writer, "{text}")?;
+    writer.reset()
+}
+
+fn write_captured_output(
+    writer: &mut impl WriteColor,
+    label: &str,
+    output: &[u8],
+) -> std::io::Result<()> {
+    if output.is_empty() {
+        return Ok(());
+    }
+    writer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_dimmed(true))?;
+    writeln!(writer, "  {label}:")?;
+    writer.reset()?;
+    writer.write_all(output)?;
+    if !output.ends_with(b"\n") {
+        writeln!(writer)?;
+    }
+    Ok(())
 }
 
 fn compile_package(request: CompileRequest) -> ExitCode {

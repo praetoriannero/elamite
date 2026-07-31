@@ -62,6 +62,9 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
     };
     let (name, ty) = match operation {
         StandardCall::Panic => return "el_panic".to_string(),
+        StandardCall::Assert => return "el_assert".to_string(),
+        StandardCall::Fail { .. } => return "el_assert_fail".to_string(),
+        StandardCall::Trap { .. } => return "el_typed_trap".to_string(),
         StringFrom => return "el_string_from".to_string(),
         StandardCall::IdentityFrom { wrapper } => ("identity_from", wrapper),
         StandardCall::ForeignRootRetain { handle, .. } => ("foreign_root_retain", handle),

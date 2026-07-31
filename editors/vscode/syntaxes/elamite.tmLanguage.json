@@ -95,6 +95,13 @@
           }
         },
         {
+          "match": "\\b(test)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.elx" },
+            "2": { "name": "entity.name.function.elx" }
+          }
+        },
+        {
           "match": "\\b(struct|enum|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.control.declaration.elx" },
@@ -121,12 +128,12 @@
     "keyword-control": {
       "comment": "Every keyword family below sits under the `keyword.control` prefix so that themes, which select scopes by dot-separated prefix, give declarations and modifiers the same color as `return` and `for`. The trailing segments keep the categories individually overridable in `editor.tokenColorCustomizations`.",
       "name": "keyword.control.elx",
-      "match": "\\b(continue|return|break|defer|match|while|else|pass|for|if|in)\\b"
+      "match": "\\b(continue|return|break|defer|expect|match|while|else|pass|for|if|in)\\b"
     },
 
     "keyword-declaration": {
       "name": "keyword.control.declaration.elx",
-      "match": "\\b(struct|trait|enum|impl|type|mod|use|fn)\\b"
+      "match": "\\b(struct|test|trait|enum|impl|type|mod|use|fn)\\b"
     },
 
     "keyword-modifier": {
@@ -157,7 +164,7 @@
 
     "type-builtin": {
       "name": "support.type.builtin.elx",
-      "match": "\\b(ForeignRootMut|ForeignRoot|NumericError|Formatter|Identity|IoError|Option|Result|String|CVoid|Vec|Map|Set)\\b"
+      "match": "\\b(ForeignRootMut|ForeignRoot|NumericError|BuiltinTrap|RuntimeTrap|Formatter|Identity|IoError|Option|Result|String|CVoid|Vec|Map|Set)\\b"
     },
 
     "type-builtin-trait": {
@@ -167,7 +174,7 @@
 
     "function-builtin": {
       "name": "support.function.builtin.elx",
-      "match": "\\b(println|print|panic)\\b"
+      "match": "\\b(println|assert|print|panic|trap|fail)\\b"
     },
 
     "type-name": {

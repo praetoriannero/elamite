@@ -40,6 +40,7 @@ enum ItemHead {
     Trait,
     Impl,
     Function,
+    Test,
     Unknown,
 }
 
@@ -96,6 +97,7 @@ impl<'a> Parser<'a> {
                 };
                 self.parse_function(body)
             }
+            ItemHead::Test => self.parse_test(),
             ItemHead::Unknown => {
                 let fallback = self.current_span();
                 let mut children = self.take_docs();
@@ -137,6 +139,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::Trait)) => ItemHead::Trait,
             Some(TokenKind::Keyword(Keyword::Impl)) => ItemHead::Impl,
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemHead::Function,
+            Some(TokenKind::Keyword(Keyword::Test)) => ItemHead::Test,
             _ => ItemHead::Unknown,
         }
     }
@@ -300,6 +303,15 @@ impl<'a> Parser<'a> {
             }
         }
         SyntaxNode::new(SyntaxKind::Function, children, fallback)
+    }
+
+    fn parse_test(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = self.take_docs();
+        self.expect_keyword(Keyword::Test, &mut children, "expected `test`");
+        self.expect_identifier(&mut children, "expected test name");
+        self.parse_statement_block(&mut children);
+        SyntaxNode::new(SyntaxKind::Test, children, fallback)
     }
 
     fn parse_generic_parameters(&mut self) -> SyntaxNode {
@@ -648,6 +660,7 @@ impl<'a> Parser<'a> {
                 self.parse_simple_statement(SyntaxKind::PassStatement)
             }
             Some(TokenKind::Keyword(Keyword::Defer)) => self.parse_defer(),
+            Some(TokenKind::Keyword(Keyword::Expect)) => self.parse_expect(),
             Some(TokenKind::Keyword(Keyword::If)) => self.parse_if(),
             Some(TokenKind::Keyword(Keyword::Match)) => self.parse_match(),
             Some(TokenKind::Keyword(Keyword::For)) => self.parse_for(),
@@ -714,6 +727,24 @@ impl<'a> Parser<'a> {
         let mut children = vec![keyword, node(call)];
         self.expect_line_end(&mut children);
         SyntaxNode::new(SyntaxKind::DeferStatement, children, fallback)
+    }
+
+    fn parse_expect(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        self.expect_simple(
+            &TokenKind::LParen,
+            &mut children,
+            "expected `(` after `expect`",
+        );
+        children.push(node(self.parse_expression()));
+        self.expect_simple(
+            &TokenKind::RParen,
+            &mut children,
+            "expected `)` after expected trap",
+        );
+        self.parse_statement_block(&mut children);
+        SyntaxNode::new(SyntaxKind::ExpectStatement, children, fallback)
     }
 
     fn parse_if(&mut self) -> SyntaxNode {

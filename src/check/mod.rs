@@ -157,6 +157,8 @@ struct Checker<'a> {
     /// Nesting depth of `defer` statements being checked. A deferred body runs
     /// while its scope is already exiting, so it may not redirect control.
     defer_depth: u32,
+    expect_depth: u32,
+    current_is_test: bool,
     /// The enclosing function's declared return type, for postfix `?`
     /// propagation-target checking (`SPEC.md` 8).
     current_return_type: Option<TypeId>,
@@ -191,6 +193,8 @@ impl<'a> Checker<'a> {
             pending_self_type: None,
             loop_depth: 0,
             defer_depth: 0,
+            expect_depth: 0,
+            current_is_test: false,
             current_return_type: None,
             unsafe_depth: 0,
             pointer_bits,
@@ -209,7 +213,8 @@ impl<'a> Checker<'a> {
             .filter(|declaration| {
                 // Trait *declaration* methods without bodies have nothing to
                 // check; default bodies and implementation methods do.
-                declaration.kind == DeclarationKind::Function
+                (declaration.kind == DeclarationKind::Function
+                    || (declaration.kind == DeclarationKind::Test && declaration.test_selected))
                     && (declaration.parent_impl.is_some()
                         || declaration.parent_declaration.is_none_or(|parent| {
                             self.resolved.declarations[parent.index()].kind
@@ -238,15 +243,17 @@ impl<'a> Checker<'a> {
         let Some(signature) = self.typed.function_signatures.get(&declaration_id).cloned() else {
             return;
         };
-        if self
-            .resolved
-            .is_standard_declaration(declaration_id, "panic")
+        if ["panic", "trap", "assert", "fail"]
+            .into_iter()
+            .any(|name| self.resolved.is_standard_declaration(declaration_id, name))
         {
             return;
         }
         let syntax = self.resolved.declarations[declaration_id.index()]
             .syntax
             .clone();
+        self.current_is_test =
+            self.resolved.declarations[declaration_id.index()].kind == DeclarationKind::Test;
         self.current_self_declaration = self.resolved.declarations[declaration_id.index()]
             .parent_declaration
             .filter(|parent| {
@@ -311,6 +318,7 @@ impl<'a> Checker<'a> {
         }
         self.current_self_declaration = None;
         self.current_module = None;
+        self.current_is_test = false;
     }
 
     /// Checks every statement in `block` and returns whether the block
@@ -433,6 +441,61 @@ impl<'a> Checker<'a> {
                 self.defer_depth -= 1;
                 false
             }
+            SyntaxKind::ExpectStatement => {
+                if !self.current_is_test {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ControlFlow,
+                            "`expect` is valid only inside a test declaration",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
+                if self.expect_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ControlFlow,
+                            "an `expect` block cannot contain another `expect` block",
+                        )
+                        .with_primary(node.span),
+                    );
+                }
+                let children = child_nodes(node);
+                if let Some(selector) = children
+                    .iter()
+                    .copied()
+                    .find(|child| child.kind != SyntaxKind::Block)
+                {
+                    let (selector_type, _) = self.check_expr(selector, ExpectedType::None);
+                    if selector_type != self.typed.types.error()
+                        && let Some(runtime_trap) =
+                            self.resolved.standard_declaration("RuntimeTrap")
+                        && !crate::traits::implements_trait(
+                            self.resolved,
+                            self.typed,
+                            selector_type,
+                            runtime_trap,
+                        )
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::ExpressionType,
+                                "an `expect` selector must implement `std.testing.RuntimeTrap`",
+                            )
+                            .with_primary(selector.span),
+                        );
+                    }
+                }
+                self.expect_depth += 1;
+                if let Some(block) = children
+                    .into_iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                {
+                    self.check_block(block, return_type);
+                }
+                self.expect_depth -= 1;
+                false
+            }
             SyntaxKind::IfStatement => self.check_if_statement(node, return_type),
             SyntaxKind::WhileStatement => {
                 let children = child_nodes(node);
@@ -538,7 +601,7 @@ impl<'a> Checker<'a> {
                 terminates
             }
             SyntaxKind::BreakStatement | SyntaxKind::ContinueStatement => {
-                if self.defer_depth > 0 {
+                if self.defer_depth > 0 || self.expect_depth > 0 {
                     let what = if node.kind == SyntaxKind::BreakStatement {
                         "break"
                     } else {
@@ -547,7 +610,11 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::ControlFlow,
-                            format!("`{what}` cannot appear inside a deferred block"),
+                            if self.expect_depth > 0 {
+                                format!("`{what}` cannot escape an `expect` block")
+                            } else {
+                                format!("`{what}` cannot appear inside a deferred block")
+                            },
                         )
                         .with_primary(node.span),
                     );
@@ -695,6 +762,15 @@ impl<'a> Checker<'a> {
                 Diagnostic::new(
                     Category::ControlFlow,
                     "`return` cannot appear inside a deferred block",
+                )
+                .with_primary(node.span),
+            );
+        }
+        if self.expect_depth > 0 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ControlFlow,
+                    "`return` cannot escape an `expect` block",
                 )
                 .with_primary(node.span),
             );
@@ -1588,6 +1664,15 @@ impl<'a> Checker<'a> {
                 Diagnostic::new(
                     Category::ControlFlow,
                     "postfix `?` cannot appear inside a deferred statement",
+                )
+                .with_primary(node.span),
+            );
+        }
+        if self.expect_depth > 0 {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ControlFlow,
+                    "postfix `?` cannot escape an `expect` block",
                 )
                 .with_primary(node.span),
             );

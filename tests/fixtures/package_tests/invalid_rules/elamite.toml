@@ -1,0 +1,5 @@
+[package]
+name = "invalid_test_rules"
+version = "0.1.0"
+target_kind = "lib"
+

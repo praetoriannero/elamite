@@ -25,9 +25,10 @@ impl<'a> Resolver<'a> {
         id
     }
 
-    pub(super) fn install_standard_library_names(&mut self) -> (ModuleId, ModuleId) {
+    pub(super) fn install_standard_library_names(&mut self) -> (ModuleId, ModuleId, ModuleId) {
         let io = self.intern("io");
         let ffi = self.intern("ffi");
+        let testing = self.intern("testing");
         let std = self.intern("std");
         let io_module = self.push_module(
             None,
@@ -38,6 +39,12 @@ impl<'a> Resolver<'a> {
         let ffi_module = self.push_module(
             None,
             vec![std, ffi],
+            Some(self.program.std_root),
+            ModuleOrigin::Standard,
+        );
+        let testing_module = self.push_module(
+            None,
+            vec![std, testing],
             Some(self.program.std_root),
             ModuleOrigin::Standard,
         );
@@ -52,6 +59,13 @@ impl<'a> Resolver<'a> {
             self.program.std_root,
             ffi,
             NamespaceTarget::Item(ItemId::Module(ffi_module)),
+            Visibility::Public,
+            None,
+        );
+        self.insert_namespace(
+            self.program.std_root,
+            testing,
+            NamespaceTarget::Item(ItemId::Module(testing_module)),
             Visibility::Public,
             None,
         );
@@ -131,7 +145,7 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
-        (io_module, ffi_module)
+        (io_module, ffi_module, testing_module)
     }
 
     pub(super) fn push_builtin(&mut self, name: Symbol) -> BuiltinId {
@@ -145,21 +159,30 @@ impl<'a> Resolver<'a> {
     /// unqualified `Option` resolves after lexical, module, import, and
     /// dependency-alias lookup exactly like the builtin names beside it.
     pub(super) fn register_standard_declarations(&mut self) {
-        let entries = self.program.modules[self.program.std_root.index()]
-            .namespace
+        let entries = self
+            .program
+            .modules
             .iter()
-            .filter_map(|(name, entry)| match entry.target {
-                NamespaceTarget::Item(ItemId::Declaration(declaration)) => {
-                    Some((*name, declaration))
-                }
-                _ => None,
+            .filter(|module| module.package.is_none())
+            .flat_map(|module| {
+                module
+                    .namespace
+                    .iter()
+                    .filter_map(|(name, entry)| match entry.target {
+                        NamespaceTarget::Item(ItemId::Declaration(declaration)) => {
+                            Some((module.id, *name, declaration))
+                        }
+                        _ => None,
+                    })
             })
             .collect::<Vec<_>>();
-        for (name, declaration) in entries {
+        for (module, name, declaration) in entries {
             self.program.standard_declarations.insert(name, declaration);
-            self.program
-                .prelude
-                .insert(name, ItemId::Declaration(declaration));
+            if module == self.program.std_root {
+                self.program
+                    .prelude
+                    .insert(name, ItemId::Declaration(declaration));
+            }
         }
     }
 
@@ -220,12 +243,18 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    pub(super) fn install_parsed_units(&mut self, io_module: ModuleId, ffi_module: ModuleId) {
+    pub(super) fn install_parsed_units(
+        &mut self,
+        io_module: ModuleId,
+        ffi_module: ModuleId,
+        testing_module: ModuleId,
+    ) {
         for unit in std::mem::take(&mut self.expanded.units) {
             let module = match unit.identity {
                 ParsedUnitIdentity::Standard(StandardModule::Root) => self.program.std_root,
                 ParsedUnitIdentity::Standard(StandardModule::Io) => io_module,
                 ParsedUnitIdentity::Standard(StandardModule::Ffi) => ffi_module,
+                ParsedUnitIdentity::Standard(StandardModule::Testing) => testing_module,
                 ParsedUnitIdentity::PackageRoot(package) => self.program.package_roots[&package],
                 ParsedUnitIdentity::PackageModule { package, path } => {
                     self.program.module_keys[&(package, path.components().to_vec())]
@@ -332,6 +361,15 @@ impl<'a> Resolver<'a> {
         for (module, tree) in units {
             self.collect_container(module, &tree);
         }
+        let units = self
+            .parsed_units
+            .iter()
+            .chain(&self.inline_units)
+            .map(|unit| (unit.module, unit.tree.clone()))
+            .collect::<Vec<_>>();
+        for (module, tree) in units {
+            self.collect_test_container(module, &tree);
+        }
     }
 
     pub(super) fn check_exported_c_symbol_conflicts(&mut self) {
@@ -377,6 +415,14 @@ impl<'a> Resolver<'a> {
                     self.collect_named_declaration(module, item, false, None, None);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn collect_test_container(&mut self, module: ModuleId, container: &SyntaxNode) {
+        for item in direct_item_nodes(container) {
+            if item.kind == SyntaxKind::Test {
+                self.collect_named_declaration(module, item, false, None, None);
             }
         }
     }
@@ -453,6 +499,7 @@ impl<'a> Resolver<'a> {
             SyntaxKind::Enum => Keyword::Enum,
             SyntaxKind::Trait => Keyword::Trait,
             SyntaxKind::Function => Keyword::Fn,
+            SyntaxKind::Test => Keyword::Test,
             _ => return None,
         };
         let (name_text, span) = declaration_name(node, keyword)?;
@@ -467,6 +514,7 @@ impl<'a> Resolver<'a> {
             (SyntaxKind::Trait, _) => DeclarationKind::Trait,
             (SyntaxKind::Function, true) => DeclarationKind::ForeignFunction,
             (SyntaxKind::Function, false) => DeclarationKind::Function,
+            (SyntaxKind::Test, false) => DeclarationKind::Test,
             _ => return None,
         };
         let id = DeclarationId(self.program.declarations.len() as u32);
@@ -483,6 +531,9 @@ impl<'a> Resolver<'a> {
             generic_parameters: Vec::new(),
             externally_reachable: false,
             foreign_binding,
+            test_selected: kind == DeclarationKind::Test
+                && self.resolve_test_bodies
+                && self.program.modules[module.index()].package.as_ref() == Some(&self.graph.root),
         });
         self.program.declaration_members.entry(id).or_default();
         if parent_declaration.is_none() && parent_impl.is_none() {

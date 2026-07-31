@@ -1,0 +1,3 @@
+test nested_test:
+    std.testing.assert(true)
+

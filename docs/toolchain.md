@@ -35,12 +35,20 @@ elamc build path/to/package --release --keep-c
 elamc run path/to/package
 elamc dump typed-ir path/to/package
 elamc doc path/to/package
-elamc test path/to/suite --filter=case-name
+elamc test path/to/package --filter=qualified-test-name
+elamc conformance path/to/suite --filter=case-name
 ```
 
 The installed executable is named `elamc`; `elamite` remains the language and
 manifest name. `elamc --version` reports both the compiler version and the
 targeted `SPEC.md` revision.
+
+`test` discovers language-native declarations in one selected package,
+compiles a test-only native artifact, and executes each selected test in a
+fresh process. Its report uses aligned Cargo-style rows with green passing and
+red failing statuses on terminals, and automatically falls back to plain text
+when redirected. `conformance` is the separate compiler-development fixture
+matrix command.
 
 `check` runs all semantic passes without lowering or native tools. `build` and
 `run` accept `--out-dir`, `--cc`, `--release`, `--keep-c`, and either supported

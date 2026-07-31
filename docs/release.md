@@ -25,8 +25,10 @@ cargo fmt --check
 cargo check --all-targets
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
-cargo run -- test examples/spec_demo --all-modes
-cargo run -- test tests/fixtures/conformance --all-modes
+cargo run -- test examples/spec_demo
+cargo run -- test examples/spec_demo --release
+cargo run -- conformance examples/spec_demo --all-modes
+cargo run -- conformance tests/fixtures/conformance --all-modes
 ```
 
 The x86 cells require a working 32-bit libc, C compiler, and Boehm development

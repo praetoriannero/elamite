@@ -34,5 +34,5 @@ files) when present, so x86 and x86-64 must demonstrate their distinct
 Run all positive fixtures with:
 
 ```sh
-cargo run -- test tests/fixtures/conformance
+cargo run -- conformance tests/fixtures/conformance
 ```

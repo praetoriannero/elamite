@@ -15,6 +15,7 @@ pub struct Intrinsic {
 pub const ROOT_SOURCE: &str = include_str!("../stdlib/src/lib.elx");
 pub const IO_SOURCE: &str = include_str!("../stdlib/src/io.elx");
 pub const FFI_SOURCE: &str = include_str!("../stdlib/src/ffi.elx");
+pub const TESTING_SOURCE: &str = include_str!("../stdlib/src/testing.elx");
 
 /// Exact source-backed public declarations shipped by the compiler.
 pub const SOURCE_DECLARATIONS: &[&str] = &[
@@ -22,8 +23,13 @@ pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.NumericError",
     "std.Option",
     "std.panic",
+    "std.trap",
     "std.Result",
     "std.io.IoError",
+    "std.testing.RuntimeTrap",
+    "std.testing.BuiltinTrap",
+    "std.testing.assert",
+    "std.testing.fail",
 ];
 
 /// Exact compiler-known entity inventory.

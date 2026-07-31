@@ -1,0 +1,54 @@
+struct FailureMessage:
+    value: i32
+
+enum FirstTrap:
+    Value
+
+enum SecondTrap:
+    Value
+
+impl Display for FailureMessage:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ():
+        formatter.write(f"user failure {self.value}")
+
+impl std.testing.RuntimeTrap for FirstTrap:
+    fn code(self: &Self) -> str:
+        return "shared-code"
+
+    fn message(self: &Self) -> String:
+        return String.from("first")
+
+impl std.testing.RuntimeTrap for SecondTrap:
+    fn code(self: &Self) -> str:
+        return "shared-code"
+
+    fn message(self: &Self) -> String:
+        return String.from("second")
+
+test assertion_fails:
+    std.testing.assert(false)
+
+test explicit_failure_formats_once:
+    std.testing.fail(f"failure {42}")
+
+test custom_failure_uses_display:
+    std.testing.fail(FailureMessage { value: 7 })
+
+test later_test_still_runs:
+    println("later")
+
+test normal_completion_does_not_match:
+    expect(std.testing.BuiltinTrap.Panic):
+        pass
+
+test assertion_does_not_match:
+    expect(std.testing.BuiltinTrap.Panic):
+        std.testing.assert(false)
+
+test a_different_trap_does_not_match:
+    expect(std.testing.BuiltinTrap.DivisionByZero):
+        panic("different")
+
+test equal_codes_from_different_types_do_not_match:
+    expect(FirstTrap.Value):
+        std.trap(SecondTrap.Value)

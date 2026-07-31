@@ -167,6 +167,15 @@ impl<'a> Resolver<'a> {
                     self.lookup_module_name(from_module, name, false, use_span)
                 {
                     (found, 1, true)
+                } else if let Some(item) = self.program.prelude.get(&name).copied() {
+                    (
+                        LookupResult {
+                            item,
+                            provenance: Vec::new(),
+                        },
+                        1,
+                        false,
+                    )
                 } else if let Some(found) = self.standard_package_root(name) {
                     (found, 1, true)
                 } else {

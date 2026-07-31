@@ -1,0 +1,5 @@
+[package]
+name = "failing_native_tests"
+version = "0.1.0"
+target_kind = "lib"
+

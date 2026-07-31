@@ -113,7 +113,7 @@ fn command_line_runner_selects_a_fixture() {
     suite.case("first", "runner\n");
     suite.case("second", "runner\n");
     let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
-        .arg("test")
+        .arg("conformance")
         .arg(&suite.root)
         .arg("--filter=first")
         .output()

@@ -286,6 +286,11 @@ pub enum TypedStatementKind {
     /// binding identities, so execution at scope exit reads the values those
     /// bindings have *then*. No callable or environment value exists.
     Defer(Vec<TypedStatement>),
+    Expect {
+        selector: TypedExpression,
+        trait_declaration: DeclarationId,
+        body: Vec<TypedStatement>,
+    },
     Break,
     Continue,
     Pass,

@@ -65,11 +65,12 @@ impl<'a> TypedLowerer<'a> {
             .declarations
             .iter()
             .filter(|declaration| {
-                declaration.kind == DeclarationKind::Function
+                (declaration.kind == DeclarationKind::Function
+                    || (declaration.kind == DeclarationKind::Test && declaration.test_selected))
                     && declaration.parent_impl.is_none()
-                    && !self
-                        .resolved
-                        .is_standard_declaration(declaration.id, "panic")
+                    && !["panic", "trap", "assert", "fail"]
+                        .into_iter()
+                        .any(|name| self.resolved.is_standard_declaration(declaration.id, name))
                     && self
                         .typed
                         .callable_generic_parameters(self.resolved, declaration.id)
@@ -191,6 +192,34 @@ impl<'a> TypedLowerer<'a> {
         });
     }
 
+    fn enqueue_trait_methods(
+        &mut self,
+        trait_declaration: DeclarationId,
+        concrete: TypeId,
+        names: &[&str],
+        span: Span,
+    ) {
+        for name in names {
+            let Some(entry) = crate::traits::vtable_entry(
+                self.resolved,
+                self.typed,
+                trait_declaration,
+                concrete,
+                name,
+            ) else {
+                continue;
+            };
+            self.enqueue_reachable(
+                FunctionInstance {
+                    declaration: entry.declaration,
+                    arguments: entry.arguments,
+                    self_type: entry.self_type,
+                },
+                span,
+            );
+        }
+    }
+
     /// Registers vtables for every implementation of a trait, which a dynamic
     /// call may reach.
     fn enqueue_trait_implementations(&mut self, trait_declaration: DeclarationId, span: Span) {
@@ -213,9 +242,10 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn enqueue_reachable(&mut self, instance: FunctionInstance, span: Span) {
-        if self.resolved.declarations[instance.declaration.index()].kind
-            != DeclarationKind::Function
-        {
+        if !matches!(
+            self.resolved.declarations[instance.declaration.index()].kind,
+            DeclarationKind::Function | DeclarationKind::Test
+        ) {
             return;
         }
         let mut ancestry = self.ancestry.clone();
@@ -733,6 +763,31 @@ impl<'a> TypedLowerer<'a> {
                     }
                 };
                 TypedStatementKind::Defer(body)
+            }
+            SyntaxKind::ExpectStatement => {
+                let children = child_nodes(node);
+                let selector_node = children
+                    .iter()
+                    .copied()
+                    .find(|child| child.kind != SyntaxKind::Block)?;
+                let selector = self.lower_expression(selector_node)?;
+                let trait_declaration = self.resolved.standard_declaration("RuntimeTrap")?;
+                self.enqueue_trait_methods(
+                    trait_declaration,
+                    selector.ty,
+                    &["code", "message"],
+                    selector.span,
+                );
+                let body = children
+                    .into_iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                    .map(|block| self.lower_block(block, local_types))
+                    .unwrap_or_default();
+                TypedStatementKind::Expect {
+                    selector,
+                    trait_declaration,
+                    body,
+                }
             }
             _ => return None,
         };
@@ -1366,10 +1421,30 @@ impl<'a> TypedLowerer<'a> {
                 });
             }
             CheckedCall::Standard(operation) => {
+                match operation {
+                    StandardCall::Trap {
+                        reason_type,
+                        trait_declaration,
+                    } => self.enqueue_trait_methods(
+                        trait_declaration,
+                        reason_type,
+                        &["code", "message"],
+                        node.span,
+                    ),
+                    StandardCall::Fail { value_type } => {
+                        if let Some(display) = self.resolved.standard_declaration("Display") {
+                            self.enqueue_trait_methods(display, value_type, &["fmt"], node.span);
+                        }
+                    }
+                    _ => {}
+                }
                 let mut arguments = Vec::new();
                 let has_receiver = !matches!(
                     operation,
                     StandardCall::Panic
+                        | StandardCall::Assert
+                        | StandardCall::Fail { .. }
+                        | StandardCall::Trap { .. }
                         | StandardCall::StringFrom
                         | StandardCall::IdentityFrom { .. }
                         | StandardCall::ForeignRootRetain { .. }

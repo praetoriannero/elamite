@@ -17,6 +17,10 @@ pub enum NumericError:
 pub fn panic(message: str) -> !:
     pass
 
+/// Raises an unrecoverable typed runtime trap.
+pub fn trap[T: testing.RuntimeTrap](reason: T) -> !:
+    pass
+
 /// Formats a value into a standard formatter.
 pub trait Display:
     fn fmt(self: &Self, formatter: &var Formatter) -> ()
