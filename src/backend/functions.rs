@@ -19,6 +19,13 @@ impl<'a> CEmitter<'a> {
 
     pub(super) fn emit_function(&mut self, function: &ControlFlowFunction) {
         self.promoted = function.promoted_locals.clone();
+        let capture_bindings = function
+            .closure
+            .as_ref()
+            .map(|closure| closure.captures.keys().copied().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        self.promoted
+            .retain(|binding| !capture_bindings.contains(binding));
         let Some(return_type) =
             self.c_function_return_type(function.return_type, Some(function.span))
         else {
@@ -37,13 +44,19 @@ impl<'a> CEmitter<'a> {
             c_comment(&function.name)
         );
         let _ = writeln!(self.output, "{return_type} {symbol}({parameters}) {{");
+        if function.closure.is_some() {
+            self.output.push_str("    (void)el_env;\n");
+        }
         let parameter_bindings = function
             .parameters
             .iter()
             .map(|parameter| parameter.binding)
             .collect::<BTreeSet<_>>();
         for (binding, ty) in &function.local_types {
-            if parameter_bindings.contains(binding) || self.promoted.contains(binding) {
+            if parameter_bindings.contains(binding)
+                || capture_bindings.contains(binding)
+                || self.promoted.contains(binding)
+            {
                 continue;
             }
             if let Some(c_type) = self.c_type(*ty, Some(function.span)) {
@@ -138,18 +151,21 @@ impl<'a> CEmitter<'a> {
     }
 
     pub(super) fn parameter_list(&mut self, function: &ControlFlowFunction) -> String {
-        if function.parameters.is_empty() {
-            return "void".to_string();
+        let mut parameters = Vec::new();
+        if let Some(closure) = &function.closure
+            && let Some(ty) = self.c_type(closure.ty, Some(function.span))
+        {
+            parameters.push(format!("{ty} el_env"));
         }
-        function
-            .parameters
-            .iter()
-            .filter_map(|parameter| {
-                self.c_type(parameter.ty, Some(parameter.span))
-                    .map(|ty| format!("{ty} {}", local_name(parameter.binding)))
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+        parameters.extend(function.parameters.iter().filter_map(|parameter| {
+            self.c_type(parameter.ty, Some(parameter.span))
+                .map(|ty| format!("{ty} {}", local_name(parameter.binding)))
+        }));
+        if parameters.is_empty() {
+            "void".to_string()
+        } else {
+            parameters.join(", ")
+        }
     }
 
     pub(super) fn emit_instruction(
@@ -257,6 +273,36 @@ impl<'a> CEmitter<'a> {
                 self.constant_expression(constant, destination_type, span)?
             }
             Rvalue::FunctionReference(instance) => self.function_symbol(instance),
+            Rvalue::Closure { ty, captures } => {
+                let destination_name = temporary_name(destination);
+                let c_type = self.c_type(*ty, Some(span))?;
+                let class = if captures.iter().any(|capture| {
+                    let capture_type = function.temporary_types[capture.index()];
+                    self.scanned_allocation(capture_type)
+                }) {
+                    AllocationClass::Scanned
+                } else {
+                    AllocationClass::PointerFree
+                };
+                self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                    destination: &destination_name,
+                    byte_count: &format!("sizeof(*{destination_name})"),
+                    class,
+                });
+                let _ = writeln!(
+                    self.output,
+                    "    if ({destination_name} == NULL) el_out_of_memory();"
+                );
+                for (index, capture) in captures.iter().enumerate() {
+                    let _ = writeln!(
+                        self.output,
+                        "    {destination_name}->v{index} = {};",
+                        temporary_name(*capture)
+                    );
+                }
+                let _ = c_type;
+                destination_name
+            }
             Rvalue::Load(place) => self.place_expression(place),
             Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
             Rvalue::DefaultValue(ty) => self.default_expression(*ty, span)?,
@@ -448,11 +494,13 @@ impl<'a> CEmitter<'a> {
             }
             Rvalue::MakeTraitObject {
                 trait_declaration,
+                trait_type,
                 concrete,
                 value,
             } => {
-                let object = object_name(*trait_declaration);
-                let table = vtable_instance_name(self.typed, *trait_declaration, *concrete);
+                let object = object_name(*trait_declaration, *trait_type);
+                let table =
+                    vtable_instance_name(self.typed, *trait_declaration, *trait_type, *concrete);
                 format!(
                     "({object}){{ (void *){}, &{table} }}",
                     temporary_name(*value)
@@ -611,6 +659,16 @@ impl<'a> CEmitter<'a> {
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
+                self.call_rvalue(call, destination_type)
+            }
+            Rvalue::ClosureCall {
+                instance,
+                closure,
+                arguments,
+            } => {
+                let mut values = vec![temporary_name(*closure)];
+                values.extend(arguments.iter().map(|argument| temporary_name(*argument)));
+                let call = format!("{}({})", self.function_symbol(instance), values.join(", "));
                 self.call_rvalue(call, destination_type)
             }
             Rvalue::VariadicSlice {
@@ -1112,7 +1170,7 @@ impl<'a> CEmitter<'a> {
     pub(super) fn emit_place_checks(&mut self, place: Option<&ControlFlowPlace>, span: Span) {
         let Some(place) = place else { return };
         match place {
-            ControlFlowPlace::Local(_) => {}
+            ControlFlowPlace::Local(_) | ControlFlowPlace::ClosureCapture(_) => {}
             ControlFlowPlace::Temporary(_) => {}
             ControlFlowPlace::Field { base, .. }
             | ControlFlowPlace::TupleField { base, .. }
@@ -1180,6 +1238,7 @@ impl<'a> CEmitter<'a> {
                     local_name(*binding)
                 }
             }
+            ControlFlowPlace::ClosureCapture(index) => format!("el_env->v{index}"),
             ControlFlowPlace::Temporary(temporary) => temporary_name(*temporary),
             ControlFlowPlace::Field { base, field } => {
                 format!(
@@ -1474,6 +1533,15 @@ impl<'a> CEmitter<'a> {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
+                    NeverCall::Closure {
+                        instance,
+                        closure,
+                        arguments,
+                    } => {
+                        let mut values = vec![temporary_name(*closure)];
+                        values.extend(arguments.iter().map(|argument| temporary_name(*argument)));
+                        format!("{}({})", self.function_symbol(instance), values.join(", "))
+                    }
                 };
                 let _ = writeln!(self.output, "    {expression};\n    abort();");
             }

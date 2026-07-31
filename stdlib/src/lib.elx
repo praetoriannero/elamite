@@ -13,6 +13,10 @@ pub enum NumericError:
     OutOfRange
     NotANumber
 
+/// A safe callable with one exact tuple of arguments and one exact result.
+pub trait Callable[Arguments, Return]:
+    fn call(self: &Self, arguments: Arguments) -> Return
+
 /// Terminates the process with an unrecoverable diagnostic.
 pub fn panic(message: str) -> !:
     pass

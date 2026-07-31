@@ -74,7 +74,14 @@ impl<'a> Checker<'a> {
         let mut valid = true;
         for (argument, trait_type) in obligations {
             let trait_name = crate::traits::trait_name(self.resolved, self.typed, trait_type);
-            if !crate::traits::provides(self.resolved, self.typed, argument, &trait_name) {
+            let substitution = self.typed.instance_substitution(self.resolved, instance);
+            let required = self.typed.types.substitute(trait_type, &substitution);
+            let satisfies = if trait_name == "Callable" {
+                self.satisfies_callable_signature(argument, required)
+            } else {
+                crate::traits::provides(self.resolved, self.typed, argument, &trait_name)
+            };
+            if !satisfies {
                 self.diagnostics.push(
                     Diagnostic::new(
                         Category::TypeSystem,
@@ -88,6 +95,91 @@ impl<'a> Checker<'a> {
             }
         }
         valid
+    }
+
+    fn satisfies_callable_signature(&mut self, actual: TypeId, required: TypeId) -> bool {
+        let TypeKind::Nominal {
+            identity,
+            arguments,
+        } = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(required))
+        else {
+            return false;
+        };
+        if !self
+            .resolved
+            .is_standard_declaration(identity.declaration, "Callable")
+        {
+            return false;
+        }
+        let [argument_tuple, required_return] = arguments.as_slice() else {
+            return false;
+        };
+        let required_kind = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(*argument_tuple));
+        let required_parameters = match required_kind {
+            TypeKind::Tuple(parameters) => parameters.clone(),
+            TypeKind::Primitive(PrimitiveType::Unit) => Vec::new(),
+            _ => return false,
+        };
+        let required_return = *required_return;
+        let actual_kind = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(actual))
+            .clone();
+        if matches!(actual_kind, TypeKind::Nominal { .. }) {
+            let Some((_, parameters, return_type)) = self.callable_impl_signature(actual) else {
+                return false;
+            };
+            return parameters.len() == required_parameters.len()
+                && parameters
+                    .iter()
+                    .zip(&required_parameters)
+                    .all(|(actual, required)| self.typed.types.exactly_equal(*actual, *required))
+                && self.typed.types.exactly_equal(return_type, required_return);
+        }
+        let exact_signature = |parameters: &[TypeId], return_type: TypeId| {
+            parameters.len() == required_parameters.len()
+                && parameters
+                    .iter()
+                    .zip(&required_parameters)
+                    .all(|(actual, required)| self.typed.types.exactly_equal(*actual, *required))
+                && self.typed.types.exactly_equal(return_type, required_return)
+        };
+        match actual_kind {
+            TypeKind::Closure {
+                parameters,
+                return_type,
+                ..
+            } => exact_signature(&parameters, return_type),
+            TypeKind::Reference { target, .. } => match self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(target))
+            {
+                TypeKind::Function {
+                    safety: Safety::Safe,
+                    receiver: None,
+                    parameters,
+                    return_type,
+                    ..
+                } if parameters.iter().all(|parameter| !parameter.variadic) => {
+                    let parameters = parameters
+                        .iter()
+                        .map(|parameter| parameter.ty)
+                        .collect::<Vec<_>>();
+                    exact_signature(&parameters, *return_type)
+                }
+                _ => false,
+            },
+            TypeKind::Nominal { .. } => unreachable!("handled before immutable comparison"),
+            _ => false,
+        }
     }
 
     pub(super) fn generic_inference_variables(
@@ -941,12 +1033,34 @@ impl<'a> Checker<'a> {
             );
             return false;
         }
-        let implemented = crate::traits::implements_trait(
-            self.resolved,
-            self.typed,
-            source_target,
-            trait_declaration,
-        );
+        let implemented = if self
+            .resolved
+            .is_standard_declaration(trait_declaration, "Callable")
+        {
+            let target = self.typed.types.resolve_inference(object_type);
+            let trait_type = match self.typed.types.kind(target) {
+                TypeKind::Reference { target, .. } => {
+                    match self
+                        .typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(*target))
+                    {
+                        TypeKind::TraitObject { trait_type } => Some(*trait_type),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            trait_type
+                .is_some_and(|required| self.satisfies_callable_signature(source_target, required))
+        } else {
+            crate::traits::implements_trait(
+                self.resolved,
+                self.typed,
+                source_target,
+                trait_declaration,
+            )
+        };
         if !implemented {
             self.diagnostics.push(
                 Diagnostic::new(
@@ -1158,6 +1272,102 @@ impl<'a> Checker<'a> {
             self.check_call_arguments(node.span, &parameters, arguments);
             return (return_type, PlaceKind::Value);
         }
+        if let TypeKind::Closure {
+            declaration,
+            parameters,
+            return_type,
+            ..
+        } = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(callee_type))
+            .clone()
+        {
+            self.program
+                .calls
+                .insert(node.span, CheckedCall::Closure { declaration });
+            let parameters = parameters
+                .into_iter()
+                .map(|ty| FunctionParameter {
+                    ty,
+                    variadic: false,
+                })
+                .collect::<Vec<_>>();
+            self.check_call_arguments(node.span, &parameters, arguments);
+            return (return_type, PlaceKind::Value);
+        }
+        if let TypeKind::GenericParameter(parameter) = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(callee_type))
+            .clone()
+            && let Some((trait_declaration, parameters, return_type)) =
+                self.callable_bound_signature(parameter)
+        {
+            self.program.calls.insert(
+                node.span,
+                CheckedCall::CallableBound {
+                    trait_declaration,
+                    receiver_type: callee_type,
+                    parameters: parameters.clone(),
+                },
+            );
+            let parameters = parameters
+                .into_iter()
+                .map(|ty| FunctionParameter {
+                    ty,
+                    variadic: false,
+                })
+                .collect::<Vec<_>>();
+            self.check_call_arguments(node.span, &parameters, arguments);
+            return (return_type, PlaceKind::Value);
+        }
+        if let Some((trait_declaration, parameters, return_type)) =
+            self.callable_object_signature(callee_type)
+        {
+            let slot = crate::traits::vtable_slots(self.resolved, trait_declaration)
+                .iter()
+                .position(|(name, _)| name == "call")
+                .unwrap_or(0);
+            self.program.calls.insert(
+                node.span,
+                CheckedCall::CallableDynamic {
+                    trait_declaration,
+                    slot,
+                    parameters: parameters.clone(),
+                },
+            );
+            let parameters = parameters
+                .into_iter()
+                .map(|ty| FunctionParameter {
+                    ty,
+                    variadic: false,
+                })
+                .collect::<Vec<_>>();
+            self.check_call_arguments(node.span, &parameters, arguments);
+            return (return_type, PlaceKind::Value);
+        }
+        if let Some((trait_declaration, parameters, return_type)) =
+            self.callable_impl_signature(callee_type)
+        {
+            self.program.calls.insert(
+                node.span,
+                CheckedCall::CallableBound {
+                    trait_declaration,
+                    receiver_type: callee_type,
+                    parameters: parameters.clone(),
+                },
+            );
+            let parameters = parameters
+                .into_iter()
+                .map(|ty| FunctionParameter {
+                    ty,
+                    variadic: false,
+                })
+                .collect::<Vec<_>>();
+            self.check_call_arguments(node.span, &parameters, arguments);
+            return (return_type, PlaceKind::Value);
+        }
         for argument in arguments {
             self.check_expr(argument, ExpectedType::None);
         }
@@ -1168,6 +1378,99 @@ impl<'a> Checker<'a> {
             );
         }
         (self.typed.types.error(), PlaceKind::Value)
+    }
+
+    fn callable_bound_signature(
+        &self,
+        parameter: GenericParameterId,
+    ) -> Option<(DeclarationId, Vec<TypeId>, TypeId)> {
+        self.typed
+            .obligations_for(parameter)
+            .find_map(|obligation| self.callable_trait_signature(obligation.trait_type))
+    }
+
+    fn callable_trait_signature(
+        &self,
+        trait_type: TypeId,
+    ) -> Option<(DeclarationId, Vec<TypeId>, TypeId)> {
+        let TypeKind::Nominal {
+            identity,
+            arguments,
+        } = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(trait_type))
+        else {
+            return None;
+        };
+        if !self
+            .resolved
+            .is_standard_declaration(identity.declaration, "Callable")
+        {
+            return None;
+        }
+        let [argument_tuple, return_type] = arguments.as_slice() else {
+            return None;
+        };
+        let argument_kind = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(*argument_tuple));
+        let parameters = match argument_kind {
+            TypeKind::Tuple(parameters) => parameters.clone(),
+            TypeKind::Primitive(PrimitiveType::Unit) => Vec::new(),
+            _ => return None,
+        };
+        Some((identity.declaration, parameters, *return_type))
+    }
+
+    fn callable_object_signature(
+        &self,
+        ty: TypeId,
+    ) -> Option<(DeclarationId, Vec<TypeId>, TypeId)> {
+        let TypeKind::Reference { target, .. } = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(ty))
+        else {
+            return None;
+        };
+        let TypeKind::TraitObject { trait_type } = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(*target))
+        else {
+            return None;
+        };
+        self.callable_trait_signature(*trait_type)
+    }
+
+    fn callable_impl_signature(
+        &mut self,
+        ty: TypeId,
+    ) -> Option<(DeclarationId, Vec<TypeId>, TypeId)> {
+        let trait_declaration = self.resolved.standard_declaration("Callable")?;
+        let selected =
+            crate::traits::vtable_entry(self.resolved, self.typed, trait_declaration, ty, "call")?;
+        let instance = FunctionInstance {
+            declaration: selected.declaration,
+            arguments: selected.arguments,
+            self_type: selected.self_type,
+        };
+        let signature = self.typed.instantiate_signature(self.resolved, &instance)?;
+        let [argument] = signature.parameters.as_slice() else {
+            return None;
+        };
+        let argument_kind = self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(argument.ty));
+        let parameters = match argument_kind {
+            TypeKind::Tuple(parameters) => parameters.clone(),
+            TypeKind::Primitive(PrimitiveType::Unit) => Vec::new(),
+            _ => return None,
+        };
+        Some((trait_declaration, parameters, signature.return_type))
     }
 
     pub(super) fn check_member_call(

@@ -132,6 +132,7 @@ impl<'a> TypeBuilder<'a> {
             if matches!(
                 declaration.kind,
                 DeclarationKind::Function
+                    | DeclarationKind::Closure
                     | DeclarationKind::Test
                     | DeclarationKind::ForeignFunction
             ) {
@@ -270,6 +271,7 @@ impl<'a> TypeBuilder<'a> {
                 })
             }
             DeclarationKind::Function
+            | DeclarationKind::Closure
             | DeclarationKind::Test
             | DeclarationKind::ForeignFunction => {
                 self.diagnostics.push(
@@ -711,6 +713,8 @@ impl<'a> TypeBuilder<'a> {
             direct_children(&declaration_data.syntax, SyntaxKind::Type).last()
         {
             self.lower_return_type(node, self_type)
+        } else if declaration_data.kind == DeclarationKind::Closure {
+            self.types.fresh_inference_variable()
         } else {
             self.types.primitive(PrimitiveType::Unit)
         };

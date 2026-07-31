@@ -24,6 +24,10 @@ pub(super) fn function_type_name(ty: TypeId) -> String {
     format!("el_fn_t{}", ty.index())
 }
 
+pub(super) fn closure_name(ty: TypeId) -> String {
+    format!("el_closure_t{}", ty.index())
+}
+
 pub(super) fn numeric_alternative_name(
     operation: NumericAlternative,
     operand: TypeId,
@@ -148,12 +152,16 @@ pub(super) fn default_helper_name(ty: TypeId) -> String {
     format!("el_default_t{}", ty.index())
 }
 
-pub(super) fn object_name(trait_declaration: DeclarationId) -> String {
-    format!("el_obj{}", trait_declaration.index())
+pub(super) fn object_name(trait_declaration: DeclarationId, trait_type: TypeId) -> String {
+    format!(
+        "el_obj{}_t{}",
+        trait_declaration.index(),
+        trait_type.index()
+    )
 }
 
-pub(super) fn vtable_type_name(trait_declaration: DeclarationId) -> String {
-    format!("el_vt{}", trait_declaration.index())
+pub(super) fn vtable_type_name(trait_declaration: DeclarationId, trait_type: TypeId) -> String {
+    format!("el_vt{}_t{}", trait_declaration.index(), trait_type.index())
 }
 
 pub(super) fn vtable_slot_name(slot: usize) -> String {
@@ -163,20 +171,28 @@ pub(super) fn vtable_slot_name(slot: usize) -> String {
 pub(super) fn vtable_instance_name(
     typed: &TypedProgram,
     trait_declaration: DeclarationId,
+    trait_type: TypeId,
     concrete: TypeId,
 ) -> String {
     let _ = typed;
-    format!("el_vtbl{}_{}", trait_declaration.index(), concrete.index())
+    format!(
+        "el_vtbl{}_{}_{}",
+        trait_declaration.index(),
+        trait_type.index(),
+        concrete.index()
+    )
 }
 
 pub(super) fn thunk_name(
     trait_declaration: DeclarationId,
+    trait_type: TypeId,
     concrete: TypeId,
     slot: usize,
 ) -> String {
     format!(
-        "el_thunk{}_{}_{slot}",
+        "el_thunk{}_{}_{}_{slot}",
         trait_declaration.index(),
+        trait_type.index(),
         concrete.index()
     )
 }

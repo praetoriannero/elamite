@@ -23,6 +23,7 @@ use crate::types::{FunctionSignature, PrimitiveType, TypeId, TypeKind, TypedProg
 pub struct TraitImplementation {
     pub implementation: ImplId,
     pub trait_declaration: DeclarationId,
+    pub trait_type: TypeId,
     pub target: TypeId,
     pub span: Span,
 }
@@ -199,6 +200,7 @@ fn collect(resolved: &ResolvedProgram, typed: &TypedProgram) -> Vec<TraitImpleme
         implementations.push(TraitImplementation {
             implementation: block.id,
             trait_declaration,
+            trait_type,
             target,
             span: block.span,
         });
@@ -326,7 +328,13 @@ fn compare_signatures(
         return;
     };
     let span = resolved.declarations[impl_method.index()].span;
-    let expected = substitute_signature(typed, &declared, implementation.target);
+    let expected = substitute_signature(
+        resolved,
+        typed,
+        &declared,
+        implementation.trait_type,
+        implementation.target,
+    );
 
     let mismatch = |diagnostics: &mut Vec<Diagnostic>, detail: &str| {
         diagnostics.push(
@@ -392,24 +400,48 @@ fn compare_signatures(
 }
 
 fn substitute_signature(
+    resolved: &ResolvedProgram,
     typed: &mut TypedProgram,
     signature: &FunctionSignature,
+    trait_type: TypeId,
     target: TypeId,
 ) -> FunctionSignature {
+    let mut substitution = crate::types::Substitution::new();
+    if let TypeKind::Nominal {
+        identity,
+        arguments,
+    } = typed
+        .types
+        .kind(typed.types.resolve_inference(trait_type))
+        .clone()
+    {
+        for (parameter, argument) in resolved.declarations[identity.declaration.index()]
+            .generic_parameters
+            .iter()
+            .copied()
+            .zip(arguments)
+        {
+            substitution.insert(parameter, argument);
+        }
+    }
+    let substitute = |typed: &mut TypedProgram, ty| {
+        let ty = typed.types.substitute(ty, &substitution);
+        typed.types.substitute_self(ty, target)
+    };
     FunctionSignature {
         ty: signature.ty,
         receiver: signature
             .receiver
-            .map(|receiver| typed.types.substitute_self(receiver, target)),
+            .map(|receiver| substitute(typed, receiver)),
         parameters: signature
             .parameters
             .iter()
             .map(|parameter| crate::types::FunctionParameter {
-                ty: typed.types.substitute_self(parameter.ty, target),
+                ty: substitute(typed, parameter.ty),
                 variadic: parameter.variadic,
             })
             .collect(),
-        return_type: typed.types.substitute_self(signature.return_type, target),
+        return_type: substitute(typed, signature.return_type),
     }
 }
 
@@ -1179,6 +1211,14 @@ fn provides_inner(
         ),
         TypeKind::Reference { target, .. } => {
             matches!(trait_name, "PartialEq" | "Eq" | "Hash")
+                || (trait_name == "Callable"
+                    && matches!(
+                        typed.types.kind(typed.types.resolve_inference(*target)),
+                        TypeKind::Function {
+                            safety: crate::types::Safety::Safe,
+                            ..
+                        }
+                    ))
                 || (trait_name == "Display"
                     && provides_inner(
                         resolved,
@@ -1206,6 +1246,7 @@ fn provides_inner(
             matches!(trait_name, "Default" | "PartialEq" | "Eq" | "Hash")
         }
         TypeKind::Function { .. } => matches!(trait_name, "PartialEq" | "Eq"),
+        TypeKind::Closure { .. } => trait_name == "Callable",
         TypeKind::Builtin { builtin, arguments } => {
             let name = resolved.builtin_name(*builtin);
             match (name, trait_name) {

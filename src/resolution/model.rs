@@ -119,6 +119,7 @@ pub enum DeclarationKind {
     Enum,
     Trait,
     Function,
+    Closure,
     Test,
     ForeignType,
     ForeignStruct,
@@ -217,9 +218,34 @@ pub struct LocalBinding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalBindingKind {
     Parameter,
+    ClosureCapture,
     Local,
     Loop,
     PatternCandidate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureCaptureKind {
+    Value,
+    SharedReference,
+    MutableReference,
+    SharedRawPointer,
+    MutableRawPointer,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClosureCapture {
+    pub source: LocalBindingId,
+    pub binding: LocalBindingId,
+    pub kind: ClosureCaptureKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedClosure {
+    pub declaration: DeclarationId,
+    pub span: Span,
+    pub captures: Vec<ClosureCapture>,
 }
 
 /// One import or public re-export.
@@ -276,6 +302,7 @@ pub struct ResolvedProgram {
     pub variants: Vec<Variant>,
     pub generic_parameters: Vec<GenericParameter>,
     pub local_bindings: Vec<LocalBinding>,
+    pub closures: Vec<ResolvedClosure>,
     pub references: Vec<ResolvedReference>,
     pub declaration_members: BTreeMap<DeclarationId, BTreeMap<Symbol, MemberId>>,
     pub impl_members: BTreeMap<ImplId, BTreeMap<Symbol, DeclarationId>>,

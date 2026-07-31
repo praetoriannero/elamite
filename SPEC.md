@@ -2,7 +2,7 @@
 
 > Status: Draft
 >
-> Version: 0.5.0-draft
+> Version: 0.7.0-draft
 >
 > The current [specification demonstration](examples/spec_demo.elx) is the
 > authoritative surface-language example. This document describes that design;
@@ -232,6 +232,22 @@ form `&var`. This restriction applies through nested ordinary values. It does
 not remove mutation capabilities carried by explicit aliases: a non-rebindable
 binding whose value is an `&var T`, or whose value contains one, cannot replace
 that reference but may still mutate its target.
+
+A local `let` or `var` may bind either one identifier or an irrefutable tuple
+binding pattern. Tuple binding patterns may nest and may contain identifiers or
+`_`; `()` and `(name,)` are the empty and one-element forms. Literals,
+alternatives, enum variants, record patterns, dereference patterns, guards,
+rest patterns, and tuple patterns in parameters or loop headers are not local
+binding patterns. An optional annotation applies to the complete pattern:
+`let (number, name): (i32, String) = value`.
+
+The initializer is evaluated exactly once before any new binding enters scope
+and must have the exact tuple shape and arity of the pattern. Every identifier
+in one pattern must be unique. All of its bindings enter scope together after
+the initializer; `_` creates no binding. Each `let` component receives an
+independent logical copy and is non-rebindable. Each `var` component receives
+an independent logical copy in its own rebindable local place. The initializer
+and any source value remain usable under the ordinary copy rules.
 
 Assignment, ordinary argument passing, and ordinary returns copy the source
 value; using the source after that operation is valid. Copying is a core
@@ -549,7 +565,30 @@ and `usize` use the selected C target's pointer width.
 
 Tuples use parentheses, for example `(bool, String)`. `()` is both the unit
 value and the empty tuple. `(value)` is a grouped expression, while `(value,)`
-is a one-element tuple. `str` is an immutable UTF-8 character sequence.
+is a one-element tuple.
+
+A zero-based positional selector accesses a tuple component with ordinary
+postfix precedence: `pair.0`, `pair.1`, and so on. The selector is a canonical
+unsuffixed decimal integer with no sign, radix prefix, separator, or leading
+zero except `.0`, and it must be statically within the receiver tuple's arity.
+Numeric selectors do not name struct fields or tuple-like enum payloads and
+are never dynamic indices or method names. Existing floating-point literal
+tokenization is unchanged.
+
+Positional access composes left-to-right with every other postfix operation;
+the receiver in `callback().0`, `value.0.name`, or `values.1[index]` is
+evaluated exactly once. In value context, access produces an ordinary logical
+copy of the component. When rooted in an addressable tuple path, it is an
+addressable place; when that path is mutable it is also assignable, supporting
+replacement, compound assignment, nested mutation, `&pair.0`, and
+`&var pair.0` under the ordinary place and promotion rules. A safe-reference
+receiver is automatically dereferenced as for a named field. A raw-pointer
+tuple receiver may be selected directly only in an `unsafe` context; selection
+performs the same mandatory null and alignment checks as explicit
+dereferencing, and only `*var Tuple` produces an assignable raw target. A
+reference stored as a tuple component receives no special dereference behavior.
+
+`str` is an immutable UTF-8 character sequence.
 `String` is the standard-library mutable UTF-8 sequence type. A copied `String`
 is an independent logical value; an implementation may use copy-on-write
 storage. `str` qualifies for `StableHash`; `String` does not.
@@ -930,17 +969,16 @@ variadic(7)
 variadic(7, "one", "two")
 ~~~
 
-A function value is a *function reference*. A safe function reference is written
+A named-function value is a *function reference*. A safe function reference is written
 `&fn(Parameters) -> Return`; an unsafe function reference is written
 `&unsafe fn(Parameters) -> Return`. The bare forms `fn(Parameters) -> Return`
 and `unsafe fn(Parameters) -> Return` are function types that, like a trait,
 are inhabited only behind a reference. Every value or storage location that
-holds an ordinary Elamite function therefore has one of the two reference
-types. There is no `&var fn` form, because a function's code is never mutated.
-Elamite has no closures, anonymous function literals, captured environments, or
-bound-method values. A function reference is produced only by referencing a
-named function or an unbound method, and its safety qualifier matches that
-declaration.
+holds a named Elamite function therefore has one of the two reference types.
+There is no `&var fn` form, because a function's code is never mutated. A
+function reference is produced only by referencing a named function or an
+unbound method, and its safety qualifier matches that declaration. Bound-method
+values remain unsupported.
 
 Referencing a named function, as in `let bump = increment`, produces an `&fn`
 value whose target is that function. A function reference is called with ordinary
@@ -990,6 +1028,84 @@ let recover: &unsafe fn(*Session) -> &Session = Session.get_self_ptr_unsafe
 unsafe:
     let session = recover(pointer)
 ~~~
+
+### 5.1 Explicit-capture closures
+
+A closure is a safe anonymous callable with its own function boundary. A
+captureless closure is written `fn(parameters):` or
+`fn(parameters) -> Return:`. A capturing closure places a nonempty capture list
+before the parameter list:
+
+~~~elx
+let offset: i32 = 4
+let add = fn[offset](value: i32):
+    return value + offset
+
+var total: i32 = 0
+let accumulate = fn[&var total as state](value: i32) -> i32:
+    *state += value
+    return *state
+~~~
+
+Closure parameters always have explicit types and cannot be variadic. A closure
+literal introduces no generic parameters, cannot be declared `unsafe`, and
+cannot capture implicitly. It may occur within a generic declaration; ordinary
+substitution then makes the anonymous closure type concrete.
+
+Every enclosing local used by a closure body must occur exactly once in its
+capture list. Module declarations, imports, types, and named functions require
+no capture. A capture may be renamed with `source as alias`; the alias is the
+only binding visible in the closure. Capture aliases and parameters share one
+local namespace and cannot collide. The binding receiving a closure is not in
+scope while its initializer is resolved, so a closure cannot capture itself or
+perform anonymous recursion.
+
+Captures are evaluated exactly once from left to right when execution reaches
+the closure expression:
+
+- `value` stores an independent logical copy;
+- `&value` forms a shared reference to addressable storage;
+- `&var value` forms a mutable reference and requires mutable storage;
+- `*pointer` copies a raw pointer, downgrading `*var T` to `*T` when needed;
+- `*var pointer` requires and preserves `*var T`.
+
+A raw-pointer local cannot use the plain capture form. Raw-pointer captures do
+not dereference the pointer or keep its pointee alive. Their later dereference,
+automatic field access, or conversion to a safe reference follows Section 3.3
+and requires an explicit `unsafe:` block. Merely copying, storing, passing, or
+comparing a captured raw pointer remains safe.
+
+A capture alias cannot be rebound. Mutation through a captured `&var T` or
+`*var T` changes the referenced storage. A plain captured value is private
+environment storage; logically copying the closure recursively copies such
+values, while captured references and raw pointers preserve their ordinary
+alias identity. Closure environments and address-taken captured storage are
+managed, so a safe reference may outlive the source stack frame. A raw pointer
+alone never roots its pointee.
+
+The return annotation is optional. Explicit `return` expressions and an
+expected callable result constrain one exact inferred type; every returned
+value must agree. Reachable fallthrough and bare `return` contribute `()`.
+There is no implicit tail-expression return. An annotated non-unit result
+requires a value on every normally completing path, and `-> !` follows the
+ordinary never-return rules.
+
+Each closure expression has a distinct anonymous nominal type and implements
+the standard user-implementable `Callable[Arguments, Return]` trait, where
+`Arguments` is the exact argument tuple. Ordinary call syntax invokes a
+closure. Generic code may call a type parameter through a matching `Callable`
+bound, and a callable may be erased behind
+`&Callable[Arguments, Return]`. Named safe function references participate in
+the same callable contract. Closures, including captureless closures, never
+convert to `&fn`, `*fn`, or a C callback.
+
+A closure does not inherit an enclosing `unsafe:`, loop, `defer`, or function
+return context. Its body begins safe and uses its own `return`, postfix `?`,
+never-return, and cleanup rules. It cannot `break` or `continue` an enclosing
+loop. Private evolving captures, implicit/default capture, initialized capture
+expressions, generic closure literals, unsafe closures, variadic closures,
+anonymous recursion, callable equality or hashing, `CallableMut`,
+`CallableOnce`, and closure-to-function-pointer conversion are not supported.
 
 A function reference is an ordinary storable value. It may appear in a binding,
 field, enum payload, collection element, parameter, or return value. Named
@@ -1228,12 +1344,15 @@ Conditions appear after the keyword. `match` evaluates its scrutinee and chooses
 the first matching arm. Each arm uses `Pattern:` followed on the next line by
 an indented body.
 
-Patterns initially appear only in `match` arms. They include `_`, immutable
+Refutable patterns appear only in `match` arms. They include `_`, immutable
 binding names, primitive and `str` literals, tuples, structs, unit/tuple/record
-enum variants, and alternatives separated by `|`. Struct and record-variant
-patterns use named fields. Field shorthand such as `Point { x, .. }` binds `x`
-and ignores the remaining fields; without `..`, every field must appear.
-Alternative patterns must bind the same names with the same types.
+enum variants, and alternatives separated by `|`. The restricted irrefutable
+tuple patterns accepted by local `let` and `var` declarations are defined in
+Section 3.1 and do not enable any other match-pattern form at a binding site.
+Struct and record-variant match patterns use named fields. Field shorthand such
+as `Point { x, .. }` binds `x` and ignores the remaining fields; without `..`,
+every field must appear. Alternative patterns must bind the same names with the
+same types.
 
 A guarded arm uses `Pattern if condition:`. Its bindings are in scope in the
 boolean guard. A failed guard proceeds to the next arm, and guarded arms do not

@@ -51,8 +51,8 @@ pub use crate::operations::{
     NumericAlternative, NumericOperator, NumericOutcome, ReceiverAdjustment, StandardCall,
 };
 use crate::resolution::{
-    DeclarationId, DeclarationKind, FieldId, GenericParameterId, LocalBindingId, MemberId,
-    ModuleId, NameTarget, ResolvedProgram, VariantId,
+    ClosureCaptureKind, DeclarationId, DeclarationKind, FieldId, GenericParameterId,
+    LocalBindingId, MemberId, ModuleId, NameTarget, ResolvedProgram, VariantId,
 };
 use crate::source::Span;
 use crate::syntax::{
@@ -343,6 +343,16 @@ impl<'a> Checker<'a> {
                 .kind(self.typed.types.resolve_inference(ty)),
             TypeKind::Never
         )
+    }
+
+    fn resolve_aliases(&self, mut ty: TypeId) -> TypeId {
+        loop {
+            ty = self.typed.types.resolve_inference(ty);
+            match self.typed.types.kind(ty) {
+                TypeKind::Alias { target, .. } => ty = *target,
+                _ => return ty,
+            }
+        }
     }
 
     fn node_contains_never_expression(&self, node: &SyntaxNode) -> bool {
@@ -652,7 +662,13 @@ impl<'a> Checker<'a> {
                 ..
             }))
         );
-        let nodes = child_nodes(node);
+        let pattern = child_nodes(node)
+            .into_iter()
+            .find(|child| child.kind == SyntaxKind::TuplePattern);
+        let nodes = child_nodes(node)
+            .into_iter()
+            .filter(|child| child.kind != SyntaxKind::TuplePattern)
+            .collect::<Vec<_>>();
         let (annotation, initializer) = match nodes.as_slice() {
             [annotation, initializer] => (Some(*annotation), *initializer),
             [initializer] => (None, *initializer),
@@ -676,19 +692,75 @@ impl<'a> Checker<'a> {
         } else {
             initializer_type
         };
-        if let Some(token) = let_name_token(node)
+        if let Some(pattern) = pattern {
+            self.check_local_binding_pattern(pattern, final_type, is_var);
+        } else if let Some(token) = let_name_token(node)
+            && token_text(token) != "_"
             && let Some(&id) = self.span_to_local.get(&token.span)
         {
-            self.local_types.insert(id, final_type);
-            self.local_rebindable.insert(
-                id,
-                if is_var {
-                    Rebindable::Var
-                } else {
-                    Rebindable::Let
-                },
-            );
+            self.record_local_binding(id, final_type, is_var);
         }
+    }
+
+    fn check_local_binding_pattern(&mut self, pattern: &SyntaxNode, ty: TypeId, is_var: bool) {
+        match pattern.kind {
+            SyntaxKind::TuplePattern => {
+                let elements = child_nodes(pattern);
+                let resolved = self.resolve_aliases(ty);
+                let members = match self.typed.types.kind(resolved) {
+                    TypeKind::Tuple(members) if members.len() == elements.len() => {
+                        Some(members.clone())
+                    }
+                    TypeKind::Primitive(PrimitiveType::Unit) if elements.is_empty() => {
+                        Some(Vec::new())
+                    }
+                    TypeKind::Error => Some(vec![self.typed.types.error(); elements.len()]),
+                    _ => None,
+                };
+                if members.is_none() && ty != self.typed.types.error() {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Pattern,
+                            "this tuple binding pattern does not match the initializer's type",
+                        )
+                        .with_primary(pattern.span),
+                    );
+                }
+                for (index, element) in elements.into_iter().enumerate() {
+                    let element_type = members
+                        .as_ref()
+                        .and_then(|members| members.get(index).copied())
+                        .unwrap_or_else(|| self.typed.types.error());
+                    self.check_local_binding_pattern(element, element_type, is_var);
+                }
+            }
+            SyntaxKind::Pattern => {
+                let Some(token) = first_identifier_token(pattern) else {
+                    return;
+                };
+                if token_text(token) == "_" {
+                    return;
+                }
+                if let Some(&id) = self.span_to_local.get(&token.span) {
+                    self.record_local_binding(id, ty, is_var);
+                    self.program.copied_pattern_bindings.insert(id);
+                    self.program.pattern_binding_types.insert(id, ty);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn record_local_binding(&mut self, id: LocalBindingId, ty: TypeId, is_var: bool) {
+        self.local_types.insert(id, ty);
+        self.local_rebindable.insert(
+            id,
+            if is_var {
+                Rebindable::Var
+            } else {
+                Rebindable::Let
+            },
+        );
     }
 
     fn check_assignment_statement(&mut self, node: &SyntaxNode) {
@@ -789,8 +861,18 @@ impl<'a> Checker<'a> {
         }
         match expression {
             Some(expression) => {
-                let (expression_type, _) =
-                    self.check_expr(expression, ExpectedType::Exact(return_type));
+                let return_is_inferred = matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(return_type)),
+                    TypeKind::InferenceVariable(_)
+                );
+                let expected = if return_is_inferred {
+                    ExpectedType::None
+                } else {
+                    ExpectedType::Exact(return_type)
+                };
+                let (expression_type, _) = self.check_expr(expression, expected);
                 self.program.copies.insert(expression.span);
                 if is_unit {
                     self.diagnostics.push(
@@ -800,6 +882,21 @@ impl<'a> Checker<'a> {
                         )
                         .with_primary(expression.span),
                     );
+                } else if return_is_inferred {
+                    if self
+                        .typed
+                        .types
+                        .unify(return_type, expression_type)
+                        .is_err()
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::ExpressionType,
+                                "closure return values must have one exact type",
+                            )
+                            .with_primary(expression.span),
+                        );
+                    }
                 } else if !self.types_compatible(expression_type, return_type) {
                     self.diagnostics.push(
                         Diagnostic::new(
@@ -811,7 +908,15 @@ impl<'a> Checker<'a> {
                 }
             }
             None => {
-                if !is_unit {
+                let return_is_inferred = matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(return_type)),
+                    TypeKind::InferenceVariable(_)
+                );
+                if return_is_inferred {
+                    let _ = self.typed.types.unify(return_type, unit_type);
+                } else if !is_unit {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::ExpressionType,
@@ -875,6 +980,8 @@ impl<'a> Checker<'a> {
             SyntaxKind::FormattedStringExpression => self.check_formatted_string(node),
             SyntaxKind::NameExpression => self.check_name_expression(node, expected),
             SyntaxKind::MemberExpression => self.check_member_expression(node, expected),
+            SyntaxKind::TupleFieldExpression => self.check_tuple_field_expression(node),
+            SyntaxKind::ClosureExpression => self.check_closure_expression(node),
             SyntaxKind::UnaryExpression => self.check_unary(node, expected),
             SyntaxKind::BinaryExpression => self.check_binary(node),
             SyntaxKind::CastExpression => self.check_cast(node),
@@ -1906,6 +2013,337 @@ impl<'a> Checker<'a> {
         )
     }
 
+    fn check_tuple_field_expression(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+        let Some(base) = child_nodes(node).into_iter().next() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
+        let Some(index_token) = node.children.iter().rev().find_map(|child| match child {
+            SyntaxElement::Token(
+                token @ Token {
+                    kind: TokenKind::IntegerLiteral { .. },
+                    ..
+                },
+            ) => Some(token),
+            _ => None,
+        }) else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let Some(index) = tuple_field_index(index_token) else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Syntax,
+                    "a tuple selector must be a canonical unsuffixed decimal index",
+                )
+                .with_primary(index_token.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+
+        let resolved = self.resolve_aliases(base_type);
+        let (tuple_type, place) = match self.typed.types.kind(resolved).clone() {
+            TypeKind::Tuple(_) | TypeKind::Primitive(PrimitiveType::Unit) => (resolved, base_place),
+            TypeKind::Reference { mutability, target } => {
+                let place = if mutability == Mutability::Mutable {
+                    PlaceKind::Mutable
+                } else {
+                    PlaceKind::Addressable
+                };
+                (self.resolve_aliases(target), place)
+            }
+            TypeKind::RawPointer { mutability, target } => {
+                self.require_unsafe_context(node.span, "accessing a tuple through a raw pointer");
+                self.reject_locally_invalid_pointer(base);
+                let place = if mutability == Mutability::Mutable {
+                    PlaceKind::RawPointerTarget
+                } else {
+                    PlaceKind::Value
+                };
+                (self.resolve_aliases(target), place)
+            }
+            TypeKind::Error => return (self.typed.types.error(), PlaceKind::Value),
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "positional field access requires a tuple receiver",
+                    )
+                    .with_primary(base.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+        };
+        let member = match self.typed.types.kind(tuple_type) {
+            TypeKind::Tuple(members) => members.get(index).copied(),
+            TypeKind::Primitive(PrimitiveType::Unit) => None,
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "positional field access requires a tuple receiver",
+                    )
+                    .with_primary(base.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+        };
+        match member {
+            Some(member) => (member, place),
+            None => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        format!("tuple index {index} is out of range"),
+                    )
+                    .with_primary(index_token.span),
+                );
+                (self.typed.types.error(), PlaceKind::Value)
+            }
+        }
+    }
+
+    fn check_closure_expression(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
+        let Some(resolved_closure) = self
+            .resolved
+            .closures
+            .iter()
+            .find(|closure| closure.span == node.span)
+            .cloned()
+        else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let declaration = resolved_closure.declaration;
+        let Some(mut signature) = self.typed.function_signatures.get(&declaration).cloned() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+
+        let mut checked_captures = Vec::new();
+        for capture in resolved_closure.captures {
+            let source_type = self
+                .local_types
+                .get(&capture.source)
+                .copied()
+                .unwrap_or_else(|| self.typed.types.error());
+            let source_place = match self.local_rebindable.get(&capture.source) {
+                Some(Rebindable::Var) => PlaceKind::Mutable,
+                Some(Rebindable::Let) => PlaceKind::Addressable,
+                None => PlaceKind::Value,
+            };
+            let ty = match capture.kind {
+                ClosureCaptureKind::Value => {
+                    if matches!(
+                        self.typed.types.kind(self.resolve_aliases(source_type)),
+                        TypeKind::RawPointer { .. }
+                    ) {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::ExpressionType,
+                                "a raw-pointer local must be captured with `*name` or `*var name`",
+                            )
+                            .with_primary(capture.span),
+                        );
+                    }
+                    source_type
+                }
+                ClosureCaptureKind::SharedReference => {
+                    if !source_place.permits_safe_reference() {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::Place,
+                                "this capture source is not addressable",
+                            )
+                            .with_primary(capture.span),
+                        );
+                    }
+                    self.typed.types.intern(TypeKind::Reference {
+                        mutability: Mutability::Shared,
+                        target: source_type,
+                    })
+                }
+                ClosureCaptureKind::MutableReference => {
+                    if !source_place.is_mutable() {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::Place,
+                                "a mutable-reference capture requires mutable binding storage",
+                            )
+                            .with_primary(capture.span),
+                        );
+                    }
+                    self.typed.types.intern(TypeKind::Reference {
+                        mutability: Mutability::Mutable,
+                        target: source_type,
+                    })
+                }
+                ClosureCaptureKind::SharedRawPointer => {
+                    match self
+                        .typed
+                        .types
+                        .kind(self.resolve_aliases(source_type))
+                        .clone()
+                    {
+                        TypeKind::RawPointer { target, .. } => {
+                            self.typed.types.intern(TypeKind::RawPointer {
+                                mutability: Mutability::Shared,
+                                target,
+                            })
+                        }
+                        _ => {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::ExpressionType,
+                                    "`*name` capture requires a raw-pointer local",
+                                )
+                                .with_primary(capture.span),
+                            );
+                            self.typed.types.error()
+                        }
+                    }
+                }
+                ClosureCaptureKind::MutableRawPointer => {
+                    match self
+                        .typed
+                        .types
+                        .kind(self.resolve_aliases(source_type))
+                        .clone()
+                    {
+                        TypeKind::RawPointer {
+                            mutability: Mutability::Mutable,
+                            target,
+                        } => self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Mutable,
+                            target,
+                        }),
+                        _ => {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::ExpressionType,
+                                    "`*var name` capture requires a mutable raw-pointer local",
+                                )
+                                .with_primary(capture.span),
+                            );
+                            self.typed.types.error()
+                        }
+                    }
+                }
+            };
+            checked_captures.push(CheckedClosureCapture {
+                source: capture.source,
+                binding: capture.binding,
+                kind: capture.kind,
+                source_ty: source_type,
+                ty,
+                span: capture.span,
+            });
+        }
+
+        let saved_local_types = std::mem::take(&mut self.local_types);
+        let saved_rebindable = std::mem::take(&mut self.local_rebindable);
+        let saved_loop = self.loop_depth;
+        let saved_defer = self.defer_depth;
+        let saved_expect = self.expect_depth;
+        let saved_unsafe = self.unsafe_depth;
+        let saved_return = self.current_return_type;
+        let saved_self = self.current_self_declaration;
+        let saved_test = self.current_is_test;
+
+        for capture in &checked_captures {
+            self.local_types.insert(capture.binding, capture.ty);
+            self.local_rebindable
+                .insert(capture.binding, Rebindable::Let);
+        }
+        if let Some(parameters) = node.direct_child(SyntaxKind::Parameters) {
+            for (parameter, parameter_type) in parameters
+                .direct_children(SyntaxKind::Parameter)
+                .into_iter()
+                .zip(&signature.parameters)
+            {
+                if let Some(token) = parameter_name_token(parameter)
+                    && let Some(binding) = self.span_to_local.get(&token.span).copied()
+                {
+                    self.local_types.insert(binding, parameter_type.ty);
+                    self.local_rebindable.insert(binding, Rebindable::Let);
+                }
+            }
+        }
+        self.loop_depth = 0;
+        self.defer_depth = 0;
+        self.expect_depth = 0;
+        self.unsafe_depth = 0;
+        self.current_return_type = Some(signature.return_type);
+        self.current_self_declaration = None;
+        self.current_is_test = false;
+        let definitely_returns = node
+            .direct_child(SyntaxKind::Block)
+            .is_some_and(|block| self.check_block(block, signature.return_type));
+        let unresolved_return = self.typed.types.resolve_inference(signature.return_type);
+        if matches!(
+            self.typed.types.kind(unresolved_return),
+            TypeKind::InferenceVariable(_)
+        ) {
+            let inferred = if definitely_returns {
+                self.typed.types.never()
+            } else {
+                self.typed.types.primitive(PrimitiveType::Unit)
+            };
+            let _ = self.typed.types.unify(signature.return_type, inferred);
+        } else if !definitely_returns
+            && !self.typed.types.exactly_equal(
+                unresolved_return,
+                self.typed.types.primitive_id(PrimitiveType::Unit),
+            )
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ControlFlow,
+                    "this closure has a reachable path that does not return its result type",
+                )
+                .with_primary(node.span),
+            );
+        }
+        signature.return_type = self.typed.types.resolve_inference(signature.return_type);
+        signature.ty = self.typed.types.intern(TypeKind::Function {
+            safety: Safety::Safe,
+            abi: crate::types::Abi::Elamite,
+            receiver: None,
+            parameters: signature.parameters.clone(),
+            return_type: signature.return_type,
+        });
+        self.typed
+            .function_signatures
+            .insert(declaration, signature.clone());
+
+        self.local_types = saved_local_types;
+        self.local_rebindable = saved_rebindable;
+        self.loop_depth = saved_loop;
+        self.defer_depth = saved_defer;
+        self.expect_depth = saved_expect;
+        self.unsafe_depth = saved_unsafe;
+        self.current_return_type = saved_return;
+        self.current_self_declaration = saved_self;
+        self.current_is_test = saved_test;
+
+        let closure_type = self.typed.types.intern(TypeKind::Closure {
+            declaration,
+            captures: checked_captures.iter().map(|capture| capture.ty).collect(),
+            parameters: signature
+                .parameters
+                .iter()
+                .map(|parameter| parameter.ty)
+                .collect(),
+            return_type: signature.return_type,
+        });
+        self.program.closures.insert(
+            declaration,
+            CheckedClosure {
+                declaration,
+                ty: closure_type,
+                captures: checked_captures,
+            },
+        );
+        (closure_type, PlaceKind::Value)
+    }
+
     fn check_array(&mut self, node: &SyntaxNode, expected: ExpectedType) -> (TypeId, PlaceKind) {
         let elements = child_nodes(node);
         let expected_element = match expected {
@@ -2712,6 +3150,21 @@ fn token_text(token: &Token) -> String {
         TokenKind::Keyword(Keyword::SelfValue) => "self".to_string(),
         _ => String::new(),
     }
+}
+
+fn tuple_field_index(token: &Token) -> Option<usize> {
+    let TokenKind::IntegerLiteral { raw, radix, suffix } = &token.kind else {
+        return None;
+    };
+    if *radix != 10
+        || suffix.is_some()
+        || raw.is_empty()
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        || (raw.len() > 1 && raw.starts_with('0'))
+    {
+        return None;
+    }
+    raw.parse().ok()
 }
 
 fn first_identifier_token(node: &SyntaxNode) -> Option<&Token> {

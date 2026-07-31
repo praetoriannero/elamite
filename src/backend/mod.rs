@@ -20,7 +20,7 @@ use crate::ir::{
     AggregateValue, BinaryOperator, BlockId, CollectionLiteralKind, ControlFlowFunction,
     ControlFlowPlace, ControlFlowProgram, IndexKind, Instruction, IterationKind,
     LogicalCopyStrategy, NeverCall, RuntimeFormattedPart, Rvalue, TemporaryId, Terminator,
-    TypedEnum, UnaryOperator, logical_copy_strategy,
+    TypedEnum, UnaryOperator, VtableMethod, logical_copy_strategy,
 };
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
@@ -542,6 +542,7 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             TypeKind::Reference { .. }
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }
+            | TypeKind::Closure { .. }
             | TypeKind::TraitObject { .. } => return "NULL".to_string(),
             _ => return "0".to_string(),
         }

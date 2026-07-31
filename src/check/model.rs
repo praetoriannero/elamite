@@ -17,11 +17,11 @@ pub struct CheckedProgram {
     /// binding initializers, assignment sources, return values, call
     /// arguments, and aggregate-literal field/element values.
     pub copies: BTreeSet<Span>,
-    /// Pattern bindings receive independent logical-value copies and behave
-    /// as immutable `let` bindings. Match lowering consumes these stable
-    /// binding identities when it materializes payload extraction.
+    /// Match-pattern and local tuple-destructuring bindings receive
+    /// independent logical-value copies. Lowering consumes these stable
+    /// identities when it materializes component extraction.
     pub copied_pattern_bindings: BTreeSet<LocalBindingId>,
-    /// Canonical payload type selected for each copied pattern binding.
+    /// Canonical component type selected for each copied binding.
     pub pattern_binding_types: BTreeMap<LocalBindingId, TypeId>,
     /// Named functions and type-selected methods used as first-class function
     /// references. The key is the complete expression span, not merely its
@@ -30,6 +30,24 @@ pub struct CheckedProgram {
     pub function_references: BTreeMap<Span, FunctionInstance>,
     /// Callable resolution selected for each call expression.
     pub calls: BTreeMap<Span, CheckedCall>,
+    pub closures: BTreeMap<DeclarationId, CheckedClosure>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckedClosureCapture {
+    pub source: LocalBindingId,
+    pub binding: LocalBindingId,
+    pub kind: ClosureCaptureKind,
+    pub source_ty: TypeId,
+    pub ty: TypeId,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckedClosure {
+    pub declaration: DeclarationId,
+    pub ty: TypeId,
+    pub captures: Vec<CheckedClosureCapture>,
 }
 
 /// One validated contextual conversion from `&Concrete`/`&var Concrete` to a
@@ -51,6 +69,22 @@ pub enum CheckedCall {
         adjustment: ReceiverAdjustment,
     },
     Indirect,
+    Closure {
+        declaration: DeclarationId,
+    },
+    /// Call syntax justified by a `Callable[Arguments, Return]` bound. The
+    /// concrete monomorphized type decides whether lowering emits a closure
+    /// environment call, an indirect named-function call, or a user impl.
+    CallableBound {
+        trait_declaration: DeclarationId,
+        receiver_type: TypeId,
+        parameters: Vec<TypeId>,
+    },
+    CallableDynamic {
+        trait_declaration: DeclarationId,
+        slot: usize,
+        parameters: Vec<TypeId>,
+    },
     /// `Type.default()` supplied by a `Default` derivation, which has no
     /// declaration to call.
     DerivedDefault {

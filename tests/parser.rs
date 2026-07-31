@@ -93,6 +93,55 @@ fn parses_native_tests_and_expected_trap_blocks() {
 }
 
 #[test]
+fn parses_local_tuple_bindings_and_positional_fields() {
+    let source = r#"
+fn main() -> ():
+    let () = ()
+    let (only,) = (1,)
+    let (
+        top,
+        bottom,
+    ) = (2, 3)
+    let ((left, _), (right,)): ((i32, i32), (i32,)) = ((1, 2), (3,))
+    var pair = (left, right)
+    pair.0 = pair.1
+    let selected = ((pair, pair),).0.1.0
+"#;
+    let (sources, output) = parse_text(source);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.tree.count(SyntaxKind::TuplePattern), 6);
+    assert_eq!(output.tree.count(SyntaxKind::TupleFieldExpression), 5);
+}
+
+#[test]
+fn parses_explicit_capture_closures_and_their_aliases() {
+    let source = r#"
+fn main() -> ():
+    let offset: i32 = 2
+    var total: i32 = 0
+    let apply = fn[offset, &var total as state](value: i32):
+        *state += value
+        return value + offset
+    let constant = fn() -> i32:
+        return 9
+    println(apply(constant()))
+"#;
+    let (sources, output) = parse_text(source);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.tree.count(SyntaxKind::ClosureExpression), 2);
+    assert_eq!(output.tree.count(SyntaxKind::ClosureCaptureList), 1);
+    assert_eq!(output.tree.count(SyntaxKind::ClosureCapture), 2);
+}
+
+#[test]
 fn rejects_test_modifiers_signatures_and_empty_bodies() {
     for source in [
         "pub test visible:\n    pass\n",
@@ -404,9 +453,9 @@ fn reports_required_invalid_surface_forms_at_source_spans() {
             "foreign function declaration cannot have a body",
         ),
         (
-            "anonymous function expression",
+            "closure without a body",
             "fn bad():\n    let callback = fn(value: i32) -> i32\n",
-            "expected an expression",
+            "expected `:` before body",
         ),
         (
             "reserved parameter name",

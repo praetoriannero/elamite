@@ -362,11 +362,14 @@ impl<'a> Resolver<'a> {
                 for child in child_nodes(node) {
                     if child.kind == SyntaxKind::Type {
                         self.resolve_type(child, module, generics, self_allowed);
+                    } else if child.kind == SyntaxKind::TuplePattern {
+                        // Binding names enter scope together only after the
+                        // initializer has been resolved.
                     } else {
                         self.resolve_expression(child, module, generics, scopes, self_allowed);
                     }
                 }
-                if let Some(token) = binding_name_token(node) {
+                for token in binding_name_tokens(node) {
                     self.declare_local(scopes, token, LocalBindingKind::Local);
                 }
             }
@@ -692,6 +695,10 @@ impl<'a> Resolver<'a> {
         self_allowed: bool,
     ) -> Option<NameTarget> {
         match node.kind {
+            SyntaxKind::ClosureExpression => {
+                self.resolve_closure_expression(node, module, generics, scopes, self_allowed);
+                None
+            }
             SyntaxKind::NameExpression => {
                 let token = node.children.iter().find_map(|child| match child {
                     SyntaxElement::Token(token) => Some(token),
@@ -746,6 +753,175 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+    }
+
+    fn resolve_closure_expression(
+        &mut self,
+        node: &SyntaxNode,
+        module: ModuleId,
+        generics: &BTreeMap<Symbol, GenericParameterId>,
+        outer_scopes: &LexicalScopes,
+        self_allowed: bool,
+    ) {
+        let declaration = DeclarationId(self.program.declarations.len() as u32);
+        let name = self.intern(&format!("$closure{}", declaration.index()));
+        let mut generic_parameters = generics.values().copied().collect::<Vec<_>>();
+        generic_parameters.sort();
+        generic_parameters.dedup();
+        self.program.declarations.push(Declaration {
+            id: declaration,
+            module,
+            name,
+            kind: DeclarationKind::Closure,
+            visibility: Visibility::Package,
+            span: node.span,
+            syntax: node.clone(),
+            parent_declaration: None,
+            parent_impl: None,
+            generic_parameters,
+            externally_reachable: false,
+            foreign_binding: None,
+            test_selected: false,
+        });
+
+        let mut scopes = LexicalScopes::default();
+        scopes.push();
+        let mut captures = Vec::new();
+        let mut captured_sources = BTreeSet::new();
+        if let Some(list) = child_nodes(node)
+            .into_iter()
+            .find(|child| child.kind == SyntaxKind::ClosureCaptureList)
+        {
+            for capture in child_nodes(list)
+                .into_iter()
+                .filter(|child| child.kind == SyntaxKind::ClosureCapture)
+            {
+                let identifiers = capture
+                    .children
+                    .iter()
+                    .filter_map(|child| match child {
+                        SyntaxElement::Token(
+                            token @ Token {
+                                kind: TokenKind::Identifier(_),
+                                ..
+                            },
+                        ) => Some(token),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let Some(source_token) = identifiers.first().copied() else {
+                    continue;
+                };
+                let target = self.resolve_unqualified_name(
+                    source_token,
+                    module,
+                    generics,
+                    outer_scopes,
+                    self_allowed,
+                );
+                let Some(NameTarget::Local(source)) = target else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::NameResolution,
+                            "a closure capture must name an enclosing local binding",
+                        )
+                        .with_primary(source_token.span),
+                    );
+                    continue;
+                };
+                if !captured_sources.insert(source) {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::DeclarationConflict,
+                            "an enclosing local may be captured only once",
+                        )
+                        .with_primary(source_token.span)
+                        .with_related(
+                            self.program.local_bindings[source.index()].span,
+                            "local declared here",
+                        ),
+                    );
+                    continue;
+                }
+                let binding_token = identifiers.get(1).copied().unwrap_or(source_token);
+                let binding = self.declare_local(
+                    &mut scopes,
+                    binding_token,
+                    LocalBindingKind::ClosureCapture,
+                );
+                let direct = capture.direct_tokens();
+                let kind = if direct
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::Amp))
+                {
+                    if direct
+                        .iter()
+                        .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Var)))
+                    {
+                        ClosureCaptureKind::MutableReference
+                    } else {
+                        ClosureCaptureKind::SharedReference
+                    }
+                } else if direct
+                    .iter()
+                    .any(|token| matches!(token.kind, TokenKind::Star))
+                {
+                    if direct
+                        .iter()
+                        .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Var)))
+                    {
+                        ClosureCaptureKind::MutableRawPointer
+                    } else {
+                        ClosureCaptureKind::SharedRawPointer
+                    }
+                } else {
+                    ClosureCaptureKind::Value
+                };
+                captures.push(ClosureCapture {
+                    source,
+                    binding,
+                    kind,
+                    span: capture.span,
+                });
+            }
+        }
+
+        if let Some(parameters) = child_nodes(node)
+            .into_iter()
+            .find(|child| child.kind == SyntaxKind::Parameters)
+        {
+            for parameter in child_nodes(parameters)
+                .into_iter()
+                .filter(|child| child.kind == SyntaxKind::Parameter)
+            {
+                if let Some(type_node) = child_nodes(parameter)
+                    .into_iter()
+                    .find(|child| child.kind == SyntaxKind::Type)
+                {
+                    self.resolve_type(type_node, module, generics, self_allowed);
+                }
+                if let Some(token) = parameter_name_token(parameter) {
+                    self.declare_local(&mut scopes, token, LocalBindingKind::Parameter);
+                }
+            }
+        }
+        for type_node in child_nodes(node)
+            .into_iter()
+            .filter(|child| child.kind == SyntaxKind::Type)
+        {
+            self.resolve_type(type_node, module, generics, self_allowed);
+        }
+        if let Some(block) = child_nodes(node)
+            .into_iter()
+            .find(|child| child.kind == SyntaxKind::Block)
+        {
+            self.resolve_block(block, module, generics, &mut scopes, self_allowed, false);
+        }
+        self.program.closures.push(ResolvedClosure {
+            declaration,
+            span: node.span,
+            captures,
+        });
     }
 
     pub(super) fn resolve_unqualified_name(

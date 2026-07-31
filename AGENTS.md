@@ -120,17 +120,14 @@ requires `unsafe:` and a runtime null check. Exact function references may
 explicitly convert to matching raw function pointers, but function and data
 pointer domains never cast between each other.
 
-`ROADMAP.md` **Explicit-capture closures** records the accepted design for
-separate, explicit-capture safe closures. Do not implement its anonymous `fn`
-literals, captures, or `Callable` integration until the **Normative closure
-contract** package has moved that contract into `SPEC.md`, `LEDGER.md`, and the
-authoritative example. The accepted design has no implicit captures, `move`,
-generic closure literals, unsafe closures, or closure-to-function-pointer
-conversion. Until that milestone lands, ordinary stateful Elamite callbacks
-continue to use `&Trait`, formed automatically from a concrete safe reference
-when that exact trait-object type is expected (or explicitly with `as &Trait`);
-C callbacks carry registered state through a separate raw context pointer, and
-recursion uses named functions.
+`SPEC.md` §5.1 owns explicit-capture safe closures. Keep capture lists
+nonempty when present, aliases explicit with `as`, parameter types explicit,
+and each closure expression nominally distinct. There are no implicit
+captures, `move`, generic or variadic closure literals, unsafe closures,
+anonymous recursion, or closure-to-function-pointer conversion. Ordinary
+stateful callbacks may use a closure or `&Trait`; C callbacks continue to carry
+registered state through a separate raw context pointer, and recursion uses
+named functions.
 
 `ROADMAP.md` **Standard-library concurrency** records the accepted concurrency
 direction. It adds no concurrency syntax: native threads are created through
@@ -141,12 +138,12 @@ behavior until the **Normative concurrency contract** package has made the
 complete contract normative. Until then, retain `SPEC.md` §10.3's
 single-runtime-thread callback restriction.
 
-`ROADMAP.md` **Tuple destructuring and positional fields** records the accepted
-tuple-binding and positional-field design. Do not extend `let`/`var` to tuple
-patterns or parse numeric postfix fields such as `.0` until the **Normative
-tuple-access contract** package has specified their exact shape, copying,
-scope, place, tokenization, and receiver rules in `SPEC.md` and `LEDGER.md`.
-Existing tuple patterns remain match-only until that gate lands.
+`SPEC.md` §3.1 and §4.1 define local tuple destructuring and positional fields.
+Keep local binding patterns irrefutable and limited to nested tuples,
+identifiers, and `_`; do not generalize parameters, loop headers, assignment,
+or refutable binding forms. Numeric postfix selectors are canonical,
+unsuffixed, in-range decimal tuple indices and follow ordinary value-copy,
+place, receiver-adaptation, raw-pointer safety, and promotion rules.
 
 Deterministic cleanup uses a lexical, block-scoped `defer` statement in two
 forms: `defer call` defers one safe unit-returning call, and `defer:` defers an

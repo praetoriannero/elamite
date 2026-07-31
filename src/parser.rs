@@ -677,24 +677,64 @@ impl<'a> Parser<'a> {
     fn parse_let(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = vec![self.bump()];
-        self.expect_identifier(&mut children, "expected binding name");
+        if self.at_simple(&TokenKind::LParen) {
+            children.push(node(self.parse_binding_tuple_pattern()));
+        } else {
+            self.expect_identifier(&mut children, "expected binding name or tuple pattern");
+        }
         if self.at_simple(&TokenKind::Colon) {
             children.push(self.bump());
             children.push(node(self.parse_type()));
         }
         self.expect_simple(&TokenKind::Assign, &mut children, "expected `=`");
-        children.push(node(self.parse_expression()));
-        self.expect_line_end(&mut children);
+        let expression = self.parse_expression();
+        let multiline = expression.kind == SyntaxKind::ClosureExpression;
+        children.push(node(expression));
+        if !multiline {
+            self.expect_line_end(&mut children);
+        }
         SyntaxNode::new(SyntaxKind::LetStatement, children, fallback)
+    }
+
+    fn parse_binding_tuple_pattern(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        while !self.at_eof() && !self.at_simple(&TokenKind::RParen) {
+            if self.at_simple(&TokenKind::LParen) {
+                children.push(node(self.parse_binding_tuple_pattern()));
+            } else {
+                let element_fallback = self.current_span();
+                let mut element = Vec::new();
+                self.expect_identifier(
+                    &mut element,
+                    "tuple binding elements must be identifiers, `_`, or nested tuples",
+                );
+                children.push(node(SyntaxNode::new(
+                    SyntaxKind::Pattern,
+                    element,
+                    element_fallback,
+                )));
+            }
+            if !self.eat_simple(&TokenKind::Comma, &mut children) {
+                break;
+            }
+        }
+        self.expect_simple(&TokenKind::RParen, &mut children, "expected `)`");
+        SyntaxNode::new(SyntaxKind::TuplePattern, children, fallback)
     }
 
     fn parse_return(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = vec![self.bump()];
+        let mut multiline = false;
         if !self.at_line_end() {
-            children.push(node(self.parse_expression()));
+            let expression = self.parse_expression();
+            multiline = expression.kind == SyntaxKind::ClosureExpression;
+            children.push(node(expression));
         }
-        self.expect_line_end(&mut children);
+        if !multiline {
+            self.expect_line_end(&mut children);
+        }
         SyntaxNode::new(SyntaxKind::ReturnStatement, children, fallback)
     }
 
@@ -833,15 +873,21 @@ impl<'a> Parser<'a> {
 
     fn parse_expression_or_assignment_statement(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
-        let mut children = vec![node(self.parse_expression())];
+        let expression = self.parse_expression();
+        let mut multiline = expression.kind == SyntaxKind::ClosureExpression;
+        let mut children = vec![node(expression)];
         let kind = if self.at_assignment_operator() {
             children.push(self.bump());
-            children.push(node(self.parse_expression()));
+            let value = self.parse_expression();
+            multiline = value.kind == SyntaxKind::ClosureExpression;
+            children.push(node(value));
             SyntaxKind::AssignmentStatement
         } else {
             SyntaxKind::ExpressionStatement
         };
-        self.expect_line_end(&mut children);
+        if !multiline {
+            self.expect_line_end(&mut children);
+        }
         SyntaxNode::new(kind, children, fallback)
     }
 
@@ -930,6 +976,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::True | Keyword::False | Keyword::Null),
             ) => SyntaxNode::new(SyntaxKind::LiteralExpression, vec![self.bump()], fallback),
             Some(TokenKind::FormattedString(_)) => self.parse_formatted_string_expression(),
+            Some(TokenKind::Keyword(Keyword::Fn)) => self.parse_closure_expression(),
             Some(TokenKind::LParen) => self.parse_parenthesized_or_tuple(),
             Some(TokenKind::LBracket) => self.parse_array_expression(),
             Some(TokenKind::At) => self.parse_macro_expression(),
@@ -945,6 +992,79 @@ impl<'a> Parser<'a> {
                 SyntaxNode::new(SyntaxKind::Error, children, fallback)
             }
         }
+    }
+
+    fn parse_closure_expression(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        if self.at_simple(&TokenKind::LBracket) {
+            children.push(node(self.parse_closure_captures()));
+        }
+        children.push(node(self.parse_closure_parameters()));
+        if self.at_simple(&TokenKind::Arrow) {
+            children.push(self.bump());
+            children.push(node(self.parse_return_type()));
+        }
+        self.parse_statement_block(&mut children);
+        SyntaxNode::new(SyntaxKind::ClosureExpression, children, fallback)
+    }
+
+    fn parse_closure_captures(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        if self.at_simple(&TokenKind::RBracket) {
+            self.error_here("a closure capture list cannot be empty; omit `[]`");
+        }
+        while !self.at_eof() && !self.at_simple(&TokenKind::RBracket) {
+            let capture_fallback = self.current_span();
+            let mut capture = Vec::new();
+            if self.at_simple(&TokenKind::Amp) || self.at_simple(&TokenKind::Star) {
+                capture.push(self.bump());
+                self.eat_keyword(Keyword::Var, &mut capture);
+            }
+            self.expect_identifier(&mut capture, "expected captured local name");
+            if self.at_keyword(Keyword::As) {
+                capture.push(self.bump());
+                self.expect_identifier(&mut capture, "expected capture alias after `as`");
+            }
+            children.push(node(SyntaxNode::new(
+                SyntaxKind::ClosureCapture,
+                capture,
+                capture_fallback,
+            )));
+            if !self.eat_simple(&TokenKind::Comma, &mut children) {
+                break;
+            }
+        }
+        self.expect_simple(&TokenKind::RBracket, &mut children, "expected `]`");
+        SyntaxNode::new(SyntaxKind::ClosureCaptureList, children, fallback)
+    }
+
+    fn parse_closure_parameters(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = Vec::new();
+        self.expect_simple(&TokenKind::LParen, &mut children, "expected `(`");
+        while !self.at_eof() && !self.at_simple(&TokenKind::RParen) {
+            let parameter_fallback = self.current_span();
+            let mut parameter = Vec::new();
+            self.expect_identifier(&mut parameter, "expected closure parameter name");
+            self.expect_simple(&TokenKind::Colon, &mut parameter, "expected `:`");
+            if self.at_simple(&TokenKind::Ellipsis) {
+                self.error_here("closure parameters cannot be variadic");
+                parameter.push(self.bump());
+            }
+            parameter.push(node(self.parse_type()));
+            children.push(node(SyntaxNode::new(
+                SyntaxKind::Parameter,
+                parameter,
+                parameter_fallback,
+            )));
+            if !self.eat_simple(&TokenKind::Comma, &mut children) {
+                break;
+            }
+        }
+        self.expect_simple(&TokenKind::RParen, &mut children, "expected `)`");
+        SyntaxNode::new(SyntaxKind::Parameters, children, fallback)
     }
 
     fn parse_formatted_string_expression(&mut self) -> SyntaxNode {
@@ -1105,7 +1225,18 @@ impl<'a> Parser<'a> {
         let fallback = left.span;
         if self.at_simple(&TokenKind::Dot) {
             let mut children = vec![node(left), self.bump()];
-            self.expect_identifier(&mut children, "expected member name after `.`");
+            if matches!(self.current_kind(), Some(TokenKind::IntegerLiteral { .. })) {
+                children.push(self.bump());
+                return Some(SyntaxNode::new(
+                    SyntaxKind::TupleFieldExpression,
+                    children,
+                    fallback,
+                ));
+            }
+            self.expect_identifier(
+                &mut children,
+                "expected member name or tuple index after `.`",
+            );
             return Some(SyntaxNode::new(
                 SyntaxKind::MemberExpression,
                 children,

@@ -297,6 +297,74 @@ fn resolves_parameters_locals_patterns_loops_and_record_shorthand() {
 }
 
 #[test]
+fn tuple_binding_names_enter_scope_together_after_the_initializer() {
+    let tree = TestTree::new("tuple-binding-scope");
+    let package = tree.package(
+        "app",
+        "exe",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn main() -> ():\n\
+             \x20\x20\x20\x20let source = (1, 2)\n\
+             \x20\x20\x20\x20let (left, right) = source\n\
+             \x20\x20\x20\x20println(left + right)\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+    assert_eq!(
+        output
+            .program
+            .local_bindings
+            .iter()
+            .filter(|binding| binding.kind == LocalBindingKind::Local)
+            .count(),
+        3
+    );
+
+    let invalid = tree.package(
+        "invalid",
+        "exe",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn main() -> ():\n\
+             \x20\x20\x20\x20let (left, right) = (left, 2)\n\
+             \x20\x20\x20\x20println(right)\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&invalid);
+    let text = diagnostic_text(&sources, &output.diagnostics);
+    assert!(text.contains("cannot resolve `left`"), "{text}");
+
+    let duplicate = tree.package(
+        "duplicate",
+        "exe",
+        &[],
+        &[(
+            "src/main.elx",
+            "fn main() -> ():\n\
+             \x20\x20\x20\x20let (same, same) = (1, 2)\n\
+             \x20\x20\x20\x20println(same)\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&duplicate);
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.category == Category::DeclarationConflict),
+        "{}",
+        diagnostic_text(&sources, &output.diagnostics)
+    );
+}
+
+#[test]
 fn lookup_does_not_search_other_modules_or_inherit_imports() {
     let tree = TestTree::new("lexical-boundaries");
     let package = tree.package(
@@ -322,6 +390,55 @@ fn lookup_does_not_search_other_modules_or_inherit_imports() {
             .iter()
             .any(|diagnostic| diagnostic.category == Category::NameResolution
                 && diagnostic.message.contains("Hidden")),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn closure_resolution_requires_explicit_unique_capture_bindings() {
+    let tree = TestTree::new("closure-captures");
+    let package = tree.package(
+        "app",
+        "exe",
+        &[],
+        &[(
+            "src/main.elx",
+            r#"
+fn main() -> ():
+    let outer: i32 = 1
+    let missing = fn():
+        println(outer)
+    let duplicate = fn[outer as first, outer as second]():
+        println(first)
+        println(second)
+    let collision = fn[outer as value](value: i32):
+        println(value)
+"#,
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    let rendered = diagnostic_text(&sources, &output.diagnostics);
+    assert!(
+        output.diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::NameResolution
+                && diagnostic.message.contains("cannot resolve `outer`")
+        }),
+        "{rendered}"
+    );
+    assert!(
+        output.diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::DeclarationConflict
+                && diagnostic.message.contains("captured only once")
+        }),
+        "{rendered}"
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::DeclarationConflict)
+            .count()
+            >= 2,
         "{rendered}"
     );
 }
@@ -816,6 +933,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
     assert_eq!(
         output.program.prelude_names(),
         vec![
+            "Callable",
             "Default",
             "Display",
             "Eq",

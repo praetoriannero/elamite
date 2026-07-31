@@ -193,6 +193,106 @@ fn main() -> ():
 }
 
 #[test]
+fn checks_closure_captures_return_inference_and_callable_bounds() {
+    assert_no_diagnostics(
+        r#"
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+fn invoke(callback: &Callable[(i32,), i32], value: i32) -> i32:
+    return callback(value)
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+struct Multiplier:
+    factor: i32
+
+impl Callable[(i32,), i32] for Multiplier:
+    fn call(self: &Self, arguments: (i32,)) -> i32:
+        return arguments.0 * self.factor
+
+fn main() -> ():
+    let offset: i32 = 4
+    var total: i32 = 0
+    let add = fn[offset, &var total as state](value: i32):
+        *state += value
+        return value + offset
+    println(apply(add, 3))
+    println(apply(increment, 4))
+    println(invoke(&add, 5))
+    let multiplier = Multiplier { factor: 2 }
+    println(multiplier(6))
+    println(invoke(&multiplier, 7))
+"#,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pointer: *i32 = null
+    let invalid = fn[pointer]():
+        pass
+"#,
+        Category::ExpressionType,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let value: i32 = 1
+    let invalid = fn[&var value]():
+        pass
+"#,
+        Category::Place,
+    );
+
+    assert_has_category(
+        r#"
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+fn main() -> ():
+    let wrong = fn(value: bool) -> bool:
+        return value
+    println(apply(wrong, 1))
+"#,
+        Category::TypeSystem,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let value: i32 = 1
+    let invalid = fn[value]() -> i32:
+        value = 2
+        return value
+"#,
+        Category::Place,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pointer: *i32 = null
+    unsafe:
+        let invalid = fn[*pointer]():
+            println(*pointer)
+"#,
+        Category::UnsafeContext,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let invalid = fn() -> i32:
+        pass
+"#,
+        Category::ControlFlow,
+    );
+}
+
+#[test]
 fn checks_methods_receiver_adaptation_and_function_references() {
     assert_no_diagnostics(
         r#"
@@ -1122,6 +1222,65 @@ fn describe(pair: (i32, i32)) -> str:
             return "origin"
 "#,
         Category::Pattern,
+    );
+}
+
+#[test]
+fn checks_local_tuple_bindings_and_positional_places() {
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    var tuple = ((1, 2), (3,))
+    var ((left, _), (right,)): ((i32, i32), (i32,)) = tuple
+    left += right
+    tuple.0.1 = left
+    let shared: &((i32, i32), (i32,)) = &tuple
+    let observed = shared.0.1
+    let pointer: *var ((i32, i32), (i32,)) = (&var tuple) as *var ((i32, i32), (i32,))
+    unsafe:
+        pointer.1.0 = observed
+"#,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let (left, right) = (1, 2, 3)
+"#,
+        Category::Pattern,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pair = (1, 2)
+    println(pair.2)
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pair = (1, 2)
+    println(pair.01)
+"#,
+        Category::Syntax,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var pair = (1, 2)
+    let pointer: *var (i32, i32) = (&var pair) as *var (i32, i32)
+    pointer.0 = 3
+"#,
+        Category::UnsafeContext,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pair = (1, 2)
+    pair.0 = 3
+"#,
+        Category::Place,
     );
 }
 

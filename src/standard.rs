@@ -19,6 +19,7 @@ pub const TESTING_SOURCE: &str = include_str!("../stdlib/src/testing.elx");
 
 /// Exact source-backed public declarations shipped by the compiler.
 pub const SOURCE_DECLARATIONS: &[&str] = &[
+    "std.Callable",
     "std.Display",
     "std.NumericError",
     "std.Option",

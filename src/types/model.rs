@@ -308,6 +308,7 @@ impl TypedProgram {
             } => false,
             TypeKind::Primitive(_) | TypeKind::RawPointer { .. } => true,
             TypeKind::Reference { .. } => pointer_bits == 32 || pointer_bits == 64,
+            TypeKind::Closure { .. } => pointer_bits == 32 || pointer_bits == 64,
             TypeKind::Tuple(elements) => elements
                 .iter()
                 .all(|element| self.layout_inner(*element, pointer_bits, substitution, visiting)),

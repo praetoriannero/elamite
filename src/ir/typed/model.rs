@@ -6,6 +6,10 @@ use super::super::*;
 pub enum TypedCallee {
     Function(FunctionInstance),
     Indirect(Box<TypedExpression>),
+    Closure {
+        instance: FunctionInstance,
+        value: Box<TypedExpression>,
+    },
     /// A call through a trait object's vtable. The object supplies both the
     /// receiver and the function pointer.
     Dynamic {
@@ -41,6 +45,11 @@ pub enum TypedExpressionKind {
     Constant(Constant),
     FunctionReference(FunctionInstance),
     Local(LocalBindingId),
+    ClosureCapture(usize),
+    Closure {
+        instance: FunctionInstance,
+        captures: Vec<TypedExpression>,
+    },
     Unary {
         operator: UnaryOperator,
         operand: Box<TypedExpression>,
@@ -60,6 +69,10 @@ pub enum TypedExpressionKind {
     Field {
         base: Box<TypedExpression>,
         field: FieldId,
+    },
+    TupleField {
+        base: Box<TypedExpression>,
+        index: usize,
     },
     Index {
         base: Box<TypedExpression>,
@@ -130,6 +143,7 @@ pub enum TypedExpressionKind {
     MakeTraitObject {
         value: Box<TypedExpression>,
         trait_declaration: DeclarationId,
+        trait_type: TypeId,
         concrete: TypeId,
     },
     Tuple(Vec<TypedExpression>),
@@ -198,9 +212,20 @@ pub enum TypedPlace {
         ty: TypeId,
         span: Span,
     },
+    ClosureCapture {
+        index: usize,
+        ty: TypeId,
+        span: Span,
+    },
     Field {
         base: Box<TypedPlace>,
         field: FieldId,
+        ty: TypeId,
+        span: Span,
+    },
+    TupleField {
+        base: Box<TypedPlace>,
+        index: usize,
         ty: TypeId,
         span: Span,
     },
@@ -225,7 +250,9 @@ impl TypedPlace {
     pub fn ty(&self) -> TypeId {
         match self {
             Self::Local { ty, .. }
+            | Self::ClosureCapture { ty, .. }
             | Self::Field { ty, .. }
+            | Self::TupleField { ty, .. }
             | Self::Index { ty, .. }
             | Self::Dereference { ty, .. } => *ty,
         }
@@ -235,7 +262,9 @@ impl TypedPlace {
     pub fn span(&self) -> Span {
         match self {
             Self::Local { span, .. }
+            | Self::ClosureCapture { span, .. }
             | Self::Field { span, .. }
+            | Self::TupleField { span, .. }
             | Self::Index { span, .. }
             | Self::Dereference { span, .. } => *span,
         }
@@ -248,6 +277,11 @@ pub enum TypedStatementKind {
         binding: LocalBindingId,
         mutable: bool,
         ty: TypeId,
+        value: TypedExpression,
+    },
+    Destructure {
+        bindings: Vec<TypedTupleBinding>,
+        mutable: bool,
         value: TypedExpression,
     },
     Assign {
@@ -294,6 +328,13 @@ pub enum TypedStatementKind {
     Break,
     Continue,
     Pass,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedTupleBinding {
+    pub binding: LocalBindingId,
+    pub ty: TypeId,
+    pub indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -349,6 +390,13 @@ pub struct TypedFunction {
     /// literal. Such a cell has no binding, so promotion alone does not imply
     /// it.
     pub allocates_managed: bool,
+    pub closure: Option<TypedClosureBody>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedClosureBody {
+    pub ty: TypeId,
+    pub captures: BTreeMap<LocalBindingId, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -397,10 +445,19 @@ impl TypedIrProgram {
 #[derive(Debug, Clone)]
 pub struct Vtable {
     pub trait_declaration: DeclarationId,
+    pub trait_type: TypeId,
     pub concrete: TypeId,
     /// One entry per slot of [`crate::traits::vtable_slots`], in the same
     /// order.
-    pub methods: Vec<FunctionInstance>,
+    pub methods: Vec<VtableMethod>,
+    pub signatures: Vec<crate::types::FunctionSignature>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VtableMethod {
+    Function(FunctionInstance),
+    Closure(FunctionInstance),
+    FunctionReference,
 }
 
 pub struct TypedIrOutput {

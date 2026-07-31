@@ -144,6 +144,12 @@ pub enum TypeKind {
     TraitObject {
         trait_type: TypeId,
     },
+    Closure {
+        declaration: DeclarationId,
+        captures: Vec<TypeId>,
+        parameters: Vec<TypeId>,
+        return_type: TypeId,
+    },
     Foreign {
         identity: NominalIdentity,
         complete: bool,
@@ -696,6 +702,7 @@ fn same_outer_shape(left: &TypeKind, right: &TypeKind) -> bool {
         | (TypeKind::RawPointer { .. }, TypeKind::RawPointer { .. })
         | (TypeKind::Function { .. }, TypeKind::Function { .. })
         | (TypeKind::TraitObject { .. }, TypeKind::TraitObject { .. })
+        | (TypeKind::Closure { .. }, TypeKind::Closure { .. })
         | (TypeKind::Foreign { .. }, TypeKind::Foreign { .. })
         | (TypeKind::GenericParameter(_), TypeKind::GenericParameter(_))
         | (TypeKind::SelfType(_), TypeKind::SelfType(_))
@@ -768,6 +775,14 @@ fn type_discriminants_equal(left: &TypeKind, right: &TypeKind) -> bool {
                     .all(|(left, right)| left.variadic == right.variadic)
         }
         (
+            TypeKind::Closure {
+                declaration: left, ..
+            },
+            TypeKind::Closure {
+                declaration: right, ..
+            },
+        ) => left == right,
+        (
             TypeKind::Foreign {
                 identity: left_identity,
                 complete: left_complete,
@@ -819,6 +834,17 @@ fn type_children(kind: &TypeKind) -> Vec<TypeId> {
             .chain(parameters.iter().map(|parameter| parameter.ty))
             .chain(std::iter::once(*return_type))
             .collect(),
+        TypeKind::Closure {
+            captures,
+            parameters,
+            return_type,
+            ..
+        } => captures
+            .iter()
+            .chain(parameters)
+            .copied()
+            .chain(std::iter::once(*return_type))
+            .collect(),
         TypeKind::Error
         | TypeKind::Never
         | TypeKind::Primitive(_)
@@ -857,6 +883,20 @@ fn map_type_children(mut kind: TypeKind, mut map: impl FnMut(TypeId) -> TypeId) 
             }
             for parameter in parameters {
                 parameter.ty = map(parameter.ty);
+            }
+            *return_type = map(*return_type);
+        }
+        TypeKind::Closure {
+            captures,
+            parameters,
+            return_type,
+            ..
+        } => {
+            for capture in captures {
+                *capture = map(*capture);
+            }
+            for parameter in parameters {
+                *parameter = map(*parameter);
             }
             *return_type = map(*return_type);
         }

@@ -5,6 +5,7 @@ use super::super::*;
 #[derive(Debug, Clone)]
 pub enum ControlFlowPlace {
     Local(LocalBindingId),
+    ClosureCapture(usize),
     Temporary(TemporaryId),
     Field {
         base: Box<ControlFlowPlace>,
@@ -57,6 +58,10 @@ pub enum AggregateValue {
 pub enum Rvalue {
     Constant(Constant),
     FunctionReference(FunctionInstance),
+    Closure {
+        ty: TypeId,
+        captures: Vec<TemporaryId>,
+    },
     Load(ControlFlowPlace),
     /// The address of a place. Its root local is promoted, so the address is
     /// stable for as long as the reference is reachable.
@@ -103,6 +108,7 @@ pub enum Rvalue {
     MakeTraitObject {
         value: TemporaryId,
         trait_declaration: DeclarationId,
+        trait_type: TypeId,
         concrete: TypeId,
     },
     /// Calls through a trait object's vtable slot.
@@ -156,6 +162,11 @@ pub enum Rvalue {
     },
     IndirectCall {
         callee: TemporaryId,
+        arguments: Vec<TemporaryId>,
+    },
+    ClosureCall {
+        instance: FunctionInstance,
+        closure: TemporaryId,
         arguments: Vec<TemporaryId>,
     },
     VariadicSlice {
@@ -241,6 +252,11 @@ pub enum NeverCall {
         callee: TemporaryId,
         arguments: Vec<TemporaryId>,
     },
+    Closure {
+        instance: FunctionInstance,
+        closure: TemporaryId,
+        arguments: Vec<TemporaryId>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -285,6 +301,7 @@ pub struct ControlFlowFunction {
     pub promoted_locals: BTreeSet<LocalBindingId>,
     /// See [`TypedFunction::allocates_managed`].
     pub allocates_managed: bool,
+    pub closure: Option<TypedClosureBody>,
     pub temporary_types: Vec<TypeId>,
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,

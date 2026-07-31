@@ -111,7 +111,7 @@ impl<'a> Resolver<'a> {
                 | DeclarationKind::ForeignType => {
                     self.check_signature_node(&syntax, &mut checked);
                 }
-                DeclarationKind::Test => {}
+                DeclarationKind::Closure | DeclarationKind::Test => {}
             }
         }
     }

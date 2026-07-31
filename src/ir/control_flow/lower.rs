@@ -49,7 +49,9 @@ fn type_contains_runtime_managed(types: &TypeContext, ty: TypeId, depth: u32) ->
         return true;
     }
     match types.kind(types.resolve_inference(ty)) {
-        TypeKind::Primitive(PrimitiveType::String) | TypeKind::Builtin { .. } => true,
+        TypeKind::Primitive(PrimitiveType::String)
+        | TypeKind::Builtin { .. }
+        | TypeKind::Closure { .. } => true,
         TypeKind::Tuple(elements) => elements
             .iter()
             .any(|element| type_contains_runtime_managed(types, *element, depth - 1)),
@@ -147,6 +149,7 @@ impl<'a> FunctionLowerer<'a> {
             local_types: self.function.local_types.clone(),
             promoted_locals: self.function.promoted_locals.clone(),
             allocates_managed: self.function.allocates_managed,
+            closure: self.function.closure.clone(),
             temporary_types: self.temporary_types,
             entry: BlockId(0),
             blocks,
@@ -202,6 +205,39 @@ impl<'a> FunctionLowerer<'a> {
                     value,
                     span: statement.span,
                 });
+            }
+            TypedStatementKind::Destructure {
+                bindings, value, ..
+            } => {
+                // Evaluate the initializer exactly once, then copy each bound
+                // component in source order into independent local storage.
+                let root = self.lower_expression(value);
+                for binding in bindings {
+                    let mut place = ControlFlowPlace::Temporary(root);
+                    for index in &binding.indices {
+                        place = ControlFlowPlace::TupleField {
+                            base: Box::new(place),
+                            index: *index,
+                        };
+                    }
+                    let loaded = self.temp(binding.ty);
+                    self.emit(Instruction::Assign {
+                        destination: loaded,
+                        value: Rvalue::Load(place),
+                        span: statement.span,
+                    });
+                    let copied = self.temp(binding.ty);
+                    self.emit(Instruction::Assign {
+                        destination: copied,
+                        value: Rvalue::Copy(loaded),
+                        span: statement.span,
+                    });
+                    self.emit(Instruction::Store {
+                        place: ControlFlowPlace::Local(binding.binding),
+                        value: copied,
+                        span: statement.span,
+                    });
+                }
             }
             TypedStatementKind::Assign {
                 place,
@@ -753,6 +789,16 @@ impl<'a> FunctionLowerer<'a> {
                 Rvalue::FunctionReference(instance.clone())
             }
             TypedExpressionKind::Local(binding) => Rvalue::Load(ControlFlowPlace::Local(*binding)),
+            TypedExpressionKind::ClosureCapture(index) => {
+                Rvalue::Load(ControlFlowPlace::ClosureCapture(*index))
+            }
+            TypedExpressionKind::Closure { captures, .. } => Rvalue::Closure {
+                ty: expression.ty,
+                captures: captures
+                    .iter()
+                    .map(|capture| self.lower_expression(capture))
+                    .collect(),
+            },
             TypedExpressionKind::AddressOf(place) => {
                 let place = self.lower_place(place);
                 Rvalue::AddressOf(place)
@@ -823,12 +869,14 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::MakeTraitObject {
                 value,
                 trait_declaration,
+                trait_type,
                 concrete,
             } => {
                 let value = self.lower_expression(value);
                 Rvalue::MakeTraitObject {
                     value,
                     trait_declaration: *trait_declaration,
+                    trait_type: *trait_type,
                     concrete: *concrete,
                 }
             }
@@ -1008,6 +1056,21 @@ impl<'a> FunctionLowerer<'a> {
                 Rvalue::IndirectCall { callee, arguments }
             }
             TypedExpressionKind::Call {
+                callee: TypedCallee::Closure { instance, value },
+                arguments,
+            } => {
+                let closure = self.lower_expression(value);
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect();
+                Rvalue::ClosureCall {
+                    instance: instance.clone(),
+                    closure,
+                    arguments,
+                }
+            }
+            TypedExpressionKind::Call {
                 callee: TypedCallee::Print { newline },
                 arguments,
             } => {
@@ -1026,6 +1089,13 @@ impl<'a> FunctionLowerer<'a> {
                 Rvalue::Load(ControlFlowPlace::Field {
                     base: Box::new(place),
                     field: *field,
+                })
+            }
+            TypedExpressionKind::TupleField { base, index } => {
+                let place = self.expression_place(base);
+                Rvalue::Load(ControlFlowPlace::TupleField {
+                    base: Box::new(place),
+                    index: *index,
                 })
             }
             TypedExpressionKind::Index { base, index } => {
@@ -1230,6 +1300,17 @@ impl<'a> FunctionLowerer<'a> {
                         .collect(),
                 })
             }
+            TypedExpressionKind::Call {
+                callee: TypedCallee::Closure { instance, value },
+                arguments,
+            } => Some(NeverCall::Closure {
+                instance: instance.clone(),
+                closure: self.lower_expression(value),
+                arguments: arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect(),
+            }),
             _ => None,
         }
     }
@@ -1395,9 +1476,14 @@ impl<'a> FunctionLowerer<'a> {
     fn lower_place(&mut self, place: &TypedPlace) -> ControlFlowPlace {
         match place {
             TypedPlace::Local { binding, .. } => ControlFlowPlace::Local(*binding),
+            TypedPlace::ClosureCapture { index, .. } => ControlFlowPlace::ClosureCapture(*index),
             TypedPlace::Field { base, field, .. } => ControlFlowPlace::Field {
                 base: Box::new(self.lower_place(base)),
                 field: *field,
+            },
+            TypedPlace::TupleField { base, index, .. } => ControlFlowPlace::TupleField {
+                base: Box::new(self.lower_place(base)),
+                index: *index,
             },
             TypedPlace::Index {
                 base, index, kind, ..
@@ -1446,9 +1532,14 @@ impl<'a> FunctionLowerer<'a> {
     fn expression_place(&mut self, expression: &TypedExpression) -> ControlFlowPlace {
         match &expression.kind {
             TypedExpressionKind::Local(binding) => ControlFlowPlace::Local(*binding),
+            TypedExpressionKind::ClosureCapture(index) => ControlFlowPlace::ClosureCapture(*index),
             TypedExpressionKind::Field { base, field } => ControlFlowPlace::Field {
                 base: Box::new(self.expression_place(base)),
                 field: *field,
+            },
+            TypedExpressionKind::TupleField { base, index } => ControlFlowPlace::TupleField {
+                base: Box::new(self.expression_place(base)),
+                index: *index,
             },
             TypedExpressionKind::Index { base, index } => {
                 let base = self.expression_place(base);

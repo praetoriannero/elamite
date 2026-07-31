@@ -327,7 +327,14 @@ impl<'a> Lexer<'a> {
                     pos = self.lex_identifier(pos, line_end);
                 }
                 b'0'..=b'9' => {
-                    pos = self.lex_number(pos, line_end);
+                    // After a postfix dot, keep a decimal selector separate
+                    // from a following dot (`nested.0.1`). Ordinary literals
+                    // such as `1.0` retain their existing tokenization.
+                    let allow_float = !self
+                        .tokens
+                        .last()
+                        .is_some_and(|token| matches!(token.kind, TokenKind::Dot));
+                    pos = self.lex_number(pos, line_end, allow_float);
                 }
                 b'"' => {
                     pos = self.lex_quoted(pos, line_end, b'"');
@@ -375,7 +382,7 @@ impl<'a> Lexer<'a> {
         end
     }
 
-    fn lex_number(&mut self, start: usize, line_end: usize) -> usize {
+    fn lex_number(&mut self, start: usize, line_end: usize, allow_float: bool) -> usize {
         let bytes = self.source.as_bytes();
         if bytes[start] == b'0' && start + 1 < line_end {
             let radix = match bytes[start + 1] {
@@ -395,7 +402,11 @@ impl<'a> Lexer<'a> {
         self.validate_digit_run(start, end, 10);
         let mut is_float = false;
 
-        if end + 1 < line_end && bytes[end] == b'.' && bytes[end + 1].is_ascii_digit() {
+        if allow_float
+            && end + 1 < line_end
+            && bytes[end] == b'.'
+            && bytes[end + 1].is_ascii_digit()
+        {
             is_float = true;
             end += 1;
             let fraction_start = end;
@@ -405,7 +416,7 @@ impl<'a> Lexer<'a> {
             self.validate_digit_run(fraction_start, end, 10);
         }
 
-        if end < line_end && matches!(bytes[end], b'e' | b'E') {
+        if allow_float && end < line_end && matches!(bytes[end], b'e' | b'E') {
             is_float = true;
             end += 1;
             if end < line_end && matches!(bytes[end], b'+' | b'-') {

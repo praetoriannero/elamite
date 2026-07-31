@@ -162,6 +162,101 @@ fn main() -> ():
 }
 
 #[test]
+fn explicit_closures_capture_copy_alias_and_call_through_generic_bounds() {
+    let source = r#"
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+fn invoke(callback: &Callable[(i32,), i32], value: i32) -> i32:
+    return callback(value)
+
+fn invoke_zero(callback: &Callable[(), i32]) -> i32:
+    return callback()
+
+fn make(offset: i32) -> &Callable[(i32,), i32]:
+    let add = fn[offset](value: i32) -> i32:
+        return value + offset
+    return &add
+
+fn echo_with_closure[T](value: T) -> T:
+    let echo = fn[value](ignored: ()) -> T:
+        return value
+    return echo(())
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+struct Multiplier:
+    factor: i32
+
+impl Callable[(i32,), i32] for Multiplier:
+    fn call(self: &Self, arguments: (i32,)) -> i32:
+        return arguments.0 * self.factor
+
+fn main() -> ():
+    let offset: i32 = 4
+    let add = fn[offset](value: i32):
+        return value + offset
+    let copied = add
+    let composed = fn[add as callback](value: i32):
+        return callback(value)
+    var total: i32 = 10
+    let increase = fn[&var total as state](value: i32):
+        *state += value
+        return *state
+    let observe = fn[&total as state]() -> i32:
+        return *state
+    let read_pointer: *i32 = &total as *i32
+    let write_pointer: *var i32 = &var total as *var i32
+    let read_raw = fn[*read_pointer as pointer]() -> i32:
+        unsafe:
+            return *pointer
+    let write_raw = fn[*var write_pointer as pointer](value: i32) -> i32:
+        unsafe:
+            *pointer += value
+            return *pointer
+    let constant = fn() -> i32:
+        return 9
+    let never = fn() -> !:
+        panic("unreachable closure")
+    println(add(3))
+    println(copied(5))
+    println(composed(2))
+    println(increase(2))
+    println(observe())
+    println(read_raw())
+    println(write_raw(3))
+    println(total)
+    println(constant())
+    println(invoke_zero(&constant))
+    println(apply(add, 6))
+    println(apply(increment, 8))
+    let callbacks = @vec[add, add]
+    println(callbacks[0](1))
+    println(invoke(&add, 7))
+    let named = increment
+    println(invoke(&named, 10))
+    let multiplier = Multiplier { factor: 3 }
+    println(multiplier(4))
+    println(invoke(&multiplier, 5))
+    let escaped = make(20)
+    println(escaped(2))
+    println(echo_with_closure(31))
+    if false:
+        never()
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(
+            stdout,
+            "7\n9\n6\n12\n12\n12\n15\n15\n9\n9\n10\n9\n5\n11\n11\n12\n15\n22\n31\n"
+        );
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
 fn panic_is_a_never_returning_runtime_terminator() {
     let (stdout, stderr, status) = build_and_run(
         r#"
@@ -1111,6 +1206,78 @@ fn main() -> ():
     assert_eq!(stdout, "9\n1\n");
     assert_eq!(stderr, "");
     assert_eq!(status, 0);
+}
+
+#[test]
+fn tuple_bindings_and_positional_fields_preserve_value_and_place_semantics() {
+    let source = r#"
+fn make(calls: &var i32) -> ((String, i32), (i32,)):
+    *calls += 1
+    return ((String.from("alpha"), 9), (3,))
+
+fn select(calls: &var i32) -> (i32, i32):
+    *calls += 1
+    return (4, 5)
+
+fn first[T](pair: (T, T)) -> T:
+    return pair.0
+
+fn main() -> ():
+    var calls = 0
+    let ((name, _), (right,)) = make(&var calls)
+    println(calls)
+    println(name)
+    println(right)
+    println(select(&var calls).1)
+    println(calls)
+    println(first[i32]((6, 7)))
+
+    let () = ()
+    let (single,) = (7,)
+    println(single)
+
+    var pair = (10, 20)
+    var (independent, _) = pair
+    independent = 99
+    println(independent)
+    println(pair.0)
+
+    pair.0 = 11
+    let alias = &var pair.1
+    *alias = 21
+    let shared: &(i32, i32) = &pair
+    println(shared.0)
+    println(pair.1)
+
+    let pointer: *var (i32, i32) = (&var pair) as *var (i32, i32)
+    unsafe:
+        pointer.0 = 12
+    println(pair.0)
+    println(((1, 2), (3, 4)).1.0)
+
+    var target = 1
+    let (link,) = (&var target,)
+    *link = 2
+    println(target)
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stderr, "");
+        assert_eq!(
+            stdout,
+            "1\nalpha\n3\n5\n2\n6\n7\n99\n10\n11\n21\n12\n3\n2\n"
+        );
+    }
+
+    let tree = TestTree::new("tuple-x86");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(compilation.generated_c.contains(".v0"));
+    assert!(compilation.generated_c.contains("el_check_ptr"));
 }
 
 #[test]
@@ -3532,6 +3699,26 @@ fn main() -> ():
     let hidden = conceal(null)
     unsafe:
         println(*hidden)
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.contains("E-RUN-NULL"), "{stderr}");
+    assert!(stderr.contains("main.elx:9:"), "{stderr}");
+
+    // Positional selection through a raw tuple pointer has the same mandatory
+    // pointer check as explicit dereference.
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn conceal(pointer: *(i32, i32)) -> *(i32, i32):
+    return pointer
+
+fn main() -> ():
+    println("before")
+    let hidden = conceal(null)
+    unsafe:
+        println(hidden.0)
 "#,
         Optimization::Debug,
     );

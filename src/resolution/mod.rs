@@ -125,6 +125,7 @@ impl<'a> Resolver<'a> {
             variants: Vec::new(),
             generic_parameters: Vec::new(),
             local_bindings: Vec::new(),
+            closures: Vec::new(),
             references: Vec::new(),
             declaration_members: BTreeMap::new(),
             impl_members: BTreeMap::new(),
@@ -260,21 +261,47 @@ fn parameter_name_token(node: &SyntaxNode) -> Option<&Token> {
     })
 }
 
-fn binding_name_token(node: &SyntaxNode) -> Option<&Token> {
-    let mut saw_binding = false;
-    node.children.iter().find_map(|child| {
-        let SyntaxElement::Token(token) = child else {
-            return None;
-        };
-        match &token.kind {
-            TokenKind::Keyword(Keyword::Let | Keyword::Var) => {
-                saw_binding = true;
-                None
-            }
-            TokenKind::Identifier(_) if saw_binding => Some(token),
+fn binding_name_tokens(node: &SyntaxNode) -> Vec<&Token> {
+    if let Some(pattern) = child_nodes(node)
+        .into_iter()
+        .find(|child| child.kind == SyntaxKind::TuplePattern)
+    {
+        let mut tokens = Vec::new();
+        collect_binding_name_tokens(pattern, &mut tokens);
+        return tokens;
+    }
+    node.children
+        .iter()
+        .filter_map(|child| match child {
+            SyntaxElement::Token(
+                token @ Token {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                },
+            ) if name != "_" => Some(token),
             _ => None,
+        })
+        .take(1)
+        .collect()
+}
+
+fn collect_binding_name_tokens<'a>(node: &'a SyntaxNode, tokens: &mut Vec<&'a Token>) {
+    for child in &node.children {
+        match child {
+            SyntaxElement::Token(
+                token @ Token {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                },
+            ) if name != "_" => tokens.push(token),
+            SyntaxElement::Node(child)
+                if matches!(child.kind, SyntaxKind::TuplePattern | SyntaxKind::Pattern) =>
+            {
+                collect_binding_name_tokens(child, tokens);
+            }
+            _ => {}
         }
-    })
+    }
 }
 
 fn for_binding_token(node: &SyntaxNode) -> Option<&Token> {

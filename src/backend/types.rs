@@ -32,6 +32,9 @@ impl<'a> CEmitter<'a> {
             }
         }
         for function in &self.program.functions {
+            if let Some(closure) = &function.closure {
+                types.insert(closure.ty);
+            }
             if !matches!(
                 self.typed
                     .types
@@ -152,6 +155,14 @@ impl<'a> CEmitter<'a> {
                     self.typed.types.kind(self.resolve_alias(*target)),
                     TypeKind::TraitObject { .. }
                 ) => {}
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                // A pointee can require its own concrete C declaration even
+                // when it is reachable only through a pointer (for example,
+                // `*(i32, i32)` followed by `.0`). Recursive nominal graphs
+                // remain safe because `emitting_types` breaks the cycle and
+                // nominal types already have forward declarations.
+                self.emit_type_definition(*target, span);
+            }
             TypeKind::Function {
                 receiver,
                 parameters,
@@ -204,6 +215,23 @@ impl<'a> CEmitter<'a> {
                     "typedef {result} (*{})({parameters});\n",
                     function_type_name(ty)
                 );
+            }
+            TypeKind::Closure { captures, .. } => {
+                for capture in captures {
+                    self.emit_type_definition(*capture, span);
+                }
+                let name = closure_name(ty);
+                let _ = writeln!(self.output, "typedef struct {name}_data {{");
+                if captures.is_empty() {
+                    self.output.push_str("    uint8_t _value;\n");
+                } else {
+                    for (index, capture) in captures.iter().enumerate() {
+                        if let Some(c_type) = self.c_type(*capture, span) {
+                            let _ = writeln!(self.output, "    {c_type} v{index};");
+                        }
+                    }
+                }
+                let _ = writeln!(self.output, "}} *{name};\n");
             }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
@@ -460,6 +488,7 @@ impl<'a> CEmitter<'a> {
                 | TypeKind::RawPointer { .. }
                 | TypeKind::Function { .. }
                 | TypeKind::TraitObject { .. }
+                | TypeKind::Closure { .. }
                 | TypeKind::Builtin { .. }
                 | TypeKind::Foreign { .. }
                 | TypeKind::GenericParameter(_)
@@ -552,12 +581,13 @@ impl<'a> CEmitter<'a> {
                     self.type_error(ty, span, "this trait object has no trait declaration");
                     return None;
                 };
-                object_name(trait_declaration)
+                object_name(trait_declaration, trait_type)
             }
             TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
                 format!("{} *", self.c_type(*target, span)?)
             }
             TypeKind::Function { .. } => function_type_name(ty),
+            TypeKind::Closure { .. } => closure_name(ty),
             TypeKind::Builtin { builtin, arguments }
                 if self.resolved.builtin_name(*builtin) == "CVoid" && arguments.is_empty() =>
             {

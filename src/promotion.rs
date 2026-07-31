@@ -55,6 +55,22 @@ fn collect(resolved: &ResolvedProgram, node: &SyntaxNode, promoted: &mut BTreeSe
     {
         promoted.insert(binding);
     }
+    if node.kind == SyntaxKind::ClosureCapture {
+        let mut tokens = node.children.iter().filter_map(|child| match child {
+            SyntaxElement::Token(token) => Some(token),
+            SyntaxElement::Node(_) => None,
+        });
+        let first = tokens.next();
+        if matches!(first.map(|token| &token.kind), Some(TokenKind::Amp)) {
+            let source = tokens.find(|token| matches!(token.kind, TokenKind::Identifier(_)));
+            if let Some(source) = source
+                && let Some(reference) = resolved.reference_at(source.span)
+                && let NameTarget::Local(binding) = reference.target
+            {
+                promoted.insert(binding);
+            }
+        }
+    }
     for child in &node.children {
         if let SyntaxElement::Node(child) = child {
             collect(resolved, child, promoted);
@@ -98,6 +114,7 @@ fn root_local(resolved: &ResolvedProgram, node: &SyntaxNode) -> Option<LocalBind
             }
         }
         SyntaxKind::MemberExpression
+        | SyntaxKind::TupleFieldExpression
         | SyntaxKind::BracketExpression
         | SyntaxKind::ParenthesizedExpression => {
             let base = node.children.iter().find_map(|child| match child {

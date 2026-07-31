@@ -69,23 +69,29 @@ impl<'a> CEmitter<'a> {
         if vtables.is_empty() {
             return;
         }
-        let mut traits: BTreeMap<DeclarationId, Vec<&crate::ir::Vtable>> = BTreeMap::new();
+        let mut traits: BTreeMap<(DeclarationId, TypeId), Vec<&crate::ir::Vtable>> =
+            BTreeMap::new();
         for vtable in &vtables {
             traits
-                .entry(vtable.trait_declaration)
+                .entry((vtable.trait_declaration, vtable.trait_type))
                 .or_default()
                 .push(vtable);
         }
-        for (trait_declaration, _tables) in traits {
-            let slots = crate::traits::vtable_slots(self.resolved, trait_declaration);
-            let vtable_type = vtable_type_name(trait_declaration);
-            let object = object_name(trait_declaration);
+        for ((trait_declaration, trait_type), tables) in traits {
+            let Some(table) = tables.first() else {
+                continue;
+            };
+            for signature in &table.signatures {
+                self.emit_type_definition(signature.return_type, None);
+                for parameter in &signature.parameters {
+                    self.emit_type_definition(parameter.ty, None);
+                }
+            }
+            let vtable_type = vtable_type_name(trait_declaration, trait_type);
+            let object = object_name(trait_declaration, trait_type);
             // The method-pointer struct and the fat-reference struct.
             let _ = writeln!(self.output, "typedef struct {vtable_type} {{");
-            for (slot, (_, method)) in slots.iter().enumerate() {
-                let Some(signature) = self.typed.function_signatures.get(method).cloned() else {
-                    continue;
-                };
+            for (slot, signature) in table.signatures.iter().enumerate() {
                 let Some(return_type) = self.c_function_return_type(signature.return_type, None)
                 else {
                     continue;
@@ -120,71 +126,99 @@ impl<'a> CEmitter<'a> {
         if vtables.is_empty() {
             return;
         }
-        let mut traits: BTreeMap<DeclarationId, Vec<&crate::ir::Vtable>> = BTreeMap::new();
+        let mut traits: BTreeMap<(DeclarationId, TypeId), Vec<&crate::ir::Vtable>> =
+            BTreeMap::new();
         for vtable in &vtables {
             traits
-                .entry(vtable.trait_declaration)
+                .entry((vtable.trait_declaration, vtable.trait_type))
                 .or_default()
                 .push(vtable);
         }
-        for (trait_declaration, tables) in traits {
-            let vtable_type = vtable_type_name(trait_declaration);
+        for ((trait_declaration, trait_type), tables) in traits {
+            let vtable_type = vtable_type_name(trait_declaration, trait_type);
             let _ = &tables;
             for table in tables {
                 let Some(concrete_type) = self.c_type(table.concrete, None) else {
                     continue;
                 };
-                for (slot, instance) in table.methods.iter().enumerate() {
-                    // Instance signatures were cached during lowering; the
-                    // backend only reads them.
-                    let Some(signature) = self
-                        .typed
-                        .function_instance_signatures
-                        .get(instance)
-                        .or_else(|| self.typed.function_signatures.get(&instance.declaration))
-                        .cloned()
-                    else {
+                for (slot, method) in table.methods.iter().enumerate() {
+                    let thunk = thunk_name(trait_declaration, trait_type, table.concrete, slot);
+                    let Some(slot_signature) = table.signatures.get(slot).cloned() else {
                         continue;
                     };
                     let Some(return_type) =
-                        self.c_function_return_type(signature.return_type, None)
+                        self.c_function_return_type(slot_signature.return_type, None)
                     else {
                         continue;
                     };
-                    let thunk = thunk_name(trait_declaration, table.concrete, slot);
                     let mut parameters = vec!["void *el_self".to_string()];
-                    let mut arguments = vec![format!("({concrete_type} *)el_self")];
-                    for (index, parameter) in signature.parameters.iter().enumerate() {
+                    for (index, parameter) in slot_signature.parameters.iter().enumerate() {
                         let Some(ty) = self.c_type(parameter.ty, None) else {
                             return;
                         };
                         parameters.push(format!("{ty} a{index}"));
-                        arguments.push(format!("a{index}"));
                     }
-                    let symbol = self.function_symbol(instance);
-                    let call = format!("{symbol}({})", arguments.join(", "));
+                    let call = match method {
+                        VtableMethod::Function(instance) => {
+                            let mut arguments = vec![format!("({concrete_type} *)el_self")];
+                            arguments.extend(
+                                slot_signature
+                                    .parameters
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, _)| format!("a{index}")),
+                            );
+                            format!(
+                                "{}({})",
+                                self.function_symbol(instance),
+                                arguments.join(", ")
+                            )
+                        }
+                        VtableMethod::Closure(instance) => {
+                            let tuple_arguments =
+                                callable_tuple_arguments(&self.typed.types, &slot_signature);
+                            let mut arguments = vec![format!("*(({concrete_type} *)el_self)")];
+                            arguments.extend(tuple_arguments);
+                            format!(
+                                "{}({})",
+                                self.function_symbol(instance),
+                                arguments.join(", ")
+                            )
+                        }
+                        VtableMethod::FunctionReference => {
+                            let arguments =
+                                callable_tuple_arguments(&self.typed.types, &slot_signature);
+                            format!("(*(({concrete_type} *)el_self))({})", arguments.join(", "))
+                        }
+                    };
+                    let parameter_uses = slot_signature
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| format!("    (void)a{index};\n"))
+                        .collect::<String>();
                     if return_type == "void" {
                         let _ = writeln!(
                             self.output,
-                            "static void {thunk}({}) {{\n    {call};\n}}\n",
-                            parameters.join(", ")
+                            "static void {thunk}({}) {{\n{parameter_uses}    {call};\n}}\n",
+                            parameters.join(", "),
                         );
                     } else {
                         let _ = writeln!(
                             self.output,
-                            "static {return_type} {thunk}({}) {{\n    return {call};\n}}\n",
-                            parameters.join(", ")
+                            "static {return_type} {thunk}({}) {{\n{parameter_uses}    return {call};\n}}\n",
+                            parameters.join(", "),
                         );
                     }
                 }
                 let entries = (0..table.methods.len())
-                    .map(|slot| thunk_name(trait_declaration, table.concrete, slot))
+                    .map(|slot| thunk_name(trait_declaration, trait_type, table.concrete, slot))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let _ = writeln!(
                     self.output,
                     "static const {vtable_type} {} = {{ {entries} }};\n",
-                    vtable_instance_name(self.typed, trait_declaration, table.concrete)
+                    vtable_instance_name(self.typed, trait_declaration, trait_type, table.concrete,)
                 );
             }
         }
@@ -2327,6 +2361,11 @@ impl<'a> CEmitter<'a> {
                     self.emit_copy_helper(*argument, span);
                 }
             }
+            TypeKind::Closure { captures, .. } => {
+                for capture in captures {
+                    self.emit_copy_helper(*capture, span);
+                }
+            }
             _ => {}
         }
         let Some(c_type) = self.c_type(ty, span) else {
@@ -2536,6 +2575,33 @@ impl<'a> CEmitter<'a> {
                     }
                 }
             }
+            TypeKind::Closure { captures, .. } => {
+                self.output
+                    .push_str("    if (value == NULL) return NULL;\n");
+                let _ = writeln!(self.output, "    {c_type} result;");
+                self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                    destination: "result",
+                    byte_count: "sizeof(*result)",
+                    class: if captures
+                        .iter()
+                        .any(|capture| self.scanned_allocation(*capture))
+                    {
+                        AllocationClass::Scanned
+                    } else {
+                        AllocationClass::PointerFree
+                    },
+                });
+                self.output
+                    .push_str("    if (result == NULL) el_out_of_memory();\n");
+                for (index, capture) in captures.iter().enumerate() {
+                    let helper = copy_helper_name(self.resolve_alias(*capture));
+                    let _ = writeln!(
+                        self.output,
+                        "    result->v{index} = {helper}(value->v{index});"
+                    );
+                }
+                self.output.push_str("    return result;\n");
+            }
             _ if matches!(
                 strategy,
                 LogicalCopyStrategy::Trivial | LogicalCopyStrategy::PreserveIdentity
@@ -2555,5 +2621,21 @@ impl<'a> CEmitter<'a> {
         self.output.push_str("}\n\n");
         self.emitting_copy_helpers.remove(&ty);
         self.emitted_copy_helpers.insert(ty);
+    }
+}
+
+fn callable_tuple_arguments(
+    types: &TypeContext,
+    signature: &crate::types::FunctionSignature,
+) -> Vec<String> {
+    let Some(parameter) = signature.parameters.first() else {
+        return Vec::new();
+    };
+    match types.kind(types.resolve_inference(parameter.ty)) {
+        TypeKind::Tuple(elements) => (0..elements.len())
+            .map(|index| format!("a0.v{index}"))
+            .collect(),
+        TypeKind::Primitive(PrimitiveType::Unit) => Vec::new(),
+        _ => vec!["a0".to_string()],
     }
 }

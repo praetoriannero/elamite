@@ -177,13 +177,17 @@ fn horizontal(point: Point) -> f64:
 fn apply_offset(callback: &fn(i32) -> i32, value: i32) -> i32:
     return callback(value)
 
-// A function reference is produced only by naming a function; Elamite has no
-// closures, anonymous function literals, or captured environments.
+// A function reference is produced only by naming a function. Closures are
+// separate anonymous nominal callable values and never convert to `&fn`.
 fn increment(value: i32) -> i32:
     return value + 1
 
-// A callback that must carry data uses a trait object instead, since a function
-// reference carries no captured environment.
+fn closure_demo(offset: i32) -> i32:
+    let add = fn[offset](value: i32):
+        return value + offset
+    return add(2)
+
+// A user-defined trait object remains another stateful callback option.
 trait Transform:
     fn apply(self: &Self, value: i32) -> i32
 
@@ -317,6 +321,13 @@ pub fn main() -> Result[(), io.IoError]:
     fn_stop(&var session)
 
     let observer: Session = session
+    let unpacked = observer.unpack()
+    let (was_active, observer_name): (bool, String) = unpacked
+    var mutable_summary = (was_active, observer_name)
+    mutable_summary.0 = true
+    let summary_name = &mutable_summary.1
+    println(f"tuple summary: {mutable_summary.0} / {summary_name}")
+
     // A raw-pointer receiver accepts an already matching pointer without
     // implicitly dereferencing or converting it. The unsafe method call and
     // the raw-to-reference conversion in its body each remain explicit.

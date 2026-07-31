@@ -2,7 +2,8 @@ fn return_tuple() -> (i32, i32):
     return (0, 42)
 
 fn main():
-    println("")
+    let (a, b) = return_tuple()
+    println(f"{a}, {b}")
 
 use std.testing.assert as assert
 

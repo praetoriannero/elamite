@@ -224,6 +224,7 @@ pub enum SyntaxKind {
     CastExpression,
     CallExpression,
     MemberExpression,
+    TupleFieldExpression,
     BracketExpression,
     TryExpression,
     ParenthesizedExpression,
@@ -232,6 +233,9 @@ pub enum SyntaxKind {
     MacroExpression,
     RecordExpression,
     RecordField,
+    ClosureCaptureList,
+    ClosureCapture,
+    ClosureExpression,
 }
 
 /// A syntax node or one of its original tokens.

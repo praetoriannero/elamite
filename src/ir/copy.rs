@@ -22,9 +22,10 @@ pub fn logical_copy_strategy(types: &TypeContext, mut ty: TypeId) -> LogicalCopy
             TypeKind::Never => LogicalCopyStrategy::PreserveIdentity,
             TypeKind::Primitive(PrimitiveType::String) => LogicalCopyStrategy::OwnedString,
             TypeKind::Primitive(_) => LogicalCopyStrategy::Trivial,
-            TypeKind::Tuple(_) | TypeKind::Array { .. } | TypeKind::Nominal { .. } => {
-                LogicalCopyStrategy::Recursive
-            }
+            TypeKind::Tuple(_)
+            | TypeKind::Array { .. }
+            | TypeKind::Nominal { .. }
+            | TypeKind::Closure { .. } => LogicalCopyStrategy::Recursive,
             TypeKind::Reference { .. }
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }

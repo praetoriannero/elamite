@@ -114,6 +114,43 @@ fn recognizes_and_decodes_literals() {
 }
 
 #[test]
+fn distinguishes_tuple_selectors_from_float_literals() {
+    let output = lex_text("let value = nested.0.1\nlet ratio = 1.25e+2f64\n");
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let significant = output
+        .tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token.kind,
+                TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof
+            )
+        })
+        .map(|token| &token.kind)
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(
+            significant.as_slice(),
+            [
+                TokenKind::Keyword(_),
+                TokenKind::Identifier(_),
+                TokenKind::Assign,
+                TokenKind::Identifier(_),
+                TokenKind::Dot,
+                TokenKind::IntegerLiteral { raw: zero, .. },
+                TokenKind::Dot,
+                TokenKind::IntegerLiteral { raw: one, .. },
+                TokenKind::Keyword(_),
+                TokenKind::Identifier(_),
+                TokenKind::Assign,
+                TokenKind::FloatLiteral { raw: float, .. },
+            ] if zero == "0" && one == "1" && float == "1.25e+2f64"
+        ),
+        "{significant:?}"
+    );
+}
+
+#[test]
 fn recognizes_every_reserved_keyword() {
     let source = "as break continue defer else enum false fn for if impl in \
                   let match mod null pass pub return root self Self struct super trait true \

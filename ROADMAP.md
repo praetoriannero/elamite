@@ -3,10 +3,10 @@
 > Status: Active — completed legacy work is omitted from this forward-looking
 > plan; remaining milestones and work packages use stable descriptive names
 >
-> Next required work package: **Tuple destructuring and positional fields** —
-> **Normative tuple-access contract**
+> Next required work package: **Macro expansion foundations** —
+> **Language-contract closure**
 >
-> Basis: `SPEC.md` version 0.5.0-draft and
+> Basis: `SPEC.md` version 0.7.0-draft and
 > `examples/spec_demo.elx`
 
 This document breaks the remaining initial Elamite compiler work and planned
@@ -355,7 +355,7 @@ item attributes on the bounded compile-time runtime.
 
 ### Explicit-capture closures
 
-> Status: Accepted design; pending normative specification and implementation.
+> Status: Implemented against `SPEC.md` 0.7.0-draft.
 >
 > Blocked by: **None**. **Standard-library concurrency** is blocked by this
 > milestone because spawned thread bodies rely on closures.
@@ -424,17 +424,17 @@ The accepted surface has these boundaries:
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Normative closure contract** | Record closure syntax, capture forms and aliases, evaluation order, name visibility, inferred returns, callable behavior, copying, safety, escape, control-flow, and exclusion rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected closure form has one normative outcome before anonymous `fn` expressions are enabled. |
-| **Syntax and editor support** | Parse safe closure expressions with optional nonempty capture lists, typed parameters, optional return annotations, and ordinary indented bodies; update traversal and editor inventories without admitting generic, unsafe, variadic, or declaration-position forms. | Snapshots preserve capture-kind and body spans, and malformed lists, modifiers, parameters, aliases, and body indentation receive focused diagnostics. |
-| **Capture resolution** | Assign stable identities to closure expressions and environment bindings, resolve every outer-local use through one explicit capture, and distinguish declarations that require no capture. | Missing, duplicate, self-initializing, shadowing, alias-collision, and inaccessible captures are deterministic errors with related spans. |
-| **Capture typing and construction** | Type-check value, shared-reference, mutable-reference, const-pointer, and mutable-pointer captures; require addressability and mutability where appropriate; record exact-once left-to-right construction and any `*var T` to `*T` downgrade. | Capture types and evaluation order are explicit in typed facts, direct raw-pointer captures cannot bypass `*`/`*var`, and no capture operation itself enters an unsafe context. |
-| **Callable types and return inference** | Give each closure expression a unique anonymous nominal type, add the ordinary user-implementable `Callable[Arguments, Return]` contract and call-syntax selection, infer omitted closure results, and preserve exact annotated results including `!`. | Distinct expressions remain distinct types, all return paths agree, fallthrough is unit, generic callable parameters infer concrete closure types, and erased calls retain exact argument and result types. |
-| **Body, safety, and control checking** | Check a closure as its own safe function boundary with immutable capture bindings, explicit unsafe blocks, ordinary return/error/defer rules, and no inherited unsafe or escaping control context. | Raw-pointer comparisons compile safely; automatic raw-pointer field access requires `unsafe:`, mutable access requires `*var`, and unsafe closure declarations and anonymous recursion are rejected. |
-| **Copy, alias, and escape semantics** | Extend logical-copy recording and promotion analysis to anonymous environments so value fields copy independently, explicit references and pointers preserve identity, and escaping references to captured storage or closure values remain rooted where required. | Later outer rebinding affects only reference captures, copied closures expose independent value state, aliases remain aliases, and a raw pointer alone never roots its pointee. |
-| **Typed and control-flow IR lowering** | Represent closure construction, environment access, static callable invocation, erased callable dispatch, return flow, traps, and deferred cleanup without embedding syntax or name-resolution facts in later IR. | Construction and argument evaluation order are explicit, closure-local exits cannot target an outer body, and existing named-function lowering is unchanged. |
-| **C99 environment and call emission** | Emit deterministic private environment layouts and static body functions, pass an environment pointer on direct calls, and reuse ordinary trait-object vtables for erased calls while retaining GC-visible roots. | Capturing and captureless closures work on x86 and x86-64, generated C remains C99, symbols are deterministic, and no closure is emitted as a plain C function pointer. |
-| **Cross-feature integration** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Closure support does not weaken coherence, copy independence, visibility, safety, cleanup, trap behavior, or production/test reachability. |
-| **Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `LEDGER.md`. |
+| **Normative closure contract (done)** | Record closure syntax, capture forms and aliases, evaluation order, name visibility, inferred returns, callable behavior, copying, safety, escape, control-flow, and exclusion rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected closure form has one normative outcome before anonymous `fn` expressions are enabled. |
+| **Syntax and editor support (done)** | Parse safe closure expressions with optional nonempty capture lists, typed parameters, optional return annotations, and ordinary indented bodies; update traversal and editor inventories without admitting generic, unsafe, variadic, or declaration-position forms. | Snapshots preserve capture-kind and body spans, and malformed lists, modifiers, parameters, aliases, and body indentation receive focused diagnostics. |
+| **Capture resolution (done)** | Assign stable identities to closure expressions and environment bindings, resolve every outer-local use through one explicit capture, and distinguish declarations that require no capture. | Missing, duplicate, self-initializing, shadowing, alias-collision, and inaccessible captures are deterministic errors with related spans. |
+| **Capture typing and construction (done)** | Type-check value, shared-reference, mutable-reference, const-pointer, and mutable-pointer captures; require addressability and mutability where appropriate; record exact-once left-to-right construction and any `*var T` to `*T` downgrade. | Capture types and evaluation order are explicit in typed facts, direct raw-pointer captures cannot bypass `*`/`*var`, and no capture operation itself enters an unsafe context. |
+| **Callable types and return inference (done)** | Give each closure expression a unique anonymous nominal type, add the ordinary user-implementable `Callable[Arguments, Return]` contract and call-syntax selection, infer omitted closure results, and preserve exact annotated results including `!`. | Distinct expressions remain distinct types, all return paths agree, fallthrough is unit, generic callable parameters infer concrete closure types, and erased calls retain exact argument and result types. |
+| **Body, safety, and control checking (done)** | Check a closure as its own safe function boundary with immutable capture bindings, explicit unsafe blocks, ordinary return/error/defer rules, and no inherited unsafe or escaping control context. | Raw-pointer comparisons compile safely; automatic raw-pointer field access requires `unsafe:`, mutable access requires `*var`, and unsafe closure declarations and anonymous recursion are rejected. |
+| **Copy, alias, and escape semantics (done)** | Extend logical-copy recording and promotion analysis to anonymous environments so value fields copy independently, explicit references and pointers preserve identity, and escaping references to captured storage or closure values remain rooted where required. | Later outer rebinding affects only reference captures, copied closures expose independent value state, aliases remain aliases, and a raw pointer alone never roots its pointee. |
+| **Typed and control-flow IR lowering (done)** | Represent closure construction, environment access, static callable invocation, erased callable dispatch, return flow, traps, and deferred cleanup without embedding syntax or name-resolution facts in later IR. | Construction and argument evaluation order are explicit, closure-local exits cannot target an outer body, and existing named-function lowering is unchanged. |
+| **C99 environment and call emission (done)** | Emit deterministic private environment layouts and static body functions, pass an environment pointer on direct calls, and reuse ordinary trait-object vtables for erased calls while retaining GC-visible roots. | Capturing and captureless closures work on x86 and x86-64, generated C remains C99, symbols are deterministic, and no closure is emitted as a plain C function pointer. |
+| **Cross-feature integration (done)** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Closure support does not weaken coherence, copy independence, visibility, safety, cleanup, trap behavior, or production/test reachability. |
+| **Conformance and tooling closure (done)** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `LEDGER.md`. |
 
 Private evolving captured state, implicit or default capture, arbitrary
 initialized captures, generic closure literals, unsafe closures, variadic
@@ -564,85 +564,6 @@ cancellation, interruption, timeouts, thread-local storage, relaxed atomics,
 guards exposing protected references, scoped reference transfer, parallel
 iterators, scheduling or fairness guarantees, automatic deadlock detection,
 and foreign-thread attachment are outside this milestone.
-
-## 8. Tuple binding and positional access
-
-### Tuple destructuring and positional fields
-
-> Status: Accepted design; pending normative specification and implementation.
->
-> Blocked by: **None**. It may be delivered after its **Normative tuple-access
-> contract** package without waiting for macros, closures, or concurrency.
-
-**Goal:** Let local bindings destructure tuple values and let tuple components
-participate in ordinary postfix field access and place semantics without
-introducing general refutable binding patterns or destructuring assignment.
-
-~~~elx
-let pair = (1, "one")
-let (number, name) = pair
-println(pair.0)
-
-var mutable_pair = (2, "two")
-mutable_pair.0 = 3
-~~~
-
-The accepted surface has these boundaries:
-
-- `let (x, y) = value` binds independent logical copies of the two components,
-  while `var (x, y) = value` creates two independently rebindable local places.
-  The initializer is evaluated exactly once before any new name enters scope,
-  and the source value remains usable under ordinary copy semantics;
-- binding patterns may nest tuple patterns and use `_`, including the unit and
-  one-element forms `let () = unit` and `let (only,) = singleton`. Every
-  binding pattern must be irrefutable: literals, alternatives, enum variants,
-  record patterns, dereference patterns, and guards remain valid only where
-  the existing pattern grammar permits them;
-- the initializer must have an exact tuple type with the same shape and arity.
-  A binding annotation, when present, applies to the complete tuple pattern,
-  as in `let (x, y): (i32, String) = value`. Duplicate binding names,
-  non-tuple values, shape or arity mismatches, and refutable subpatterns are
-  compile-time errors with component-specific spans;
-- all names introduced by one destructuring declaration enter scope together
-  after the initializer. `let` components are non-rebindable, `var` components
-  are independently rebindable, `_` creates no binding, and ordinary lexical
-  shadowing rules apply to the complete declaration;
-- `tuple.0`, `tuple.1`, and subsequent zero-based decimal selectors access
-  tuple components. A selector is a canonical unsuffixed decimal index with no
-  sign, radix prefix, separator, or leading zero except `.0`; it must be
-  statically within the tuple's arity. Numeric selectors do not select struct
-  fields or tuple-like enum payloads;
-- positional access has the same highest postfix precedence and left-to-right
-  composition as named field access, so expressions such as
-  `value.0.name`, `values.1[index]`, and `callback().0` evaluate their receiver
-  exactly once. Existing floating literals retain their tokenization and
-  meaning;
-- in value context, positional access returns an ordinary logical copy of the
-  selected component, preserving any explicit aliases stored within it. On an
-  addressable mutable tuple path, the selected component is an assignable and
-  addressable place, so `pair.0 = value`, compound assignment, nested mutation,
-  `&pair.0`, and `&var pair.0` follow the same mutability, reachability, and
-  promotion rules as named aggregate fields; and
-- safe-reference and raw-pointer receivers follow the language's ordinary
-  member-access adaptation and safety rules. Positional access adds no
-  implicit conversion, bounds trap, dynamic index, tuple method namespace, or
-  special behavior for references stored as tuple elements.
-
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **Normative tuple-access contract** | Record local tuple-binding syntax, irrefutability, annotations, scope, copy and mutability behavior, numeric selectors, place semantics, receiver adaptation, tokenization, and exclusions in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected binding or selector has one normative outcome before either parser path is enabled. |
-| **Binding and selector syntax** | Reuse tuple-pattern syntax after `let` and `var`, parse optional whole-pattern annotations, and extend postfix parsing with canonical numeric selectors without changing floating-literal lexing or named fields. | Snapshots cover unit, singleton, nested and multiline bindings, `.0` chains, malformed indices, leading zeros, suffixes, missing initializers, and parser recovery. |
-| **Binding resolution and scope** | Allocate stable local identities for every destructured name, resolve the initializer before introducing them simultaneously, preserve lexical shadowing, and diagnose duplicates at their binding spans. | Initializers cannot see newly declared names, `_` allocates no identity, nested declarations bind deterministically, and unrelated match-pattern resolution remains unchanged. |
-| **Shape, type, and place checking** | Require an exact irrefutable tuple shape, propagate expected types from a whole-pattern annotation, infer each binding type, and classify positional selections as values or mutable/addressable places through ordinary receiver adaptation. | Arity, type, selector-range, receiver-type, immutability, and invalid-reference diagnostics identify the relevant tuple component without cascading. |
-| **Copy and control-flow lowering** | Evaluate a destructuring initializer once into a temporary, lower component bindings left-to-right through existing logical-copy operations, and lower numeric selections to typed tuple-field places in control-flow IR. | Ordinary fields copy independently, explicit aliases retain identity, `var` components are separate places, and side-effecting receivers and initializers execute once. |
-| **C99 tuple-field emission** | Emit positional reads, writes, addresses, nested places, and copy helpers through the existing deterministic tuple layout without exposing backend field names as language syntax. | Unit, singleton, heterogeneous, generic, nested, referenced, and mutable tuple cases emit valid C99 on x86 and x86-64. |
-| **Cross-feature integration** | Exercise destructuring and numeric fields with generics, function returns, `Result`, loops, `match`, closures when available, references, raw-pointer unsafe access, collections, `defer`, and thread/channel tuple results when available. | Tuple access does not weaken copy independence, mutability, safety, promotion, pattern exhaustiveness, transfer, cleanup, or evaluation order. |
-| **Conformance and tooling closure** | Add parser snapshots, compile-pass/fail cases, run-pass tests, generated-C assertions, formatting and documentation examples, editor synchronization if needed, and the Linux x86/x86-64 matrix. | The pre-tuple-access suite remains green, existing match patterns and floating literals are unchanged, and every normative tuple-access rule is mapped in `LEDGER.md`. |
-
-Destructuring assignment, tuple patterns in parameters or loop headers,
-record or enum destructuring declarations, refutable `let`, rest patterns such
-as `..`, dynamically computed tuple indices, and user-defined numeric fields
-are outside this milestone.
 
 ## 9. Recommended delivery checkpoints
 
