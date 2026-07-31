@@ -45,7 +45,8 @@ To produce a `.vsix`, run `npx @vscode/vsce package` from this directory.
   and every suffix in `parse_numeric_suffix`
 - Strings, character literals, and escapes including `\u{...}`
 - Formatted strings, with interpolation highlighted as real expressions,
-  nested braces balanced, and `{{`/`}}` treated as literal braces
+  variable names using the same scope as ordinary source, nested braces
+  balanced, and `{{`/`}}` treated as literal braces
 - `@importc`/`@exportc` attributes and `@vec`/`@map`/`@set` macros
 - Declaration names for `fn`, `struct`, `enum`, `trait`, `type`, and `mod`
 - Operators and punctuation

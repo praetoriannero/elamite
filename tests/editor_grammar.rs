@@ -278,3 +278,28 @@ fn grammar_accepts_exactly_the_parser_macros() {
         "the VS Code grammar's macro list disagrees with `parse_macro_expression` in src/parser.rs"
     );
 }
+
+#[test]
+fn grammar_scopes_variables_the_same_inside_formatted_strings() {
+    let grammar = read(GRAMMAR);
+    let expression = slice_between(&grammar, "\"expression\": {", "\n    \"comments\":");
+    let interpolation = slice_between(
+        &grammar,
+        "\"interpolation\": {",
+        "\n    \"interpolation-nested\":",
+    );
+    let identifier = slice_between(&grammar, "\"identifier\": {", "\n    \"numbers\":");
+
+    assert!(
+        expression.contains(r##""include": "#identifier""##),
+        "ordinary expressions must include the shared identifier rule"
+    );
+    assert!(
+        interpolation.contains(r##""include": "#expression""##),
+        "formatted-string interpolation must reuse the ordinary expression rules"
+    );
+    assert!(
+        identifier.contains(r#""name": "variable.other.readwrite.elx""#),
+        "ordinary identifiers must receive an explicit variable scope"
+    );
+}

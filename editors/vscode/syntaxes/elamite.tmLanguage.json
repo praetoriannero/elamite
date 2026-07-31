@@ -29,6 +29,7 @@
         { "include": "#type-builtin-trait" },
         { "include": "#type-name" },
         { "include": "#function-call" },
+        { "include": "#identifier" },
         { "include": "#operators" },
         { "include": "#punctuation" }
       ]
@@ -188,6 +189,12 @@
       "captures": {
         "1": { "name": "entity.name.function.call.elx" }
       }
+    },
+
+    "identifier": {
+      "comment": "Ordinary lowercase identifiers share this scope in source and formatted-string interpolation. More specific keyword, builtin, type, and function-call rules run first.",
+      "name": "variable.other.readwrite.elx",
+      "match": "\\b[a-z_][A-Za-z0-9_]*\\b"
     },
 
     "numbers": {
