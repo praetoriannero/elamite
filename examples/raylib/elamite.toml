@@ -1,0 +1,10 @@
+[package]
+name = "raylib_demo"
+version = "0.1.0"
+target_kind = "exe"
+
+[native]
+include_paths = ["native/include"]
+libraries = ["raylib"]
+# Common desktop Linux dependencies, kept after raylib for static builds.
+link_options = ["-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11"]

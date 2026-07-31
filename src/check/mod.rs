@@ -52,7 +52,7 @@ pub use crate::operations::{
 };
 use crate::resolution::{
     ClosureCaptureKind, DeclarationId, DeclarationKind, FieldId, GenericParameterId,
-    LocalBindingId, MemberId, ModuleId, NameTarget, ResolvedProgram, VariantId,
+    LocalBindingId, MemberId, ModuleId, NameTarget, ResolvedProgram, VariantId, Visibility,
 };
 use crate::source::Span;
 use crate::syntax::{
@@ -343,6 +343,45 @@ impl<'a> Checker<'a> {
                 .kind(self.typed.types.resolve_inference(ty)),
             TypeKind::Never
         )
+    }
+
+    /// Whether a field can be named from the function currently being
+    /// checked. Unmarked fields are package-private; standard-library modules
+    /// share the `None` package identity and therefore form one package for
+    /// this purpose.
+    fn field_is_accessible(&self, field: FieldId) -> bool {
+        let field = &self.resolved.fields[field.index()];
+        if field.visibility == Visibility::Public {
+            return true;
+        }
+        let Some(current_module) = self.current_module else {
+            return false;
+        };
+        let owner_module = self.resolved.declarations[field.parent_declaration.index()].module;
+        self.resolved.modules[current_module.index()]
+            .package
+            .as_ref()
+            == self.resolved.modules[owner_module.index()].package.as_ref()
+    }
+
+    /// Reports one external use of a package-private field. Callers continue
+    /// checking the field's type after this diagnostic so one visibility
+    /// mistake does not cause unrelated type or control-flow cascades.
+    fn require_field_access(&mut self, field: FieldId, use_span: Span) -> bool {
+        if self.field_is_accessible(field) {
+            return true;
+        }
+        let field = &self.resolved.fields[field.index()];
+        let name = self.resolved.symbol_text(field.name);
+        self.diagnostics.push(
+            Diagnostic::new(
+                Category::Visibility,
+                format!("field `{name}` is package-private"),
+            )
+            .with_primary(use_span)
+            .with_related(field.span, "package-private field declared here"),
+        );
+        false
     }
 
     fn resolve_aliases(&self, mut ty: TypeId) -> TypeId {
@@ -2944,6 +2983,7 @@ impl<'a> Checker<'a> {
                 self.check_expr_lenient_record_field(field_node);
                 continue;
             };
+            self.require_field_access(field_id, name_token.span);
             if !seen.insert(field_id) {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -2988,6 +3028,9 @@ impl<'a> Checker<'a> {
         }
         for field_id in required {
             if !seen.contains(field_id) {
+                if !self.require_field_access(*field_id, whole_span) {
+                    continue;
+                }
                 let name = self
                     .resolved
                     .symbol_text(self.resolved.fields[field_id.index()].name);

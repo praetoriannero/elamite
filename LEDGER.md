@@ -119,12 +119,13 @@ removed.
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
 | Package = compilation/dependency/nominal-identity/coherence unit; `elamite.toml` declares name, version, target kind (`lib`\|`exe`), dependencies, root file; default roots `src/lib.elx`/`src/main.elx` | M1 | — | compile-fail (malformed manifest), integration |
+| Optional `[format].line_length` is positive tooling metadata, defaults to 100, and may be overridden for one formatter invocation without affecting package identity or language semantics | formatter extension (done) | — | unit/integration (`parses_and_validates_the_format_line_length`, `package_formatting_uses_manifest_width_and_cli_override`) |
 | Root file defines `root` module; other `.elx` files define file-backed modules from relative path; directories are namespace components; path components must be valid identifiers | M1 | — | integration, compile-fail (invalid component) |
 | `mod name:` inline nested module; inline and file-backed modules cannot collide; file-backed modules need no bodyless `mod` declaration | M1 (discover file-backed paths), M3 (parse inline modules), M4 (reject collision during collection) | — | compile-fail (duplicate module path) |
 | Path roots `root`, `self`, `super` (error at package root) are keywords; `std` and dependency aliases are ordinary names resolved after lexical bindings, module declarations, imports, and prelude names, so a module may shadow `std` | M4 | — | compile-fail (`super` at root) |
 | Unqualified name lookup: lexical bindings, current-module decls/imports, prelude only — never unrelated modules | M4 | — | compile-fail |
 | `use path` / `use path as name`; not inherited by nested modules; no wildcard/grouped `use` declarations; import order has no semantic effect | M3 (parse), M4 (resolve) | — | compile-pass, compile-fail |
-| `pub` visibility on modules/fns/structs/enums/traits/aliases; fields and inherent methods package-private unless individually `pub`; all variants/payload fields of a `pub enum` are public; all methods of a `pub trait` are public | M4 | — | compile-fail (private access across packages) |
+| `pub` visibility on modules/fns/structs/enums/traits/aliases; fields and inherent methods package-private unless individually `pub`; all variants/payload fields of a `pub enum` are public; all methods of a `pub trait` are public | M4 | — | compile-pass/fail (`enforces_struct_field_visibility_across_packages`) |
 | `pub use path [as name]` re-export; module re-export exposes public contents only; reachability requires an unbroken re-export chain; re-export doesn't change nominal identity or defining package | M4 | — | compile-pass/fail (unreachable public decl) |
 | Public signature may mention only publicly accessible types/traits/aliases/bounds; private members are not part of the public signature | M4, M5 | — | compile-fail |
 | Shared module-item namespace (modules/types/traits/fns/module values/aliases/imports); duplicate declaration or import is an error even for the same target; explicit alias resolves it; local bindings may shadow module items | M4 | — | compile-fail (duplicate entry) |
@@ -448,12 +449,14 @@ are the outcomes the initial driver must support, independent of spelling:
 
 | Outcome | Description | Pass |
 | --- | --- | --- |
-| Check a package | Run resolution + type checking without generating C or linking; report diagnostics | M4–M7 |
-| Build a package | Full pipeline through C generation, C-compiler invocation, and linking; produce an executable or library artifact | M8 (initial), M17–M18 (complete) |
+| Check a package or standalone source file | Run resolution + type checking without generating C or linking; report diagnostics. A standalone `.elx` file is an implicit executable package containing only that root file | M4–M7, driver extension (done) |
+| Build a package or standalone source file | Full pipeline through C generation, C-compiler invocation, and linking; produce an executable or library artifact. Direct `elamc FILE.elx` compilation and the explicit `build` workflow share the package pipeline | M8 (initial), M17–M18 (complete), driver extension (done) |
 | Initialize a package | Create a non-destructive hello-world executable skeleton by default (`src/main.elx`) or a library skeleton with `--lib` (`src/lib.elx`) | M18.6 (done) |
 | Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `ROADMAP.md`) | M4 onward |
 | Select a target | Choose the target architecture/OS the generated C is compiled for | M1 (manifest), M8 (backend) — depends on the open target-matrix decision in §13 above |
 | Select an output directory | Choose where build artifacts (generated C, object files, linked binary) land | M8, M18 (done) |
+| Select an exact output file | Write the final executable or relocatable object to the `-o` path independently of the intermediate/metadata directory | driver extension (done) |
+| Format a source file or package | Deterministically normalize spacing and indentation, preserve comments and tokens, wrap delimited forms at a preferred width, support non-mutating `--check`, and write package-owned files atomically. The default line length is 100; `[format].line_length` configures a package and `--line-length` overrides it | formatter extension (done) |
 | Dump intermediate representations | Tokens, syntax tree, resolved declarations, typed IR, control-flow IR, monomorphization results, generated C | M18 (done) |
 | Extract public documentation | Emit attached Markdown, public signatures, and source links without requiring unrelated private bodies to check | M18 (done) |
 | Run conformance fixtures | Select fixtures and target/optimization matrices, compare stable output/status expectations, isolate builds, and retain failure artifacts | M18 (done) |

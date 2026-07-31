@@ -372,7 +372,27 @@ pub fn build(
     options: &BuildOptions,
 ) -> Result<BuildArtifact, Vec<Diagnostic>> {
     let compilation = compile(graph, sources, options.target)?;
-    build_compilation(graph, sources, options, compilation, false)
+    build_compilation(graph, sources, options, compilation, false, None)
+}
+
+/// Builds the selected package while writing its final native artifact to the
+/// exact path requested by the caller. Intermediate C and package metadata
+/// continue to use [`BuildOptions::output_directory`].
+pub fn build_to(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    options: &BuildOptions,
+    output_path: &Path,
+) -> Result<BuildArtifact, Vec<Diagnostic>> {
+    let compilation = compile(graph, sources, options.target)?;
+    build_compilation(
+        graph,
+        sources,
+        options,
+        compilation,
+        false,
+        Some(output_path),
+    )
 }
 
 /// Builds one executable containing the selected package's test declarations.
@@ -382,7 +402,7 @@ pub fn build_tests(
     options: &BuildOptions,
 ) -> Result<TestBuild, Vec<Diagnostic>> {
     let (compilation, cases) = compile_tests(graph, sources, options.target)?;
-    let artifact = build_compilation(graph, sources, options, compilation, true)?;
+    let artifact = build_compilation(graph, sources, options, compilation, true, None)?;
     Ok(TestBuild { artifact, cases })
 }
 
@@ -392,6 +412,7 @@ fn build_compilation(
     options: &BuildOptions,
     compilation: Compilation,
     force_executable: bool,
+    output_path: Option<&Path>,
 ) -> Result<BuildArtifact, Vec<Diagnostic>> {
     let root = &graph.packages[&graph.root];
     std::fs::create_dir_all(&options.output_directory).map_err(|error| {
@@ -413,10 +434,27 @@ fn build_compilation(
         )]
     })?;
 
-    let artifact_path = match (root.manifest.target_kind, force_executable) {
-        (_, true) | (TargetKind::Executable, false) => options.output_directory.join(&stem),
-        (TargetKind::Library, false) => options.output_directory.join(format!("{stem}.o")),
+    let artifact_path = match output_path {
+        Some(path) => path.to_path_buf(),
+        None => match (root.manifest.target_kind, force_executable) {
+            (_, true) | (TargetKind::Executable, false) => options.output_directory.join(&stem),
+            (TargetKind::Library, false) => options.output_directory.join(format!("{stem}.o")),
+        },
     };
+    if let Some(parent) = artifact_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            vec![Diagnostic::new(
+                Category::Toolchain,
+                format!(
+                    "cannot create output directory {}: {error}",
+                    parent.display()
+                ),
+            )]
+        })?;
+    }
     let (metadata, metadata_path, dependency_metadata_paths) =
         materialize_package_metadata(graph, &compilation.resolved, sources, options, &stem)?;
     let compiler = options

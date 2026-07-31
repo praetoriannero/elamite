@@ -124,6 +124,16 @@ target_kind = "exe"
 path = "../codec"
 ~~~
 
+Formatting preferences are optional tooling metadata rather than part of
+package identity or language semantics. `[format].line_length` is a positive
+integer specifying the formatter's preferred maximum line length; it defaults
+to 100 when omitted. A command-line override takes precedence over this value.
+
+~~~toml
+[format]
+line_length = 100
+~~~
+
 Dependency resolution follows these entries transitively. The initial resolver
 does not fetch registry or Git dependencies, select among version constraints,
 or read or write a package lockfile. Those facilities may be added by a future

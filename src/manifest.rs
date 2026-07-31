@@ -53,6 +53,8 @@ pub struct Manifest {
     pub library_paths: Vec<PathBuf>,
     pub native_libraries: Vec<String>,
     pub link_options: Vec<String>,
+    /// Preferred source formatting width from `[format].line_length`.
+    pub format_line_length: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +64,8 @@ struct RawManifest {
     dependencies: BTreeMap<Spanned<String>, RawDependency>,
     #[serde(default)]
     native: RawNative,
+    #[serde(default)]
+    format: RawFormat,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +91,11 @@ struct RawNative {
     libraries: Vec<String>,
     #[serde(default)]
     link_options: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawFormat {
+    line_length: Option<Spanned<usize>>,
 }
 
 /// Builds a diagnostic whose primary span is `spanned`'s location within
@@ -217,6 +226,22 @@ impl Manifest {
                 None => Diagnostic::new(Category::ManifestInvalid, message),
             });
         }
+        let format_line_length = raw
+            .format
+            .line_length
+            .as_ref()
+            .map_or(crate::formatter::DEFAULT_LINE_LENGTH, |length| {
+                *length.get_ref()
+            });
+        if let Some(line_length) = &raw.format.line_length
+            && *line_length.get_ref() == 0
+        {
+            diagnostics.push(spanned_diagnostic(
+                file,
+                line_length,
+                "format line length must be greater than zero",
+            ));
+        }
 
         let Some(target_kind) = target_kind else {
             return Err(diagnostics);
@@ -235,6 +260,7 @@ impl Manifest {
             library_paths: raw.native.library_paths,
             native_libraries: raw.native.libraries,
             link_options: raw.native.link_options,
+            format_line_length,
         })
     }
 }
@@ -263,6 +289,44 @@ mod tests {
         assert_eq!(manifest.name, "demo");
         assert_eq!(manifest.target_kind, TargetKind::Executable);
         assert_eq!(manifest.root, PathBuf::from("src/main.elx"));
+        assert_eq!(
+            manifest.format_line_length,
+            crate::formatter::DEFAULT_LINE_LENGTH
+        );
+    }
+
+    #[test]
+    fn parses_and_validates_the_format_line_length() {
+        let manifest = parse(
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+            target_kind = "exe"
+
+            [format]
+            line_length = 88
+            "#,
+        )
+        .expect("format settings should parse");
+        assert_eq!(manifest.format_line_length, 88);
+
+        let diagnostics = parse(
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+            target_kind = "exe"
+
+            [format]
+            line_length = 0
+            "#,
+        )
+        .expect_err("zero line length should be rejected");
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.category
+            == Category::ManifestInvalid
+            && diagnostic.message.contains("greater than zero")
+            && diagnostic.primary.is_some()));
     }
 
     #[test]

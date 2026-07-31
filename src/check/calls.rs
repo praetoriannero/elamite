@@ -951,6 +951,7 @@ impl<'a> Checker<'a> {
             };
         match self.find_member(declaration, &token_text(member_token)) {
             Some(MemberId::Field(field_id)) => {
+                self.require_field_access(field_id, member_token.span);
                 let field_type = self
                     .typed
                     .instantiate_field_type(self.resolved, field_id, &owner_arguments)
@@ -2039,6 +2040,7 @@ impl<'a> Checker<'a> {
             // Field lookup has precedence over method lookup. Calling it is an
             // ordinary indirect call and performs no receiver adaptation.
             Some(MemberId::Field(field)) => {
+                self.require_field_access(field, member_token.span);
                 let field_type = self
                     .typed
                     .field_types

@@ -32,6 +32,8 @@ pub enum Category {
     /// A token sequence does not form the required surface-language construct
     /// (Milestone 3).
     Syntax,
+    /// Source formatting configuration or output validation failed.
+    Formatting,
     /// Two declarations, imports, modules, members, or lexical bindings
     /// conflict in one namespace (Milestone 4).
     DeclarationConflict,

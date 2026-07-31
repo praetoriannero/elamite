@@ -9,6 +9,8 @@ implementation.
   surface-language example.
 - [`examples/closures`](examples/closures) demonstrates explicit captures and
   the `Callable` interface.
+- [`examples/raylib`](examples/raylib) demonstrates desktop graphics through
+  Elamite's C interoperability layer.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.
@@ -44,6 +46,45 @@ cargo run -- dump typed-ir path/to/package
 cargo run -- doc path/to/package
 ```
 
+Compile one source file directly, without an `elamite.toml`, and choose the
+executable path with `-o`:
+
+```sh
+cargo run -- path/to/main.elx -o app
+```
+
+The explicit workflow is also available as
+`cargo run -- build path/to/main.elx -o app`; `check`, `run`, and `dump` accept
+a source file in the same position as a package directory. A standalone file
+is an implicit executable package containing only that file. Use a manifest
+package when the program needs file-backed modules, package dependencies, or
+native link configuration.
+
+Successful compilation is quiet by default. Diagnostics and toolchain failures
+are written to standard error; `run` forwards the compiled program's own
+standard output and standard error.
+
+Format one source file or every source owned by a package with:
+
+```sh
+cargo run -- fmt path/to/main.elx
+cargo run -- fmt path/to/package
+cargo run -- fmt --check path/to/package
+```
+
+The formatter uses a preferred maximum line length of 100 columns. Packages
+can change it in `elamite.toml`:
+
+```toml
+[format]
+line_length = 88
+```
+
+Pass `--line-length=COLUMNS` to override the manifest or default value for one
+invocation. Formatting preserves comments and significant tokens, refuses to
+write invalid source, and is quiet on success. Package formatting does not
+modify dependencies or standard-library sources.
+
 Create a new executable package containing a hello-world program with:
 
 ```sh
@@ -59,12 +100,14 @@ cargo run -- init hello_lib --lib
 cargo run -- build hello_lib
 ```
 
-Compilation commands accept `--target=x86` or `--target=x86_64`. `build` and
-`run` also accept `--release`, `--out-dir=PATH`, and `--cc=PATH`; add
-`--keep-c` to retain the generated translation unit for inspection. Run
-`cargo run -- --help` or append `--help` to a command for the complete
-Clap-generated interface. Executable packages produce a native executable;
-library packages produce a relocatable object and public metadata.
+Compilation commands accept `--target=x86` or `--target=x86_64`. Direct
+single-file compilation, `build`, and `run` also accept `-o PATH`,
+`--release`, `--out-dir=PATH`, and `--cc=PATH`; `-o` selects the exact final
+artifact path while `--out-dir` selects the intermediate and metadata
+directory. Add `--keep-c` to retain the generated translation unit for
+inspection. Run `cargo run -- --help` or append `--help` to a command for the
+complete Clap-generated interface. Executable packages produce a native
+executable; library packages produce a relocatable object and public metadata.
 
 Run language-native package tests with:
 

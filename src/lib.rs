@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod docs;
 pub mod driver;
 pub mod expansion;
+pub mod formatter;
 pub mod ident;
 pub mod ir;
 pub mod lexer;

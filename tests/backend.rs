@@ -1751,6 +1751,67 @@ fn command_line_run_builds_and_executes_a_package() {
 }
 
 #[test]
+fn command_line_compiles_one_source_file_to_the_exact_output_path() {
+    let tree = TestTree::new("cli-single-file");
+    let source = tree.root.join("standalone.elx");
+    let output_path = tree.root.join("bin/custom-name");
+    fs::write(
+        &source,
+        "fn main() -> ():\n    println(\"from one file\")\n",
+    )
+    .expect("write standalone source");
+    fs::write(
+        tree.root.join("broken.elx"),
+        "this sibling must not be discovered",
+    )
+    .expect("write ignored sibling");
+
+    let built = Command::new(env!("CARGO_BIN_EXE_elamc"))
+        .arg(&source)
+        .arg("-o")
+        .arg(&output_path)
+        .output()
+        .expect("compile standalone Elamite source");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert_eq!(built.stdout, b"");
+    assert_eq!(built.stderr, b"");
+    assert!(output_path.is_file());
+
+    let executed = Command::new(&output_path)
+        .output()
+        .expect("run standalone executable");
+    assert!(executed.status.success());
+    assert_eq!(executed.stdout, b"from one file\n");
+}
+
+#[test]
+fn command_line_build_subcommand_accepts_a_source_file_and_output_path() {
+    let tree = TestTree::new("cli-single-file-build");
+    let source = tree.root.join("tool.elx");
+    let output_path = tree.root.join("tool-bin");
+    fs::write(&source, "fn main() -> ():\n    pass\n").expect("write standalone source");
+
+    let built = Command::new(env!("CARGO_BIN_EXE_elamc"))
+        .arg("build")
+        .arg(&source)
+        .arg(format!("-o={}", output_path.display()))
+        .output()
+        .expect("build standalone Elamite source");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert_eq!(built.stdout, b"");
+    assert_eq!(built.stderr, b"");
+    assert!(output_path.is_file());
+}
+
+#[test]
 fn command_line_check_honors_the_selected_pointer_width() {
     let tree = TestTree::new("cli-target");
     tree.executable("fn main() -> ():\n    let value: usize = 4294967296\n    println(value)\n");
@@ -1782,6 +1843,7 @@ fn command_line_help_lists_the_supported_workflows() {
         "run",
         "init",
         "dump",
+        "fmt",
         "doc",
         "test",
         "conformance",

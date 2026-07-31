@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use elamite::diagnostics::Category;
+use elamite::manifest::TargetKind;
 use elamite::package::{Package, PackageGraph};
 use elamite::source::SourceManager;
 
@@ -39,6 +40,29 @@ fn single_file_library_has_no_extra_modules() {
     let package = Package::load(&manifest_at(&fixture("single_file_library")), &mut sources)
         .expect("package should load");
     assert!(package.modules.is_empty());
+}
+
+#[test]
+fn standalone_source_file_becomes_an_implicit_executable_package() {
+    let source = fixture("single_file_executable").join("src/main.elx");
+    let graph = PackageGraph::single_file(&source).expect("single source file should load");
+    let package = &graph.packages[&graph.root];
+
+    assert_eq!(package.manifest.name, "main");
+    assert_eq!(package.manifest.version, "0.0.0");
+    assert_eq!(package.manifest.target_kind, TargetKind::Executable);
+    assert_eq!(package.manifest.root, Path::new("main.elx"));
+    assert!(package.manifest.dependencies.is_empty());
+    assert!(package.modules.is_empty());
+    assert_eq!(graph.dependency_order(), vec![&graph.root]);
+}
+
+#[test]
+fn standalone_source_file_requires_an_elx_extension() {
+    let diagnostics = PackageGraph::single_file(&manifest_at(&fixture("single_file_executable")))
+        .expect_err("manifest should not be accepted as a source file");
+    assert_eq!(diagnostics[0].category, Category::PackageGraphInvalid);
+    assert!(diagnostics[0].message.contains("`.elx` extension"));
 }
 
 #[test]

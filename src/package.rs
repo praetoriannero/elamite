@@ -35,6 +35,7 @@ impl ModulePath {
 ///
 /// Under the initial local-path resolver specified by `SPEC.md` §2.3, the
 /// canonicalized manifest-directory path is the instance discriminator.
+/// An implicit single-file package instead uses the canonicalized source path.
 /// Future resolvers may construct a different opaque key without changing how
 /// the rest of the compiler consumes a [`PackageId`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -242,6 +243,97 @@ pub struct PackageGraph {
 }
 
 impl PackageGraph {
+    /// Constructs an implicit executable package around one `.elx` source
+    /// file. The file is the package root; no sibling modules, dependencies,
+    /// or native link inputs are inferred without a manifest.
+    pub fn single_file(source_path: &Path) -> Result<PackageGraph, Vec<Diagnostic>> {
+        if source_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("elx")
+        {
+            return Err(vec![Diagnostic::new(
+                Category::PackageGraphInvalid,
+                format!(
+                    "single-file input {} must have the `.elx` extension",
+                    source_path.display()
+                ),
+            )]);
+        }
+
+        let source_path = source_path.canonicalize().map_err(|error| {
+            vec![Diagnostic::new(
+                Category::PackageGraphInvalid,
+                format!(
+                    "cannot open single-file input {}: {error}",
+                    source_path.display()
+                ),
+            )]
+        })?;
+        if !source_path.is_file() {
+            return Err(vec![Diagnostic::new(
+                Category::PackageGraphInvalid,
+                format!(
+                    "single-file input {} is not a regular file",
+                    source_path.display()
+                ),
+            )]);
+        }
+
+        let source_dir = source_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let root_file = source_path
+            .file_name()
+            .expect("a canonical file path has a file name")
+            .into();
+        let name = source_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("main")
+            .to_string();
+        let id = PackageId(source_path);
+        let package = Package {
+            id: id.clone(),
+            manifest: Manifest {
+                name,
+                version: "0.0.0".to_string(),
+                target_kind: crate::manifest::TargetKind::Executable,
+                root: root_file,
+                dependencies: Vec::new(),
+                include_paths: Vec::new(),
+                library_paths: Vec::new(),
+                native_libraries: Vec::new(),
+                link_options: Vec::new(),
+                format_line_length: crate::formatter::DEFAULT_LINE_LENGTH,
+            },
+            manifest_dir: source_dir.clone(),
+            source_dir,
+            modules: BTreeMap::new(),
+        };
+        Ok(PackageGraph {
+            root: id.clone(),
+            packages: BTreeMap::from([(id.clone(), package)]),
+            dependency_edges: BTreeMap::from([(id, BTreeMap::new())]),
+        })
+    }
+
+    /// Resolves either a package directory or an implicit single-file
+    /// executable, based on the supplied input path.
+    pub fn resolve_input(
+        input: &Path,
+        sources: &mut SourceManager,
+    ) -> Result<PackageGraph, Vec<Diagnostic>> {
+        if input.is_file()
+            || input.extension().and_then(|extension| extension.to_str()) == Some("elx")
+        {
+            Self::single_file(input)
+        } else {
+            Self::resolve(&input.join("elamite.toml"), sources)
+        }
+    }
+
     /// Resolves the package at `manifest_path` and every dependency it
     /// declares, transitively, detecting cycles in the dependency graph.
     /// `SPEC.md` §2.3: "The package dependency graph must be acyclic" — this

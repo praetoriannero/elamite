@@ -618,6 +618,7 @@ impl<'a> Checker<'a> {
                 all_irrefutable = false;
                 continue;
             };
+            self.require_field_access(field_id, name_token.span);
             if !seen.insert(field_id) {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -647,6 +648,10 @@ impl<'a> Checker<'a> {
         if !has_rest {
             for field_id in required {
                 if !seen.contains(field_id) {
+                    if !self.require_field_access(*field_id, pattern.span) {
+                        all_irrefutable = false;
+                        continue;
+                    }
                     let name = self
                         .resolved
                         .symbol_text(self.resolved.fields[field_id.index()].name);

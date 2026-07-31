@@ -1,8 +1,9 @@
 //! Command-line interface for the Elamite compiler.
 
 use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -13,9 +14,10 @@ use codespan_reporting::term::{
 };
 use elamite::config::{Optimization, Target};
 use elamite::diagnostics::Diagnostic;
-use elamite::driver::{BuildOptions, DumpStage, build, check_frontend, dump, run};
+use elamite::driver::{BuildOptions, DumpStage, build, build_to, check_frontend, dump, run};
+use elamite::formatter::{FormatOptions, format_source};
 use elamite::manifest::TargetKind;
-use elamite::package::PackageGraph;
+use elamite::package::{Package, PackageGraph};
 use elamite::resolution::resolve;
 use elamite::scaffold::init_package;
 use elamite::source::SourceManager;
@@ -25,25 +27,32 @@ use elamite::source::SourceManager;
     name = "elamc",
     version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.7.0-draft)"),
     about = "The Elamite programming language compiler",
-    arg_required_else_help = true
+    arg_required_else_help = true,
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+
+    #[command(flatten)]
+    direct: DirectBuildArgs,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Check a package without generating native code.
+    /// Check a package or source file without generating native code.
     Check(CheckArgs),
-    /// Compile a package into a native artifact.
+    /// Compile a package or source file into a native artifact.
     Build(BuildArgs),
-    /// Compile and run an executable package.
+    /// Compile and run an executable package or source file.
     Run(BuildArgs),
     /// Create a new hello-world package.
     Init(InitArgs),
     /// Print a deterministic compiler intermediate representation.
     Dump(DumpArgs),
+    /// Format an Elamite source file or package.
+    Fmt(FmtArgs),
     /// Extract public API documentation as Markdown.
     Doc(DocArgs),
     /// Compile and run language-native package tests.
@@ -59,10 +68,38 @@ struct CheckArgs {
 }
 
 #[derive(Debug, Args)]
+struct DirectBuildArgs {
+    /// Compile one .elx source file directly.
+    #[arg(value_name = "SOURCE", required = true)]
+    source: Option<PathBuf>,
+
+    /// Native target architecture; defaults to the host architecture.
+    #[arg(long, value_enum, value_name = "ARCH")]
+    target: Option<CliTarget>,
+
+    #[command(flatten)]
+    native: NativeBuildArgs,
+
+    /// Write the executable to this exact path.
+    #[arg(short = 'o', long = "output", value_name = "PATH")]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 struct BuildArgs {
     #[command(flatten)]
     package: PackageArgs,
 
+    #[command(flatten)]
+    native: NativeBuildArgs,
+
+    /// Write the final executable or object to this exact path.
+    #[arg(short = 'o', long = "output", value_name = "PATH")]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct NativeBuildArgs {
     /// Optimize the generated native artifact.
     #[arg(long)]
     release: bool,
@@ -86,9 +123,9 @@ struct BuildArgs {
 
 #[derive(Debug, Args)]
 struct PackageArgs {
-    /// Package directory containing elamite.toml.
-    #[arg(value_name = "PACKAGE", default_value = ".")]
-    package_dir: PathBuf,
+    /// Package directory containing elamite.toml, or one .elx source file.
+    #[arg(value_name = "INPUT", default_value = ".")]
+    input: PathBuf,
 
     /// Native target architecture; defaults to the host architecture.
     #[arg(long, value_enum, value_name = "ARCH")]
@@ -128,9 +165,32 @@ struct DocArgs {
 }
 
 #[derive(Debug, Args)]
+struct FmtArgs {
+    /// Package directory containing elamite.toml, or one .elx source file.
+    #[arg(value_name = "INPUT", default_value = ".")]
+    input: PathBuf,
+
+    /// Verify formatting without changing files.
+    #[arg(long)]
+    check: bool,
+
+    /// Override the preferred maximum line length.
+    #[arg(long, value_name = "COLUMNS", value_parser = parse_line_length)]
+    line_length: Option<usize>,
+}
+
+#[derive(Debug, Args)]
 struct PackageTestArgs {
+    /// Package directory containing elamite.toml.
+    #[arg(value_name = "PACKAGE", default_value = ".")]
+    package_dir: PathBuf,
+
+    /// Native target architecture; defaults to the host architecture.
+    #[arg(long, value_enum, value_name = "ARCH")]
+    target: Option<CliTarget>,
+
     #[command(flatten)]
-    build: BuildArgs,
+    native: NativeBuildArgs,
 
     /// Run only exact or qualified test names containing this text.
     #[arg(long, value_name = "TEXT")]
@@ -220,10 +280,11 @@ enum CompileCommand {
 
 struct CompileRequest {
     command: CompileCommand,
-    package_dir: PathBuf,
+    input: PathBuf,
     target: Target,
     optimization: Optimization,
     output_directory: PathBuf,
+    output_file: Option<PathBuf>,
     keep_generated_c: bool,
     c_compiler: Option<OsString>,
     c_flags: Vec<OsString>,
@@ -231,15 +292,16 @@ struct CompileRequest {
 
 impl CompileRequest {
     fn check(arguments: CheckArgs) -> Self {
-        let package_dir = arguments.package.package_dir;
+        let input = arguments.package.input;
         Self {
             command: CompileCommand::Check,
             target: arguments
                 .package
                 .target
                 .map_or_else(Target::host, Target::from),
-            output_directory: package_dir.join("build"),
-            package_dir,
+            output_directory: default_output_directory(&input),
+            input,
+            output_file: None,
             optimization: Optimization::Debug,
             keep_generated_c: false,
             c_compiler: None,
@@ -248,45 +310,238 @@ impl CompileRequest {
     }
 
     fn build(command: CompileCommand, arguments: BuildArgs) -> Self {
-        let package_dir = arguments.package.package_dir;
-        let output_directory = arguments
+        Self::native(
+            command,
+            arguments.package,
+            arguments.native,
+            arguments.output,
+        )
+    }
+
+    fn native(
+        command: CompileCommand,
+        package: PackageArgs,
+        native: NativeBuildArgs,
+        output_file: Option<PathBuf>,
+    ) -> Self {
+        let input = package.input;
+        let output_directory = native
             .out_dir
-            .unwrap_or_else(|| package_dir.join("build"));
+            .unwrap_or_else(|| default_output_directory(&input));
         Self {
             command,
-            target: arguments
-                .package
-                .target
-                .map_or_else(Target::host, Target::from),
-            package_dir,
-            optimization: if arguments.release {
+            target: package.target.map_or_else(Target::host, Target::from),
+            input,
+            optimization: if native.release {
                 Optimization::Release
             } else {
                 Optimization::Debug
             },
             output_directory,
-            keep_generated_c: arguments.keep_c,
-            c_compiler: arguments.cc,
-            c_flags: arguments.c_flag,
+            output_file,
+            keep_generated_c: native.keep_c,
+            c_compiler: native.cc,
+            c_flags: native.c_flag,
         }
     }
 }
 
+fn default_output_directory(input: &std::path::Path) -> PathBuf {
+    if input.is_file() || input.extension().and_then(|extension| extension.to_str()) == Some("elx")
+    {
+        input
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("build")
+    } else {
+        input.join("build")
+    }
+}
+
+fn parse_line_length(value: &str) -> Result<usize, String> {
+    let line_length = value
+        .parse::<usize>()
+        .map_err(|_| "line length must be a positive integer".to_string())?;
+    if line_length == 0 {
+        Err("line length must be greater than zero".to_string())
+    } else {
+        Ok(line_length)
+    }
+}
+
 fn main() -> ExitCode {
-    match Cli::parse().command {
-        Command::Check(arguments) => compile_package(CompileRequest::check(arguments)),
-        Command::Build(arguments) => {
+    let arguments = Cli::parse();
+    match arguments.command {
+        Some(Command::Check(arguments)) => compile_package(CompileRequest::check(arguments)),
+        Some(Command::Build(arguments)) => {
             compile_package(CompileRequest::build(CompileCommand::Build, arguments))
         }
-        Command::Run(arguments) => {
+        Some(Command::Run(arguments)) => {
             compile_package(CompileRequest::build(CompileCommand::Run, arguments))
         }
-        Command::Init(arguments) => initialize_package(arguments),
-        Command::Dump(arguments) => dump_package(arguments),
-        Command::Doc(arguments) => document_package(arguments),
-        Command::Test(arguments) => test_package(arguments),
-        Command::Conformance(arguments) => test_packages(arguments),
+        Some(Command::Init(arguments)) => initialize_package(arguments),
+        Some(Command::Dump(arguments)) => dump_package(arguments),
+        Some(Command::Fmt(arguments)) => format_input(arguments),
+        Some(Command::Doc(arguments)) => document_package(arguments),
+        Some(Command::Test(arguments)) => test_package(arguments),
+        Some(Command::Conformance(arguments)) => test_packages(arguments),
+        None => compile_package(CompileRequest::native(
+            CompileCommand::Build,
+            PackageArgs {
+                input: arguments
+                    .direct
+                    .source
+                    .expect("Clap requires SOURCE when no subcommand is present"),
+                target: arguments.direct.target,
+            },
+            arguments.direct.native,
+            arguments.direct.output,
+        )),
     }
+}
+
+fn format_input(arguments: FmtArgs) -> ExitCode {
+    let mut sources = SourceManager::new();
+    let is_file_input = arguments.input.is_file()
+        || arguments
+            .input
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("elx");
+    let (mut paths, configured_line_length) = if is_file_input {
+        if arguments
+            .input
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("elx")
+        {
+            render_diagnostics(
+                &sources,
+                &[Diagnostic::new(
+                    elamite::diagnostics::Category::Formatting,
+                    format!(
+                        "format input {} must have the `.elx` extension",
+                        arguments.input.display()
+                    ),
+                )],
+            );
+            return ExitCode::FAILURE;
+        }
+        (
+            vec![arguments.input],
+            elamite::formatter::DEFAULT_LINE_LENGTH,
+        )
+    } else {
+        let manifest_path = arguments.input.join("elamite.toml");
+        let package = match Package::load(&manifest_path, &mut sources) {
+            Ok(package) => package,
+            Err(diagnostics) => {
+                render_diagnostics(&sources, &diagnostics);
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut paths = vec![package.manifest_dir.join(&package.manifest.root)];
+        paths.extend(package.modules.into_values());
+        (paths, package.manifest.format_line_length)
+    };
+    paths.sort();
+    paths.dedup();
+    let options = FormatOptions {
+        line_length: arguments.line_length.unwrap_or(configured_line_length),
+    };
+
+    let mut changes = Vec::<(PathBuf, String)>::new();
+    let mut diagnostics = Vec::new();
+    for path in paths {
+        let file = match sources.load_file(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                diagnostics.push(Diagnostic::new(
+                    elamite::diagnostics::Category::Formatting,
+                    error.to_string(),
+                ));
+                continue;
+            }
+        };
+        let source = sources.text(file);
+        match format_source(file, source, options) {
+            Ok(formatted) if formatted != source => changes.push((path, formatted)),
+            Ok(_) => {}
+            Err(mut errors) => diagnostics.append(&mut errors),
+        }
+    }
+    if !diagnostics.is_empty() {
+        render_diagnostics(&sources, &diagnostics);
+        return ExitCode::FAILURE;
+    }
+    if arguments.check {
+        if changes.is_empty() {
+            return ExitCode::SUCCESS;
+        }
+        let diagnostics = changes
+            .iter()
+            .map(|(path, _)| {
+                Diagnostic::new(
+                    elamite::diagnostics::Category::Formatting,
+                    format!("{} is not formatted", path.display()),
+                )
+            })
+            .collect::<Vec<_>>();
+        render_diagnostics(&sources, &diagnostics);
+        return ExitCode::FAILURE;
+    }
+
+    for (path, formatted) in changes {
+        if let Err(error) = replace_file_atomically(&path, formatted.as_bytes()) {
+            render_diagnostics(
+                &sources,
+                &[Diagnostic::new(
+                    elamite::diagnostics::Category::Formatting,
+                    format!("cannot replace {}: {error}", path.display()),
+                )],
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn replace_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("source");
+    let permissions = fs::metadata(path)?.permissions();
+    for attempt in 0..100u32 {
+        let temporary = parent.join(format!(
+            ".{file_name}.elamite-fmt-{}-{attempt}",
+            std::process::id()
+        ));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = (|| {
+            file.write_all(contents)?;
+            file.sync_all()?;
+            fs::set_permissions(&temporary, permissions.clone())?;
+            fs::rename(&temporary, path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a temporary formatter file",
+    ))
 }
 
 fn initialize_package(arguments: InitArgs) -> ExitCode {
@@ -309,13 +564,13 @@ fn initialize_package(arguments: InitArgs) -> ExitCode {
 }
 
 fn dump_package(arguments: DumpArgs) -> ExitCode {
-    let manifest_path = arguments.package.package_dir.join("elamite.toml");
+    let input = arguments.package.input;
     let target = arguments
         .package
         .target
         .map_or_else(Target::host, Target::from);
     let mut sources = SourceManager::new();
-    let graph = match PackageGraph::resolve(&manifest_path, &mut sources) {
+    let graph = match PackageGraph::resolve_input(&input, &mut sources) {
         Ok(graph) => graph,
         Err(diagnostics) => {
             render_diagnostics(&sources, &diagnostics);
@@ -400,8 +655,22 @@ fn test_packages(arguments: ConformanceArgs) -> ExitCode {
 }
 
 fn test_package(arguments: PackageTestArgs) -> ExitCode {
-    let request = CompileRequest::build(CompileCommand::Build, arguments.build);
-    let manifest_path = request.package_dir.join("elamite.toml");
+    let PackageTestArgs {
+        package_dir,
+        target,
+        native,
+        filter,
+    } = arguments;
+    let request = CompileRequest::native(
+        CompileCommand::Build,
+        PackageArgs {
+            input: package_dir,
+            target,
+        },
+        native,
+        None,
+    );
+    let manifest_path = request.input.join("elamite.toml");
     let mut sources = SourceManager::new();
     let graph = match PackageGraph::resolve(&manifest_path, &mut sources) {
         Ok(graph) => graph,
@@ -422,7 +691,7 @@ fn test_package(arguments: PackageTestArgs) -> ExitCode {
                 c_compiler: request.c_compiler,
                 c_flags: request.c_flags,
             },
-            filter: arguments.filter,
+            filter,
             runtime_environment: Vec::new(),
         },
     );
@@ -533,23 +802,24 @@ fn write_captured_output(
 }
 
 fn compile_package(request: CompileRequest) -> ExitCode {
-    let manifest_path = request.package_dir.join("elamite.toml");
     let mut sources = SourceManager::new();
-    match PackageGraph::resolve(&manifest_path, &mut sources) {
+    match PackageGraph::resolve_input(&request.input, &mut sources) {
         Ok(graph) => {
             if request.command != CompileCommand::Check {
-                let artifact = match build(
-                    &graph,
-                    &mut sources,
-                    &BuildOptions {
-                        target: request.target,
-                        optimization: request.optimization,
-                        output_directory: request.output_directory,
-                        keep_generated_c: request.keep_generated_c,
-                        c_compiler: request.c_compiler,
-                        c_flags: request.c_flags,
-                    },
-                ) {
+                let output_file = request.output_file;
+                let options = BuildOptions {
+                    target: request.target,
+                    optimization: request.optimization,
+                    output_directory: request.output_directory,
+                    keep_generated_c: request.keep_generated_c,
+                    c_compiler: request.c_compiler,
+                    c_flags: request.c_flags,
+                };
+                let result = match output_file {
+                    Some(output) => build_to(&graph, &mut sources, &options, &output),
+                    None => build(&graph, &mut sources, &options),
+                };
+                let artifact = match result {
                     Ok(artifact) => artifact,
                     Err(diagnostics) => {
                         render_diagnostics(&sources, &diagnostics);
@@ -569,10 +839,6 @@ fn compile_package(request: CompileRequest) -> ExitCode {
                     return result.status.code().map_or(ExitCode::FAILURE, |code| {
                         ExitCode::from(u8::try_from(code).unwrap_or(1))
                     });
-                }
-                println!("built {}", artifact.path.display());
-                if let Some(path) = artifact.generated_c_path {
-                    println!("generated C {}", path.display());
                 }
                 return ExitCode::SUCCESS;
             }

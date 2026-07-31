@@ -27,11 +27,25 @@ impl TestTree {
     }
 
     fn package(&self, relative: &str, files: &[(&str, &str)]) -> PathBuf {
+        self.package_with_dependencies(relative, "exe", &[], files)
+    }
+
+    fn package_with_dependencies(
+        &self,
+        relative: &str,
+        target_kind: &str,
+        dependencies: &[(&str, &str)],
+        files: &[(&str, &str)],
+    ) -> PathBuf {
         let directory = self.root.join(relative);
         fs::create_dir_all(directory.join("src")).expect("create package source directory");
-        let manifest = format!(
-            "[package]\nname = \"{relative}\"\nversion = \"0.1.0\"\ntarget_kind = \"exe\"\n"
+        let mut manifest = format!(
+            "[package]\nname = \"{relative}\"\nversion = \"0.1.0\"\ntarget_kind = \
+             \"{target_kind}\"\n"
         );
+        for (alias, path) in dependencies {
+            manifest.push_str(&format!("\n[dependencies.{alias}]\npath = \"{path}\"\n"));
+        }
         fs::write(directory.join("elamite.toml"), manifest).expect("write manifest");
         for (path, source) in files {
             let path = directory.join(path);
@@ -92,7 +106,11 @@ fn render(sources: &SourceManager, diagnostics: &[Diagnostic]) -> String {
 fn check_output(source: &str) -> (SourceManager, CheckOutput) {
     let tree = TestTree::new("case");
     let package = tree.package("demo", &[("src/main.elx", source)]);
-    let (sources, resolved) = resolve_package(&package);
+    check_package_output(&package)
+}
+
+fn check_package_output(package: &Path) -> (SourceManager, CheckOutput) {
+    let (sources, resolved) = resolve_package(package);
     let mut typed = resolve_types(&resolved);
     assert!(
         typed.diagnostics.is_empty(),
@@ -586,6 +604,149 @@ fn main() -> ():
     let point = Point { x, y }
     println(f"{point.x}, {point.y}")
 "#,
+    );
+}
+
+#[test]
+fn enforces_struct_field_visibility_across_packages() {
+    let tree = TestTree::new("field-visibility");
+    tree.package_with_dependencies(
+        "records",
+        "lib",
+        &[],
+        &[(
+            "src/lib.elx",
+            r#"
+fn increment(value: i32) -> i32:
+    return value + 1
+
+pub struct PublicRecord:
+    pub value: i32
+    pub callback: &fn(i32) -> i32
+
+pub struct GuardedRecord:
+    pub visible: i32
+    hidden: i32
+    hidden_callback: &fn(i32) -> i32
+
+pub fn public_record() -> PublicRecord:
+    return PublicRecord{value: 1, callback: increment}
+
+pub fn guarded_record() -> GuardedRecord:
+    return GuardedRecord{
+        visible: 1,
+        hidden: 2,
+        hidden_callback: increment,
+    }
+"#,
+        )],
+    );
+    let public_consumer = tree.package_with_dependencies(
+        "public_consumer",
+        "exe",
+        &[("records", "../records")],
+        &[(
+            "src/main.elx",
+            r#"
+use records.PublicRecord
+use records.GuardedRecord
+use records.guarded_record
+use records.public_record
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn read(record: PublicRecord) -> i32:
+    match record:
+        PublicRecord { value, .. }:
+            return value
+
+fn read_visible(record: GuardedRecord) -> i32:
+    match record:
+        GuardedRecord { visible, .. }:
+            return visible
+
+fn main():
+    var record = public_record()
+    println(record.value)
+    record.value = 2
+    let value = &record.value
+    println(record.callback(40))
+    let constructed = PublicRecord{value: 3, callback: increment}
+    println(read(constructed))
+    println(read_visible(guarded_record()))
+"#,
+        )],
+    );
+    let (sources, public_output) = check_package_output(&public_consumer);
+    assert!(
+        public_output.diagnostics.is_empty(),
+        "{}",
+        render(&sources, &public_output.diagnostics)
+    );
+
+    let private_consumer = tree.package_with_dependencies(
+        "private_consumer",
+        "exe",
+        &[("records", "../records")],
+        &[(
+            "src/main.elx",
+            r#"
+use records.GuardedRecord
+use records.guarded_record
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main():
+    var record = guarded_record()
+    println(record.hidden)
+    record.hidden = 3
+    let hidden_reference = &record.hidden
+    println(record.hidden_callback(40))
+
+    let hidden = 4
+    let forged = GuardedRecord{
+        visible: 1,
+        hidden,
+        hidden_callback: increment,
+    }
+    let omitted = GuardedRecord{visible: 1}
+
+    match record:
+        GuardedRecord { hidden, .. }:
+            println(hidden)
+"#,
+        )],
+    );
+    let (sources, private_output) = check_package_output(&private_consumer);
+    let visibility = private_output
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.category == Category::Visibility)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        visibility.len(),
+        9,
+        "{}",
+        render(&sources, &private_output.diagnostics)
+    );
+    assert!(
+        visibility.iter().all(|diagnostic| {
+            diagnostic.message.contains("package-private")
+                && diagnostic.primary.is_some()
+                && diagnostic.related.len() == 1
+        }),
+        "{}",
+        render(&sources, &private_output.diagnostics)
+    );
+    assert!(
+        private_output
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.category == Category::Visibility),
+        "{}",
+        render(&sources, &private_output.diagnostics)
     );
 }
 

@@ -1,9 +1,12 @@
+struct Test:
+    pub x: i32
+
 fn return_tuple() -> (i32, i32):
     return (0, 42)
 
 fn main():
-    let (a, b) = return_tuple()
-    println(f"{a}, {b}")
+    let t = Test{x: 4}
+    println(f"{t.x}")
 
 use std.testing.assert as assert
 
