@@ -17,6 +17,9 @@ implementation.
   language to its specified boundaries and records, in
   [`known_failures`](examples/adversarial/known_failures), the cases where
   `SPEC.md` and the compiler currently disagree.
+- [`examples/adversarial_macros`](examples/adversarial_macros) does the same
+  for the `SPEC.md` §12 compile-time surface; it requires `--unstable-macros`
+  and is checked rather than run until the bounded interpreter exists.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.

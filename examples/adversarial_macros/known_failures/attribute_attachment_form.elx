@@ -1,0 +1,31 @@
+// FINDING M2 — a user-defined attribute cannot be attached.
+//
+// SPEC 12.5: "With no explicit arguments the short form is `@attr(path)`",
+// otherwise `@attr(path(...))`.
+//
+// Expected (once execution lands): the attachment resolves `tag` in the
+//           attribute namespace, where it is already collected.
+// Actual:   error: unknown compiler attribute `@tag`
+//
+// Both `@attr(tag)` and `@attr(tag("x"))` produce the same message. The
+// wrapper unwraps its argument and then looks the inner name up among the
+// compiler-defined attributes (`@importc`, `@exportc`), never consulting the
+// attribute namespace that src/expansion/namespace.rs already populates.
+//
+// Attachment is listed in the pending "Interpreter-backed macros, attributes,
+// and derives" milestone, so the missing behavior is on plan; the diagnostic
+// misattributing a declared user attribute to the compiler-defined set is the
+// reportable part.
+//
+// Run with: elamc check attribute_attachment_form.elx --unstable-macros
+
+attr tag(target: std.ast.StructDefinition) -> std.ast.StructDefinition:
+    return target
+
+@attr(tag)
+struct Thing:
+    id: i32
+
+fn main():
+    let thing = Thing { id: 1 }
+    println(f"{thing.id}")

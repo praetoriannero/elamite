@@ -1631,7 +1631,7 @@ impl<'a> Parser<'a> {
             TokenKind::Caret => (6, 7, false),
             TokenKind::Amp => (7, 8, false),
             TokenKind::Shl | TokenKind::Shr => (8, 9, false),
-            TokenKind::Plus | TokenKind::Minus => (9, 10, false),
+            TokenKind::Plus | TokenKind::PlusPlus | TokenKind::Minus => (9, 10, false),
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => (10, 11, false),
             _ => return None,
         })

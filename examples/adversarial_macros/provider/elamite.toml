@@ -1,0 +1,4 @@
+[package]
+name = "provider"
+version = "0.1.0"
+target_kind = "lib"

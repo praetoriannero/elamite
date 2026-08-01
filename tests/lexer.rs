@@ -194,7 +194,7 @@ fn removed_and_contextual_words_are_ordinary_identifiers() {
 #[test]
 fn recognizes_surface_punctuation_and_operators() {
     let output = lex_text(
-        "( ) [ ] { } , ; : . .. ... @ $ ? -> = + - * / % & | ^ ~ ! << >> == != <= >= < > && || \
+        "( ) [ ] { } , ; : . .. ... @ $ ? -> = + ++ - * / % & | ^ ~ ! << >> == != <= >= < > && || \
          += -= *= /= %= &= |= ^= <<= >>=\n",
     );
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);

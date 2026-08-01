@@ -135,6 +135,7 @@ pub enum TokenKind {
 
     Assign,
     Plus,
+    PlusPlus,
     Minus,
     Star,
     Slash,

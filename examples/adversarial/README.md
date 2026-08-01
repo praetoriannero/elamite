@@ -17,7 +17,7 @@ Two halves:
 ## Running it
 
 ```sh
-cargo run -- run examples/adversarial            # ~200 observations
+cargo run -- run examples/adversarial            # 411 observations
 cargo run -- test examples/adversarial           # 26 trap and assertion tests
 cargo run -- run examples/adversarial --release
 cargo run -- run examples/adversarial --target=x86
@@ -48,6 +48,7 @@ cargo run -- build examples/adversarial/known_failures/variant_literal_arm.elx
 | `closures.elx` | 5.1 | all five capture forms in one closure, capture evaluation order, snapshot vs alias semantics under closure copies, return inference, `Callable` bounds and `&Callable` erasure, escaping environments, closure-local `defer` |
 | `generics.elx` | 6 | inference from arguments and from expected types, explicit argument lists, distinct instantiations, generic implementations, finite mutual recursion across instantiations, instantiated generic function references |
 | `traits.elx` | 6 | inherent over trait precedence, `Type.Trait.method` qualification, default methods and overrides in the vtable, contextual and explicit trait-object conversion, heterogeneous objects, mutable trait objects, non-object-safe traits used statically |
+| `concat.elx` | 7 | `++` on `str`, `String`, and `Vec`: result types, left-before-right evaluation, chained order, operand independence, self-concatenation, additive precedence against equality and relational operators, empty and nested operands |
 | `control.elx` | 7 | left-to-right evaluation of arguments and operands, short-circuiting, all fourteen precedence levels, compound-assignment destination evaluated once, source-order arms, guards, alternatives, every pattern shape, explicit dereference for reference matching, nested loop control |
 | `text.elx` | 4.1, 7.2 | `str`/`String` materialization and independence, every escape plus direct Unicode, interpolation order, `{{`/`}}`, user `Display` through `Formatter`, nested and dynamically dispatched `Display` |
 | `errors.elx` | 8 | `?` with an exact error type and single operand evaluation, explicit conversion of a foreign error, reverse and inner-first cleanup order, `defer:` blocks, execution-time argument values, cleanup on all five exit edges, a returned handle closed by its own `defer` |
@@ -55,8 +56,10 @@ cargo run -- build examples/adversarial/known_failures/variant_literal_arm.elx
 
 ## Findings
 
-Fourteen places where the implementation and the documents disagree. Ordered
-by severity. Numbers match the `known_failures/` files.
+Fifteen places where the implementation and the documents disagree. Ordered
+by severity within each group. Numbers match the `known_failures/` files.
+Four more, specific to the compile-time surface, are in the sibling
+[`examples/adversarial_macros`](../adversarial_macros) package.
 
 ### Silently accepted, then broken
 
@@ -93,6 +96,7 @@ comparisons should be fixed together.
 | --- | --- | --- | --- |
 | 3 | `variadic_iteration.elx` | SPEC 5's own normative example iterates a variadic tail with `for` | SPEC 7.1 restricts `for` to arrays, `Vec`, `Map`, and `Set`, which excludes the slice `[T]` that SPEC 5 binds. The example in the specification does not compile. Indexing works; `rest.len()` also fails, leaving no portable way to bound the index |
 | 4 | `shift_operand_typing.elx` | SPEC 7 "A shift count must have an unsigned integer type" | the implementation instead requires both operands to share one concrete type, so `1i32 << 3u32` is rejected and `1i32 << 3i32` — a signed count — is accepted. Wrong in both directions. The runtime width check is correct |
+| 15 | `non_final_variadic.elx` | SPEC 5 "Variadics ... may appear only once, as the final parameter" | a misplaced or repeated variadic is accepted, the marker is silently dropped from the checker's view, and the backend still emits a slice parameter — so a call that type-checks reaches the C compiler as `incompatible type for argument 1`. A call with the "right" arity instead blames the call site for the malformed declaration |
 | 12 | `static_arithmetic_evidence.elx` | SPEC 4.1 "A statically evident invalid literal, conversion, or arithmetic operation is a compile-time error" | `2147483647 + 1`, `1i32 << 32i32`, and `1i32 / 0i32` all compile and trap at run time. The array half of the same rule *is* implemented. `LEDGER.md` 4.1 assigns static detection to M6 and marks the row complete |
 
 ### Ambiguity worth settling
@@ -100,6 +104,14 @@ comparisons should be fixed together.
 | # | File | Question |
 | --- | --- | --- |
 | 14 | `callable_erasure_of_function_reference.elx` | `LEDGER.md` 5 says "named safe function references also satisfy matching callable APIs; `&Callable` provides erasure". A `Callable` bound does accept a named function reference; erasing that reference behind `&Callable` does not. SPEC 6 arguably justifies the rejection, since the target of an `&fn` is a function rather than a type implementing `Callable`. SPEC 5.1 should say so explicitly |
+
+## Compile-time surface
+
+`SPEC.md` §12 and the compile-time half of `++` live in the sibling
+[`examples/adversarial_macros`](../adversarial_macros) package, which needs
+`--unstable-macros` and is checked rather than run until the bounded
+interpreter lands. Its findings are listed in that package's README; the one
+that is not macro-specific, finding 15 above, is filed here instead.
 
 ## Behaviors confirmed correct
 
@@ -124,6 +136,10 @@ break and did not:
   `RuntimeTrap` keeps its own nominal identity;
 - a duplicate literal map key replaces, a duplicate set element collapses, and
   both report the displaced value or membership transition;
+- `++` rejects every operand shape outside its contract — numeric operands,
+  mixed `str`/`String`, `Set`, `Map`, fixed arrays, `bool`, `a ++= b`, and both
+  `++a` and `a++` — while `str ++ str` stays `str` and `String ++ String` stays
+  `String`;
 - `check`/`build` correctly reject a statically known out-of-bounds array
   index, a chained comparison, a reference to a non-addressable expression, a
   duplicate module item, an alternative pattern binding different names, and a

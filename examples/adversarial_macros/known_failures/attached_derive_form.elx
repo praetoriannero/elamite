@@ -1,0 +1,32 @@
+// FINDING M3 — the general attached derive form is unavailable, including for
+// compiler-supported derives.
+//
+// SPEC 4.3: "The general derivation form is an attached `@derive(...)`
+// attribute immediately before a struct or enum." The compact
+// `struct Point(Default):` spelling is described as the *compatibility* form.
+// SPEC 12.6 uses `@derive(Name, ...)` for user derives.
+//
+// Expected (once execution lands): `@derive(Default)` behaves exactly like
+//           `struct Point(Default):`.
+// Actual:   error: unknown compiler attribute `@Default`
+//
+// `@derive(...)` is not recognized as a derivation form at all: its arguments
+// are unwrapped and each is looked up as a compiler-defined attribute name.
+// A user derive attached the same way reports the same message with the
+// trait's name.
+//
+// "Built-in compatibility and migration" in the pending "Interpreter-backed
+// macros, attributes, and derives" milestone owns the attached built-in form,
+// so this is on plan. It is recorded because SPEC 4.3 presents the attached
+// spelling as the general one while only the compact spelling works.
+//
+// Run with: elamc check attached_derive_form.elx --unstable-macros
+
+@derive(Default)
+struct Point:
+    x: i32
+    y: i32
+
+fn main():
+    let point = Point.default()
+    println(f"{point.x}/{point.y}")

@@ -1,0 +1,10 @@
+[package]
+name = "adversarial_macros"
+version = "0.1.0"
+target_kind = "exe"
+
+[dependencies.provider]
+path = "provider"
+
+[format]
+line_length = 88

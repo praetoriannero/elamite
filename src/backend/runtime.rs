@@ -234,7 +234,8 @@ impl<'a> CEmitter<'a> {
                  \x20\x20\x20\x20void *result = malloc(byte_count);\n\
                  \x20\x20\x20\x20if (result == NULL) exit(101);\n\
                  \x20\x20\x20\x20return result;\n\
-                 }\n\n",
+                 }\n\
+                 void el_out_of_memory(void) { exit(101); }\n\n",
             );
             return;
         }
@@ -469,6 +470,25 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20if (value.length != 0U) memcpy(owned.bytes, value.bytes, value.length);\n\
              \x20\x20\x20\x20owned.bytes[value.length] = '\\0';\n\
              \x20\x20\x20\x20return owned;\n\
+             }\n\
+             el_str el_concat_str(el_str left, el_str right) {\n\
+             \x20\x20\x20\x20el_str result = {NULL, 0U};\n\
+             \x20\x20\x20\x20if (left.length > SIZE_MAX - right.length) el_out_of_memory();\n\
+             \x20\x20\x20\x20result.length = left.length + right.length;\n\
+             \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc(result.length == 0U ? 1U : result.length);\n\
+             \x20\x20\x20\x20if (left.length != 0U) memcpy((char *)result.bytes, left.bytes, left.length);\n\
+             \x20\x20\x20\x20if (right.length != 0U) memcpy((char *)result.bytes + left.length, right.bytes, right.length);\n\
+             \x20\x20\x20\x20return result;\n\
+             }\n\
+             el_string el_concat_string(el_string left, el_string right) {\n\
+             \x20\x20\x20\x20el_string result = {NULL, 0U};\n\
+             \x20\x20\x20\x20if (left.length >= SIZE_MAX - right.length) el_out_of_memory();\n\
+             \x20\x20\x20\x20result.length = left.length + right.length;\n\
+             \x20\x20\x20\x20result.bytes = (char *)el_runtime_alloc(result.length + 1U);\n\
+             \x20\x20\x20\x20if (left.length != 0U) memcpy(result.bytes, left.bytes, left.length);\n\
+             \x20\x20\x20\x20if (right.length != 0U) memcpy(result.bytes + left.length, right.bytes, right.length);\n\
+             \x20\x20\x20\x20result.bytes[result.length] = '\\0';\n\
+             \x20\x20\x20\x20return result;\n\
              }\n\n\
              bool el_text_equal(const char *a, size_t a_length, const char *b, size_t b_length) {\n\
              \x20\x20\x20\x20return a_length == b_length && (a_length == 0U || memcmp(a, b, a_length) == 0);\n\
@@ -1022,6 +1042,27 @@ impl<'a> CEmitter<'a> {
     pub(super) fn emit_standard_runtime_helpers(&mut self) {
         let calls = self.standard_call_instances();
         let literals = self.collection_literal_instances();
+        let mut concatenated_types = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        destination,
+                        value:
+                            Rvalue::Binary {
+                                operator: BinaryOperator::Concatenate,
+                                ..
+                            },
+                        ..
+                    } = instruction
+                    {
+                        concatenated_types.insert(
+                            self.resolve_alias(function.temporary_types[destination.index()]),
+                        );
+                    }
+                }
+            }
+        }
         let mut collections = BTreeSet::new();
         for operation in calls.keys() {
             if let Some(collection) = standard_collection_type(*operation) {
@@ -1049,7 +1090,13 @@ impl<'a> CEmitter<'a> {
             };
             match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
                 ("Vec", [element]) => {
-                    self.emit_vec_helpers(collection, *element, &calls, &literals);
+                    self.emit_vec_helpers(
+                        collection,
+                        *element,
+                        &calls,
+                        &literals,
+                        concatenated_types.contains(&self.resolve_alias(collection)),
+                    );
                 }
                 ("Map", [key, value]) => {
                     self.emit_map_helpers(collection, *key, *value, &calls, &literals);
@@ -1112,6 +1159,7 @@ impl<'a> CEmitter<'a> {
         element: TypeId,
         calls: &BTreeMap<StandardCall, (TypeId, Span)>,
         literals: &BTreeSet<(CollectionLiteralKind, TypeId, usize)>,
+        concatenate_used: bool,
     ) {
         let Some(collection_type) = self.c_type(collection, None) else {
             return;
@@ -1132,6 +1180,32 @@ impl<'a> CEmitter<'a> {
             "    result->length = 0U;\n    result->capacity = 0U;\n    result->values = NULL;\n    \
              return result;\n}\n\n",
         );
+
+        if concatenate_used {
+            self.emit_copy_helper(element, None);
+            let element_copy = copy_helper_name(self.resolve_alias(element));
+            let concatenate = concatenate_name(collection);
+            let _ = writeln!(
+                self.output,
+                "static {collection_type} {concatenate}({collection_type} left, {collection_type} right) {{\n    \
+                 {collection_type} result = {new}();\n    uintptr_t length;\n    \
+                 if (left->length > UINTPTR_MAX - right->length) el_out_of_memory();\n    \
+                 length = left->length + right->length;\n    \
+                 if (length > SIZE_MAX / sizeof({element_type})) el_out_of_memory();\n    \
+                 result->length = length;\n    result->capacity = length;\n    \
+                 if (length != 0U) {{"
+            );
+            let bytes = format!("length * sizeof({element_type})");
+            self.emit_runtime_allocate("result->values", &bytes, scanned);
+            let _ = writeln!(
+                self.output,
+                "    }}\n    for (uintptr_t index = 0U; index < left->length; ++index) \
+                 result->values[index] = {element_copy}(left->values[index]);\n    \
+                 for (uintptr_t index = 0U; index < right->length; ++index) \
+                 result->values[left->length + index] = {element_copy}(right->values[index]);\n    \
+                 return result;\n}}\n"
+            );
+        }
 
         let operation = StandardCall::VecLen { collection };
         if calls.contains_key(&operation) {

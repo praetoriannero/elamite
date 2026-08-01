@@ -472,6 +472,7 @@ fn checked_binary_name(operator: BinaryOperator) -> Option<&'static str> {
 fn c_binary_operator(operator: BinaryOperator) -> Option<&'static str> {
     Some(match operator {
         BinaryOperator::Add => "+",
+        BinaryOperator::Concatenate => return None,
         BinaryOperator::Subtract => "-",
         BinaryOperator::Multiply => "*",
         BinaryOperator::Divide => "/",

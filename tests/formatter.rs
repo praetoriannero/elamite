@@ -81,6 +81,25 @@ fn formats_a_single_file_quietly_with_the_default_width() {
 }
 
 #[test]
+fn formats_concatenation_as_a_spaced_binary_operator() {
+    let package = TestPackage::new(
+        "concatenation",
+        None,
+        "fn main() -> ():\n    let message=\"hello\"++\"world\"\n    println(message)\n",
+    );
+    let output = run_fmt(&package.source_path(), &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        package.source(),
+        "fn main() -> ():\n    let message = \"hello\" ++ \"world\"\n    println(message)\n"
+    );
+}
+
+#[test]
 fn package_formatting_uses_manifest_width_and_cli_override() {
     let source = "fn calculate(first: i32, second: i32, third: i32) -> i32:\n    return first\n";
     let package = TestPackage::new("configured", Some(40), source);

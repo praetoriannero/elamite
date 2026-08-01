@@ -361,7 +361,7 @@
         },
         {
           "name": "keyword.operator.arithmetic.elx",
-          "match": "[+\\-*/%]"
+          "match": "\\+\\+|[+\\-*/%]"
         },
         {
           "name": "keyword.operator.comparison.elx",

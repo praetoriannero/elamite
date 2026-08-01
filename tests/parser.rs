@@ -655,6 +655,7 @@ fn respects_every_expression_precedence_level() {
         ("-value as i32", "CastExpression"),
         ("left as i32 * right", "Star"),
         ("left * middle + right", "Plus"),
+        ("left + middle ++ right", "PlusPlus"),
         ("left + middle << right", "Shl"),
         ("left << middle & right", "Amp"),
         ("left & middle ^ right", "Caret"),

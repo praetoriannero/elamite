@@ -1072,6 +1072,7 @@ fn punctuation(source: &str) -> Option<(TokenKind, usize)> {
         (">=", TokenKind::GreaterEq),
         ("&&", TokenKind::AndAnd),
         ("||", TokenKind::OrOr),
+        ("++", TokenKind::PlusPlus),
         ("+=", TokenKind::PlusAssign),
         ("-=", TokenKind::MinusAssign),
         ("*=", TokenKind::StarAssign),

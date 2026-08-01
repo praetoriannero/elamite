@@ -36,6 +36,7 @@ pub(super) fn unary_operator(kind: &TokenKind) -> Option<UnaryOperator> {
 pub(super) fn binary_operator(kind: &TokenKind) -> Option<BinaryOperator> {
     Some(match kind {
         TokenKind::Plus => BinaryOperator::Add,
+        TokenKind::PlusPlus => BinaryOperator::Concatenate,
         TokenKind::Minus => BinaryOperator::Subtract,
         TokenKind::Star => BinaryOperator::Multiply,
         TokenKind::Slash => BinaryOperator::Divide,

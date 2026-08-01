@@ -799,6 +799,28 @@ impl<'a> CEmitter<'a> {
     ) -> Option<String> {
         let left = temporary_name(left);
         let right = temporary_name(right);
+        if operator == BinaryOperator::Concatenate {
+            if let Some(primitive) = self.typed.types.expanded_primitive(ty) {
+                return match primitive {
+                    PrimitiveType::Str => Some(format!("el_concat_str({left}, {right})")),
+                    PrimitiveType::String => Some(format!("el_concat_string({left}, {right})")),
+                    _ => {
+                        self.type_error(ty, Some(span), "unsupported concatenation operand type");
+                        None
+                    }
+                };
+            }
+            let resolved = self.resolve_alias(ty);
+            if matches!(
+                self.typed.types.kind(resolved),
+                TypeKind::Builtin { builtin, arguments }
+                    if self.resolved.builtin_name(*builtin) == "Vec" && arguments.len() == 1
+            ) {
+                return Some(format!("{}({left}, {right})", concatenate_name(resolved)));
+            }
+            self.type_error(ty, Some(span), "unsupported concatenation operand type");
+            return None;
+        }
         if let Some(primitive) = self.typed.types.expanded_primitive(ty)
             && primitive.is_integer()
             && let Some(operation) = checked_binary_name(operator)

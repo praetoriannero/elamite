@@ -1,0 +1,78 @@
+// FINDING M4 — compile-time signatures are not validated yet.
+//
+// This file is a checklist for the pending "Compile-time checking and
+// lowering" package rather than a defect report: ROADMAP assigns admitted
+// signature checking to that package, and the completed "Compile-time
+// identities and namespace collection" package states that "Signature
+// semantics and execution remain later packages".
+//
+// Every declaration below is accepted today with no diagnostic. Each one
+// violates a stated SPEC 12.1 rule, so each should be rejected once signature
+// checking lands:
+//
+//   returns_runtime_type   SPEC 12.1: signatures "may use only the
+//                          compile-time value types admitted by `std.ast`".
+//   takes_runtime_type     same rule, in parameter position.
+//   takes_reference        SPEC 12.1: "they cannot accept or return runtime
+//                          references, raw pointers, or function values."
+//   takes_raw_pointer      same rule.
+//   misplaced_variadic     SPEC 5 requires a variadic to be final; see also
+//                          ../../adversarial/known_failures/non_final_variadic.elx,
+//                          where the same hole corrupts generated C for
+//                          ordinary functions.
+//   Marker (derive)        SPEC 12.1: "A derive has exactly its one implicit
+//                          target parameter and is never variadic."
+//
+// Macro *bodies* are also unchecked: a body may contain an obvious type error
+// (`let bad: i32 = "text"`) or call an ordinary runtime function, and neither
+// is diagnosed.
+//
+// Run with: elamc check signature_validation.elx --unstable-macros
+
+macro returns_runtime_type() -> i32:
+    return 1
+
+macro takes_runtime_type(value: i32) -> std.ast.Expression:
+    let result: std.ast.Expression = quote:
+        1
+    return result
+
+macro takes_reference(value: &std.ast.Expression) -> std.ast.Expression:
+    let result: std.ast.Expression = quote:
+        1
+    return result
+
+macro takes_raw_pointer(value: *std.ast.Expression) -> std.ast.Expression:
+    let result: std.ast.Expression = quote:
+        1
+    return result
+
+macro misplaced_variadic(
+    rest: ...std.ast.Expression,
+    tail: std.ast.Expression,
+) -> std.ast.Expression:
+    let result: std.ast.Expression = quote:
+        $tail
+    return result
+
+trait Marker:
+    fn marker() -> i32
+
+derive Marker(
+    target: std.ast.StructDefinition,
+    extra: std.ast.Expression,
+) -> std.ast.Implementation:
+    let result: std.ast.Implementation = quote:
+        impl Marker for Target:
+            fn marker() -> i32:
+                return 1
+    return result
+
+macro unchecked_body() -> std.ast.Expression:
+    let bad: i32 = "not an integer"
+    let result: std.ast.Expression = quote:
+        1
+    return result
+
+fn main():
+    println("signature checklist")

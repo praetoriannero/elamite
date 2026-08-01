@@ -17,5 +17,6 @@ pub fn main() -> ():
     generics.run()
     traits.run()
     control.run()
+    concat.run()
     text.run()
     errors.run()

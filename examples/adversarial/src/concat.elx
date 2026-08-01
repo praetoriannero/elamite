@@ -1,0 +1,122 @@
+/// # The concatenation operator (`SPEC.md` 7)
+///
+/// `++` concatenates two values of the same concatenable type, creates a new
+/// logical value, evaluates its left operand before its right, sits at
+/// additive precedence, and is distinct from numeric `+`. It is not an
+/// increment operator.
+///
+/// The compile-time AST list types that `SPEC.md` 7 also admits are exercised
+/// in the sibling `examples/adversarial_macros` package, because they exist
+/// only inside a compile-time declaration body.
+
+struct Tag(PartialEq):
+    name: str
+
+fn note(label: str, value: str) -> str:
+    println(f"  evaluating {label}")
+    return value
+
+/// Each concatenable type keeps its own result type.
+fn result_types() -> ():
+    let left: str = "ab"
+    let right: str = "cd"
+    println(f"str ++ str: {left ++ right}")
+    println(f"str result is str: {takes_str(left ++ right)}")
+
+    let owned_left = String.from("ef")
+    let owned_right = String.from("gh")
+    println(f"String ++ String: {owned_left ++ owned_right}")
+    println(f"String result is String: {takes_string(owned_left ++ owned_right)}")
+
+    let numbers = @vec[1, 2] ++ @vec[3]
+    println(f"Vec ++ Vec: len {numbers.len()} first {numbers[0]} last {numbers[2]}")
+
+fn takes_str(value: str) -> usize:
+    return 1
+
+fn takes_string(value: String) -> usize:
+    return 2
+
+/// The left operand is evaluated before the right, and a chain evaluates
+/// left to right.
+fn evaluation_order() -> ():
+    println("concatenation order:")
+    let pair = note("left", "a") ++ note("right", "b")
+    println(f"  pair: {pair}")
+
+    println("chained order:")
+    let triple = note("one", "1") ++ note("two", "2") ++ note("three", "3")
+    println(f"  triple: {triple}")
+
+/// The result is a new logical value: neither operand is aliased or consumed.
+fn operands_are_untouched() -> ():
+    var first = @vec[1]
+    let second = @vec[2]
+    let joined = first ++ second
+
+    first.append(9)
+
+    println(f"joined len: {joined.len()}, sources: {first.len()}/{second.len()}")
+    println(f"joined is independent: {joined[0]}/{joined[1]}")
+
+    // Concatenating a value with itself reads it twice without aliasing.
+    let text: str = "ab"
+    println(f"self concatenation: {text ++ text}")
+
+/// `++` sits at additive precedence, so it binds tighter than every
+/// comparison and looser than nothing that can apply to a sequence.
+fn precedence() -> ():
+    let left: str = "a"
+    let right: str = "b"
+    let whole: str = "ab"
+
+    // Parsed as `(left ++ right) == whole`.
+    println(f"tighter than equality: {left ++ right == whole}")
+
+    // Parsed as `(left ++ right) < right`.
+    println(f"tighter than relational: {left ++ right < right}")
+
+    // Explicit grouping agrees with the default associativity.
+    let tail: str = "c"
+    println(f"associativity: {left ++ right ++ tail == (left ++ right) ++ tail}")
+
+/// Empty operands and nested element types behave like any other value.
+fn edge_shapes() -> ():
+    let empty: Vec[i32] = Vec.new()
+    let filled = @vec[1, 2]
+    println(f"empty ++ filled: {(empty ++ filled).len()}")
+    println(f"filled ++ empty: {(filled ++ empty).len()}")
+    println(f"empty ++ empty: {(empty ++ empty).len()}")
+
+    let blank: str = ""
+    let text: str = "x"
+    println(f"blank ++ text: {blank ++ text}")
+
+    // Nested and aggregate element types concatenate structurally.
+    let nested = @vec[@vec[1]] ++ @vec[@vec[2, 3]]
+    println(f"nested vectors: {nested.len()} inner {nested[1].len()}")
+
+    let tags = @vec[Tag { name: "a" }] ++ @vec[Tag { name: "b" }]
+    println(f"struct elements: {tags.len()} second {tags[1].name}")
+
+/// `++` is a binary operator only. Rejected forms, each a compile error:
+///
+/// - `1 ++ 2`               numeric operands
+/// - `"a" ++ String.from("b")`  mixed `str` and `String`
+/// - `@set{1} ++ @set{2}`   unordered collections
+/// - `@map{"a": 1} ++ ...`  key-value collections
+/// - `[1, 2] ++ [3, 4]`     fixed arrays are not standard-library sequences
+/// - `true ++ false`        non-concatenable scalars
+/// - `a ++= b`              there is no compound concatenation assignment
+/// - `++a` / `a++`          `++` is not an increment operator
+fn rejected_forms() -> ():
+    println("rejected forms are listed in this function's documentation")
+
+pub fn run() -> ():
+    println("== 7 concatenation ==")
+    result_types()
+    evaluation_order()
+    operands_are_untouched()
+    precedence()
+    edge_shapes()
+    rejected_forms()

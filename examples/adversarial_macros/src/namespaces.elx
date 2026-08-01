@@ -1,0 +1,90 @@
+/// # Compile-time namespaces, imports, and visibility (`SPEC.md` 12.1)
+///
+/// Macros, attributes, and derives occupy three namespaces that are separate
+/// from each other and from the ordinary module-item namespace, and their
+/// imports follow the ordinary Section 2.3 rules.
+
+// Four declarations share the spelling `overloaded` across four namespaces
+// without conflicting.
+
+macro overloaded() -> std.ast.Expression:
+    let value: std.ast.Expression = quote:
+        1
+    return value
+
+attr overloaded(target: std.ast.StructDefinition) -> std.ast.StructDefinition:
+    return target
+
+trait overloaded_trait:
+    fn marker() -> i32
+
+derive overloaded_trait(
+    target: std.ast.StructDefinition,
+) -> std.ast.Implementation:
+    let value: std.ast.Implementation = quote:
+        impl overloaded_trait for Target:
+            fn marker() -> i32:
+                return 1
+    return value
+
+/// The ordinary namespace keeps its own `overloaded` binding.
+pub fn overloaded() -> i32:
+    return 1
+
+pub mod helpers:
+    pub macro helper_expression() -> std.ast.Expression:
+        let value: std.ast.Expression = quote:
+            2
+        return value
+
+    pub attr helper_attribute(
+        target: std.ast.StructDefinition,
+    ) -> std.ast.StructDefinition:
+        return target
+
+    /// Package-private, but reachable from any module of this package.
+    macro package_private() -> std.ast.Expression:
+        let value: std.ast.Expression = quote:
+            3
+        return value
+
+    pub use macro self.helper_expression as reexported_helper
+
+// Each namespace has its own import keyword.
+use macro root.namespaces.helpers.helper_expression
+use attr root.namespaces.helpers.helper_attribute
+
+// An alias resolves what would otherwise be a duplicate binding.
+use macro root.namespaces.helpers.reexported_helper as aliased_helper
+
+// A package-private declaration is importable inside its own package.
+use macro root.namespaces.helpers.package_private
+
+// The `self` path root is accepted in a compile-time import, exactly as in an
+// ordinary one.
+use macro self.overloaded as local_macro
+
+// A public declaration from a dependency crosses the package boundary.
+use macro provider.provided_expression
+use attr provider.provided_attribute
+use derive provider.Provided
+
+// A dependency's public re-export is importable under its re-exported name.
+use macro provider.reexported_expression
+
+/// Rejected namespace forms, each a compile error:
+///
+/// - declaring the same macro name twice in one module
+///   ("macro `name` is bound more than once in this module")
+/// - importing the same compile-time name twice without an alias
+/// - `use macro provider.package_private_expression`
+///   ("macro `package_private_expression` is package-private")
+/// - `pub use macro` of a package-private declaration, which reports the
+///   offending declaration as a related span
+/// - a compile-time declaration that is local to a function body, a struct
+///   member, a trait member, generic, or `unsafe`
+/// - a compile-time declaration with no explicit return type
+macro documents_rejected_namespace_forms() -> std.ast.Expression:
+    let value: std.ast.Expression = quote:
+        0
+    return value

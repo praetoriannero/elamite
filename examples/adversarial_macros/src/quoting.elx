@@ -1,0 +1,168 @@
+/// # Quotation and interpolation (`SPEC.md` 12.2, 12.3)
+///
+/// `quote:` introduces an indentation-delimited template whose expected
+/// `std.ast` role comes from a binding annotation or a return position.
+/// Every one of the twelve published roles appears below, together with
+/// `$name` scalar interpolation and `$(expression)` computed interpolation.
+
+// ---------------------------------------------------------------- scalars --
+
+macro quoted_expression(operand: std.ast.Expression) -> std.ast.Expression:
+    let value: std.ast.Expression = quote:
+        $operand + 1
+    return value
+
+macro quoted_pattern() -> std.ast.Pattern:
+    let value: std.ast.Pattern = quote:
+        Option.Some(payload)
+    return value
+
+macro quoted_type() -> std.ast.TypeSyntax:
+    let value: std.ast.TypeSyntax = quote:
+        Map[str, Vec[i32]]
+    return value
+
+macro quoted_identifier_role(name: std.ast.Expression) -> std.ast.Expression:
+    // A computed interpolation evaluates one compile-time expression and
+    // inserts its single AST value.
+    let value: std.ast.Expression = quote:
+        $(std.ast.literal(1)) + $name
+    return value
+
+// ------------------------------------------------------------------ lists --
+
+macro quoted_statements(bound: std.ast.Expression) -> std.ast.StatementList:
+    let value: std.ast.StatementList = quote:
+        let computed = $bound
+        println(f"{computed}")
+    return value
+
+macro quoted_items() -> std.ast.ItemList:
+    let value: std.ast.ItemList = quote:
+        fn generated_one() -> i32:
+            return 1
+
+        fn generated_two() -> i32:
+            return 2
+    return value
+
+macro quoted_item() -> std.ast.Item:
+    let value: std.ast.Item = quote:
+        fn generated_single() -> i32:
+            return 1
+    return value
+
+// ------------------------------------------------------------ definitions --
+
+macro quoted_struct() -> std.ast.StructDefinition:
+    let value: std.ast.StructDefinition = quote:
+        struct Generated:
+            id: u64
+            label: String
+    return value
+
+macro quoted_enum() -> std.ast.EnumDefinition:
+    let value: std.ast.EnumDefinition = quote:
+        enum GeneratedState:
+            Idle
+            Counted(i32)
+            Placed { x: i32, y: i32 }
+    return value
+
+macro quoted_function() -> std.ast.FunctionDefinition:
+    let value: std.ast.FunctionDefinition = quote:
+        pub fn generated(value: i32) -> i32:
+            if value > 0:
+                return value
+            return 0
+    return value
+
+macro quoted_field() -> std.ast.FieldDefinition:
+    let value: std.ast.FieldDefinition = quote:
+        identifier: u64
+    return value
+
+trait GeneratedMarker:
+    fn marker() -> i32
+
+macro quoted_implementation() -> std.ast.Implementation:
+    let value: std.ast.Implementation = quote:
+        impl GeneratedMarker for Generated:
+            fn marker() -> i32:
+                return 1
+    return value
+
+// ---------------------------------------------------------------- members --
+
+attr adds_members(
+    target: std.ast.StructDefinition,
+) -> std.ast.StructDefinition:
+    // A member list carries fields and methods together, and `++` joins it to
+    // the target's existing members (`SPEC.md` 7 and 12.3).
+    let additions: std.ast.MemberList = quote:
+        id: u64
+
+        pub fn identifier(self: &Self) -> u64:
+            return self.id
+
+    let combined = target.members() ++ additions
+    return target.with_members(combined)
+
+// ------------------------------------------------------------- structural --
+
+/// The role may come from the return position instead of a binding.
+macro role_from_return() -> std.ast.Expression:
+    return quote:
+        1 + 2
+
+/// A quote may be interpolated into another quote; the inner value keeps its
+/// own origin.
+macro nested_quotes() -> std.ast.Expression:
+    let inner: std.ast.Expression = quote:
+        1
+    let outer: std.ast.Expression = quote:
+        $inner + 2
+    return outer
+
+/// A variadic tail binds the ordinary `[T]` slice of syntax arguments.
+macro variadic_tail(
+    first: std.ast.Expression,
+    rest: ...std.ast.Expression,
+) -> std.ast.Expression:
+    let value: std.ast.Expression = quote:
+        $first
+    return value
+
+/// Quoted bodies keep ordinary indentation rules, including deeply nested
+/// blocks and multi-line delimited expressions.
+macro deep_indentation() -> std.ast.FunctionDefinition:
+    let value: std.ast.FunctionDefinition = quote:
+        fn nested(flag: bool) -> i32:
+            if flag:
+                for value in @vec[1, 2, 3]:
+                    if value > 1:
+                        return value
+            else:
+                match flag:
+                    true:
+                        return 1
+                    false:
+                        return 0
+            return 0
+    return value
+
+/// Rejected quotation forms, each a compile error:
+///
+/// - a `quote:` with no binding annotation and no return-position role
+///   ("this quote has no expected `std.ast` role")
+/// - an annotation naming a non-`std.ast` type, such as `let q: i32 = quote:`
+/// - an item body in an `Expression` role, or an expression in a
+///   `StructDefinition` role
+/// - a `quote:` in an ordinary runtime function body
+/// - `$name` outside a `quote:` body
+/// - `$` with neither an identifier nor `(` following it
+/// - `$()` with no computed expression
+/// - an empty `quote:` body
+macro documents_rejected_forms() -> std.ast.Expression:
+    return quote:
+        0

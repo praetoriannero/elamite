@@ -78,6 +78,7 @@ pub enum UnaryOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOperator {
     Add,
+    Concatenate,
     Subtract,
     Multiply,
     Divide,

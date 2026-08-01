@@ -1,0 +1,9 @@
+// Compile-time surface stress package: see README.md.
+//
+// This package is checked, not run: the bounded interpreter is a pending
+// milestone, so no compile-time declaration executes yet.
+//
+//     cargo run -- check examples/adversarial_macros --unstable-macros
+
+pub fn main() -> ():
+    println("compile-time surface package")

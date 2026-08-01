@@ -1431,6 +1431,19 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         }
         match operator {
+            TokenKind::PlusPlus => {
+                if left_type != self.typed.types.error() && !self.is_concatenable_type(left_type) {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "`++` requires `str`, `String`, or `Vec[T]` operands",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                (left_type, PlaceKind::Value)
+            }
             TokenKind::EqEq | TokenKind::NotEq => {
                 if left_type != self.typed.types.error()
                     && !crate::traits::provides(self.resolved, self.typed, left_type, "PartialEq")
@@ -1536,6 +1549,20 @@ impl<'a> Checker<'a> {
                 (left_type, PlaceKind::Value)
             }
             _ => (self.typed.types.error(), PlaceKind::Value),
+        }
+    }
+
+    fn is_concatenable_type(&self, mut ty: TypeId) -> bool {
+        loop {
+            ty = self.typed.types.resolve_inference(ty);
+            match self.typed.types.kind(ty) {
+                TypeKind::Alias { target, .. } => ty = *target,
+                TypeKind::Primitive(PrimitiveType::Str | PrimitiveType::String) => return true,
+                TypeKind::Builtin { builtin, arguments } => {
+                    return self.resolved.builtin_name(*builtin) == "Vec" && arguments.len() == 1;
+                }
+                _ => return false,
+            }
         }
     }
 

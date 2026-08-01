@@ -466,6 +466,7 @@ fn is_prefix_operator(pieces: &[Piece<'_>], index: usize) -> bool {
             | TokenKind::Arrow
             | TokenKind::Assign
             | TokenKind::Plus
+            | TokenKind::PlusPlus
             | TokenKind::Minus
             | TokenKind::Star
             | TokenKind::Slash

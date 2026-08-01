@@ -934,6 +934,35 @@ fn main() -> ():
 }
 
 #[test]
+fn concatenation_accepts_text_and_vectors_but_is_not_numeric_addition() {
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    let borrowed = "left" ++ "right"
+    let owned = String.from("left") ++ String.from("right")
+    let values = @vec[1, 2] ++ @vec[3, 4]
+    println(f"{borrowed} {owned} {values.len()}")
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let bad = 1 ++ 2
+    println(bad)
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let bad = "left" + "right"
+    println(bad)
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
 fn checks_explicit_numeric_casts() {
     assert_no_diagnostics(
         r#"

@@ -9,13 +9,19 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
         .iter()
         .map(|function| FunctionLowerer::new(types, function).run())
         .collect::<Vec<_>>();
-    let formats_text = functions.iter().any(|function| {
+    let runtime_expression_allocates = functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
             block.instructions.iter().any(|instruction| {
                 matches!(
                     instruction,
                     Instruction::Assign {
                         value: Rvalue::FormattedString(_),
+                        ..
+                    } | Instruction::Assign {
+                        value: Rvalue::Binary {
+                            operator: BinaryOperator::Concatenate,
+                            ..
+                        },
                         ..
                     }
                 )
@@ -40,7 +46,7 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
         // materialized value can allocate managed backing storage. Include
         // temporaries and return values: `println(String.from(text))`, for
         // example, need not introduce a source local.
-        requires_managed_memory: formats_text || materializes_managed_values,
+        requires_managed_memory: runtime_expression_allocates || materializes_managed_values,
     }
 }
 

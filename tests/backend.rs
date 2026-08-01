@@ -3292,6 +3292,34 @@ fn main() -> ():
 }
 
 #[test]
+fn concatenation_preserves_order_and_creates_independent_values() {
+    let source = r#"
+fn observed(label: str, value: str) -> str:
+    print(label)
+    return value
+
+fn main() -> ():
+    let borrowed = observed("L", "hello ") ++ observed("R", "world")
+    let owned = String.from("owned ") ++ String.from("text")
+    var left = @vec[1, 2]
+    var right = @vec[3, 4]
+    let joined = left ++ right
+    left.append(9)
+    right.append(8)
+    println(f"={borrowed}:{owned}:{left.len()}:{right.len()}:{joined.len()}")
+    for value in joined:
+        print(value)
+    println("")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "LR=hello world:owned text:3:3:4\n1234\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
 fn array_and_collection_empty_apis_return_typed_values() {
     let source = r#"
 fn main() -> ():

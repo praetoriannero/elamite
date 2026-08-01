@@ -147,6 +147,13 @@ fn grammar_highlights_named_and_computed_quote_interpolation() {
 }
 
 #[test]
+fn grammar_highlights_concatenation_as_one_operator() {
+    let grammar = read(GRAMMAR);
+    let operators = slice_between(&grammar, "\"operators\"", "\n    },");
+    assert!(operators.contains("\\\\+\\\\+"));
+}
+
+#[test]
 fn grammar_recognizes_exactly_the_lexer_numeric_suffixes() {
     let lexer = read("src/lexer.rs");
     let expected = quoted_literals(slice_between(

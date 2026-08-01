@@ -1,0 +1,38 @@
+/// A dependency package supplying compile-time declarations across a package
+/// boundary (`SPEC.md` 12.1).
+
+/// Public compile-time declarations are importable by dependent packages.
+pub macro provided_expression() -> std.ast.Expression:
+    let value: std.ast.Expression = quote:
+        41 + 1
+    return value
+
+pub attr provided_attribute(
+    target: std.ast.StructDefinition,
+) -> std.ast.StructDefinition:
+    return target
+
+pub trait Provided:
+    fn provided_marker() -> i32
+
+pub derive Provided(
+    target: std.ast.StructDefinition,
+) -> std.ast.Implementation:
+    let implementation: std.ast.Implementation = quote:
+        impl Provided for Target:
+            fn provided_marker() -> i32:
+                return 1
+    return implementation
+
+/// A package-private compile-time declaration is reachable inside this
+/// package only. Importing it from `adversarial_macros` is rejected; see
+/// `src/namespaces.elx`.
+macro package_private_expression() -> std.ast.Expression:
+    let value: std.ast.Expression = quote:
+        0
+    return value
+
+/// A re-export keeps the original identity and defining package. A `pub use`
+/// of the package-private declaration above is correctly rejected with a
+/// related span pointing at that declaration.
+pub use macro self.provided_expression as reexported_expression

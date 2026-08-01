@@ -28,6 +28,10 @@ pub(super) fn closure_name(ty: TypeId) -> String {
     format!("el_closure_t{}", ty.index())
 }
 
+pub(super) fn concatenate_name(ty: TypeId) -> String {
+    format!("el_concat_t{}", ty.index())
+}
+
 pub(super) fn numeric_alternative_name(
     operation: NumericAlternative,
     operand: TypeId,
