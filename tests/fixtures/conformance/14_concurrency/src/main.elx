@@ -1,0 +1,151 @@
+use std.sync.TryReceiveError
+use std.sync.TrySendError
+
+@importc("GC_gcollect", "gc.h")
+fn collect()
+
+@importc("elamite_conformance_callback", "concurrency_callback.h")
+fn invoke_callback(callback: *fn(i32) -> i32, value: i32) -> i32
+
+fn double(value: i32) -> i32:
+    return value * 2
+
+fn callback_worker() -> i32:
+    let rooted = @vec[String.from("registered")]
+    unsafe:
+        collect()
+        let callback: &fn(i32) -> i32 = double
+        let result = invoke_callback(callback as *fn(i32) -> i32, 21)
+        return result + rooted.len() as i32
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let callback_started = std.thread.spawn(callback_worker)
+    match callback_started:
+        Result.Ok(thread):
+            println(thread.join())
+        Result.Err(_):
+            println("spawn unavailable")
+
+    var original = @vec[1]
+    let body = fn[original]() -> Vec[i32]:
+        return original
+    let copied = std.thread.spawn(body)
+    original.append(2)
+    match copied:
+        Result.Ok(thread):
+            let other_handle = thread
+            let first = thread.join()
+            let second = other_handle.join()
+            println(f"transfer={first.len()}:{second.len()}:{original.len()}:{thread.is_finished()}")
+        Result.Err(_):
+            println("spawn unavailable")
+
+    let completed = std.sync.AtomicBool.new(false)
+    let result_body = fn[completed]() -> Result[String, String]:
+        defer completed.store(true)
+        return Result.Ok(String.from("ordinary result"))
+    let result_started = std.thread.spawn(result_body)
+    match result_started:
+        Result.Ok(thread):
+            match thread.join():
+                Result.Ok(message):
+                    println(message)
+                Result.Err(message):
+                    println(message)
+            println(completed.load())
+        Result.Err(_):
+            println("spawn unavailable")
+
+    let (sender, receiver) = std.sync.channel[i32](1)
+    match receiver.try_receive():
+        Result.Ok(_):
+            println("unexpected value")
+        Result.Err(reason):
+            match reason:
+                TryReceiveError.Empty:
+                    println("empty")
+                TryReceiveError.Closed:
+                    println("unexpected close")
+    let sender_copy = sender
+    let receiver_copy = receiver
+    let _ = sender.send(7)
+    match sender_copy.try_send(8):
+        Result.Ok(_):
+            println("unexpected capacity")
+        Result.Err(reason):
+            match reason:
+                TrySendError.Full:
+                    println("full")
+                TrySendError.Closed:
+                    println("unexpected close")
+    sender.close()
+    sender_copy.close()
+    match receiver_copy.receive():
+        Option.Some(value):
+            println(value)
+        Option.None:
+            println("unexpected close")
+    match receiver.try_receive():
+        Result.Ok(_):
+            println("unexpected value")
+        Result.Err(reason):
+            match reason:
+                TryReceiveError.Empty:
+                    println("unexpected empty")
+                TryReceiveError.Closed:
+                    println("closed")
+
+    let (closed_sender, closed_receiver) = std.sync.unbounded_channel[i32]()
+    closed_receiver.close()
+    closed_receiver.close()
+    match closed_sender.send(9):
+        Result.Ok(_):
+            println("unexpected send")
+        Result.Err(_):
+            println("send closed")
+
+    let mutex = std.sync.Mutex[Vec[i32]].new(@vec[1])
+    let mutex_copy = mutex
+    var read_copy = mutex.read()
+    read_copy.append(2)
+    let previous = mutex.replace(@vec[3])
+    println(f"mutex={read_copy.len()}:{previous.len()}:{mutex_copy.read()[0]}")
+
+    let counter = std.sync.Mutex[i32].new(0)
+    let update = fn[counter]() -> ():
+        var index = 0
+        while index < 100:
+            let _ = counter.update(increment)
+            index += 1
+    let left = std.thread.spawn(update)
+    let right = std.thread.spawn(update)
+    match left:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match right:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    println(counter.read())
+
+    let number = std.sync.AtomicI32.new(1)
+    let number_copy = number
+    println(number.exchange(2))
+    println(number.compare_exchange(2, 4))
+    println(number.fetch_add(3))
+    println(number_copy.fetch_sub(2))
+    number.store(9)
+    println(number_copy.load())
+
+    let width = std.sync.AtomicUsize.new(1)
+    println(width.fetch_add(2))
+    println(width.fetch_sub(1))
+    let flag = std.sync.AtomicBool.new(false)
+    println(flag.compare_exchange(false, true))
+    println(flag.exchange(false))

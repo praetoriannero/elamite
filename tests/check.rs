@@ -2566,3 +2566,79 @@ fn main() -> ():
         );
     }
 }
+
+#[test]
+fn concurrency_boundaries_accept_nested_values_and_synchronized_handles() {
+    assert_no_diagnostics(
+        r#"
+struct Envelope:
+    labels: Vec[String]
+    values: (i32, bool)
+
+fn main() -> ():
+    let envelope = Envelope {
+        labels: @vec[String.from("transfer")],
+        values: (7, true),
+    }
+    let worker = fn[envelope]() -> Envelope:
+        return envelope
+    let _ = std.thread.spawn(worker)
+
+    let (sender, receiver) = std.sync.unbounded_channel[i32]()
+    let mutex = std.sync.Mutex[i32].new(0)
+    let atomic = std.sync.AtomicI32.new(0)
+    let synchronized = fn[sender, receiver, mutex, atomic]() -> ():
+        let _ = sender.send(mutex.read() + atomic.load())
+        let _ = receiver.try_receive()
+    let _ = std.thread.spawn(synchronized)
+"#,
+    );
+}
+
+#[test]
+fn spawn_rejects_raw_pointer_and_trait_object_captures() {
+    for (source, description) in [
+        (
+            r#"
+fn main() -> ():
+    let value = 7
+    let pointer = &value as *i32
+    let worker = fn[*pointer]() -> i32:
+        unsafe:
+            return *pointer
+    let _ = std.thread.spawn(worker)
+"#,
+            "raw pointer capture",
+        ),
+        (
+            r#"
+trait Read:
+    fn read(self: &Self) -> i32
+
+struct Value:
+    number: i32
+
+impl Read for Value:
+    fn read(self: &Self) -> i32:
+        return self.number
+
+fn main() -> ():
+    let value = Value { number: 7 }
+    let erased: &Read = &value
+    let worker = fn[erased]() -> i32:
+        return erased.read()
+    let _ = std.thread.spawn(worker)
+"#,
+            "trait-object capture",
+        ),
+    ] {
+        let (sources, diagnostics) = check_diagnostics(source);
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("spawned callable does not satisfy `Transfer`")),
+            "{description} unexpectedly passed:\n{}",
+            render(&sources, &diagnostics)
+        );
+    }
+}

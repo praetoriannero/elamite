@@ -18,6 +18,7 @@ for the Milestone 19 ledger audit.
 | §9 Garbage collection | `09_gc` | reference-formation and promotion suites | OOM collect/retry/terminate generated-C test; best-effort churn test | recursive graph and allocation-churn backend suites |
 | §10 Unsafe/C ABI | `10_unsafe` | unsafe, pointer-validity, and FFI contract suites | raw-pointer and callback trap processes | `examples/c_ffi` and C harness/callback integration tests |
 | §11 Conformance example | `11_example` | earlier section suites own its forms | earlier trap suites | exact normative `Counter` behavior |
+| §10.4 Native concurrency | `14_concurrency` | structural/generic/capture `Transfer` suites | self-join and worker-panic processes | registered callback, lifecycle, channel, mutex, and atomic tests |
 
 `12_runtime_stress` is the M19 cross-section stress layer. It combines generic
 instantiation, recursive calls, collection churn and copying, managed cycles,
@@ -30,6 +31,14 @@ is owned by `foreign_callbacks_retain_registered_context_until_close` in
 runner prefers `expected.<target>.stdout` (and corresponding stderr/status
 files) when present, so x86 and x86-64 must demonstrate their distinct
 `isize`/`usize` widths instead of merely accepting a target flag.
+
+`14_concurrency` is the deterministic concurrency contract fixture. It covers
+registered-thread C callback reentry, collector-visible worker roots, transfer
+copy independence, repeated joins, ordinary `Result` and `defer` behavior,
+channel state distinctions and closure, mutex copies, and the complete atomic
+surface. `15_concurrency_stress` is its repeated four-producer/four-consumer
+contention layer; consumers run until explicit closure so the test never
+assumes a scheduler-specific distribution of messages.
 
 Run all positive fixtures with:
 

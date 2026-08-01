@@ -181,8 +181,11 @@ impl<'a> CEmitter<'a> {
 
     fn run(mut self) -> COutput {
         self.emit_prelude();
-        self.emit_foreign_headers();
+        // The collector's feature macros must be visible before any foreign
+        // header can include `gc.h`; otherwise that header's include guard
+        // suppresses the thread-registration declarations needed below.
         self.emit_managed_memory_prelude();
+        self.emit_foreign_headers();
         self.emit_forward_structs();
         self.emit_object_types();
         let used_types = self.used_types();

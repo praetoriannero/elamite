@@ -333,6 +333,110 @@ fn main() -> ():
 }
 
 #[test]
+fn a_worker_panic_terminates_the_complete_process() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn fail() -> !:
+    panic("worker failure")
+
+fn main() -> ():
+    let started = std.thread.spawn(fail)
+    match started:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(stdout, "");
+    assert_eq!(status, 101, "{stderr}");
+    assert!(stderr.contains("E-RUN-PANIC"), "{stderr}");
+    assert!(stderr.contains("worker failure"), "{stderr}");
+}
+
+#[test]
+fn operating_system_spawn_failure_is_recoverable() {
+    let tree = TestTree::new("spawn-failure");
+    fs::create_dir_all(tree.root.join("native/include")).expect("create include directory");
+    fs::write(
+        tree.root.join("native/include/fail_spawn.h"),
+        "#ifndef ELAMITE_FAIL_SPAWN_H\n\
+         #define ELAMITE_FAIL_SPAWN_H\n\
+         #include <errno.h>\n\
+         static void elamite_force_spawn_failure(void) {}\n\
+         #ifdef pthread_create\n\
+         #undef pthread_create\n\
+         #endif\n\
+         static int elamite_failed_pthread_create(\n\
+         \x20\x20\x20\x20pthread_t *thread, const pthread_attr_t *attributes,\n\
+         \x20\x20\x20\x20void *(*entry)(void *), void *argument\n\
+         ) {\n\
+         \x20\x20\x20\x20(void)thread; (void)attributes; (void)entry; (void)argument;\n\
+         \x20\x20\x20\x20return EAGAIN;\n\
+         }\n\
+         #define pthread_create elamite_failed_pthread_create\n\
+         #endif\n",
+    )
+    .expect("write failure-injection header");
+    fs::write(
+        tree.root.join("elamite.toml"),
+        "[package]\n\
+         name = \"backend_test\"\n\
+         version = \"0.1.0\"\n\
+         target_kind = \"exe\"\n\
+         \n\
+         [native]\n\
+         include_paths = [\"native/include\"]\n",
+    )
+    .expect("write manifest");
+    fs::write(
+        tree.root.join("src/main.elx"),
+        r#"
+use std.thread.SpawnError
+
+@importc("elamite_force_spawn_failure", "fail_spawn.h")
+fn force_spawn_failure()
+
+fn worker() -> i32:
+    return 42
+
+fn main() -> ():
+    unsafe:
+        force_spawn_failure()
+    match std.thread.spawn(worker):
+        Result.Ok(_):
+            println("unexpected success")
+        Result.Err(reason):
+            match reason:
+                SpawnError.Unavailable:
+                    println("unavailable")
+"#,
+    )
+    .expect("write Elamite source");
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let artifact = build(
+        &graph,
+        &mut sources,
+        &BuildOptions {
+            target: Target::X86_64,
+            optimization: Optimization::Debug,
+            features: Default::default(),
+            output_directory: tree.root.join("out"),
+            keep_generated_c: true,
+            c_compiler: None,
+            c_flags: Vec::new(),
+        },
+    )
+    .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    let result = run(&artifact).expect("run spawn-failure fixture");
+    assert_eq!(result.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&result.stdout), "unavailable\n");
+    assert_eq!(String::from_utf8_lossy(&result.stderr), "");
+}
+
+#[test]
 fn never_returning_thread_bodies_and_joins_reach_c99_lowering() {
     let tree = TestTree::new("never-thread");
     tree.executable(
@@ -505,6 +609,37 @@ fn main() -> ():
 }
 
 #[test]
+fn concurrency_runtime_remains_c99_and_target_width_neutral() {
+    let tree = TestTree::new("concurrency-target-width");
+    tree.executable(
+        r#"
+fn worker() -> usize:
+    let value = std.sync.AtomicUsize.new(1)
+    let _ = value.fetch_add(2)
+    return value.load()
+
+fn main() -> ():
+    match std.thread.spawn(worker):
+        Result.Ok(thread):
+            println(thread.join())
+        Result.Err(_):
+            pass
+"#,
+    );
+    for target in [Target::X86, Target::X86_64] {
+        let mut sources = SourceManager::new();
+        let graph = tree.graph(&mut sources);
+        let compilation = compile(&graph, &mut sources, target)
+            .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+        assert!(compilation.generated_c.contains("uintptr_t value;"));
+        assert!(compilation.generated_c.contains("pthread_mutex_t lock;"));
+        assert!(compilation.generated_c.contains("pthread_create("));
+        assert!(!compilation.generated_c.contains("_Atomic"));
+        assert!(!compilation.generated_c.contains("_Static_assert"));
+    }
+}
+
+#[test]
 fn bounded_channels_sustain_mpmc_contention() {
     let source = r#"
 fn increment(value: i32) -> i32:
@@ -520,15 +655,14 @@ fn main() -> ():
             let _ = sender.send(1)
             index += 1
     let consume = fn[receiver, total, received]() -> ():
-        var index = 0
-        while index < 1000:
+        var open = true
+        while open:
             match receiver.receive():
                 Option.Some(_):
                     let _ = total.update(increment)
                     let _ = received.fetch_add(1)
                 Option.None:
-                    pass
-            index += 1
+                    open = false
     let first_consumer = std.thread.spawn(consume)
     let second_consumer = std.thread.spawn(consume)
     let first_producer = std.thread.spawn(produce)
@@ -561,6 +695,82 @@ fn main() -> ():
     let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
     assert_eq!(status, 0, "{stderr}");
     assert_eq!(stdout, "2000\n2000\n");
+}
+
+#[test]
+fn closing_channels_wakes_blocked_senders_and_receivers() {
+    let source = r#"
+fn main() -> ():
+    let (sender, receiver) = std.sync.channel[i32](1)
+    let _ = sender.send(1)
+    let blocked_send = fn[sender]() -> Result[(), std.sync.SendError]:
+        return sender.send(2)
+    let send_thread = std.thread.spawn(blocked_send)
+    receiver.close()
+    match send_thread:
+        Result.Ok(thread):
+            match thread.join():
+                Result.Ok(_):
+                    println("unexpected send")
+                Result.Err(_):
+                    println("sender woke")
+        Result.Err(_):
+            println("spawn unavailable")
+
+    let (second_sender, second_receiver) = std.sync.unbounded_channel[i32]()
+    let blocked_receive = fn[second_receiver]() -> Option[i32]:
+        return second_receiver.receive()
+    let receive_thread = std.thread.spawn(blocked_receive)
+    second_sender.close()
+    match receive_thread:
+        Result.Ok(thread):
+            match thread.join():
+                Option.Some(_):
+                    println("unexpected receive")
+                Option.None:
+                    println("receiver woke")
+        Result.Err(_):
+            println("spawn unavailable")
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "sender woke\nreceiver woke\n");
+    }
+}
+
+#[test]
+fn concurrent_output_preserves_complete_calls() {
+    let source = r#"
+fn main() -> ():
+    let write_left = fn() -> ():
+        var index = 0
+        while index < 100:
+            println("left")
+            index += 1
+    let write_right = fn() -> ():
+        var index = 0
+        while index < 100:
+            println("right")
+            index += 1
+    let left = std.thread.spawn(write_left)
+    let right = std.thread.spawn(write_right)
+    match left:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+    match right:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout.lines().filter(|line| *line == "left").count(), 100);
+    assert_eq!(stdout.lines().filter(|line| *line == "right").count(), 100);
+    assert_eq!(stdout.lines().count(), 200, "{stdout}");
 }
 
 #[test]

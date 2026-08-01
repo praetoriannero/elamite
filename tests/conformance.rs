@@ -200,6 +200,105 @@ fn generated_c_is_clean_under_address_and_undefined_behavior_sanitizers() {
 }
 
 #[test]
+fn concurrency_contract_matches_the_available_target_and_optimization_matrix() {
+    let mut targets = vec![Target::X86_64];
+    if x86_runtime_available() {
+        targets.push(Target::X86);
+    } else {
+        eprintln!("skipping x86 concurrency execution: the host has no 32-bit C/GC toolchain");
+    }
+    let report = run_suite(
+        Path::new("tests/fixtures/conformance/14_concurrency"),
+        &RunnerOptions {
+            filter: None,
+            targets,
+            optimizations: vec![Optimization::Debug, Optimization::Release],
+            features: Default::default(),
+            c_flags: Vec::new(),
+            runtime_environment: Vec::new(),
+        },
+    )
+    .expect("run concurrency contract fixture");
+    assert!(
+        report.success(),
+        "{}",
+        report
+            .cases
+            .iter()
+            .map(|case| case.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
+fn concurrency_generated_c_is_clean_under_address_and_undefined_sanitizers() {
+    let report = run_suite(
+        Path::new("tests/fixtures/conformance"),
+        &RunnerOptions {
+            filter: Some("concurrency".to_string()),
+            targets: vec![Target::X86_64],
+            optimizations: vec![Optimization::Debug],
+            features: Default::default(),
+            c_flags: vec![
+                OsString::from("-fsanitize=address,undefined"),
+                OsString::from("-fno-omit-frame-pointer"),
+            ],
+            runtime_environment: vec![(
+                OsString::from("ASAN_OPTIONS"),
+                OsString::from("detect_leaks=0:halt_on_error=1"),
+            )],
+        },
+    )
+    .expect("run instrumented concurrency fixtures");
+    assert!(
+        report.success(),
+        "{}",
+        report
+            .cases
+            .iter()
+            .map(|case| case.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
+fn concurrency_stress_is_clean_under_thread_sanitizer() {
+    let report = run_suite(
+        Path::new("tests/fixtures/conformance/15_concurrency_stress"),
+        &RunnerOptions {
+            filter: None,
+            targets: vec![Target::X86_64],
+            optimizations: vec![Optimization::Debug],
+            features: Default::default(),
+            c_flags: vec![
+                OsString::from("-fsanitize=thread"),
+                OsString::from("-fno-omit-frame-pointer"),
+            ],
+            runtime_environment: vec![(
+                OsString::from("TSAN_OPTIONS"),
+                // Boehm stops collector threads with signals. TSan reports
+                // the collector mechanism itself unless this unrelated
+                // diagnostic is disabled; data-race reports remain fatal.
+                OsString::from("halt_on_error=1:report_signal_unsafe=0"),
+            )],
+        },
+    )
+    .expect("run thread-sanitized concurrency fixture");
+    assert!(
+        report.success(),
+        "{}",
+        report
+            .cases
+            .iter()
+            .map(|case| case.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
 fn runtime_stress_is_stable_across_repeated_debug_and_release_runs() {
     for _ in 0..3 {
         let report = run_suite(
@@ -225,6 +324,61 @@ fn runtime_stress_is_stable_across_repeated_debug_and_release_runs() {
                 .join("\n")
         );
     }
+}
+
+#[test]
+fn concurrency_stress_is_stable_across_repeated_debug_and_release_runs() {
+    for _ in 0..3 {
+        let report = run_suite(
+            Path::new("tests/fixtures/conformance/15_concurrency_stress"),
+            &RunnerOptions {
+                filter: None,
+                targets: vec![Target::X86_64],
+                optimizations: vec![Optimization::Debug, Optimization::Release],
+                features: Default::default(),
+                c_flags: Vec::new(),
+                runtime_environment: Vec::new(),
+            },
+        )
+        .expect("run concurrency stress fixture");
+        assert!(
+            report.success(),
+            "{}",
+            report
+                .cases
+                .iter()
+                .map(|case| case.detail.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+}
+
+fn x86_runtime_available() -> bool {
+    let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    let source = std::env::temp_dir().join(format!(
+        "elamite-x86-conformance-{}-{serial}.c",
+        std::process::id()
+    ));
+    let executable = source.with_extension("bin");
+    if fs::write(
+        &source,
+        "#include <stdint.h>\n#include <pthread.h>\n#include <gc.h>\nint main(void) { return 0; }\n",
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let available = Command::new("cc")
+        .args(["-m32", "-std=c99"])
+        .arg(&source)
+        .args(["-lgc", "-lpthread", "-o"])
+        .arg(&executable)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let _ = fs::remove_file(source);
+    let _ = fs::remove_file(executable);
+    available
 }
 
 fn contains_file_named(directory: &Path, name: &str) -> bool {

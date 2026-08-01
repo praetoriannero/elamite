@@ -1,0 +1,7 @@
+[package]
+name = "concurrency_contract"
+version = "0.1.0"
+target_kind = "exe"
+
+[native]
+include_paths = ["native/include"]

@@ -3,8 +3,8 @@
 > Status: Active — completed legacy work is omitted from this forward-looking
 > plan; remaining milestones and work packages use stable descriptive names
 >
-> Next required work package: **Standard-library concurrency** —
-> **Concurrency conformance**
+> Next required work package: **Memory cost model documentation** —
+> **Copy and allocation inventory**
 >
 > Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
@@ -207,10 +207,9 @@ costs have been reviewed separately.
 > concurrency; it does not adopt Go-style mutable shallow copies or add a
 > source-level move operation.
 >
-> Blocked by: **Memory cost model documentation** for its baseline and by
-> **Standard-library concurrency — Concurrency conformance** before final
-> cross-thread COW validation. Earlier single-threaded packages may proceed
-> once the baseline exists.
+> Blocked by: **Memory cost model documentation** for its baseline. The
+> completed concurrency conformance matrix remains the gate for final
+> cross-thread COW validation.
 
 **Goal:** Approach the cost of read-only Go-style descriptor passing without
 adopting Go-style implicit mutable aliasing. The compiler may borrow, reuse, or
@@ -474,10 +473,10 @@ before adding any of them.
 
 ### Standard-library concurrency
 
-> Status: Runtime implementation complete; final target and stress conformance
-> remains.
+> Status: Complete. The normative contract, runtime, and conformance matrix are
+> implemented.
 >
-> Blocked by: **Explicit-capture closures**.
+> Depends on: **Explicit-capture closures** (complete).
 >
 > This milestone adds no thread, task, `concurrent`, `async`, or `await`
 > grammar. Closures supply executable bodies, and ordinary declarations in
@@ -584,7 +583,7 @@ trampoline and concurrency contract.
 | **Sequentially consistent atomics (done)** | Implement shared `AtomicBool`, `AtomicI32`, and target-width `AtomicUsize` cells with the accepted load, store, exchange, compare-exchange, and integer read-modify-write operations without emitting C11 `_Atomic` into the C99 backend. | Operations are sequentially consistent on both targets, copies retain cell identity, runtime/compiler hooks preserve C99 output, and target-width behavior never assumes 64-bit atomics on x86. |
 | **Collector and root integration (done)** | Register and unregister runtime-created threads, scan their stacks, queues, environments, synchronized handles, and unpublished/published results, and make shutdown cooperate with collection. | Stress collection cannot reclaim reachable cross-thread state, raw pointers acquire no rooting behavior, and completed thread state is reclaimable after all roots disappear. |
 | **C callback boundary (done)** | Permit synchronous same-registered-thread reentry from C on the initializer or an Elamite-created thread while retaining the prohibition on foreign-created-thread and asynchronous foreign entry. | Nested registered callbacks preserve roots and traps never unwind through C; unsupported foreign-thread entry remains explicitly documented and tested where a harness can detect it. |
-| **Concurrency conformance** | Add compile-pass/fail transfer cases, runtime lifecycle and synchronization tests, trap-process tests, high-contention and repeated stress suites, sanitizer-capable native harnesses, debug/release coverage, and the Linux x86/x86-64 matrix. | The complete pre-concurrency suite remains green, safe suites show no races or hangs under their bounded contracts, and every normative concurrency rule is mapped in `LEDGER.md`. |
+| **Concurrency conformance (done)** | Add compile-pass/fail transfer cases, runtime lifecycle and synchronization tests, trap-process tests, high-contention and repeated stress suites, sanitizer-capable native harnesses, debug/release coverage, and the Linux x86/x86-64 matrix. | The complete pre-concurrency suite remains green, safe suites show no races or hangs under their bounded contracts, and every normative concurrency rule is mapped in `LEDGER.md`. |
 
 Cooperative tasks, executors, `async`/`await`, futures, detached execution,
 cancellation, interruption, timeouts, thread-local storage, relaxed atomics,

@@ -1,0 +1,80 @@
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let (sender, receiver) = std.sync.channel[i32](8)
+    let total = std.sync.Mutex[i32].new(0)
+    let received = std.sync.AtomicUsize.new(0)
+
+    let produce = fn[sender]() -> ():
+        var index = 0
+        while index < 500:
+            let _ = sender.send(1)
+            index += 1
+
+    let consume = fn[receiver, total, received]() -> ():
+        var open = true
+        while open:
+            match receiver.receive():
+                Option.Some(_):
+                    let _ = total.update(increment)
+                    let _ = received.fetch_add(1)
+                Option.None:
+                    open = false
+
+    let consumer_one = std.thread.spawn(consume)
+    let consumer_two = std.thread.spawn(consume)
+    let consumer_three = std.thread.spawn(consume)
+    let consumer_four = std.thread.spawn(consume)
+    let producer_one = std.thread.spawn(produce)
+    let producer_two = std.thread.spawn(produce)
+    let producer_three = std.thread.spawn(produce)
+    let producer_four = std.thread.spawn(produce)
+
+    match producer_one:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match producer_two:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match producer_three:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match producer_four:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+
+    sender.close()
+
+    match consumer_one:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match consumer_two:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match consumer_three:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+    match consumer_four:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+
+    receiver.close()
+    println(total.read())
+    println(received.load())
