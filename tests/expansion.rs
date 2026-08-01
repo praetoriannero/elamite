@@ -253,6 +253,90 @@ use macro root.nested.hidden as imported
 }
 
 #[test]
+fn typed_quotes_validate_roles_only_inside_compile_time_declarations() {
+    let workspace = TestWorkspace::new("typed-quotes");
+    let valid = workspace.package(
+        "valid",
+        &[],
+        r#"
+macro build(value: std.ast.Expression) -> std.ast.Expression:
+    let expression: std.ast.Expression = quote:
+        ($value, 1)
+    let statements: std.ast.StatementList = quote:
+        let copied = $value
+        return copied
+    let members: std.ast.MemberList = quote:
+        id: u64
+
+        pub fn identifier(self: &Self) -> u64:
+            return self.id
+    return quote:
+        call($expression)
+"#,
+    );
+    let (_, output) = expand_package(&valid);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+
+    let invalid = workspace.package(
+        "invalid",
+        &[],
+        r#"
+macro bad() -> std.ast.Expression:
+    let ambiguous = quote:
+        1
+    let wrong: std.ast.Item = quote:
+        1 + 2
+    return quote:
+        0
+
+fn runtime() -> ():
+    let forbidden: std.ast.Expression = quote:
+        1
+"#,
+    );
+    let (_, output) = expand_package(&invalid);
+    let messages = output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("no expected `std.ast` role"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("expected a declaration"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("only inside a compile-time"))
+    );
+}
+
+#[test]
+fn quotation_requires_the_unstable_macro_gate() {
+    let workspace = TestWorkspace::new("quote-gate");
+    let package = workspace.package(
+        "app",
+        &[],
+        r#"
+fn runtime() -> ():
+    let syntax = quote:
+        1
+"#,
+    );
+    let (_, output) = expand_package_with_features(&package, CompilerFeatures::default());
+    assert!(output.diagnostics.iter().any(|diagnostic| {
+        diagnostic.category == elamite::diagnostics::Category::ExperimentalFeature
+            && diagnostic.message.contains("compile-time quotation")
+    }));
+}
+
+#[test]
 fn compile_time_imports_resolve_public_cross_package_reexports() {
     let workspace = TestWorkspace::new("cross-package");
     workspace.package(

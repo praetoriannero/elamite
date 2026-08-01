@@ -1091,6 +1091,7 @@ fn punctuation(source: &str) -> Option<(TokenKind, usize)> {
         (":", TokenKind::Colon),
         (".", TokenKind::Dot),
         ("@", TokenKind::At),
+        ("$", TokenKind::Dollar),
         ("?", TokenKind::Question),
         ("=", TokenKind::Assign),
         ("+", TokenKind::Plus),

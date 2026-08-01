@@ -12,6 +12,7 @@ pub mod fragment;
 mod gate;
 pub mod namespace;
 pub mod provenance;
+pub mod quote;
 pub mod scheduler;
 pub mod token_tree;
 
@@ -120,6 +121,7 @@ pub fn expand_with_features(
     output.package.compile_time =
         namespace::collect(graph, &output.package.units, &mut output.diagnostics);
     gate::validate(&output.package.units, features, &mut output.diagnostics);
+    quote::validate(&output.package.units, features, &mut output.diagnostics);
     output
 }
 

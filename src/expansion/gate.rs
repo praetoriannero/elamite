@@ -29,6 +29,7 @@ fn validate_node(node: &SyntaxNode, diagnostics: &mut Vec<Diagnostic>) {
         SyntaxKind::MacroExpression if is_user_macro_invocation(node) => {
             Some("user-defined macro invocations")
         }
+        SyntaxKind::QuoteExpression => Some("compile-time quotation"),
         _ => None,
     };
     if let Some(feature) = feature {

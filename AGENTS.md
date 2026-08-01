@@ -44,6 +44,12 @@
   inferred types, layout, runtime state, and mutable compiler tables. Only the
   expansion layer may mint origin handles; builders and transforms must retain
   provenance without fabricating physical spans.
+- `src/expansion/quote.rs` owns typed quote-role inference, interpolation
+  position classification, and quote-body adaptation back into the ordinary
+  parser. Keep quote templates role-neutral in `src/parser.rs`; do not parse
+  quoted source during lexing or let quote validation grow a second Elamite
+  grammar. Hygiene and façade-value construction belong to interpreter
+  lowering, not this syntax adapter.
 - `src/promotion.rs` decides which locals need managed storage. It answers only
   "is this local's address taken", deliberately conservatively; precise escape
   analysis belongs to the **Post-conformance optimization** milestone, not

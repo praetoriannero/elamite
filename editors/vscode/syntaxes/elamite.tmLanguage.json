@@ -13,6 +13,7 @@
       "comment": "Everything legal inside an expression position. Reused verbatim inside formatted-string interpolation, which is why it excludes comments and declarations.",
       "patterns": [
         { "include": "#macros" },
+        { "include": "#quote-interpolation" },
         { "include": "#formatted-string" },
         { "include": "#string" },
         { "include": "#character" },
@@ -307,6 +308,23 @@
       "patterns": [
         { "include": "#interpolation-nested" },
         { "include": "#expression" }
+      ]
+    },
+
+    "quote-interpolation": {
+      "comment": "SPEC.md 12.3: named and computed interpolation inside quote bodies.",
+      "patterns": [
+        {
+          "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.section.embedded.begin.elx" },
+            "2": { "name": "variable.other.readwrite.elx" }
+          }
+        },
+        {
+          "name": "punctuation.section.embedded.begin.elx",
+          "match": "\\$(?=\\()"
+        }
       ]
     },
 

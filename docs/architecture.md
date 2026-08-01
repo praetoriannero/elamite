@@ -62,8 +62,22 @@ receive only expansion-minted origin handles. Contained `std.ast.error` failures
 therefore resolve physical origins directly and retain generated invocation and
 definition locations as related context without inventing a physical span.
 These values share no `SyntaxNode`, resolver identity, inferred type, target
-layout, runtime value, or mutable compiler table. Quotation is the next layer
-that will translate source structure into this public model.
+layout, runtime value, or mutable compiler table. Quotation follows the same
+separation while preparing source structure for later interpreter lowering.
+
+The quote syntax boundary now lives in `src/expansion/quote.rs`. The lexer emits
+`$` as ordinary punctuation, while the hand-written parser records a
+role-neutral `QuoteExpression`/`QuoteBody` and replaces only `$name` and
+`$(expression)` sites with interpolation nodes. Expansion recognizes explicit
+binding and compile-time return annotations for every admitted `std.ast` role,
+classifies sites as scalar insertion or collection splicing, and adapts the
+physical body back through the same expression, pattern, type, statement,
+member, and item grammars used by handwritten source. Definition-specific
+roles additionally require the matching struct, enum, function, field, or
+implementation node. Parameter-driven roles remain for compile-time signature
+checking. This layer validates structure but deliberately does not construct
+AST façade values or assign definition-site hygiene; those operations require
+the bounded interpreter and its execution context.
 
 `src/expansion/namespace.rs` collects physical macro, attribute, and derive
 declarations and their explicit imports into stable, separate module namespaces

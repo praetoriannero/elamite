@@ -129,6 +129,7 @@ pub enum TokenKind {
     DotDot,
     Ellipsis,
     At,
+    Dollar,
     Question,
     Arrow,
 
@@ -243,6 +244,9 @@ pub enum SyntaxKind {
     ClosureCaptureList,
     ClosureCapture,
     ClosureExpression,
+    QuoteExpression,
+    QuoteBody,
+    QuoteInterpolation,
 }
 
 /// A syntax node or one of its original tokens.

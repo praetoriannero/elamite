@@ -30,6 +30,19 @@ pub enum FragmentKind {
     Item,
 }
 
+/// Structural role requested for one typed `quote:` body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteFragmentKind {
+    Expression,
+    Pattern,
+    Type,
+    StatementList,
+    MemberList,
+    Member,
+    Item,
+    ItemList,
+}
+
 impl FragmentKind {
     fn description(self) -> &'static str {
         match self {
@@ -55,6 +68,14 @@ pub fn parse(tokens: &[Token]) -> ParseOutput {
 #[must_use]
 pub fn parse_fragment(tokens: &[Token], kind: FragmentKind) -> ParseOutput {
     Parser::new(tokens).parse_complete_fragment(kind)
+}
+
+/// Parses a quote body after interpolation sites have been adapted to parser
+/// placeholders by the expansion layer. The hand-written parser remains the
+/// sole owner of every admitted structural grammar.
+#[must_use]
+pub fn parse_quote_fragment(tokens: &[Token], kind: QuoteFragmentKind) -> ParseOutput {
+    Parser::new(tokens).parse_complete_quote_fragment(kind)
 }
 
 struct Parser<'a> {
@@ -136,6 +157,88 @@ impl<'a> Parser<'a> {
         ParseOutput {
             tree,
             diagnostics: self.diagnostics,
+        }
+    }
+
+    fn parse_complete_quote_fragment(mut self, kind: QuoteFragmentKind) -> ParseOutput {
+        let fallback = self.current_span();
+        let tree = match kind {
+            QuoteFragmentKind::Expression => self.parse_expression(),
+            QuoteFragmentKind::Pattern => self.parse_pattern(),
+            QuoteFragmentKind::Type => self.parse_type(),
+            QuoteFragmentKind::StatementList => {
+                self.parse_quote_list(SyntaxKind::Block, QuoteListElement::Statement)
+            }
+            QuoteFragmentKind::MemberList => {
+                self.parse_quote_list(SyntaxKind::Block, QuoteListElement::Member)
+            }
+            QuoteFragmentKind::Member => {
+                self.eat_leading_quote_newlines();
+                let member = if self.looks_like_function() {
+                    self.parse_function(FunctionBody::Required)
+                } else {
+                    self.parse_field()
+                };
+                self.eat_leading_quote_newlines();
+                member
+            }
+            QuoteFragmentKind::Item => {
+                self.eat_leading_quote_newlines();
+                let item = self.parse_item();
+                self.eat_leading_quote_newlines();
+                item
+            }
+            QuoteFragmentKind::ItemList => {
+                self.parse_quote_list(SyntaxKind::File, QuoteListElement::Item)
+            }
+        };
+        self.eat_leading_quote_newlines();
+        if !self.at_eof() {
+            self.error_here("unexpected trailing syntax in typed quote body");
+            while !self.at_eof() {
+                self.bump();
+            }
+        }
+        ParseOutput {
+            tree: if tree.children.is_empty() {
+                SyntaxNode::new(tree.kind, tree.children, fallback)
+            } else {
+                tree
+            },
+            diagnostics: self.diagnostics,
+        }
+    }
+
+    fn parse_quote_list(&mut self, kind: SyntaxKind, element: QuoteListElement) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = Vec::new();
+        self.eat_newlines(&mut children);
+        while !self.at_eof() {
+            let before = self.position;
+            let parsed = match element {
+                QuoteListElement::Statement => self.parse_statement(),
+                QuoteListElement::Item => self.parse_item(),
+                QuoteListElement::Member => {
+                    if self.looks_like_function() {
+                        self.parse_function(FunctionBody::Required)
+                    } else {
+                        self.parse_field()
+                    }
+                }
+            };
+            children.push(node(parsed));
+            if self.position == before {
+                self.error_here("quote parser could not make progress");
+                children.push(self.bump());
+            }
+            self.eat_newlines(&mut children);
+        }
+        SyntaxNode::new(kind, children, fallback)
+    }
+
+    fn eat_leading_quote_newlines(&mut self) {
+        while self.at_simple(&TokenKind::Newline) {
+            self.position += 1;
         }
     }
 
@@ -791,7 +894,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_simple(&TokenKind::Assign, &mut children, "expected `=`");
         let expression = self.parse_expression();
-        let multiline = expression.kind == SyntaxKind::ClosureExpression;
+        let multiline = is_multiline_expression(&expression);
         children.push(node(expression));
         if !multiline {
             self.expect_line_end(&mut children);
@@ -832,7 +935,7 @@ impl<'a> Parser<'a> {
         let mut multiline = false;
         if !self.at_line_end() {
             let expression = self.parse_expression();
-            multiline = expression.kind == SyntaxKind::ClosureExpression;
+            multiline = is_multiline_expression(&expression);
             children.push(node(expression));
         }
         if !multiline {
@@ -977,12 +1080,12 @@ impl<'a> Parser<'a> {
     fn parse_expression_or_assignment_statement(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let expression = self.parse_expression();
-        let mut multiline = expression.kind == SyntaxKind::ClosureExpression;
+        let mut multiline = is_multiline_expression(&expression);
         let mut children = vec![node(expression)];
         let kind = if self.at_assignment_operator() {
             children.push(self.bump());
             let value = self.parse_expression();
-            multiline = value.kind == SyntaxKind::ClosureExpression;
+            multiline = is_multiline_expression(&value);
             children.push(node(value));
             SyntaxKind::AssignmentStatement
         } else {
@@ -1080,9 +1183,14 @@ impl<'a> Parser<'a> {
             ) => SyntaxNode::new(SyntaxKind::LiteralExpression, vec![self.bump()], fallback),
             Some(TokenKind::FormattedString(_)) => self.parse_formatted_string_expression(),
             Some(TokenKind::Keyword(Keyword::Fn)) => self.parse_closure_expression(),
+            Some(TokenKind::Keyword(Keyword::Quote)) => self.parse_quote_expression(),
             Some(TokenKind::LParen) => self.parse_parenthesized_or_tuple(),
             Some(TokenKind::LBracket) => self.parse_array_expression(),
             Some(TokenKind::At) => self.parse_macro_expression(),
+            Some(TokenKind::Dollar) => {
+                self.error_here("`$` interpolation is valid only inside a `quote:` body");
+                SyntaxNode::new(SyntaxKind::Error, vec![self.bump()], fallback)
+            }
             Some(_) if self.at_path_component() => {
                 SyntaxNode::new(SyntaxKind::NameExpression, vec![self.bump()], fallback)
             }
@@ -1110,6 +1218,97 @@ impl<'a> Parser<'a> {
         }
         self.parse_statement_block(&mut children);
         SyntaxNode::new(SyntaxKind::ClosureExpression, children, fallback)
+    }
+
+    fn parse_quote_expression(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        self.expect_simple(
+            &TokenKind::Colon,
+            &mut children,
+            "expected `:` after `quote`",
+        );
+        self.expect_simple(
+            &TokenKind::Newline,
+            &mut children,
+            "a quote body must begin on the following line",
+        );
+
+        let body_fallback = self.current_span();
+        let mut body = Vec::new();
+        if !self.eat_simple(&TokenKind::Indent, &mut body) {
+            self.error_here("expected a four-space indented quote body");
+            children.push(node(SyntaxNode::new(
+                SyntaxKind::QuoteBody,
+                body,
+                body_fallback,
+            )));
+            return SyntaxNode::new(SyntaxKind::QuoteExpression, children, fallback);
+        }
+
+        let mut depth = 1usize;
+        let mut content_tokens = 0usize;
+        while !self.at_eof() && depth > 0 {
+            if self.at_simple(&TokenKind::Dollar) {
+                body.push(node(self.parse_quote_interpolation()));
+                content_tokens += 1;
+                continue;
+            }
+            if self.at_simple(&TokenKind::Indent) {
+                depth += 1;
+                body.push(self.bump());
+                continue;
+            }
+            if self.at_simple(&TokenKind::Dedent) {
+                depth -= 1;
+                body.push(self.bump());
+                continue;
+            }
+            if !self.at_simple(&TokenKind::Newline) {
+                content_tokens += 1;
+            }
+            body.push(self.bump());
+        }
+        if depth > 0 {
+            self.error_here("expected end of indented quote body");
+        }
+        if content_tokens == 0 {
+            self.diagnostics.push(
+                Diagnostic::new(Category::Syntax, "an indented quote body cannot be empty")
+                    .with_primary(body_fallback),
+            );
+        }
+        children.push(node(SyntaxNode::new(
+            SyntaxKind::QuoteBody,
+            body,
+            body_fallback,
+        )));
+        SyntaxNode::new(SyntaxKind::QuoteExpression, children, fallback)
+    }
+
+    fn parse_quote_interpolation(&mut self) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = vec![self.bump()];
+        if matches!(self.current_kind(), Some(TokenKind::Identifier(_))) {
+            children.push(self.bump());
+            return SyntaxNode::new(SyntaxKind::QuoteInterpolation, children, fallback);
+        }
+        if self.at_simple(&TokenKind::LParen) {
+            children.push(self.bump());
+            if self.at_simple(&TokenKind::RParen) {
+                self.error_here("computed quote interpolation requires an expression");
+            } else {
+                children.push(node(self.parse_expression()));
+            }
+            self.expect_simple(
+                &TokenKind::RParen,
+                &mut children,
+                "expected `)` after computed quote interpolation",
+            );
+            return SyntaxNode::new(SyntaxKind::QuoteInterpolation, children, fallback);
+        }
+        self.error_here("expected an identifier or `(` after `$` in quote interpolation");
+        SyntaxNode::new(SyntaxKind::QuoteInterpolation, children, fallback)
     }
 
     fn parse_closure_captures(&mut self) -> SyntaxNode {
@@ -1861,6 +2060,13 @@ enum CompileTimeDeclaration {
     Derive,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum QuoteListElement {
+    Statement,
+    Member,
+    Item,
+}
+
 impl CompileTimeDeclaration {
     fn keyword(self) -> Keyword {
         match self {
@@ -1915,4 +2121,11 @@ fn is_comparison_expression(expression: &SyntaxNode) -> bool {
                 })
             )
         })
+}
+
+fn is_multiline_expression(expression: &SyntaxNode) -> bool {
+    matches!(
+        expression.kind,
+        SyntaxKind::ClosureExpression | SyntaxKind::QuoteExpression
+    )
 }

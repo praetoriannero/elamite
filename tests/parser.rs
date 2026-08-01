@@ -134,6 +134,65 @@ struct Entity:
 }
 
 #[test]
+fn parses_quote_bodies_and_both_interpolation_forms_losslessly() {
+    let source = r#"
+macro make_pair(
+    left: std.ast.Expression,
+    right: std.ast.Expression,
+) -> std.ast.Expression:
+    let pair: std.ast.Expression = quote:
+        ($left, $(right))
+    return quote:
+        call(
+            $left,
+            $(transform(right)),
+        )
+"#;
+    let (sources, output) = parse_text(source);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.tree.count(SyntaxKind::QuoteExpression), 2);
+    assert_eq!(output.tree.count(SyntaxKind::QuoteBody), 2);
+    assert_eq!(output.tree.count(SyntaxKind::QuoteInterpolation), 4);
+    assert_eq!(output.tree.count(SyntaxKind::CallExpression), 1);
+
+    let quote = find_node(&output.tree, SyntaxKind::QuoteExpression).unwrap();
+    let body = quote.direct_child(SyntaxKind::QuoteBody).unwrap();
+    assert!(body.direct_tokens().iter().any(|token| {
+        matches!(
+            token.kind,
+            TokenKind::LParen | TokenKind::Comma | TokenKind::RParen
+        )
+    }));
+}
+
+#[test]
+fn quote_interpolation_recovers_at_precise_invalid_forms() {
+    let cases = [
+        (
+            "fn main() -> ():\n    let value = $name\n",
+            "`$` interpolation is valid only inside a `quote:` body",
+        ),
+        (
+            "macro bad() -> std.ast.Expression:\n    return quote:\n        $\n",
+            "expected an identifier or `(` after `$` in quote interpolation",
+        ),
+        (
+            "macro bad() -> std.ast.Expression:\n    return quote:\n        $()\n",
+            "computed quote interpolation requires an expression",
+        ),
+    ];
+    for (source, expected) in cases {
+        let (sources, output) = parse_text(source);
+        let rendered = diagnostics(&sources, &output.diagnostics);
+        assert!(rendered.contains(expected), "{rendered}");
+    }
+}
+
+#[test]
 fn parses_local_tuple_bindings_and_positional_fields() {
     let source = r#"
 fn main() -> ():

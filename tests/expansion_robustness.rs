@@ -4,9 +4,9 @@ use elamite::expansion::fragment::parse_fragment;
 use elamite::expansion::provenance::{GeneratedSource, Origin, ProvenanceTable};
 use elamite::expansion::token_tree::{TokenTreeToken, build_token_trees};
 use elamite::lexer::lex;
-use elamite::parser::FragmentKind;
+use elamite::parser::{FragmentKind, parse};
 use elamite::source::{SourceManager, Span};
-use elamite::syntax::TokenKind;
+use elamite::syntax::{SyntaxKind, TokenKind};
 use proptest::prelude::*;
 
 proptest! {
@@ -106,5 +106,30 @@ proptest! {
         expansion_ids.sort();
         expansion_ids.dedup();
         prop_assert_eq!(expansion_ids.len(), depth);
+    }
+
+    #[test]
+    fn arbitrary_valid_quote_interpolations_parse_without_losing_sites(
+        names in proptest::collection::vec("v_[a-z][a-z0-9_]{0,8}", 0..32),
+    ) {
+        let entries = names
+            .iter()
+            .map(|name| format!("${name}, $({name}),"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let source = format!(
+            "macro generated() -> std.ast.Expression:\n    return quote:\n        ({entries})\n"
+        );
+        let mut sources = SourceManager::new();
+        let file = sources.add_text(PathBuf::from("generated-quote.elx"), source.clone());
+        let lexed = lex(file, &source);
+        prop_assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        let parsed = parse(&lexed.tokens);
+        prop_assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        prop_assert_eq!(parsed.tree.count(SyntaxKind::QuoteExpression), 1);
+        prop_assert_eq!(
+            parsed.tree.count(SyntaxKind::QuoteInterpolation),
+            names.len() * 2
+        );
     }
 }

@@ -194,7 +194,7 @@ fn removed_and_contextual_words_are_ordinary_identifiers() {
 #[test]
 fn recognizes_surface_punctuation_and_operators() {
     let output = lex_text(
-        "( ) [ ] { } , ; : . .. ... @ ? -> = + - * / % & | ^ ~ ! << >> == != <= >= < > && || \
+        "( ) [ ] { } , ; : . .. ... @ $ ? -> = + - * / % & | ^ ~ ! << >> == != <= >= < > && || \
          += -= *= /= %= &= |= ^= <<= >>=\n",
     );
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
@@ -217,6 +217,15 @@ fn body_colon_ends_a_continued_header() {
         count(&output.tokens, |kind| matches!(kind, TokenKind::Dedent)),
         1
     );
+}
+
+#[test]
+fn quote_bodies_follow_the_ordinary_exact_indentation_rule() {
+    let output = lex_text("macro bad() -> std.ast.Expression:\n    return quote:\n      value\n");
+    assert!(output.diagnostics.iter().any(|diagnostic| {
+        diagnostic.category == Category::LexicalIndentation
+            && diagnostic.message.contains("expected exactly 8 spaces")
+    }));
 }
 
 #[test]

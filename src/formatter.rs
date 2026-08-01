@@ -391,11 +391,18 @@ fn needs_space(pieces: &[Piece<'_>], index: usize) -> bool {
             | TokenKind::Question
     ) || matches!(
         previous,
-        TokenKind::LParen | TokenKind::LBracket | TokenKind::Dot | TokenKind::At
+        TokenKind::LParen
+            | TokenKind::LBracket
+            | TokenKind::Dot
+            | TokenKind::At
+            | TokenKind::Dollar
     ) {
         return false;
     }
     if matches!(previous, TokenKind::LBrace) {
+        return true;
+    }
+    if matches!(current, TokenKind::Dollar) {
         return true;
     }
     if matches!(
@@ -509,6 +516,13 @@ mod tests {
     fn normalizes_spacing_and_preserves_comments_and_literals() {
         let source = "// heading\nfn main( )->( ):\n    let value=Point{ x:1,y }\n    println(f\"{value} // literal\") // tail\n";
         let expected = "// heading\nfn main() -> ():\n    let value = Point { x: 1, y }\n    println(f\"{value} // literal\")  // tail\n";
+        assert_eq!(format(source, 100), expected);
+    }
+
+    #[test]
+    fn preserves_quote_layout_and_attaches_interpolation_markers() {
+        let source = "macro pair(left:std.ast.Expression)->std.ast.Expression:\n    return quote:\n        call( $left,$(transform(left)) )\n";
+        let expected = "macro pair(left: std.ast.Expression) -> std.ast.Expression:\n    return quote:\n        call($left, $(transform(left)))\n";
         assert_eq!(format(source, 100), expected);
     }
 

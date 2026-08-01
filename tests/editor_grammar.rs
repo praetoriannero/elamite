@@ -138,6 +138,15 @@ fn grammar_highlights_exactly_the_lexer_keywords() {
 }
 
 #[test]
+fn grammar_highlights_named_and_computed_quote_interpolation() {
+    let grammar = read(GRAMMAR);
+    let quote_rule = slice_between(&grammar, "\"quote-interpolation\"", "\n    },");
+    assert!(quote_rule.contains("[A-Za-z_][A-Za-z0-9_]*"));
+    assert!(quote_rule.contains("(?=\\\\()"));
+    assert!(quote_rule.contains("variable.other.readwrite.elx"));
+}
+
+#[test]
 fn grammar_recognizes_exactly_the_lexer_numeric_suffixes() {
     let lexer = read("src/lexer.rs");
     let expected = quoted_literals(slice_between(
