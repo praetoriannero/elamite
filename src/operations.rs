@@ -41,6 +41,9 @@ pub enum StandardCall {
     ArrayGet {
         collection: TypeId,
     },
+    SliceLen {
+        collection: TypeId,
+    },
     VecNew {
         collection: TypeId,
     },

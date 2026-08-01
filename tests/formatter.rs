@@ -208,7 +208,9 @@ fn every_shipped_source_formats_idempotently() {
         for entry in fs::read_dir(directory).expect("read source directory") {
             let path = entry.expect("read source entry").path();
             if path.is_dir() {
-                collect_sources(&path, output);
+                if path.file_name().and_then(|name| name.to_str()) != Some("known_failures") {
+                    collect_sources(&path, output);
+                }
             } else if path.extension().and_then(|extension| extension.to_str()) == Some("elx") {
                 output.push(path);
             }

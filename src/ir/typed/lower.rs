@@ -775,6 +775,13 @@ impl<'a> TypedLowerer<'a> {
                     })?
                     .id;
                 let (kind, binding_type) = match self.expanded_kind(iterable.ty) {
+                    TypeKind::Slice(element) => (
+                        IterationKind::Slice {
+                            collection: iterable.ty,
+                            element: *element,
+                        },
+                        *element,
+                    ),
                     TypeKind::Array { element, length } => (
                         IterationKind::Array {
                             length: *length,
@@ -2316,14 +2323,14 @@ impl<'a> TypedLowerer<'a> {
         self.find_field(declaration, name)
     }
 
-    /// Lowers a field-access base, inserting the automatic dereference when it
-    /// is a safe reference (SPEC 3.2).
+    /// Lowers a field-access base, inserting the automatic dereference for a
+    /// safe reference or raw pointer. Raw access has already been restricted
+    /// to `unsafe:` by checking and traps during CFG lowering.
     fn lower_receiver(&mut self, base: &SyntaxNode) -> Option<TypedExpression> {
         let value = self.lower_expression(base)?;
-        if !self.is_reference_type(value.ty) {
+        let Some(target) = self.field_pointer_target(value.ty) else {
             return Some(value);
-        }
-        let target = self.reference_target(value.ty)?;
+        };
         Some(TypedExpression {
             ty: target,
             place: PlaceKind::Mutable,
@@ -2337,10 +2344,9 @@ impl<'a> TypedLowerer<'a> {
     fn lower_place_receiver(&mut self, base: &SyntaxNode) -> Option<TypedPlace> {
         let template = self.checked.expression_types.get(&base.span).copied()?;
         let base_type = self.concrete_type(template);
-        if !self.is_reference_type(base_type) {
+        let Some(target) = self.field_pointer_target(base_type) else {
             return self.lower_place(base);
-        }
-        let target = self.reference_target(base_type)?;
+        };
         Some(TypedPlace::Dereference {
             base: Box::new(self.lower_expression(base)?),
             ty: target,
@@ -2388,19 +2394,17 @@ impl<'a> TypedLowerer<'a> {
         }
     }
 
-    fn is_reference_type(&self, ty: TypeId) -> bool {
-        matches!(self.expanded_kind(ty), TypeKind::Reference { .. })
-    }
-
-    fn reference_target(&self, ty: TypeId) -> Option<TypeId> {
+    fn field_pointer_target(&self, ty: TypeId) -> Option<TypeId> {
         match self.expanded_kind(ty) {
-            TypeKind::Reference { target, .. } => Some(*target),
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                Some(*target)
+            }
             _ => None,
         }
     }
 
     /// The struct a field selection resolves against, seeing through a safe
-    /// reference: reference field access automatically dereferences (SPEC 3.2).
+    /// reference or raw pointer.
     fn field_owner(&self, base_type: TypeId) -> Option<DeclarationId> {
         match self.expanded_kind(base_type) {
             TypeKind::Nominal { identity, .. }
@@ -2408,14 +2412,16 @@ impl<'a> TypedLowerer<'a> {
                 identity,
                 complete: true,
             } => Some(identity.declaration),
-            TypeKind::Reference { target, .. } => match self.expanded_kind(*target) {
-                TypeKind::Nominal { identity, .. }
-                | TypeKind::Foreign {
-                    identity,
-                    complete: true,
-                } => Some(identity.declaration),
-                _ => None,
-            },
+            TypeKind::Reference { target, .. } | TypeKind::RawPointer { target, .. } => {
+                match self.expanded_kind(*target) {
+                    TypeKind::Nominal { identity, .. }
+                    | TypeKind::Foreign {
+                        identity,
+                        complete: true,
+                    } => Some(identity.declaration),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

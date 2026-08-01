@@ -342,6 +342,9 @@ impl<'a> CEmitter<'a> {
                 operation,
                 arguments,
             } => {
+                if matches!(operation, StandardCall::SliceLen { .. }) {
+                    return Some(format!("{}.length", temporary_name(*arguments.first()?)));
+                }
                 if matches!(operation, StandardCall::Assert) {
                     let condition = arguments
                         .first()
@@ -426,6 +429,9 @@ impl<'a> CEmitter<'a> {
                 )
             }
             Rvalue::CollectionLength { collection, kind } => match kind {
+                IterationKind::Slice { .. } => {
+                    format!("{}.length", temporary_name(*collection))
+                }
                 IterationKind::Array { length, .. } => format!("(uintptr_t){length}U"),
                 IterationKind::Vec { .. }
                 | IterationKind::Map { .. }
@@ -441,6 +447,10 @@ impl<'a> CEmitter<'a> {
                 let collection_name = temporary_name(*collection);
                 let index_name = temporary_name(*index);
                 match kind {
+                    IterationKind::Slice { element, .. } => format!(
+                        "{}({collection_name}.values[{index_name}])",
+                        copy_helper_name(self.resolve_alias(*element))
+                    ),
                     IterationKind::Array { element, .. } => format!(
                         "{}({collection_name}.values[{index_name}])",
                         copy_helper_name(self.resolve_alias(*element))
@@ -673,23 +683,17 @@ impl<'a> CEmitter<'a> {
             }
             Rvalue::VariadicSlice {
                 elements,
-                element_type,
+                element_type: _,
             } => {
-                let slice = self.c_type(destination_type, Some(span))?;
-                if elements.is_empty() {
-                    format!("({slice}){{NULL, (uintptr_t)0}}")
-                } else {
-                    let element = self.c_type(*element_type, Some(span))?;
-                    let values = elements
-                        .iter()
-                        .map(|element| temporary_name(*element))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!(
-                        "({slice}){{({element}[]){{{values}}}, (uintptr_t){}}}",
-                        elements.len()
-                    )
-                }
+                let values = elements
+                    .iter()
+                    .map(|element| temporary_name(*element))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{}({values})",
+                    variadic_slice_name(destination_type, elements.len())
+                )
             }
             Rvalue::Aggregate(aggregate) => {
                 self.aggregate_expression(aggregate, destination_type, span)?

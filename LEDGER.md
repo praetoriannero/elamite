@@ -259,12 +259,12 @@ removed.
 | Safe/unsafe function references are `&fn`/`&unsafe fn`; general raw function pointers are `*fn`/`*unsafe fn`; both are directly callable, but every raw call requires `unsafe:` and traps on null | M11 (references), M17 (raw function pointers, done) | null trap | run-pass (`raw_function_pointers_are_general_and_directly_callable`), compile-fail |
 | Exact function references explicitly convert to matching raw function pointers; function and data pointer domains never cast between each other | M17 (done) | — | compile-pass/fail (`rejects_invalid_c_contracts_and_unsafe_calls`) |
 | No default parameter values; every non-variadic call needs the exact declared arity | M6 | — | compile-fail (arity mismatch) |
-| Variadic final parameter `name: ...T`: 0+ trailing `T` args bound as `[T]`; homogeneous, only once, final position; type marker preserved (`&fn(i32, ...String) -> ()`); lowered as a slice argument, not C's variadic ABI | M3, M6, M8 | — | compile-pass, run-pass |
+| Variadic final parameter `name: ...T`: 0+ trailing `T` args bound as immutable `[T]`; homogeneous, only once, final position; type marker preserved (`&fn(i32, ...String) -> ()`); lowered as a managed, safely escaping slice rather than C's variadic ABI; slices provide checked indexing, `len`, and copy-yielding index-order iteration | M3, M6, M8, M14 | managed allocation | compile-pass, run-pass |
 | Named-function value = safe `&fn(P) -> R` or unsafe `&unsafe fn(P) -> R`; bare function types remain inhabited only behind a reference; no `&var fn` or bound-method values | M5, M11 | — | compile-fail (bare `fn` type as a value) |
 | Closure syntax is `fn(parameters):` or `fn[nonempty captures](parameters) -> Return:`; parameters are typed, return annotation optional; no implicit, generic, unsafe, or variadic closure forms | Closures: normative contract, syntax, checking | — | parser snapshot, compile-pass/fail |
 | Capture forms are plain logical copy, `&`, `&var`, `*`, and `*var`; `source as alias` renames locally; construction is exact-once left-to-right; raw-pointer locals require an explicit pointer capture form | Closures: capture resolution/typing | Boehm GC for safe-reference escape | run-pass, compile-fail |
 | Every outer local use requires exactly one capture; declarations need none; aliases/parameters cannot collide; initializing self-capture, anonymous recursion, and inherited outer control contexts are rejected | Closures: resolution/body checking | — | compile-fail |
-| Every closure expression has a distinct anonymous nominal type implementing `Callable[Arguments, Return]`; direct and generic-bound call syntax preserves exact tuple arguments/result; named safe function references also satisfy matching callable APIs; `&Callable` provides erasure | Closures: callable types/lowering | vtable dispatch | run-pass, compile-fail |
+| Every closure expression has a distinct anonymous nominal type implementing `Callable[Arguments, Return]`; direct and generic-bound call syntax preserves exact tuple arguments/result; named safe function references satisfy static matching `Callable` bounds but do not directly erase to `&Callable`; trait-object erasure requires referenced nominal storage and never casts a function pointer into the data-pointer domain | Closures: callable types/lowering | vtable dispatch | run-pass, compile-fail |
 | Closure copies recursively copy plain capture fields and preserve reference/raw-pointer aliases; capture bindings cannot be rebound; closure environments and address-taken safe referents remain rooted; raw pointers do not root pointees | Closures: copy/escape | Boehm GC | run-pass, generated-C |
 | Closure bodies are separate safe function boundaries; return inference includes explicit returns and reachable unit fallthrough; no tail return; `!`, `?`, `defer`, and explicit inner `unsafe:` retain ordinary rules | Closures: control checking/IR | cleanup/trap paths | run-pass, compile-fail |
 | Closures never convert to function references, raw function pointers, or C callbacks; callable equality/hash, `CallableMut`/`CallableOnce`, private evolving/initialized/default captures remain unsupported | Closures: exclusion rules | — | compile-fail |
@@ -312,8 +312,8 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| `for` initially supports only arrays/`Vec`/`Map`/`Set`, no user iteration protocol yet; the iterable evaluates once and copies into hidden loop state via ordinary value semantics; later source mutation cannot affect the active loop; COW allowed if unobservable | M7 (CFG for `for`), M14 (lowering + hidden state) | — | run-pass |
-| Arrays/vectors iterate index order; maps yield `(K, V)` pairs, sets yield elements, order unspecified and may vary; each yielded item is independently copied into a non-rebindable binding; no interior references exposed; visits only direct elements, no recursive traversal through reference-like values | M14 | — | run-pass |
+| `for` initially supports slices/arrays/`Vec`/`Map`/`Set`, no user iteration protocol yet; the iterable evaluates once and copies into hidden loop state via ordinary value semantics; later source mutation cannot affect the active loop; COW allowed if unobservable | M7 (CFG for `for`), M14 (lowering + hidden state) | — | run-pass |
+| Slices/arrays/vectors iterate index order; maps yield `(K, V)` pairs, sets yield elements, order unspecified and may vary; each yielded item is independently copied into a non-rebindable binding; no interior references exposed; visits only direct elements, no recursive traversal through reference-like values | M14 | — | run-pass |
 
 ### 7.2 Formatted strings and display
 
@@ -799,8 +799,9 @@ copy recording begin in Milestone 6.
   support storage, parameters, returns, indirect calls, and identity equality,
   and lower to typed C99 function pointers without closures or captures.
 - [x] Field-first postfix calls bypass receiver adaptation, and homogeneous
-  variadic tails are packed into a slice with runtime length for checked
-  indexing.
+  variadic tails are packed into managed, safely escaping immutable slices
+  with runtime length for checked indexing, `len`, and copy-yielding
+  iteration.
 - [x] Compile-fail coverage checks invalid receiver adaptation, bound-method
   values, bare function value types, safety mismatch, variadic mismatch, and
   raw-pointer mismatch; debug and release run-pass coverage exercises methods,

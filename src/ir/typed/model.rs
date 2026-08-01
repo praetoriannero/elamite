@@ -339,6 +339,10 @@ pub struct TypedTupleBinding {
 
 #[derive(Debug, Clone, Copy)]
 pub enum IterationKind {
+    Slice {
+        collection: TypeId,
+        element: TypeId,
+    },
     Array {
         length: u128,
         element: TypeId,

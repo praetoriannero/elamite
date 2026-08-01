@@ -84,9 +84,12 @@ impl<'a> CEmitter<'a> {
                 self.emit_type_definition(*element, span);
                 let name = array_name(ty);
                 if let Some(c_type) = self.c_type(*element, span) {
+                    // ISO C99 has no zero-length arrays. The backing slot is
+                    // never observable through Elamite's length-zero type.
+                    let storage_length = (*length).max(1);
                     let _ = writeln!(
                         self.output,
-                        "typedef struct {name} {{ {c_type} values[{length}]; }} {name};\n"
+                        "typedef struct {name} {{ {c_type} values[{storage_length}]; }} {name};\n"
                     );
                 }
             }
@@ -342,7 +345,9 @@ impl<'a> CEmitter<'a> {
                 }
             }
             TypeKind::Array { element, length } => {
-                if let Some(value) = self.component_default(element, span) {
+                if length != 0
+                    && let Some(value) = self.component_default(element, span)
+                {
                     let _ = writeln!(
                         body,
                         "    for (uintptr_t i = 0; i < {length}u; ++i) value.values[i] = {value};"

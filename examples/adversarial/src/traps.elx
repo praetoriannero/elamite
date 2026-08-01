@@ -70,7 +70,7 @@ test remainder_by_zero_traps:
 
 test shift_at_width_traps:
     expect (BuiltinTrap.InvalidShift):
-        var count: i32 = 32
+        var count: u32 = 32
         println(f"unreachable {1i32 << count}")
 
 test array_index_out_of_bounds_traps:

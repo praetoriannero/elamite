@@ -569,13 +569,24 @@ impl<'a> Parser<'a> {
     fn parse_parameters(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = Vec::new();
+        let mut seen_variadic = false;
         self.expect_simple(&TokenKind::LParen, &mut children, "expected `(`");
         while !self.at_eof() && !self.at_simple(&TokenKind::RParen) {
             let param_fallback = self.current_span();
             let mut param = Vec::new();
             self.expect_parameter_name(&mut param);
             self.expect_simple(&TokenKind::Colon, &mut param, "expected `:`");
-            self.eat_simple(&TokenKind::Ellipsis, &mut param);
+            let variadic = self.eat_simple(&TokenKind::Ellipsis, &mut param);
+            if variadic && seen_variadic {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Syntax,
+                        "a parameter list may contain only one variadic parameter",
+                    )
+                    .with_primary(param_fallback),
+                );
+            }
+            seen_variadic |= variadic;
             param.push(node(self.parse_type()));
             children.push(node(SyntaxNode::new(
                 SyntaxKind::Parameter,
@@ -584,6 +595,12 @@ impl<'a> Parser<'a> {
             )));
             if !self.eat_simple(&TokenKind::Comma, &mut children) {
                 break;
+            }
+            if variadic && !self.at_simple(&TokenKind::RParen) {
+                self.diagnostics.push(
+                    Diagnostic::new(Category::Syntax, "a variadic parameter must be final")
+                        .with_primary(param_fallback),
+                );
             }
         }
         self.expect_simple(&TokenKind::RParen, &mut children, "expected `)`");
@@ -661,11 +678,29 @@ impl<'a> Parser<'a> {
     fn parse_function_type_tail(&mut self, children: &mut Vec<SyntaxElement>) {
         self.expect_keyword(Keyword::Fn, children, "expected `fn`");
         self.expect_simple(&TokenKind::LParen, children, "expected `(`");
+        let mut seen_variadic = false;
         while !self.at_eof() && !self.at_simple(&TokenKind::RParen) {
-            self.eat_simple(&TokenKind::Ellipsis, children);
+            let variadic_span = self.current_span();
+            let variadic = self.eat_simple(&TokenKind::Ellipsis, children);
+            if variadic && seen_variadic {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Syntax,
+                        "a function type may contain only one variadic parameter",
+                    )
+                    .with_primary(variadic_span),
+                );
+            }
+            seen_variadic |= variadic;
             children.push(node(self.parse_type()));
             if !self.eat_simple(&TokenKind::Comma, children) {
                 break;
+            }
+            if variadic && !self.at_simple(&TokenKind::RParen) {
+                self.diagnostics.push(
+                    Diagnostic::new(Category::Syntax, "a variadic parameter must be final")
+                        .with_primary(variadic_span),
+                );
             }
         }
         self.expect_simple(&TokenKind::RParen, children, "expected `)`");

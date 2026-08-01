@@ -1,22 +1,17 @@
-// FINDING 12 — statically evident invalid arithmetic is not a compile error.
+// REGRESSION 12 — statically evident invalid arithmetic is a compile error.
 //
 // SPEC 4.1: "A statically evident invalid literal, conversion, or arithmetic
 // operation is a compile-time error." LEDGER 4.1 assigns the static-detection
 // half of that row to M6 and marks the row complete.
 //
-// Expected: each line below is a compile-time error.
-// Actual:   all three compile; each traps at run time instead
-//           (E-RUN-OVERFLOW, E-RUN-SHIFT, E-RUN-DIVZERO).
+// Expected and current: each line below is diagnosed at compile time.
 //
 // The array half of the same rule *is* implemented: a statically known
 // out-of-bounds array index is correctly rejected with
 // "error: this constant array index is out of bounds".
 //
-// Runtime trapping is correct and covered by src/traps.elx; only the
-// compile-time half is missing.
-
 fn main():
     let overflow: i32 = 2147483647 + 1
-    let bad_shift = 1i32 << 32i32
+    let bad_shift = 1i32 << 32u32
     let divide_by_zero = 1i32 / 0i32
     println(f"{overflow} {bad_shift} {divide_by_zero}")

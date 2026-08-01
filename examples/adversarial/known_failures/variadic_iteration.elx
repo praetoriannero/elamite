@@ -1,4 +1,5 @@
-// FINDING 3 — SPEC's own normative example does not compile.
+// REGRESSION 3 — variadic tails are immutable, iterable slices with `len` and
+// managed backing storage that remains valid after the call returns.
 //
 // SPEC 5 binds a variadic tail to the slice type `[T]` and then shows exactly
 // this body:
@@ -7,20 +8,18 @@
 //         for value in y:
 //             println(f"{x}: {value}")
 //
-// SPEC 7.1 says `for` "directly supports arrays, `Vec`, `Map`, and `Set`",
-// which does not include a slice, so the specification contradicts itself.
-//
-// Expected: either the example compiles, or SPEC 5 stops using `for` on a
-//           variadic tail.
-// Actual:   error: `for` supports only arrays, `Vec`, `Map`, and `Set`
-//
-// Indexing a variadic tail does work (`rest[0]`), so the slice is otherwise
-// usable. `rest.len()` also fails, which leaves no portable way to bound the
-// index.
+// SPEC 5 and 7.1 now define this behavior explicitly.
 
-pub fn variadic(x: i32, y: ...String) -> ():
+pub fn collect(y: ...String) -> [String]:
+    return y
+
+pub fn saved_values() -> [String]:
+    return collect(String.from("one"), String.from("two"))
+
+pub fn variadic(x: i32, y: [String]) -> ():
+    println(f"length: {y.len()}")
     for value in y:
         println(f"{x}: {value}")
 
 fn main():
-    variadic(7, String.from("one"), String.from("two"))
+    variadic(7, saved_values())

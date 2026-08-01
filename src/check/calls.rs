@@ -946,6 +946,30 @@ impl<'a> Checker<'a> {
                         _ => return (self.typed.types.error(), PlaceKind::Value),
                     }
                 }
+                TypeKind::RawPointer { mutability, target } => {
+                    self.require_unsafe_context(
+                        node.span,
+                        "accessing a field through a raw pointer",
+                    );
+                    self.reject_locally_invalid_pointer(base);
+                    let target = self.typed.types.resolve_inference(target);
+                    let place = if mutability == Mutability::Mutable {
+                        PlaceKind::RawPointerTarget
+                    } else {
+                        PlaceKind::Value
+                    };
+                    match self.typed.types.kind(target).clone() {
+                        TypeKind::Nominal {
+                            identity,
+                            arguments,
+                        } => (identity.declaration, arguments, place),
+                        TypeKind::Foreign {
+                            identity,
+                            complete: true,
+                        } => (identity.declaration, Vec::new(), place),
+                        _ => return (self.typed.types.error(), PlaceKind::Value),
+                    }
+                }
                 TypeKind::Error => return (self.typed.types.error(), PlaceKind::Value),
                 _ => return (self.typed.types.error(), PlaceKind::Value),
             };
@@ -1181,6 +1205,28 @@ impl<'a> Checker<'a> {
                 arguments,
                 explicit,
                 expected,
+            );
+        }
+
+        // A dotted module path is still a direct function selection. Handle
+        // it before instance-member dispatch, whose base is a value.
+        if callee.kind == SyntaxKind::MemberExpression
+            && let Some(span) = Self::callee_target_span(callee)
+            && let Some(reference) = self.resolved.reference_at(span)
+            && let NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) =
+                reference.target
+            && matches!(
+                self.resolved.declarations[declaration.index()].kind,
+                DeclarationKind::Function | DeclarationKind::ForeignFunction
+            )
+        {
+            return self.check_function_call(
+                node.span,
+                declaration,
+                None,
+                arguments,
+                expected,
+                false,
             );
         }
 
@@ -1489,6 +1535,17 @@ impl<'a> Checker<'a> {
             _ => None,
         })?;
         let member_name = token_text(member_token);
+
+        // A builtin reached through an imported module path (for example
+        // `std.io.println`) is handled by the ordinary direct-call path.
+        if matches!(
+            self.resolved
+                .reference_at(member_token.span)
+                .map(|reference| reference.target),
+            Some(NameTarget::Item(crate::resolution::ItemId::Builtin(_)))
+        ) {
+            return None;
+        }
 
         // `Type.Trait.method(...)` selects that implementation's member
         // unconditionally, bypassing fields, inherent methods, and bound trait
@@ -2016,11 +2073,12 @@ impl<'a> Checker<'a> {
             }
             return Some((self.typed.types.error(), PlaceKind::Value));
         }
-        let (owner, self_type) = self.receiver_owner(base_type)?;
+        let receiver = self.receiver_owner(base_type);
+        let self_type = receiver.map_or(base_type, |(_, self_type)| self_type);
         // Fields and inherent methods are found first; a trait method is
         // selected only when the type itself provides no member of that name
         // (`SPEC.md` 6).
-        let member = match self.find_member(owner, &member_name) {
+        let member = match receiver.and_then(|(owner, _)| self.find_member(owner, &member_name)) {
             Some(member) => Some(member),
             None => match self.select_trait_method(self_type, &member_name, member_token.span) {
                 TraitSelection::Found(selected) => {
@@ -2284,7 +2342,10 @@ impl<'a> Checker<'a> {
         name: &str,
         span: Span,
     ) -> Option<(StandardCall, Vec<TypeId>, TypeId, bool)> {
-        let receiver = self.typed.types.resolve_inference(receiver);
+        let mut receiver = self.typed.types.resolve_inference(receiver);
+        while let TypeKind::Alias { target, .. } = self.typed.types.kind(receiver) {
+            receiver = self.typed.types.resolve_inference(*target);
+        }
         let usize_type = self.typed.types.primitive(PrimitiveType::Usize);
         let bool_type = self.typed.types.primitive(PrimitiveType::Bool);
         let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
@@ -2308,6 +2369,14 @@ impl<'a> Checker<'a> {
             ));
         }
         match self.typed.types.kind(receiver).clone() {
+            TypeKind::Slice(_) if name == "len" => Some((
+                StandardCall::SliceLen {
+                    collection: receiver,
+                },
+                Vec::new(),
+                usize_type,
+                false,
+            )),
             TypeKind::Array { element, .. } => match name {
                 "len" => Some((
                     StandardCall::ArrayLen {
@@ -2925,13 +2994,17 @@ impl<'a> Checker<'a> {
             return None;
         }
         let type_node = child_nodes(base).into_iter().next()?;
-        let (owner, arguments) = self.nominal_selection(type_node)?;
-        let target = match arguments {
-            Some(arguments) => {
-                self.typed
-                    .instantiate_declaration_type(self.resolved, owner, &arguments)?
+        let target = if let Some((owner, arguments)) = self.nominal_selection(type_node) {
+            match arguments {
+                Some(arguments) => {
+                    self.typed
+                        .instantiate_declaration_type(self.resolved, owner, &arguments)?
+                }
+                None => *self.typed.declaration_types.get(&owner)?,
             }
-            None => *self.typed.declaration_types.get(&owner)?,
+        } else {
+            let primitive = self.primitive_selection(type_node)?;
+            self.typed.types.primitive(primitive)
         };
         let trait_token = base.children.iter().rev().find_map(|child| match child {
             SyntaxElement::Token(token) if matches!(token.kind, TokenKind::Identifier(_)) => {

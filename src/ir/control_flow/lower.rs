@@ -18,6 +18,9 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
                         value: Rvalue::FormattedString(_),
                         ..
                     } | Instruction::Assign {
+                        value: Rvalue::VariadicSlice { .. },
+                        ..
+                    } | Instruction::Assign {
                         value: Rvalue::Binary {
                             operator: BinaryOperator::Concatenate,
                             ..
@@ -269,14 +272,14 @@ impl<'a> FunctionLowerer<'a> {
                     });
                     let right = self.lower_expression(value);
                     let operator = assignment_binary(*operator);
-                    let result = self.temp(value.ty);
+                    let result = self.temp(place_type);
                     self.emit(Instruction::Assign {
                         destination: result,
                         value: Rvalue::Binary {
                             operator,
                             left: old,
                             right,
-                            trap: binary_trap(operator, value.ty, self.types),
+                            trap: binary_trap(operator, place_type, self.types),
                         },
                         span: statement.span,
                     });
@@ -1640,13 +1643,18 @@ fn structural_equality(types: &TypeContext, ty: TypeId) -> bool {
     }
     matches!(
         types.kind(ty),
-        TypeKind::Tuple(_)
+        TypeKind::Primitive(PrimitiveType::Unit)
+            | TypeKind::Tuple(_)
             | TypeKind::Array { .. }
             | TypeKind::Nominal { .. }
             | TypeKind::Builtin { .. }
     ) || matches!(
         types.expanded_primitive(ty),
         Some(PrimitiveType::Str | PrimitiveType::String)
+    ) || matches!(
+        types.kind(ty),
+        TypeKind::Reference { target, .. }
+            if matches!(types.kind(types.resolve_inference(*target)), TypeKind::TraitObject { .. })
     )
 }
 

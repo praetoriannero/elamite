@@ -1,20 +1,12 @@
-// FINDING 6 — a transparent `type` alias is not transparent for standard
-// collections, in two separate ways.
+// REGRESSION 6 — a transparent `type` alias remains transparent for standard
+// collection checking, lowering, and helper emission.
 //
 // SPEC 4.4: "A module-level `type` alias is transparent."
 // LEDGER 4.4 records test evidence as compile-pass only, so the run-pass path
 // was never covered.
 //
-// Expected: compiles; prints 2.
-// Actual (a): a method call on an alias-annotated binding checks cleanly but
-//             fails lowering:
-//               error: an expression whose type belongs to a later milestone
-//               is not supported by the Milestone 8 executable subset
-// Actual (b): merely routing a collection value through an alias annotation
-//             makes the backend emit an unused constructor, which the
-//             driver's own -Werror build rejects:
-//               error: 'el_map_new_t60' defined but not used
-//               [-Werror=unused-function]
+// Expected and current: compiles; prints 2 without emitting alias-duplicate
+// runtime helpers.
 //
 // Both reproduce for `Vec` aliases as well. Assignment across the alias with
 // no alias-annotated binding in between is fine.

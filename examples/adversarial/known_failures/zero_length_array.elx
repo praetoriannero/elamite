@@ -1,17 +1,9 @@
-// FINDING 11 — a zero-length array emits invalid C.
+// REGRESSION 11 — zero-length arrays use a portable C99 representation.
 //
 // SPEC 4.1: "A fixed array type is `[T; N]`, where `N` is a compile-time
 // nonnegative `usize` value." Zero is nonnegative.
 //
-// Expected: compiles; prints 0.
-// Actual:   `elamc check` exits 0; the C compiler then rejects the output with
-//           two distinct errors:
-//           error: excess elements in array initializer [-Werror]
-//                  (from `el_array_tN result = {0};` over a zero-length
-//                   member)
-//           error: comparison of unsigned expression in '< 0' is always false
-//                  [-Werror=type-limits]
-//                  (from the generated copy loop `for (i = 0U; i < 0U; ++i)`)
+// Expected and current: compiles; prints 0.
 
 fn main():
     let empty: [i32; 0] = []

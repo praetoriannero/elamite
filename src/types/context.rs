@@ -64,6 +64,14 @@ impl PrimitiveType {
     }
 
     #[must_use]
+    pub fn is_unsigned_integer(self) -> bool {
+        matches!(
+            self,
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::U128 | Self::Usize
+        )
+    }
+
+    #[must_use]
     pub fn is_float(self) -> bool {
         matches!(self, Self::F32 | Self::F64)
     }
@@ -1065,7 +1073,7 @@ pub(crate) fn parse_integer_magnitude(
         .map_err(|_| literal_error("integer literal exceeds the supported 128-bit magnitude"))
 }
 
-fn integer_fits(
+pub(crate) fn integer_fits(
     primitive: PrimitiveType,
     magnitude: u128,
     negative: bool,

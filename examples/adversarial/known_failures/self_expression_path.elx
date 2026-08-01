@@ -1,16 +1,11 @@
-// FINDING 5 — the `self` path root resolves in a `use` declaration but not in
-// an expression path.
+// REGRESSION 5 — the `self` module path root resolves in expressions.
 //
 // SPEC 2.3: "Paths use periods. `root` begins at the current package root,
 // `self` begins at the current module, and `super` begins at its parent."
 // No rule limits `self` to import position.
 //
-// Expected: compiles; prints 1.
-// Actual:   error: cannot resolve `self`
+// Expected and current: compiles; prints 1.
 //
-// `use self.inner.value` is accepted, and `super.name()` works in expression
-// position, so only the expression-path form of `self` is affected.
-
 fn local() -> i32:
     return 1
 

@@ -1,17 +1,11 @@
-// FINDING 9 — trait-object reference equality emits invalid C.
+// REGRESSION 9 — trait-object equality compares concrete target identity.
 //
 // SPEC 4.5: "Safe references compare target storage identity rather than
 // target contents. Trait-object references likewise compare their concrete
 // target identity." LEDGER 4.5 records this row as run-pass tested.
 //
-// Expected: compiles; prints true.
-// Actual:   `elamc check` exits 0; the C compiler then rejects the output:
-//           error: invalid operands to binary == (have 'el_obj18_t36' and
-//           'el_obj18_t36')
+// Expected and current: compiles; prints true.
 //
-// Same root cause as unit_equality.elx: `==` is emitted directly on a C
-// struct type. Concrete safe-reference equality (`&dog == &dog`) works.
-
 trait Greet:
     fn greeting(self: &Self) -> str
 

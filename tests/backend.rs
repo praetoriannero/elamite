@@ -138,6 +138,84 @@ fn build_and_run(source: &str, optimization: Optimization) -> (String, String, i
 }
 
 #[test]
+fn adversarial_regressions_build_and_run_with_specified_behavior() {
+    let cases = [
+        (
+            include_str!("../examples/adversarial/known_failures/variant_literal_arm.elx"),
+            "nonzero\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/trait_impl_for_primitive.elx"),
+            "bound call: i32\nqualified: i32\ngeneric bound: i32\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/self_expression_path.elx"),
+            "1\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/alias_collection.elx"),
+            "2\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/raw_pointer_field_access.elx"),
+            "7\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/unit_equality.elx"),
+            "true\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/trait_object_equality.elx"),
+            "true\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/field_less_struct.elx"),
+            "constructed\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/zero_length_array.elx"),
+            "0\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/shift_operand_typing.elx"),
+            "unsigned shift count: 8\n",
+        ),
+        (
+            include_str!("../examples/adversarial/known_failures/variadic_iteration.elx"),
+            "length: 2\n7: one\n7: two\n",
+        ),
+    ];
+    for (source, expected) in cases {
+        let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, expected);
+    }
+}
+
+#[test]
+fn variadic_slices_use_managed_backing_storage_even_for_scalar_elements() {
+    let tree = TestTree::new("managed-variadic-slice");
+    tree.executable(
+        r#"
+fn collect(values: ...i32) -> [i32]:
+    return values
+
+fn main():
+    let saved = collect(1, 2)
+    println(saved.len())
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(compilation.control_flow_ir.requires_managed_memory);
+    assert!(compilation.generated_c.contains("static el_slice_t"));
+    assert!(compilation.generated_c.contains("el_variadic_t"));
+    assert!(compilation.generated_c.contains("result.values"));
+}
+
+#[test]
 fn builds_and_runs_calls_branches_loops_and_output() {
     let source = r#"
 fn add(left: i32, right: i32) -> i32:
@@ -1336,7 +1414,7 @@ fn checked_integer_index_and_conversion_operations_trap() {
             "E-RUN-CAST",
         ),
         (
-            "fn main() -> ():\n    let value = 1 << 32\n    println(value)\n",
+            "fn main() -> ():\n    let count = 32u32\n    let value = 1 << count\n    println(value)\n",
             "E-RUN-SHIFT",
         ),
     ];

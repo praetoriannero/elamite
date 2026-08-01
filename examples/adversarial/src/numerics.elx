@@ -123,11 +123,11 @@ fn shift_boundary() -> ():
 
     // An arithmetic right shift of a negative value keeps its sign.
     let negative: i32 = -8
-    println(f"arithmetic shift right: {negative >> 1}")
+    println(f"arithmetic shift right: {negative >> 1u32}")
 
     // A logical right shift of the corresponding unsigned value does not.
     let unsigned: u32 = 4294967288
-    println(f"logical shift right: {unsigned >> 1}")
+    println(f"logical shift right: {unsigned >> 1u32}")
 
     println(f"bitwise complement: {~0i32} {~0u8}")
 

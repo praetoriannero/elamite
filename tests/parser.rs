@@ -698,6 +698,37 @@ fn respects_every_expression_precedence_level() {
     }
 }
 
+#[test]
+fn rejects_non_final_and_repeated_variadic_parameters() {
+    let source = r#"
+fn misplaced(rest: ...i32, tail: i32):
+    pass
+
+fn repeated(first: ...i32, second: ...i32):
+    pass
+
+type Callback = &fn(...i32, i32) -> ()
+"#;
+    let (sources, output) = parse_text(source);
+    let rendered = diagnostics(&sources, &output.diagnostics);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message == "a variadic parameter must be final")
+            .count(),
+        3,
+        "{rendered}"
+    );
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("only one variadic parameter")),
+        "{rendered}"
+    );
+}
+
 fn find_node(node: &SyntaxNode, kind: SyntaxKind) -> Option<&SyntaxNode> {
     if node.kind == kind {
         return Some(node);

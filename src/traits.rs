@@ -1318,26 +1318,16 @@ fn provides_inner(
         TypeKind::Nominal {
             identity,
             arguments,
-        } => {
-            nominal_provides(
-                resolved,
-                typed,
-                identity.declaration,
-                arguments,
-                trait_name,
-                substitution,
-                assume_parameters,
-                visiting,
-            ) || (trait_name != "StableHash"
-                && manual_implementation_provides(
-                    resolved,
-                    typed,
-                    ty,
-                    trait_name,
-                    assume_parameters,
-                    visiting,
-                ))
-        }
+        } => nominal_provides(
+            resolved,
+            typed,
+            identity.declaration,
+            arguments,
+            trait_name,
+            substitution,
+            assume_parameters,
+            visiting,
+        ),
         TypeKind::Never
         | TypeKind::GenericParameter(_)
         | TypeKind::Alias { .. }
@@ -1347,6 +1337,16 @@ fn provides_inner(
         | TypeKind::SelfType(_)
         | TypeKind::InferenceVariable(_) => false,
     };
+    let result = result
+        || (trait_name != "StableHash"
+            && manual_implementation_provides(
+                resolved,
+                typed,
+                ty,
+                trait_name,
+                assume_parameters,
+                visiting,
+            ));
     visiting.remove(&visit);
     result
 }

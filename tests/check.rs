@@ -2455,3 +2455,85 @@ fn main() -> ():
         Category::Place,
     );
 }
+
+#[test]
+fn shifts_use_an_unsigned_count_independent_of_the_value_type() {
+    assert_no_diagnostics(
+        r#"
+fn main():
+    let shifted: i32 = 1i32 << 3u32
+    var assigned: i16 = 2i16
+    assigned >>= 1u8
+"#,
+    );
+    assert_has_category(
+        r#"
+fn main():
+    let shifted = 1i32 << 3i32
+"#,
+        Category::ExpressionType,
+    );
+}
+
+#[test]
+fn statically_evident_invalid_integer_arithmetic_is_rejected() {
+    let (sources, diagnostics) = check_diagnostics(
+        r#"
+fn main():
+    let overflow: i32 = 2147483647 + 1
+    let divide = 1i32 / 0i32
+    let remainder = 1i32 % 0i32
+    let shift = 1i32 << 32u32
+"#,
+    );
+    let rendered = render(&sources, &diagnostics);
+    for needle in [
+        "overflows `i32`",
+        "division by zero",
+        "remainder by zero",
+        "outside the value type's width",
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(needle)),
+            "missing `{needle}` in:\n{rendered}"
+        );
+    }
+}
+
+#[test]
+fn variadic_slices_are_immutable_iterables_with_length() {
+    assert_no_diagnostics(
+        r#"
+fn total(values: ...i32) -> i32:
+    var result = values.len() as i32
+    for value in values:
+        result += value
+    return result
+
+fn main():
+    println(total(1, 2, 3))
+"#,
+    );
+    assert_has_category(
+        r#"
+fn mutate(values: ...i32):
+    values[0] = 2
+
+fn main():
+    mutate(1)
+"#,
+        Category::Place,
+    );
+}
+
+#[test]
+fn named_function_references_do_not_directly_erase_to_callable_objects() {
+    assert_has_category(
+        include_str!(
+            "../examples/adversarial/known_failures/callable_erasure_of_function_reference.elx"
+        ),
+        Category::TypeSystem,
+    );
+}

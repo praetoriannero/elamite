@@ -53,8 +53,8 @@ fn truthy(label: str) -> bool:
 /// The precedence table resolves each level without parentheses.
 fn precedence() -> ():
     println(f"multiplicative before additive: {1 + 2 * 3}")
-    println(f"shift after additive: {1 + 1 << 2}")
-    println(f"bitwise and after shift: {1 << 2 & 6}")
+    println(f"shift after additive: {1 + 1 << 2u32}")
+    println(f"bitwise and after shift: {1 << 2u32 & 6}")
     println(f"bitwise xor after and: {6 & 3 ^ 1}")
     println(f"bitwise or after xor: {4 ^ 1 | 2}")
     println(f"relational after bitwise: {1 | 2 > 2}")

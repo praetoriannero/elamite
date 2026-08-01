@@ -584,6 +584,7 @@ impl<'a> Checker<'a> {
                     .kind(self.typed.types.resolve_inference(iterable_type))
                     .clone()
                 {
+                    TypeKind::Slice(element) => Some(element),
                     TypeKind::Array { element, .. } => Some(element),
                     TypeKind::Builtin { builtin, arguments } => {
                         match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
@@ -612,7 +613,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::ExpressionType,
-                            "`for` supports only arrays, `Vec`, `Map`, and `Set`",
+                            "`for` supports only slices, arrays, `Vec`, `Map`, and `Set`",
                         )
                         .with_primary(node.span),
                     );
@@ -825,9 +826,35 @@ impl<'a> Checker<'a> {
                 .with_primary(place_node.span),
             );
         }
-        let (value_type, _) = self.check_expr(value_node, ExpectedType::Exact(place_type));
+        let shift_assignment = operator.is_some_and(|operator| {
+            matches!(operator.kind, TokenKind::ShlAssign | TokenKind::ShrAssign)
+        });
+        let (value_type, _) = self.check_expr(
+            value_node,
+            if shift_assignment {
+                ExpectedType::None
+            } else {
+                ExpectedType::Exact(place_type)
+            },
+        );
         self.program.copies.insert(value_node.span);
-        if !self.types_compatible(value_type, place_type) {
+        if shift_assignment {
+            if value_type != self.typed.types.error()
+                && !self
+                    .typed
+                    .types
+                    .expanded_primitive(value_type)
+                    .is_some_and(PrimitiveType::is_unsigned_integer)
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a shift count must have an unsigned integer type",
+                    )
+                    .with_primary(value_node.span),
+                );
+            }
+        } else if !self.types_compatible(value_type, place_type) {
             self.diagnostics.push(
                 Diagnostic::new(
                     Category::ExpressionType,
@@ -1411,6 +1438,46 @@ impl<'a> Checker<'a> {
             return (bool_type, PlaceKind::Value);
         }
         let (left_type, _) = self.check_expr(left, ExpectedType::None);
+        if matches!(operator, TokenKind::Shl | TokenKind::Shr) {
+            let (right_type, _) = self.check_expr(right, ExpectedType::None);
+            let left_valid =
+                left_type == self.typed.types.error() || self.is_integer_type(left_type);
+            let right_valid = right_type == self.typed.types.error()
+                || self
+                    .typed
+                    .types
+                    .expanded_primitive(right_type)
+                    .is_some_and(PrimitiveType::is_unsigned_integer);
+            if !left_valid {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a shift value must have an integer type",
+                    )
+                    .with_primary(left.span),
+                );
+            }
+            if !right_valid {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a shift count must have an unsigned integer type",
+                    )
+                    .with_primary(right.span),
+                );
+            }
+            if left_valid && right_valid {
+                self.reject_statically_invalid_arithmetic(node, operator, left_type, left, right);
+            }
+            return (
+                if left_valid && right_valid {
+                    left_type
+                } else {
+                    self.typed.types.error()
+                },
+                PlaceKind::Value,
+            );
+        }
         let right_expected = if left_type == self.typed.types.error() {
             ExpectedType::None
         } else {
@@ -1519,6 +1586,7 @@ impl<'a> Checker<'a> {
                     );
                     return (self.typed.types.error(), PlaceKind::Value);
                 }
+                self.reject_statically_invalid_arithmetic(node, operator, left_type, left, right);
                 (left_type, PlaceKind::Value)
             }
             TokenKind::Percent => {
@@ -1529,6 +1597,7 @@ impl<'a> Checker<'a> {
                     );
                     return (self.typed.types.error(), PlaceKind::Value);
                 }
+                self.reject_statically_invalid_arithmetic(node, operator, left_type, left, right);
                 (left_type, PlaceKind::Value)
             }
             TokenKind::Amp
@@ -1549,6 +1618,124 @@ impl<'a> Checker<'a> {
                 (left_type, PlaceKind::Value)
             }
             _ => (self.typed.types.error(), PlaceKind::Value),
+        }
+    }
+
+    fn reject_statically_invalid_arithmetic(
+        &mut self,
+        node: &SyntaxNode,
+        operator: &TokenKind,
+        result_type: TypeId,
+        left: &SyntaxNode,
+        right: &SyntaxNode,
+    ) {
+        let Some(primitive) = self.typed.types.expanded_primitive(result_type) else {
+            return;
+        };
+        if !primitive.is_integer() {
+            return;
+        }
+        let (Some(left), Some(right)) = (
+            static_integer_expression(left),
+            static_integer_expression(right),
+        ) else {
+            return;
+        };
+        let result = match operator {
+            TokenKind::Plus => static_integer_add(left, right),
+            TokenKind::Minus => static_integer_subtract(left, right),
+            TokenKind::Star => static_integer_multiply(left, right),
+            TokenKind::Slash if right.magnitude == 0 => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "statically evident division by zero is invalid",
+                    )
+                    .with_primary(node.span),
+                );
+                return;
+            }
+            TokenKind::Slash => Some(StaticInteger {
+                negative: left.negative != right.negative,
+                magnitude: left.magnitude / right.magnitude,
+            }),
+            TokenKind::Percent if right.magnitude == 0 => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "statically evident remainder by zero is invalid",
+                    )
+                    .with_primary(node.span),
+                );
+                return;
+            }
+            TokenKind::Percent => Some(StaticInteger {
+                negative: left.negative,
+                magnitude: left.magnitude % right.magnitude,
+            }),
+            TokenKind::Shl | TokenKind::Shr => {
+                let bits = integer_primitive_bits(primitive, self.pointer_bits);
+                if right.negative || right.magnitude >= u128::from(bits) {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a statically evident shift count is outside the value type's width",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return;
+                }
+                let count = right.magnitude as u32;
+                if matches!(operator, TokenKind::Shl) {
+                    left.magnitude
+                        .checked_shl(count)
+                        .map(|magnitude| StaticInteger {
+                            negative: left.negative,
+                            magnitude,
+                        })
+                } else {
+                    let magnitude = if left.negative && count != 0 {
+                        let rounding = (1u128 << count) - 1;
+                        left.magnitude
+                            .checked_add(rounding)
+                            .map(|magnitude| magnitude >> count)
+                    } else {
+                        Some(left.magnitude >> count)
+                    };
+                    magnitude.map(|magnitude| StaticInteger {
+                        negative: left.negative,
+                        magnitude,
+                    })
+                }
+            }
+            _ => return,
+        };
+        let Some(result) = result else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "this statically evident integer operation overflows",
+                )
+                .with_primary(node.span),
+            );
+            return;
+        };
+        if !crate::types::integer_fits(
+            primitive,
+            result.magnitude,
+            result.negative,
+            self.pointer_bits,
+        ) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    format!(
+                        "this statically evident integer operation overflows `{}`",
+                        crate::types::primitive_name(primitive)
+                    ),
+                )
+                .with_primary(node.span),
+            );
         }
     }
 
@@ -2740,7 +2927,9 @@ impl<'a> Checker<'a> {
         };
         match result {
             Some(element_type) => {
-                let place = if base_place.is_mutable() {
+                let place = if matches!(self.typed.types.kind(resolved_base), TypeKind::Slice(_)) {
+                    PlaceKind::Value
+                } else if base_place.is_mutable() {
                     PlaceKind::CollectionInterior
                 } else {
                     PlaceKind::Value
@@ -3235,6 +3424,130 @@ fn tuple_field_index(token: &Token) -> Option<usize> {
         return None;
     }
     raw.parse().ok()
+}
+
+#[derive(Clone, Copy)]
+struct StaticInteger {
+    negative: bool,
+    magnitude: u128,
+}
+
+fn static_integer_expression(node: &SyntaxNode) -> Option<StaticInteger> {
+    match node.kind {
+        SyntaxKind::LiteralExpression => node.children.iter().find_map(|child| {
+            let SyntaxElement::Token(Token {
+                kind: TokenKind::IntegerLiteral { raw, radix, suffix },
+                ..
+            }) = child
+            else {
+                return None;
+            };
+            Some(StaticInteger {
+                negative: false,
+                magnitude: crate::types::parse_integer_magnitude(raw, *radix, *suffix).ok()?,
+            })
+        }),
+        SyntaxKind::ParenthesizedExpression => child_nodes(node)
+            .into_iter()
+            .next()
+            .and_then(static_integer_expression),
+        SyntaxKind::UnaryExpression => {
+            let value = child_nodes(node)
+                .into_iter()
+                .next()
+                .and_then(static_integer_expression)?;
+            let operator = node.children.iter().find_map(|child| match child {
+                SyntaxElement::Token(token) => Some(&token.kind),
+                SyntaxElement::Node(_) => None,
+            })?;
+            match operator {
+                TokenKind::Plus => Some(value),
+                TokenKind::Minus => Some(static_integer_negate(value)),
+                _ => None,
+            }
+        }
+        SyntaxKind::BinaryExpression => {
+            let nodes = child_nodes(node);
+            let left = static_integer_expression(*nodes.first()?)?;
+            let right = static_integer_expression(*nodes.get(1)?)?;
+            let operator = node.children.iter().find_map(|child| match child {
+                SyntaxElement::Token(token) => Some(&token.kind),
+                SyntaxElement::Node(_) => None,
+            })?;
+            match operator {
+                TokenKind::Plus => static_integer_add(left, right),
+                TokenKind::Minus => static_integer_subtract(left, right),
+                TokenKind::Star => static_integer_multiply(left, right),
+                TokenKind::Slash if right.magnitude != 0 => Some(StaticInteger {
+                    negative: left.negative != right.negative,
+                    magnitude: left.magnitude / right.magnitude,
+                }),
+                TokenKind::Percent if right.magnitude != 0 => Some(StaticInteger {
+                    negative: left.negative,
+                    magnitude: left.magnitude % right.magnitude,
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+    .map(static_integer_normalize)
+}
+
+fn static_integer_normalize(mut value: StaticInteger) -> StaticInteger {
+    if value.magnitude == 0 {
+        value.negative = false;
+    }
+    value
+}
+
+fn static_integer_negate(mut value: StaticInteger) -> StaticInteger {
+    if value.magnitude != 0 {
+        value.negative = !value.negative;
+    }
+    value
+}
+
+fn static_integer_add(left: StaticInteger, right: StaticInteger) -> Option<StaticInteger> {
+    if left.negative == right.negative {
+        Some(StaticInteger {
+            negative: left.negative,
+            magnitude: left.magnitude.checked_add(right.magnitude)?,
+        })
+    } else if left.magnitude >= right.magnitude {
+        Some(static_integer_normalize(StaticInteger {
+            negative: left.negative,
+            magnitude: left.magnitude - right.magnitude,
+        }))
+    } else {
+        Some(static_integer_normalize(StaticInteger {
+            negative: right.negative,
+            magnitude: right.magnitude - left.magnitude,
+        }))
+    }
+}
+
+fn static_integer_subtract(left: StaticInteger, right: StaticInteger) -> Option<StaticInteger> {
+    static_integer_add(left, static_integer_negate(right))
+}
+
+fn static_integer_multiply(left: StaticInteger, right: StaticInteger) -> Option<StaticInteger> {
+    Some(static_integer_normalize(StaticInteger {
+        negative: left.negative != right.negative,
+        magnitude: left.magnitude.checked_mul(right.magnitude)?,
+    }))
+}
+
+fn integer_primitive_bits(primitive: PrimitiveType, pointer_bits: u8) -> u8 {
+    match primitive {
+        PrimitiveType::I8 | PrimitiveType::U8 => 8,
+        PrimitiveType::I16 | PrimitiveType::U16 => 16,
+        PrimitiveType::I32 | PrimitiveType::U32 => 32,
+        PrimitiveType::I64 | PrimitiveType::U64 => 64,
+        PrimitiveType::I128 | PrimitiveType::U128 => 128,
+        PrimitiveType::Isize | PrimitiveType::Usize => pointer_bits,
+        _ => 0,
+    }
 }
 
 fn first_identifier_token(node: &SyntaxNode) -> Option<&Token> {

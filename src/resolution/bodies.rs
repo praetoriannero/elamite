@@ -948,8 +948,11 @@ impl<'a> Resolver<'a> {
                 self.record_reference(token.span, target, Vec::new());
                 return Some(target);
             }
-            self.unresolved_name(name, token.span);
-            return None;
+            // Outside a receiver-bearing method, `self` is the current
+            // module path root. A receiver binding deliberately shadows it.
+            let target = NameTarget::Item(ItemId::Module(module));
+            self.record_reference(token.span, target, Vec::new());
+            return Some(target);
         }
         if special == Some(Keyword::SelfType) {
             if self_allowed {

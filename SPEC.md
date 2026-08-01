@@ -970,7 +970,12 @@ more trailing arguments, each of type `T`, and binds `name` inside the function
 to the slice type `[T]`. Variadics are homogeneous and may appear only once,
 as the final parameter. A variadic function value preserves the marker, for
 example `&fn(i32, ...String) -> ()`. Elamite lowers this form as a slice
-argument rather than as C's untyped variadic calling convention.
+argument rather than as C's untyped variadic calling convention. The packed
+arguments use managed backing storage, so the slice remains valid if it is
+returned, stored, or captured after the call. A slice is immutable: indexing
+and iteration produce independent copies rather than mutable interior places.
+It provides `len() -> usize`, checked indexing, and `for` iteration in index
+order.
 
 ~~~elx
 fn apply_offset(callback: &fn(i32) -> i32, value: i32) -> i32:
@@ -1117,8 +1122,13 @@ the standard user-implementable `Callable[Arguments, Return]` trait, where
 closure. Generic code may call a type parameter through a matching `Callable`
 bound, and a callable may be erased behind
 `&Callable[Arguments, Return]`. Named safe function references participate in
-the same callable contract. Closures, including captureless closures, never
-convert to `&fn`, `*fn`, or a C callback.
+the same callable contract for direct calls and static `Callable` bounds, but
+do not convert directly to `&Callable`. Trait-object erasure requires a safe
+reference to nominal storage implementing the trait, such as a referenced
+closure value. This keeps function and data pointer domains separate and does
+not introduce an implicit allocation or a new storage identity merely to erase
+a function address. Closures, including captureless closures, never convert to
+`&fn`, `*fn`, or a C callback.
 
 A closure does not inherit an enclosing `unsafe:`, loop, `defer`, or function
 return context. Its body begins safe and uses its own `return`, postfix `?`,
@@ -1430,19 +1440,21 @@ Operator precedence from highest to lowest is:
 
 ### 7.1 Collection iteration
 
-The initial `for` statement directly supports arrays, `Vec`, `Map`, and `Set`;
-there is no user-defined iteration protocol or source-level iterator type yet.
+The initial `for` statement directly supports slices, arrays, `Vec`, `Map`, and
+`Set`; there is no user-defined iteration protocol or source-level iterator
+type yet.
 The iterable expression is evaluated exactly once and copied into hidden loop
 state using ordinary logical value semantics. Later mutation of the source
 collection therefore cannot affect the active loop. An implementation may use
 copy-on-write storage so long as this independence remains unobservable.
 
-Arrays and vectors iterate in index order. Maps yield `(K, V)` pairs, and sets
-yield their elements; map and set iteration order is unspecified and may vary
-between executions. Each yielded element, key, or value is independently copied
-into the loop's non-rebindable binding. Iteration exposes no safe references to
-collection interiors. It visits only direct elements and does not recursively
-traverse targets reached through explicit reference-like values.
+Slices, arrays, and vectors iterate in index order. Maps yield `(K, V)` pairs,
+and sets yield their elements; map and set iteration order is unspecified and
+may vary between executions. Each yielded element, key, or value is
+independently copied into the loop's non-rebindable binding. Iteration exposes
+no safe references to collection interiors. It visits only direct elements and
+does not recursively traverse targets reached through explicit reference-like
+values.
 
 ### 7.2 Formatted strings and display
 

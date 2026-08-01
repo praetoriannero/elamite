@@ -1,13 +1,11 @@
-// FINDING 1 — false "unreachable arm" on any enum variant with a literal
-// sub-pattern. Highest severity: it blocks `Option.Some(0)` / `Option.Some(n)`.
+// REGRESSION 1 — enum variants with refutable payload patterns must not make
+// later arms for the same constructor unreachable.
 //
 // SPEC 7: "Arms are tested in source order and never fall through. A
 // statically unreachable arm is a compile-time error." The second arm here is
 // reachable for every payload other than 0.
 //
-// Expected: compiles; prints "nonzero".
-// Actual:   error: this match arm is unreachable; its pattern is already
-//           fully covered by an earlier arm  (at `Option.Some(other)`)
+// Expected and current: compiles; prints "nonzero".
 //
 // Also reproduces with tuple-like variants (`E.Go(10)` then `E.Go(other)`) and
 // record-like variants (`E.Turn { degrees: 90 }` then `E.Turn { degrees }`).

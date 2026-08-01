@@ -386,7 +386,8 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
     use StandardCall::{
         ArrayGet, ArrayLen, MapClear, MapContainsKey, MapGet, MapInsert, MapIsEmpty, MapLen,
         MapNew, MapRemove, SetClear, SetContains, SetInsert, SetIsEmpty, SetLen, SetNew, SetRemove,
-        StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
+        SliceLen, StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew,
+        VecRemove,
     };
     Some(match operation {
         StandardCall::Panic
@@ -401,6 +402,7 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::FormatterWrite { .. } => {
             return None;
         }
+        SliceLen { .. } => return None,
         ArrayLen { collection }
         | ArrayGet { collection }
         | VecNew { collection }

@@ -9,10 +9,9 @@ Two halves:
 - **`src/`** — a package that builds, runs, and passes its own tests today.
   Every observation it prints is a rule from `SPEC.md`. If a change to the
   compiler alters any line of its output, a specified behavior moved.
-- **`known_failures/`** — one standalone `.elx` file per divergence, each
-  carrying the normative quotation, the expected behavior, and the exact
-  current behavior. None of them compile and run today; each is a ready-made
-  regression test for whoever fixes it.
+- **`known_failures/`** — the original standalone reproductions. Resolved
+  cases remain here as regression fixtures; intentional rejections and known
+  implementation limitations document their settled contract.
 
 ## Running it
 
@@ -56,54 +55,22 @@ cargo run -- build examples/adversarial/known_failures/variant_literal_arm.elx
 
 ## Findings
 
-Fifteen places where the implementation and the documents disagree. Ordered
-by severity within each group. Numbers match the `known_failures/` files.
-Four more, specific to the compile-time surface, are in the sibling
-[`examples/adversarial_macros`](../adversarial_macros) package.
+The compiler defects from this audit are now regression-tested. Findings 1,
+2, 4–12, and 15 cover enum-pattern reachability, primitive trait
+implementations, shift typing, module `self` paths, transparent collection
+aliases, raw-pointer named fields, unit and trait-object equality, fieldless
+structs, zero-length arrays, static invalid arithmetic, and variadic placement.
 
-### Silently accepted, then broken
+The two language questions found by the audit are settled:
 
-These pass `elamc check` with exit 0 and no diagnostic, then fail. A clean
-`check` that cannot build is itself a defect: `LEDGER.md` 14 defines `check` as
-"resolution + type checking without generating C or linking; report
-diagnostics."
-
-| # | File | Rule | Behavior |
-| --- | --- | --- | --- |
-| 7 | `raw_pointer_field_access.elx` | `AGENTS.md` closures section (done): `pointer.value` auto-dereferences inside `unsafe:` | lowering rejects it as outside the "Milestone 8 executable subset". The tuple form `pointer.0` is fully implemented, including assignment through `*var` |
-| 6 | `alias_collection.elx` | SPEC 4.4 "A module-level `type` alias is transparent" | a collection method on an alias-annotated binding fails lowering; separately, routing a collection through an alias emits an unused `el_map_new_tN`, which the driver's own `-Werror` build rejects |
-| 8 | `unit_equality.elx` | SPEC 4.5 "Integral primitives, `bool`, `char`, unit, and `str` provide total equality" | emits `==` on the `el_unit` struct: `invalid operands to binary ==` |
-| 9 | `trait_object_equality.elx` | SPEC 4.5 "Trait-object references likewise compare their concrete target identity" | emits `==` on the fat-reference struct. `LEDGER.md` 4.5 records this row as run-pass tested |
-| 10 | `field_less_struct.elx` | SPEC 2.2 `pass` as the explicit empty body; SPEC 4.2 sets no minimum field count | the generated copy helper never reads its parameter: `unused parameter 'value' [-Werror=unused-parameter]`. Declaring and constructing is enough |
-| 11 | `zero_length_array.elx` | SPEC 4.1 `[T; N]` where `N` is "nonnegative" | two errors: `excess elements in array initializer` and `comparison of unsigned expression in '< 0' is always false` |
-| 13 | `int128_support.elx` | SPEC 4.1 lists `i128`/`u128` with no caveat | diagnosed clearly rather than miscompiled, so this is a documentation gap: `ROADMAP.md` 2.5 requires temporary limitations to be "recorded explicitly", and no top-level document records this one |
-
-Findings 8 and 9 share one root cause — the backend emits C `==` directly on a
-struct type instead of a comparison helper — so both scalar-izable aggregate
-comparisons should be fixed together.
-
-### Valid programs rejected
-
-| # | File | Rule | Behavior |
-| --- | --- | --- | --- |
-| 1 | `variant_literal_arm.elx` | SPEC 7 "A statically unreachable arm is a compile-time error" | **highest severity.** Any literal sub-pattern inside an enum variant marks every later arm on that variant unreachable. `Option.Some(0)` followed by `Option.Some(other)` does not compile. Reproduces for tuple-like and record-like variants; plain struct patterns and guards are unaffected |
-| 2 | `trait_impl_for_primitive.elx` | SPEC 6 orphan rule permits it when the trait is local | `impl Describe for i32` is accepted with no diagnostic, then every use fails: bound and qualified calls fail lowering, and a generic bound reports "does not satisfy required `Describe` capability". The same trait on a struct works |
-| 5 | `self_expression_path.elx` | SPEC 2.3 "`self` begins at the current module" | `use self.inner.value` resolves, but `self.local()` in an expression path reports "cannot resolve `self`". `super` works in both positions |
-
-### Specification contradicts itself or the implementation
-
-| # | File | Rule | Behavior |
-| --- | --- | --- | --- |
-| 3 | `variadic_iteration.elx` | SPEC 5's own normative example iterates a variadic tail with `for` | SPEC 7.1 restricts `for` to arrays, `Vec`, `Map`, and `Set`, which excludes the slice `[T]` that SPEC 5 binds. The example in the specification does not compile. Indexing works; `rest.len()` also fails, leaving no portable way to bound the index |
-| 4 | `shift_operand_typing.elx` | SPEC 7 "A shift count must have an unsigned integer type" | the implementation instead requires both operands to share one concrete type, so `1i32 << 3u32` is rejected and `1i32 << 3i32` — a signed count — is accepted. Wrong in both directions. The runtime width check is correct |
-| 15 | `non_final_variadic.elx` | SPEC 5 "Variadics ... may appear only once, as the final parameter" | a misplaced or repeated variadic is accepted, the marker is silently dropped from the checker's view, and the backend still emits a slice parameter — so a call that type-checks reaches the C compiler as `incompatible type for argument 1`. A call with the "right" arity instead blames the call site for the malformed declaration |
-| 12 | `static_arithmetic_evidence.elx` | SPEC 4.1 "A statically evident invalid literal, conversion, or arithmetic operation is a compile-time error" | `2147483647 + 1`, `1i32 << 32i32`, and `1i32 / 0i32` all compile and trap at run time. The array half of the same rule *is* implemented. `LEDGER.md` 4.1 assigns static detection to M6 and marks the row complete |
-
-### Ambiguity worth settling
-
-| # | File | Question |
+| # | File | Decision |
 | --- | --- | --- |
-| 14 | `callable_erasure_of_function_reference.elx` | `LEDGER.md` 5 says "named safe function references also satisfy matching callable APIs; `&Callable` provides erasure". A `Callable` bound does accept a named function reference; erasing that reference behind `&Callable` does not. SPEC 6 arguably justifies the rejection, since the target of an `&fn` is a function rather than a type implementing `Callable`. SPEC 5.1 should say so explicitly |
+| 3 | `variadic_iteration.elx` | Variadic tails are managed immutable slices with `len`, checked indexing, and copy-yielding iteration. |
+| 14 | `callable_erasure_of_function_reference.elx` | Named function references satisfy static `Callable` bounds but do not erase directly to `&Callable`; erasure requires referenced nominal storage. |
+
+Finding 13 (`int128_support.elx`) is a documented implementation limitation,
+not a compiler defect: `docs/toolchain.md` records that native `i128`/`u128`
+lowering remains unavailable.
 
 ## Compile-time surface
 

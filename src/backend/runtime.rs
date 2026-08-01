@@ -625,8 +625,8 @@ impl<'a> CEmitter<'a> {
              TYPE el_neg_##NAME(TYPE a, const char *p, uint32_t l, uint32_t c) { if (a == MINIMUM) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return (TYPE)-a; } \\\n\
              TYPE el_div_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if (b == 0) { el_trap(\"E-RUN-DIVZERO\", p, l, c); } if (a == MINIMUM && b == -1) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return (TYPE)(a / b); } \\\n\
              TYPE el_rem_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if (b == 0) { el_trap(\"E-RUN-DIVZERO\", p, l, c); } if (a == MINIMUM && b == -1) { return 0; } return (TYPE)(a % b); } \\\n\
-             TYPE el_shl_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { uint32_t n; if (b < 0 || (uintmax_t)b >= (BITS)) { el_trap(\"E-RUN-SHIFT\", p, l, c); } n = (uint32_t)b; while (n-- != 0U) { if (a > MAXIMUM / 2 || a < MINIMUM / 2) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } a = (TYPE)(a * 2); } return a; } \\\n\
-             TYPE el_shr_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { uint32_t n; if (b < 0 || (uintmax_t)b >= (BITS)) el_trap(\"E-RUN-SHIFT\", p, l, c); n = (uint32_t)b; while (n-- != 0U) a = a >= 0 ? (TYPE)(a / 2) : (TYPE)(-1 - ((-1 - a) / 2)); return a; }\n\
+             TYPE el_shl_##NAME(TYPE a, uintmax_t b, const char *p, uint32_t l, uint32_t c) { uint32_t n; if (b >= (BITS)) { el_trap(\"E-RUN-SHIFT\", p, l, c); } n = (uint32_t)b; while (n-- != 0U) { if (a > MAXIMUM / 2 || a < MINIMUM / 2) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } a = (TYPE)(a * 2); } return a; } \\\n\
+             TYPE el_shr_##NAME(TYPE a, uintmax_t b, const char *p, uint32_t l, uint32_t c) { uint32_t n; if (b >= (BITS)) el_trap(\"E-RUN-SHIFT\", p, l, c); n = (uint32_t)b; while (n-- != 0U) a = a >= 0 ? (TYPE)(a / 2) : (TYPE)(-1 - ((-1 - a) / 2)); return a; }\n\
              #define EL_UNSIGNED_ARITH(NAME, TYPE, MAXIMUM, BITS) \\\n\
              TYPE el_add_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if (a > (TYPE)(MAXIMUM - b)) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return (TYPE)(a + b); } \\\n\
              TYPE el_sub_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if (a < b) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return (TYPE)(a - b); } \\\n\
@@ -634,8 +634,8 @@ impl<'a> CEmitter<'a> {
              TYPE el_neg_##NAME(TYPE a, const char *p, uint32_t l, uint32_t c) { if (a != 0) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return 0; } \\\n\
              TYPE el_div_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if (b == 0) { el_trap(\"E-RUN-DIVZERO\", p, l, c); } return (TYPE)(a / b); } \\\n\
              TYPE el_rem_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if (b == 0) { el_trap(\"E-RUN-DIVZERO\", p, l, c); } return (TYPE)(a % b); } \\\n\
-             TYPE el_shl_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if ((uintmax_t)b >= (BITS)) { el_trap(\"E-RUN-SHIFT\", p, l, c); } if (a > (TYPE)(MAXIMUM >> b)) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return (TYPE)(a << b); } \\\n\
-             TYPE el_shr_##NAME(TYPE a, TYPE b, const char *p, uint32_t l, uint32_t c) { if ((uintmax_t)b >= (BITS)) { el_trap(\"E-RUN-SHIFT\", p, l, c); } return (TYPE)(a >> b); }\n\
+             TYPE el_shl_##NAME(TYPE a, uintmax_t b, const char *p, uint32_t l, uint32_t c) { if (b >= (BITS)) { el_trap(\"E-RUN-SHIFT\", p, l, c); } if (a > (TYPE)(MAXIMUM >> b)) { el_trap(\"E-RUN-OVERFLOW\", p, l, c); } return (TYPE)(a << b); } \\\n\
+             TYPE el_shr_##NAME(TYPE a, uintmax_t b, const char *p, uint32_t l, uint32_t c) { if (b >= (BITS)) { el_trap(\"E-RUN-SHIFT\", p, l, c); } return (TYPE)(a >> b); }\n\
              EL_SIGNED_ARITH(i8, int8_t, INT8_MIN, INT8_MAX, 8)\n\
              EL_SIGNED_ARITH(i16, int16_t, INT16_MIN, INT16_MAX, 16)\n\
              EL_SIGNED_ARITH(i32, int32_t, INT32_MIN, INT32_MAX, 32)\n\
@@ -963,7 +963,7 @@ impl<'a> CEmitter<'a> {
                     {
                         literals.insert((
                             *kind,
-                            function.temporary_types[destination.index()],
+                            self.resolve_alias(function.temporary_types[destination.index()]),
                             elements.len(),
                         ));
                     }
@@ -971,6 +971,76 @@ impl<'a> CEmitter<'a> {
             }
         }
         literals
+    }
+
+    pub(super) fn variadic_slice_instances(&self) -> BTreeSet<(TypeId, TypeId, usize)> {
+        let mut slices = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    if let Instruction::Assign {
+                        destination,
+                        value:
+                            Rvalue::VariadicSlice {
+                                elements,
+                                element_type,
+                            },
+                        ..
+                    } = instruction
+                    {
+                        slices.insert((
+                            self.resolve_alias(function.temporary_types[destination.index()]),
+                            self.resolve_alias(*element_type),
+                            elements.len(),
+                        ));
+                    }
+                }
+            }
+        }
+        slices
+    }
+
+    pub(super) fn emit_variadic_slice_helper(
+        &mut self,
+        slice: TypeId,
+        element: TypeId,
+        length: usize,
+    ) {
+        let (Some(slice_type), Some(element_type)) =
+            (self.c_type(slice, None), self.c_type(element, None))
+        else {
+            return;
+        };
+        let name = variadic_slice_name(slice, length);
+        let parameters = (0..length)
+            .map(|index| format!("{element_type} value{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let parameters = if parameters.is_empty() {
+            "void".to_string()
+        } else {
+            parameters
+        };
+        let _ = writeln!(
+            self.output,
+            "static {slice_type} {name}({parameters}) {{\n    {slice_type} result = {{ NULL, \
+             (uintptr_t){length}U }};"
+        );
+        if length != 0 {
+            self.emit_runtime_allocate(
+                "result.values",
+                &format!("(size_t){length}U * sizeof({element_type})"),
+                if self.scanned_allocation(element) {
+                    AllocationClass::Scanned
+                } else {
+                    AllocationClass::PointerFree
+                },
+            );
+            for index in 0..length {
+                let _ = writeln!(self.output, "    result.values[{index}] = value{index};");
+            }
+        }
+        self.output.push_str("    return result;\n}\n\n");
     }
 
     pub(super) fn emit_runtime_allocate(
@@ -1040,6 +1110,9 @@ impl<'a> CEmitter<'a> {
     }
 
     pub(super) fn emit_standard_runtime_helpers(&mut self) {
+        for (slice, element, length) in self.variadic_slice_instances() {
+            self.emit_variadic_slice_helper(slice, element, length);
+        }
         let calls = self.standard_call_instances();
         let literals = self.collection_literal_instances();
         let mut concatenated_types = BTreeSet::new();
@@ -1066,18 +1139,21 @@ impl<'a> CEmitter<'a> {
         let mut collections = BTreeSet::new();
         for operation in calls.keys() {
             if let Some(collection) = standard_collection_type(*operation) {
-                collections.insert(collection);
+                collections.insert(self.resolve_alias(collection));
             }
         }
-        collections.extend(literals.iter().map(|(_, ty, _)| *ty));
-        collections.extend(self.used_types().into_iter().filter(|ty| {
-            match self.typed.types.kind(self.resolve_alias(*ty)) {
-                TypeKind::Builtin { builtin, .. } => {
-                    matches!(self.resolved.builtin_name(*builtin), "Vec" | "Map" | "Set")
-                }
-                _ => false,
-            }
-        }));
+        collections.extend(literals.iter().map(|(_, ty, _)| self.resolve_alias(*ty)));
+        collections.extend(
+            self.used_types()
+                .into_iter()
+                .filter(|ty| match self.typed.types.kind(self.resolve_alias(*ty)) {
+                    TypeKind::Builtin { builtin, .. } => {
+                        matches!(self.resolved.builtin_name(*builtin), "Vec" | "Map" | "Set")
+                    }
+                    _ => false,
+                })
+                .map(|ty| self.resolve_alias(ty)),
+        );
 
         for collection in collections {
             let TypeKind::Builtin { builtin, arguments } = self
@@ -1966,10 +2042,12 @@ impl<'a> CEmitter<'a> {
                 }
             }
             TypeKind::Array { element, length } => {
-                body.push_str(&format!(
-                    "    for (uintptr_t i = 0; i < {length}u; ++i) {{\n        if (!{}) return false;\n    }}\n",
-                    self.component_equality(*element, "a.values[i]", "b.values[i]")
-                ));
+                if *length != 0 {
+                    body.push_str(&format!(
+                        "    for (uintptr_t i = 0; i < {length}u; ++i) {{\n        if (!{}) return false;\n    }}\n",
+                        self.component_equality(*element, "a.values[i]", "b.values[i]")
+                    ));
+                }
             }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
@@ -2067,6 +2145,19 @@ impl<'a> CEmitter<'a> {
     /// A boolean C expression comparing one component.
     pub(super) fn component_equality(&mut self, ty: TypeId, left: &str, right: &str) -> String {
         let ty = self.resolve_alias(ty);
+        if self.typed.types.expanded_primitive(ty) == Some(PrimitiveType::Unit) {
+            return "true".to_string();
+        }
+        if let TypeKind::Reference { target, .. } = self.typed.types.kind(ty)
+            && matches!(
+                self.typed.types.kind(self.resolve_alias(*target)),
+                TypeKind::TraitObject { .. }
+            )
+        {
+            // Trait-object reference identity is the erased target address;
+            // the dispatch table is metadata, not part of the referent.
+            return format!("(({left}).data == ({right}).data)");
+        }
         if matches!(
             self.typed.types.expanded_primitive(ty),
             Some(PrimitiveType::Str | PrimitiveType::String)
@@ -2150,12 +2241,15 @@ impl<'a> CEmitter<'a> {
                 }
             }
             TypeKind::Array { element, length } => {
-                body.push_str(&format!(
-                    "    for (uintptr_t i = 0; i < {length}u; ++i) {{\n"
-                ));
-                let expression = self.component_ordering(*element, "a.values[i]", "b.values[i]");
-                append_component(&mut body, expression, "        ");
-                body.push_str("    }\n");
+                if *length != 0 {
+                    body.push_str(&format!(
+                        "    for (uintptr_t i = 0; i < {length}u; ++i) {{\n"
+                    ));
+                    let expression =
+                        self.component_ordering(*element, "a.values[i]", "b.values[i]");
+                    append_component(&mut body, expression, "        ");
+                    body.push_str("    }\n");
+                }
             }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
@@ -2224,6 +2318,9 @@ impl<'a> CEmitter<'a> {
     /// unordered.
     pub(super) fn component_ordering(&mut self, ty: TypeId, left: &str, right: &str) -> String {
         let ty = self.resolve_alias(ty);
+        if self.typed.types.expanded_primitive(ty) == Some(PrimitiveType::Unit) {
+            return "0".to_string();
+        }
         if matches!(
             self.typed.types.expanded_primitive(ty),
             Some(PrimitiveType::Str | PrimitiveType::String)
@@ -2348,12 +2445,14 @@ impl<'a> CEmitter<'a> {
                 }
             }
             TypeKind::Array { element, length } => {
-                let value = self.component_hash(*element, "value.values[index]");
-                let _ = writeln!(
-                    body,
-                    "    for (uintptr_t index = 0U; index < {length}U; ++index) \
-                     hash = el_hash_combine(hash, {value});"
-                );
+                if *length != 0 {
+                    let value = self.component_hash(*element, "value.values[index]");
+                    let _ = writeln!(
+                        body,
+                        "    for (uintptr_t index = 0U; index < {length}U; ++index) \
+                         hash = el_hash_combine(hash, {value});"
+                    );
+                }
             }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
@@ -2454,6 +2553,9 @@ impl<'a> CEmitter<'a> {
             }
             TypeKind::Tuple(elements) => {
                 let _ = writeln!(self.output, "    {c_type} result = {{0}};");
+                if elements.is_empty() {
+                    self.output.push_str("    (void)value;\n");
+                }
                 for (index, element) in elements.iter().enumerate() {
                     let helper = copy_helper_name(self.resolve_alias(*element));
                     let _ = writeln!(
@@ -2464,24 +2566,31 @@ impl<'a> CEmitter<'a> {
                 self.output.push_str("    return result;\n");
             }
             TypeKind::Array { element, length } => {
-                let helper = copy_helper_name(self.resolve_alias(element));
-                let _ = writeln!(
-                    self.output,
-                    "    {c_type} result = {{0}};\n    size_t index;"
-                );
-                let _ = writeln!(
-                    self.output,
-                    "    for (index = 0U; index < {length}U; ++index) {{"
-                );
-                let _ = writeln!(
-                    self.output,
-                    "        result.values[index] = {helper}(value.values[index]);"
-                );
-                self.output.push_str("    }\n    return result;\n");
+                if length == 0 {
+                    let _ = writeln!(self.output, "    (void)value;\n    return ({c_type}){{0}};");
+                } else {
+                    let helper = copy_helper_name(self.resolve_alias(element));
+                    let _ = writeln!(
+                        self.output,
+                        "    {c_type} result = {{0}};\n    size_t index;"
+                    );
+                    let _ = writeln!(
+                        self.output,
+                        "    for (index = 0U; index < {length}U; ++index) {{"
+                    );
+                    let _ = writeln!(
+                        self.output,
+                        "        result.values[index] = {helper}(value.values[index]);"
+                    );
+                    self.output.push_str("    }\n    return result;\n");
+                }
             }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
                     let _ = writeln!(self.output, "    {c_type} result = {{0}};");
+                    if structure.fields.is_empty() {
+                        self.output.push_str("    (void)value;\n");
+                    }
                     for (field, _, field_type) in &structure.fields {
                         let helper = copy_helper_name(self.resolve_alias(*field_type));
                         let field = field_name(*field);

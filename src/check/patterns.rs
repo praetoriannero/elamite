@@ -197,9 +197,8 @@ impl<'a> Checker<'a> {
     /// This module reasons precisely about coverage for `bool` and `enum`
     /// scrutinees and for any pattern that is unconditionally irrefutable
     /// (`_`, a plain binding, or a tuple/struct pattern built entirely from
-    /// those). Nested field-value refutability inside a matched enum
-    /// variant is not tracked (an arm's outer constructor is treated as
-    /// fully covering that variant once matched); everything else
+    /// those). Enum variants only contribute complete constructor coverage
+    /// when all of their field patterns are irrefutable; everything else
     /// (tuples/structs with a refutable field, literals of an unbounded
     /// domain) conservatively requires an explicit catch-all, matching
     /// `SPEC.md`'s "infinite domain" rule rather than risking a false
@@ -467,24 +466,29 @@ impl<'a> Checker<'a> {
             }
             let fields = self.resolved.variants[variant.index()].fields.clone();
             let owner_arguments = owner_arguments.unwrap_or_default();
-            match pattern.kind {
+            let all_irrefutable = match pattern.kind {
                 SyntaxKind::VariantPattern => self.check_variant_positional_pattern(
                     pattern,
                     &fields,
                     enum_declaration,
                     &owner_arguments,
                 ),
-                SyntaxKind::RecordPattern => {
-                    self.check_record_pattern_fields(
-                        pattern,
-                        &fields,
-                        enum_declaration,
-                        &owner_arguments,
-                    );
-                }
-                _ => {}
-            }
-            return Coverage::Variants(BTreeSet::from([variant]));
+                SyntaxKind::RecordPattern => self.check_record_pattern_fields(
+                    pattern,
+                    &fields,
+                    enum_declaration,
+                    &owner_arguments,
+                ),
+                _ => false,
+            };
+            return if all_irrefutable {
+                Coverage::Variants(BTreeSet::from([variant]))
+            } else {
+                // This arm covers only part of the constructor. It cannot
+                // make a later constructor arm redundant or establish
+                // exhaustiveness by itself.
+                Coverage::None
+            };
         }
         let Some(reference) = self.resolved.reference_at(first.span) else {
             return Coverage::Other;
@@ -541,7 +545,7 @@ impl<'a> Checker<'a> {
         fields: &[FieldId],
         _owner: DeclarationId,
         owner_arguments: &[TypeId],
-    ) {
+    ) -> bool {
         let sub_patterns = child_nodes(pattern);
         if sub_patterns.len() != fields.len() {
             self.diagnostics.push(
@@ -557,6 +561,7 @@ impl<'a> Checker<'a> {
                 .with_primary(pattern.span),
             );
         }
+        let mut all_irrefutable = sub_patterns.len() == fields.len();
         for (index, sub_pattern) in sub_patterns.iter().enumerate() {
             let field_type = fields
                 .get(index)
@@ -565,8 +570,11 @@ impl<'a> Checker<'a> {
                         .instantiate_field_type(self.resolved, *field, owner_arguments)
                 })
                 .unwrap_or_else(|| self.typed.types.error());
-            self.check_pattern(sub_pattern, field_type);
+            if !self.check_pattern(sub_pattern, field_type).is_catchall() {
+                all_irrefutable = false;
+            }
         }
+        all_irrefutable
     }
 
     /// Checks a `RecordPattern`'s named fields (struct or record-variant)

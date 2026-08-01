@@ -1,36 +1,19 @@
-// FINDING 15 — a misplaced variadic parameter is accepted and produces
-// type-incorrect C.
+// REGRESSION 15 — misplaced or repeated variadic parameters are rejected by
+// the parser before semantic lowering.
 //
 // SPEC 5: "Variadics are homogeneous and may appear only once, as the final
 // parameter." LEDGER 5 records that row against M3/M6/M8 with compile-pass and
 // run-pass evidence.
 //
-// Expected: the declaration below is a compile-time error.
-// Actual:   the declaration is accepted with no diagnostic, and the variadic
-//           marker is silently dropped from the checker's view of the
-//           signature while the backend still emits a slice parameter:
-//
-//           - `non_final(1, 2, 3)` reports "this call supplies 3 arguments,
-//             but the function requires 2" — blaming the call site for a
-//             malformed declaration;
-//           - `non_final(1, 2)` passes checking, then the C compiler rejects
-//             the generated call:
-//             error: incompatible type for argument 1 of
-//             'el_..._non_final'  (an i32 passed where a slice struct is
-//             expected)
-//
-// Declaring two variadic parameters is accepted the same way.
+// The rejected declaration forms live in `tests/parser.rs`; this shipped
+// source remains formatter-valid and witnesses the accepted final form.
 //
 // This is not macro-specific: the identical hole exists for compile-time
 // declarations, where SPEC 12.1 restates the rule for `macro` and `attr` and
 // forbids it outright for `derive`.
 
-fn non_final(rest: ...i32, tail: i32) -> i32:
-    return tail
-
-fn two_variadics(first: ...i32, second: ...i32) -> i32:
-    return 0
+fn final_variadic(head: i32, rest: ...i32) -> i32:
+    return head + rest[0]
 
 fn main():
-    println(f"{non_final(1, 2)}")
-    println(f"{two_variadics(1, 2)}")
+    println(f"{final_variadic(1, 2)}")

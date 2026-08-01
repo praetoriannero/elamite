@@ -66,7 +66,8 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
     use StandardCall::{
         ArrayGet, ArrayLen, MapClear, MapContainsKey, MapGet, MapInsert, MapIsEmpty, MapLen,
         MapNew, MapRemove, SetClear, SetContains, SetInsert, SetIsEmpty, SetLen, SetNew, SetRemove,
-        StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew, VecRemove,
+        SliceLen, StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew,
+        VecRemove,
     };
     let (name, ty) = match operation {
         StandardCall::Panic => return "el_panic".to_string(),
@@ -81,6 +82,7 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         StandardCall::FormatterWrite { formatter } => ("formatter_write", formatter),
         ArrayLen { collection } => ("array_len", collection),
         ArrayGet { collection } => ("array_get", collection),
+        SliceLen { collection } => ("slice_len", collection),
         VecNew { collection } => ("vec_new", collection),
         VecLen { collection } => ("vec_len", collection),
         VecIsEmpty { collection } => ("vec_is_empty", collection),
@@ -106,6 +108,10 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         SetClear { collection } => ("set_clear", collection),
     };
     format!("el_{name}_t{}", ty.index())
+}
+
+pub(super) fn variadic_slice_name(slice: TypeId, length: usize) -> String {
+    format!("el_variadic_t{}_n{length}", slice.index())
 }
 
 pub(super) fn variant_member_name(variant: VariantId) -> String {
