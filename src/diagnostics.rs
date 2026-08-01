@@ -34,6 +34,12 @@ pub enum Category {
     Syntax,
     /// Source formatting configuration or output validation failed.
     Formatting,
+    /// Source uses a deliberately unstable language feature without its
+    /// explicit compiler opt-in.
+    ExperimentalFeature,
+    /// A compile-time AST intrinsic, macro interpreter execution, or generated
+    /// syntax result is invalid or exhausts its deterministic boundary.
+    CompileTime,
     /// Two declarations, imports, modules, members, or lexical bindings
     /// conflict in one namespace (Milestone 4).
     DeclarationConflict,

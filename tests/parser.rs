@@ -93,6 +93,47 @@ fn parses_native_tests_and_expected_trap_blocks() {
 }
 
 #[test]
+fn parses_compile_time_declarations_and_namespace_imports() {
+    let source = r#"
+pub macro repeat(
+    values: ...std.ast.Expression,
+) -> std.ast.StatementList:
+    pass
+
+pub attr annotate(
+    target: std.ast.StructDefinition,
+    labels: ...str,
+) -> std.ast.StructDefinition:
+    pass
+
+pub derive root.traits.FieldCount(
+    target: std.ast.StructDefinition,
+) -> std.ast.Implementation:
+    pass
+
+use macro root.tools.repeat as repeat_values
+pub use attr dependency.annotate
+use derive root.traits.FieldCount
+
+@attr(annotate("entity", nested("value")))
+@derive(FieldCount)
+struct Entity:
+    value: i32
+"#;
+    let (sources, output) = parse_text(source);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.tree.count(SyntaxKind::MacroDeclaration), 1);
+    assert_eq!(output.tree.count(SyntaxKind::AttributeDeclaration), 1);
+    assert_eq!(output.tree.count(SyntaxKind::DeriveDeclaration), 1);
+    assert_eq!(output.tree.count(SyntaxKind::Use), 3);
+    assert_eq!(output.tree.count(SyntaxKind::Attribute), 2);
+}
+
+#[test]
 fn parses_local_tuple_bindings_and_positional_fields() {
     let source = r#"
 fn main() -> ():

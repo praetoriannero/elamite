@@ -1,0 +1,195 @@
+/// # Typed runtime traps and package tests (`SPEC.md` 8.1)
+///
+/// Every case below is the trapping partner of a defined-behavior case in
+/// another module. Run them with `elamc test examples/adversarial`.
+
+use std.testing
+use std.testing.BuiltinTrap
+use std.testing.assert
+// The trait itself must be in lexical scope for `self.code()` below to
+// resolve through ordinary bound-method lookup (`SPEC.md` 6).
+use std.testing.RuntimeTrap
+
+struct Cell:
+    value: i32
+
+/// A user-defined trap identity is its nominal type plus its exact code.
+pub enum DomainTrap:
+    OutOfDomain
+    Unsupported
+
+impl RuntimeTrap for DomainTrap:
+    fn code(self: &Self) -> str:
+        match *self:
+            DomainTrap.OutOfDomain:
+                return "E-DOMAIN-RANGE"
+            DomainTrap.Unsupported:
+                return "E-DOMAIN-UNSUPPORTED"
+
+    fn message(self: &Self) -> String:
+        return String.from(self.code())
+
+fn reject(value: i32) -> i32:
+    if value < 0:
+        std.trap(DomainTrap.OutOfDomain)
+    return value
+
+test integer_overflow_traps:
+    expect (BuiltinTrap.IntegerOverflow):
+        var value: i32 = 2147483647
+        value = value + 1
+        println(f"unreachable {value}")
+
+test signed_minimum_negation_traps:
+    expect (BuiltinTrap.IntegerOverflow):
+        var value: i32 = -2147483648
+        let negated = -value
+        println(f"unreachable {negated}")
+
+test signed_minimum_divided_by_negative_one_traps:
+    expect (BuiltinTrap.IntegerOverflow):
+        var value: i32 = -2147483648
+        var divisor: i32 = -1
+        println(f"unreachable {value / divisor}")
+
+test unsigned_underflow_traps:
+    expect (BuiltinTrap.IntegerOverflow):
+        var value: u8 = 0
+        value = value - 1
+        println(f"unreachable {value}")
+
+test division_by_zero_traps:
+    expect (BuiltinTrap.DivisionByZero):
+        var divisor = 0
+        println(f"unreachable {10 / divisor}")
+
+test remainder_by_zero_traps:
+    expect (BuiltinTrap.DivisionByZero):
+        var divisor = 0
+        println(f"unreachable {10 % divisor}")
+
+test shift_at_width_traps:
+    expect (BuiltinTrap.InvalidShift):
+        var count: i32 = 32
+        println(f"unreachable {1i32 << count}")
+
+test array_index_out_of_bounds_traps:
+    expect (BuiltinTrap.IndexOutOfBounds):
+        let values = [1, 2, 3]
+        var index_value: usize = 3
+        println(f"unreachable {values[index_value]}")
+
+test vector_index_out_of_bounds_traps:
+    expect (BuiltinTrap.IndexOutOfBounds):
+        let values = @vec[1, 2, 3]
+        var index_value: usize = 3
+        println(f"unreachable {values[index_value]}")
+
+test vector_remove_past_end_traps:
+    expect (BuiltinTrap.IndexOutOfBounds):
+        var values = @vec[1]
+        var index_value: usize = 1
+        println(f"unreachable {values.remove(index_value)}")
+
+test vector_insert_past_end_traps:
+    expect (BuiltinTrap.IndexOutOfBounds):
+        var values = @vec[1]
+        var index_value: usize = 5
+        values.insert(index_value, 2)
+
+test missing_map_key_traps:
+    expect (BuiltinTrap.MissingMapKey):
+        let scores = @map{ "present": 1 }
+        let missing = scores["absent"]
+        println(f"unreachable {missing}")
+
+test assigning_an_absent_map_key_traps:
+    expect (BuiltinTrap.MissingMapKey):
+        var scores = @map{ "present": 1 }
+        scores["absent"] = 2
+
+test out_of_range_conversion_traps:
+    expect (BuiltinTrap.InvalidNumericConversion):
+        var value: i32 = 300
+        let narrowed = value as u8
+        println(f"unreachable {narrowed}")
+
+test negative_to_unsigned_conversion_traps:
+    expect (BuiltinTrap.InvalidNumericConversion):
+        var value: i32 = -1
+        let narrowed = value as u32
+        println(f"unreachable {narrowed}")
+
+test nan_to_integer_conversion_traps:
+    expect (BuiltinTrap.InvalidNumericConversion):
+        var zero = 0.0f64
+        let nan = zero / zero
+        let converted = nan as i32
+        println(f"unreachable {converted}")
+
+test infinite_to_integer_conversion_traps:
+    expect (BuiltinTrap.InvalidNumericConversion):
+        var zero = 0.0f64
+        let infinite = 1.0f64 / zero
+        let converted = infinite as i32
+        println(f"unreachable {converted}")
+
+test null_raw_dereference_traps:
+    expect (BuiltinTrap.NullPointer):
+        let empty: *i32 = null
+        unsafe:
+            println(f"unreachable {*empty}")
+
+test null_raw_to_reference_conversion_traps:
+    expect (BuiltinTrap.NullPointer):
+        let empty: *Cell = null
+        unsafe:
+            let recovered: &Cell = empty as &Cell
+            println(f"unreachable {recovered.value}")
+
+test null_raw_function_call_traps:
+    expect (BuiltinTrap.NullPointer):
+        let empty: *fn(i32) -> i32 = null
+        unsafe:
+            println(f"unreachable {empty(1)}")
+
+test explicit_panic_traps:
+    expect (BuiltinTrap.Panic):
+        panic("deliberate panic from the adversarial suite")
+
+test user_defined_trap_identity:
+    expect (DomainTrap.OutOfDomain):
+        println(f"unreachable {reject(-1)}")
+
+/// A non-trapping path through the same function still returns normally.
+test accepted_domain_returns_normally:
+    assert(reject(5) == 5)
+
+/// Assertions are ordinary calls that also work outside `expect`.
+/// `Option` has no `PartialEq` implementation, so an absent result is
+/// inspected with `match` rather than `==`.
+test assertions_hold_for_defined_behavior:
+    let maximum: i32 = 2147483647
+    match maximum.checked_add(1):
+        Option.Some(value):
+            testing.fail(f"expected None, got {value}")
+        Option.None:
+            assert(true)
+
+    let zero: u8 = 0
+    assert(zero.wrapping_sub(1) == 255)
+    assert(u8.saturating_from(300) == 255)
+    assert(-2.9f64 as i32 == -2)
+
+test copies_stay_independent:
+    var first = @vec[1, 2]
+    let second = first
+    first.append(3)
+    assert(first.len() == 3)
+    assert(second.len() == 2)
+
+test references_observe_storage:
+    var value = 1
+    let reference = &var value
+    *reference = 2
+    assert(value == 2)

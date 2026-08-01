@@ -1,0 +1,183 @@
+/// # Generics and monomorphization (`SPEC.md` 6)
+
+struct Wrapper[T]:
+    value: T
+
+    fn get(self: &Self) -> T:
+        return self.value
+
+struct Pair[A, B]:
+    first: A
+    second: B
+
+enum Either[L, R]:
+    Left(L)
+    Right(R)
+
+trait Describe:
+    fn describe(self: &Self) -> str
+
+/// A user trait implemented for a *primitive* type is accepted here but is
+/// unusable downstream; see known_failures/trait_impl_for_primitive.elx.
+/// These nominal targets exercise the working path.
+struct Tag:
+    id: i32
+
+struct Flag:
+    set: bool
+
+impl Describe for Tag:
+    fn describe(self: &Self) -> str:
+        return "tag"
+
+impl Describe for Flag:
+    fn describe(self: &Self) -> str:
+        return "flag"
+
+/// A generic implementation for a generic target is valid while no concrete
+/// substitution overlaps another implementation.
+impl [T: Describe] Describe for Wrapper[T]:
+    fn describe(self: &Self) -> str:
+        return "wrapper"
+
+/// A generic body is checked once against its bounds only.
+fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
+    return *left == *right
+
+fn describe_any[T: Describe](value: &T) -> str:
+    return value.describe()
+
+/// Multiple parameters with independent bounds.
+fn pick[A: PartialEq, B](flag: bool, first: A, second: B) -> Either[A, B]:
+    if flag:
+        return Either.Left(first)
+    return Either.Right(second)
+
+/// The return type participates in inference.
+fn make_wrapper[T](value: T) -> Wrapper[T]:
+    return Wrapper { value: value }
+
+/// Finite mutual recursion across generic instantiations is valid; unbounded
+/// structural growth is rejected instead.
+fn depth_even[T](value: &Wrapper[T], remaining: i32) -> i32:
+    if remaining == 0:
+        return 0
+    return 1 + depth_odd(value, remaining - 1)
+
+fn depth_odd[T](value: &Wrapper[T], remaining: i32) -> i32:
+    if remaining == 0:
+        return 0
+    return 1 + depth_even(value, remaining - 1)
+
+/// Inference succeeds when the solution is unique.
+fn inference() -> ():
+    let integer = make_wrapper(1)
+    let text = make_wrapper(String.from("text"))
+    let nested = make_wrapper(make_wrapper(true))
+
+    println(f"inferred from argument: {integer.get()} / {text.get()}")
+    // A call result is not addressable, so it cannot auto-borrow for a
+    // `&Self` receiver; the intermediate is bound first.
+    let inner = nested.get()
+    println(f"nested instantiation: {inner.get()}")
+
+    // An expected type also drives inference.
+    let expected: Wrapper[i64] = make_wrapper(7)
+    println(f"inferred from expected type: {expected.get()}")
+
+    // An explicit complete argument list is always accepted.
+    let explicit = make_wrapper[u8](255)
+    println(f"explicit argument: {explicit.get()}")
+
+    // A struct literal infers its arguments the same way.
+    let literal: Pair[i32, str] = Pair { first: 1, second: "one" }
+    println(f"literal inference: {literal.first}/{literal.second}")
+
+/// Distinct instantiations are distinct types with distinct layouts, and each
+/// monomorphized copy keeps its own behavior.
+fn instantiation_identity() -> ():
+    let small: Wrapper[u8] = Wrapper { value: 200 }
+    let large: Wrapper[i64] = Wrapper { value: 200 }
+    println(f"distinct instantiations: {small.get()} {large.get()}")
+
+    // Copy independence holds inside a generic aggregate.
+    var mutable = Wrapper { value: @vec[1, 2] }
+    let snapshot = mutable
+    mutable.value.append(3)
+    println(
+        f"generic copy independence: {mutable.value.len()} vs {snapshot.value.len()}"
+    )
+
+    // A generic enum instantiates the same way.
+    let left: Either[i32, str] = Either.Left(1)
+    let right: Either[i32, str] = Either.Right("right")
+    println(f"either: {branch(left)} {branch(right)}")
+
+fn branch(value: Either[i32, str]) -> str:
+    match value:
+        Either.Left(number):
+            return "left"
+        Either.Right(text):
+            return text
+
+/// Bounds are the only capability a generic body may rely on.
+fn bounded_behavior() -> ():
+    // A reference operand must be an addressable place, so each literal is
+    // bound first.
+    let one = 1
+    let another_one = 1
+    let two = 2
+    println(
+        f"equivalent i32: {equivalent(&one, &another_one)} {equivalent(&one, &two)}"
+    )
+
+    let left = String.from("same")
+    let right = String.from("same")
+    println(f"equivalent String: {equivalent(&left, &right)}")
+
+    let tag = Tag { id: 1 }
+    let flag = Flag { set: true }
+    println(f"describe tag: {describe_any(&tag)}")
+    println(f"describe flag: {describe_any(&flag)}")
+
+    // A generic implementation covers every instantiated wrapper whose
+    // argument satisfies the bound.
+    let wrapped = Wrapper { value: tag }
+    println(f"describe generic impl: {describe_any(&wrapped)}")
+
+/// Recursion across generic instantiations terminates when the instantiation
+/// set is finite.
+fn recursion() -> ():
+    let wrapper = Wrapper { value: 1 }
+    println(f"mutual generic recursion: {depth_even(&wrapper, 6)}")
+
+    let either: Either[i32, bool] = pick(true, 1, false)
+    println(f"multi-parameter generic: {branch_either(either)}")
+
+fn branch_either(value: Either[i32, bool]) -> i32:
+    match value:
+        Either.Left(number):
+            return number
+        Either.Right(flag):
+            if flag:
+                return 1
+            return 0
+
+/// A generic function reference exists only once every type argument is
+/// determined.
+fn generic_function_references() -> ():
+    let concrete: &fn(&i32, &i32) -> bool = equivalent[i32]
+    let left = 1
+    let right = 1
+    println(f"instantiated generic reference: {concrete(&left, &right)}")
+
+    let other: &fn(&i32, &i32) -> bool = equivalent[i32]
+    println(f"same instantiation is one function: {concrete == other}")
+
+pub fn run() -> ():
+    println("== 6 generics ==")
+    inference()
+    instantiation_identity()
+    bounded_behavior()
+    recursion()
+    generic_function_references()

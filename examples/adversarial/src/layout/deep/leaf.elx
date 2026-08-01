@@ -1,0 +1,8 @@
+/// `layout/deep/` has no `deep.elx`, so `root.layout.deep` exists purely as a
+/// directory namespace component.
+
+pub fn describe() -> str:
+    return "directory namespace leaf"
+
+pub fn marker() -> str:
+    return "deep marker"

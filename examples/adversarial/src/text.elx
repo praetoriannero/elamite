@@ -1,0 +1,129 @@
+/// # Text, `Display`, and formatted strings (`SPEC.md` 4.1, 7.2)
+
+struct Temperature:
+    degrees: i32
+
+struct Reading:
+    label: str
+    temperature: Temperature
+
+impl Display for Temperature:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ():
+        formatter.write("<")
+        formatter.write(f"{self.degrees}")
+        formatter.write(" degrees>")
+
+impl Display for Reading:
+    fn fmt(self: &Self, formatter: &var Formatter) -> ():
+        // A user implementation composes other values by writing a formatted
+        // string.
+        formatter.write(f"{self.label}={self.temperature}")
+
+/// `str` and `String` are distinct types; a literal materializes to whichever
+/// one is expected, defaulting to `str`.
+fn text_types() -> ():
+    let defaulted = "literal"
+    let immutable: str = "immutable"
+    let owned: String = "owned"
+    let converted = String.from(immutable)
+
+    println(f"defaults to str: {defaulted}")
+    println(f"materialized: {immutable} / {owned} / {converted}")
+
+    // A `String` copies independently.
+    var first = String.from("shared")
+    let second = first
+    first = String.from("changed")
+    println(f"string copy independence: {first} / {second}")
+
+    // Comparison is exact code points, with no normalization.
+    let same_text = "immutable"
+    let same_owned = String.from("immutable")
+    let other_owned = String.from("Immutable")
+    println(f"str equality: {immutable == same_text}")
+    println(f"String equality: {converted == same_owned}")
+    println(f"case is significant: {converted == other_owned}")
+
+/// Escapes and Unicode scalars survive round trips.
+fn escapes() -> ():
+    let escaped = "tab:\tnewline-follows:\\n quote:\" apostrophe:' nul-free"
+    println(f"escapes: {escaped}")
+
+    let unicode = "\u{41}\u{7A}\u{2603}"
+    println(f"unicode escapes: {unicode}")
+
+    let direct = "λ ← 雪"
+    println(f"direct unicode: {direct}")
+
+    let characters = ['a', '\n', '\u{2603}', '\'']
+    println(f"character literals: {characters[0]} {characters[2]} {characters[3]}")
+
+/// Each `{expression}` evaluates exactly once, left to right, and `{{`/`}}`
+/// produce literal braces.
+fn interpolation() -> ():
+    println("interpolation evaluation:")
+    let first_label = counted("first")
+    let second_label = counted("second")
+    println(f"  {first_label} then {second_label}")
+
+    println(f"literal braces: {{not an interpolation}}")
+    println(f"mixed: {{{1 + 1}}}")
+
+    // Braces in an ordinary string literal have no formatting behavior.
+    println("ordinary braces: {not an interpolation}")
+
+    // An empty formatted string is valid.
+    let empty = f""
+    let blank = ""
+    println(f"empty formatted string is blank: {empty == blank}")
+
+fn counted(label: str) -> str:
+    println(f"    evaluating {label}")
+    return label
+
+/// A user `Display` implementation writes through the formatter, and nesting
+/// composes.
+fn user_display() -> ():
+    let temperature = Temperature { degrees: 21 }
+    let reading = Reading { label: "kitchen", temperature: temperature }
+
+    println(f"user display: {temperature}")
+    println(f"nested display: {reading}")
+
+    // A reference to a displayable value is itself displayable.
+    let reference = &temperature
+    println(f"reference display: {reference}")
+
+    // `print` writes without a trailing newline.
+    print("print has no newline: ")
+    print(f"{temperature}")
+    println("")
+
+/// Dynamic dispatch reaches a user `Display` implementation through a trait
+/// object.
+fn display_objects() -> ():
+    let temperature = Temperature { degrees: -5 }
+    let reading = Reading { label: "outside", temperature: temperature }
+
+    let displayables = @vec[&temperature as &Display, &reading as &Display]
+    for displayable in displayables:
+        println(f"dynamic display: {displayable}")
+
+/// Primitive displays cover every scalar category.
+fn primitive_display() -> ():
+    println(f"bool: {true} {false}")
+    println(f"char: {'x'}")
+    println(f"integers: {0} {-1} {255u8} {-32768i16}")
+    println(f"floats: {1.5f64} {2.0f32} {-0.25f64}")
+    let text = "text"
+    let owned = String.from("owned")
+    println(f"str and String: {text} {owned}")
+
+pub fn run() -> ():
+    println("== 4.1/7.2 text and display ==")
+    text_types()
+    escapes()
+    interpolation()
+    user_display()
+    display_objects()
+    primitive_display()

@@ -1,0 +1,20 @@
+// FINDING 4 — shift operand typing contradicts the specification in both
+// directions.
+//
+// SPEC 7: "A shift count must have an unsigned integer type and be smaller
+// than the bit width of the left operand." LEDGER 7 records the same rule.
+//
+// Expected: `1i32 << 3u32` compiles (unsigned count) and `1i32 << 3i32` is
+//           rejected (signed count).
+// Actual:   exactly the reverse. The implementation requires both operands to
+//           have the same concrete type:
+//             1i32 << 3u32 -> error: operands of this operator must have the
+//                             same concrete type
+//             1i32 << 3i32 -> accepted, prints 8
+//
+// The runtime width check itself is correct: a count at or above the operand
+// width traps with E-RUN-SHIFT.
+
+fn main():
+    let unsigned_count = 1i32 << 3u32
+    println(f"unsigned shift count: {unsigned_count}")

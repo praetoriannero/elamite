@@ -51,6 +51,47 @@ façade to a bounded interpreter for ordinary safe compile-time Elamite code.
 while interpolated values retain their context. The interpreter and AST façade
 must remain outside compiler-private parsed, resolved, and typed data models and
 must not gain ambient host or target capabilities.
+
+`src/expansion/ast.rs` now establishes the first of those layers. Expanded
+packages carry an exact `std.ast` 1.0 interface handshake and a stable intrinsic
+type inventory. Its opaque, immutable values cover definitions, items,
+expressions, statements, patterns, written types, metadata, fields, variants,
+parameters, and implementations; persistent typed lists and `with_` methods
+return logical copies without mutating their inputs. Validating constructors
+receive only expansion-minted origin handles. Contained `std.ast.error` failures
+therefore resolve physical origins directly and retain generated invocation and
+definition locations as related context without inventing a physical span.
+These values share no `SyntaxNode`, resolver identity, inferred type, target
+layout, runtime value, or mutable compiler table. Quotation is the next layer
+that will translate source structure into this public model.
+
+`src/expansion/namespace.rs` collects physical macro, attribute, and derive
+declarations and their explicit imports into stable, separate module namespaces
+before ordinary resolution. It resolves aliases, public re-exports, package
+privacy, inline modules, and dependency roots without adding those bindings to
+the ordinary value/type namespace. Stored signatures and bodies remain inert
+until compile-time checking and interpretation are implemented.
+`src/expansion/scheduler.rs` is the execution-independent fixed-point engine
+for that future interpreter. It orders ready work by package, module, and
+provenance; represents attributes-before-derives and generated-output
+dependencies explicitly; re-enters generated invocations and definitions; and
+turns structurally repeated active-chain requests into stable recovery nodes.
+It also owns the normative graph-wide depth, execution, and generated-node
+budgets plus the per-execution interpreter-step and live-value meters.
+Generated-node charging is atomic, while per-execution exhaustion is sticky,
+so failed work cannot leak partial syntax even through an incorrect driver.
+No macro body is executed by this layer.
+`src/expansion/gate.rs` rejects physical user-defined compile-time
+declarations, namespace imports, attachments, and invocations unless
+`CompilerFeatures::unstable_macros` is enabled. Compiler library entry points
+default to the stable feature set, and the CLI threads `--unstable-macros`
+through every compiling workflow. Syntax-only tooling remains able to inspect
+the experimental grammar without enabling execution.
+The completed foundation is guarded by directed integration tests and property
+tests over arbitrary token streams, every fragment role, deep generated
+provenance, randomized expansion depth, atomic limit recovery, and explicit
+macro-free equivalence for every shipped package example. These tests preserve
+the behavior-neutral boundary while `std.ast` and execution are added above it.
 Native-language test discovery and execution lives in `src/testing.rs` and
 remains separate from the conformance fixture runner.
 

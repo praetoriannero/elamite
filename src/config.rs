@@ -43,6 +43,12 @@ pub enum Optimization {
     Release,
 }
 
+/// Explicit opt-ins for language features that are not yet stable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompilerFeatures {
+    pub unstable_macros: bool,
+}
+
 impl Optimization {
     #[must_use]
     pub fn compiler_flag(self) -> &'static str {

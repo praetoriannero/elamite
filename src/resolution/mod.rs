@@ -21,8 +21,11 @@ pub use model::*;
 use lasso::{Rodeo, Spur};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::config::CompilerFeatures;
 use crate::diagnostics::{Category, Diagnostic};
-use crate::expansion::{ExpandedPackage, ExpandedUnitIdentity, ExpansionOutput, expand};
+use crate::expansion::{
+    ExpandedPackage, ExpandedUnitIdentity, ExpansionOutput, expand, expand_with_features,
+};
 use crate::ident::is_valid_identifier;
 use crate::package::{PackageGraph, PackageId};
 use crate::parsed::{StandardModule, parse_package};
@@ -70,14 +73,42 @@ impl LexicalScopes {
 /// Parses, expands, collects, and resolves every package source file.
 #[must_use]
 pub fn resolve(graph: &PackageGraph, sources: &mut SourceManager) -> ResolutionOutput {
-    resolve_expanded(graph, expand(parse_package(graph, sources)))
+    resolve_expanded(graph, expand(graph, parse_package(graph, sources)))
+}
+
+/// Resolves with explicit unstable-language feature opt-ins.
+#[must_use]
+pub fn resolve_with_features(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    features: CompilerFeatures,
+) -> ResolutionOutput {
+    resolve_expanded(
+        graph,
+        expand_with_features(graph, parse_package(graph, sources), features),
+    )
 }
 
 /// Resolves production declarations plus test bodies owned by the selected
 /// root package. Dependency test bodies remain deliberately unresolved.
 #[must_use]
 pub fn resolve_for_tests(graph: &PackageGraph, sources: &mut SourceManager) -> ResolutionOutput {
-    Resolver::new(graph, expand(parse_package(graph, sources)), true).run()
+    Resolver::new(graph, expand(graph, parse_package(graph, sources)), true).run()
+}
+
+/// Resolves selected test bodies with explicit unstable feature opt-ins.
+#[must_use]
+pub fn resolve_for_tests_with_features(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    features: CompilerFeatures,
+) -> ResolutionOutput {
+    Resolver::new(
+        graph,
+        expand_with_features(graph, parse_package(graph, sources), features),
+        true,
+    )
+    .run()
 }
 
 /// Collects and resolves one already expanded package.

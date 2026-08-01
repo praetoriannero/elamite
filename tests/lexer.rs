@@ -152,14 +152,14 @@ fn distinguishes_tuple_selectors_from_float_literals() {
 
 #[test]
 fn recognizes_every_reserved_keyword() {
-    let source = "as break continue defer else enum false fn for if impl in \
-                  let match mod null pass pub return root self Self struct super trait true \
-                  type unsafe use var while\n";
+    let source = "as attr break continue defer derive else enum false fn for if impl in \
+                  let macro match mod null pass pub quote return root self Self struct super \
+                  trait true type unsafe use var while\n";
     let output = lex_text(source);
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     assert_eq!(
         count(&output.tokens, |kind| matches!(kind, TokenKind::Keyword(_))),
-        31
+        35
     );
     assert_eq!(
         count(&output.tokens, |kind| matches!(

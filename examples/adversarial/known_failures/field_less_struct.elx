@@ -1,0 +1,20 @@
+// FINDING 10 — a field-less struct cannot be compiled at all.
+//
+// SPEC 2.2 makes `pass` the explicit no-op for a body that would otherwise be
+// empty, and SPEC 4.2 places no lower bound on a struct's field count.
+//
+// Expected: compiles.
+// Actual:   `elamc check` exits 0; the C compiler then rejects the generated
+//           copy helper:
+//           error: unused parameter 'value' [-Werror=unused-parameter]
+//
+// Declaring and constructing the value is enough; no copy is required to
+// trigger it. The generated `el_copy_tN` takes its argument and returns a
+// fresh zero value without reading the parameter.
+
+struct Marker:
+    pass
+
+fn main():
+    let marker = Marker {}
+    println("constructed")

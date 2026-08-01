@@ -115,6 +115,7 @@ fn build_and_run(source: &str, optimization: Optimization) -> (String, String, i
         &BuildOptions {
             target: Target::X86_64,
             optimization,
+            features: Default::default(),
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
@@ -438,6 +439,7 @@ fn add_one(value: i32) -> i32:
         &BuildOptions {
             target: Target::X86_64,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
@@ -625,6 +627,7 @@ fn main() -> ():
         &BuildOptions {
             target: Target::X86_64,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
@@ -1450,6 +1453,7 @@ fn selected_x86_target_reaches_the_native_driver() {
         &BuildOptions {
             target: Target::X86,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: tree.root.join("x86-out"),
             keep_generated_c: true,
             c_compiler: Some(compiler.into_os_string()),
@@ -1623,6 +1627,7 @@ fn library_packages_produce_relocatable_objects_without_entry_shims() {
         &BuildOptions {
             target: Target::X86_64,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: tree.root.join("out"),
             keep_generated_c: true,
             c_compiler: None,
@@ -1701,6 +1706,7 @@ fn a_multi_package_build_consumes_reexported_generic_metadata_once() {
         &BuildOptions {
             target: Target::X86_64,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: tree.root.join("out"),
             keep_generated_c: false,
             c_compiler: None,
@@ -1856,6 +1862,41 @@ fn command_line_help_lists_the_supported_workflows() {
 }
 
 #[test]
+fn command_line_requires_an_explicit_gate_for_user_defined_macros() {
+    let tree = TestTree::new("unstable-macro-gate");
+    tree.executable(
+        r#"
+macro inert(value: std.ast.Expression) -> std.ast.Expression:
+    pass
+
+fn main() -> ():
+    pass
+"#,
+    );
+
+    let denied = Command::new(env!("CARGO_BIN_EXE_elamc"))
+        .arg("check")
+        .arg(&tree.root)
+        .output()
+        .expect("run stable check");
+    assert!(!denied.status.success());
+    let stderr = String::from_utf8(denied.stderr).expect("UTF-8 diagnostics");
+    assert!(stderr.contains("require `--unstable-macros`"), "{stderr}");
+
+    let enabled = Command::new(env!("CARGO_BIN_EXE_elamc"))
+        .arg("check")
+        .arg(&tree.root)
+        .arg("--unstable-macros")
+        .output()
+        .expect("run experimental check");
+    assert!(
+        enabled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enabled.stderr)
+    );
+}
+
+#[test]
 fn command_line_version_reports_the_specification_revision() {
     let output = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("--version")
@@ -1962,6 +2003,7 @@ fn reports_missing_toolchains_without_losing_generated_c() {
         &BuildOptions {
             target: Target::X86_64,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: output.clone(),
             keep_generated_c: false,
             c_compiler: Some("elamite-no-such-c-compiler".into()),
@@ -1999,6 +2041,7 @@ fn reports_a_toolchain_that_omits_its_promised_artifact() {
         &BuildOptions {
             target: Target::X86_64,
             optimization: Optimization::Debug,
+            features: Default::default(),
             output_directory: output.clone(),
             keep_generated_c: false,
             c_compiler: Some(compiler.into_os_string()),

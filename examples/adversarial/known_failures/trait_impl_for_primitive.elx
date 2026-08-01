@@ -1,0 +1,35 @@
+// FINDING 2 — a user trait implemented for a primitive type is accepted with
+// no diagnostic but is unusable at every call site.
+//
+// SPEC 6 orphan rule: "An implementation may be declared only in the package
+// that defines either the trait or the outermost nominal target type." The
+// trait is defined here, so this implementation is legal.
+//
+// Expected: compiles; all three dispatch forms print "i32".
+// Actual:   the `impl` is accepted silently, then
+//           - bound call `number.describe()`      -> lowering error
+//             ("an expression whose type belongs to a later milestone is not
+//              supported by the Milestone 8 executable subset")
+//           - qualified `i32.Describe.describe()` -> the same lowering error
+//           - generic bound `describe_any(&number)` -> checking error
+//             ("generic argument does not satisfy required `Describe`
+//              capability")
+//
+// The same trait implemented for a nominal struct works correctly, so the gap
+// is specific to primitive implementation targets.
+
+trait Describe:
+    fn describe(self: &Self) -> str
+
+impl Describe for i32:
+    fn describe(self: &Self) -> str:
+        return "i32"
+
+fn describe_any[T: Describe](value: &T) -> str:
+    return value.describe()
+
+fn main():
+    let number = 1
+    println(f"bound call: {number.describe()}")
+    println(f"qualified: {i32.Describe.describe(&number)}")
+    println(f"generic bound: {describe_any(&number)}")

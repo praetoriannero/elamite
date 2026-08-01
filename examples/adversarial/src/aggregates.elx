@@ -1,0 +1,235 @@
+/// # Tuples, structs, enums, and aliases (`SPEC.md` 4.1, 4.2, 4.3, 4.4)
+
+/// A transparent alias fixing one parameter and leaving another variable.
+/// Annotating a binding with a collection alias does not survive C emission,
+/// so `Registry` is exercised only in signature position; see
+/// known_failures/alias_collection.elx.
+type Registry[V] = Map[str, V]
+type Counter = i32
+type Pairing = (i32, String)
+
+struct Point(Default, PartialEq, Eq, PartialOrd, Ord, Hash):
+    x: i32
+    y: i32
+
+struct Nested(Default):
+    point: Point
+    flag: bool
+    text: String
+
+/// A struct whose only fields are explicit aliases still derives nothing that
+/// requires `Default` from a safe reference.
+struct RawDefaults(Default):
+    shared: *i32
+    writable: *var i32
+    maybe: Option[i32]
+
+enum Shape:
+    Dot
+    Line(i32)
+    Segment(i32, i32)
+    Box { width: i32, height: i32 }
+
+enum Nothing:
+    Only
+
+/// Recursive containment crossing explicit indirection is legal; a generic
+/// wrapper alone would not break the cycle.
+struct Tree[T]:
+    value: T
+    left: Option[&Tree[T]]
+    right: Option[&Tree[T]]
+
+/// Tuple shape is exact: arity and component types both participate in
+/// identity, and `(v)` groups while `(v,)` is a one-element tuple.
+fn tuple_shapes() -> ():
+    let unit: () = ()
+    let grouped = (42)
+    let single = (42,)
+    let pair = (1, "one")
+    let nested = ((1, 2), (3, (4, 5)))
+
+    println(f"grouped is a value: {grouped}")
+    println(f"one element tuple: {single.0}")
+    println(f"pair: {pair.0}/{pair.1}")
+    println(f"deep selector: {nested.1.1.1}")
+    // Unit is specified to provide total equality, but `unit == ()` does not
+    // survive C emission; see known_failures/unit_equality.elx.
+    println(f"unit binding is inhabited: {is_unit(unit)}")
+
+/// Local `let` and `var` accept irrefutable nested tuple binding patterns.
+/// The initializer evaluates exactly once, before any name enters scope.
+fn tuple_destructuring() -> ():
+    let ((a, b), c) = ((1, 2), 3)
+    println(f"nested destructure: {a} {b} {c}")
+
+    // `_` binds nothing.
+    let (kept, _) = (10, 20)
+    println(f"ignored component: {kept}")
+
+    // An annotation applies to the complete pattern.
+    let (number, name): (i32, String) = (7, String.from("seven"))
+    println(f"annotated: {number}/{name}")
+
+    // `var` components are separate mutable places holding independent copies.
+    let source = (1, String.from("source"))
+    var (left, right) = source
+    left = 2
+    right = String.from("changed")
+    println(f"independent components: {source.0}/{source.1} vs {left}/{right}")
+
+    // A one-element and empty pattern are both legal.
+    let (only,) = (99,)
+    let () = ()
+    println(f"one element pattern: {only}")
+
+/// Positional selectors are places when their receiver path is addressable,
+/// so they support assignment, compound assignment, and reference formation.
+fn tuple_places() -> ():
+    var pair = (1, Point { x: 2, y: 3 })
+
+    pair.0 += 10
+    pair.1.x = 20
+
+    let component = &pair.1
+    let mutable_component = &var pair.0
+    *mutable_component += 1
+
+    println(f"tuple place mutation: {pair.0} {component.x} {pair.1.y}")
+
+    // A selector on a call result is a value, evaluated exactly once.
+    println(f"call result selector: {make_pair().1}")
+
+fn is_unit(value: ()) -> bool:
+    return true
+
+fn make_pair() -> (i32, i32):
+    println("make_pair evaluated once")
+    return (1, 2)
+
+/// Struct literals require every field exactly once, in any order, and accept
+/// field shorthand plus a trailing comma.
+fn struct_literals() -> ():
+    let x = 1
+    let y = 2
+    let shorthand = Point { x, y }
+    let reordered = Point { y: 2, x: 1 }
+    let trailing = Point {
+        x: 1,
+        y: 2,
+    }
+
+    println(f"literal forms agree: {shorthand == reordered} {reordered == trailing}")
+
+    // A field-less `struct Name: pass` declaration does not survive C
+    // emission; see known_failures/field_less_struct.elx.
+
+/// Derived `Default` is fieldwise and recursive.
+fn derived_defaults() -> ():
+    let point = Point.default()
+    let nested = Nested.default()
+    let raw = RawDefaults.default()
+
+    println(f"default point: {point.x}/{point.y}")
+    println(f"default nested: {nested.point.x}/{nested.flag}/{nested.text}")
+    // An interpolation is delimited by the enclosing literal, so a nested
+    // string literal is hoisted to a binding instead.
+    let empty_text = String.from("")
+    println(f"default nested text is empty: {nested.text == empty_text}")
+    println(
+        f"default raw pointers are null: {raw.shared == null} {raw.writable == null}"
+    )
+
+    match raw.maybe:
+        Option.Some(value):
+            println(f"unexpected default payload: {value}")
+        Option.None:
+            println("Option defaults to None without a payload default")
+
+    // Primitive defaults are compiler-supplied.
+    println(f"primitive defaults: {i32.default()} {bool.default()} {f64.default()}")
+
+/// Enums cover unit-like, tuple-like, and record-like variants in one
+/// declaration, and matching reaches each shape.
+fn enum_shapes() -> ():
+    let shapes = @vec[
+        Shape.Dot,
+        Shape.Line(5),
+        Shape.Segment(1, 2),
+        Shape.Box { width: 3, height: 4 },
+    ]
+
+    var total = 0
+    for shape in shapes:
+        total += describe(shape)
+    println(f"enum area total: {total}")
+
+    // A single-variant enum is still exhaustively matched.
+    let nothing = Nothing.Only
+    match nothing:
+        Nothing.Only:
+            println("single variant enum matched")
+
+fn describe(shape: Shape) -> i32:
+    match shape:
+        Shape.Dot:
+            return 0
+        Shape.Line(length):
+            return length
+        Shape.Segment(start, end):
+            return end - start
+        Shape.Box { width, height }:
+            return width * height
+
+/// A transparent alias is the same type as its target, so values cross the
+/// alias boundary without conversion.
+fn aliases_are_transparent() -> ():
+    // A scalar alias and its target are one type in both directions.
+    let counted: Counter = 5
+    let plain: i32 = counted
+    let back: Counter = plain
+    println(f"scalar alias: {counted + plain + back}")
+
+    // A tuple alias keeps exact shape, so selectors and destructuring apply.
+    let pairing: Pairing = (7, String.from("seven"))
+    let (number, name): Pairing = pairing
+    println(f"tuple alias: {pairing.0}/{name}/{number}")
+
+/// A recursive generic tree crosses explicit indirection at every edge.
+fn recursive_generic_tree() -> ():
+    let left_leaf = Tree { value: 1, left: Option.None, right: Option.None }
+    let right_leaf = Tree { value: 3, left: Option.None, right: Option.None }
+    // `root` is a reserved path keyword, so the binding needs another name.
+    let tree_root = Tree {
+        value: 2,
+        left: Option.Some(&left_leaf),
+        right: Option.Some(&right_leaf),
+    }
+    // `T` appears in no parameter, so it cannot be inferred and the caller
+    // must supply the complete explicit argument list.
+    println(f"tree sum: {sum_tree[i32](&tree_root)}")
+
+fn sum_tree[T](node: &Tree[i32]) -> i32:
+    var total = node.value
+    match node.left:
+        Option.Some(child):
+            total += sum_tree[i32](child)
+        Option.None:
+            pass
+    match node.right:
+        Option.Some(child):
+            total += sum_tree[i32](child)
+        Option.None:
+            pass
+    return total
+
+pub fn run() -> ():
+    println("== 4.1-4.4 aggregates ==")
+    tuple_shapes()
+    tuple_destructuring()
+    tuple_places()
+    struct_literals()
+    derived_defaults()
+    enum_shapes()
+    aliases_are_transparent()
+    recursive_generic_tree()

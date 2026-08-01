@@ -13,6 +13,10 @@ implementation.
   Elamite's C interoperability layer.
 - [`examples/sdl`](examples/sdl) demonstrates an SDL2 window and animation
   through a narrow C99 interoperability shim.
+- [`examples/adversarial`](examples/adversarial) pushes the implemented
+  language to its specified boundaries and records, in
+  [`known_failures`](examples/adversarial/known_failures), the cases where
+  `SPEC.md` and the compiler currently disagree.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.

@@ -1,0 +1,26 @@
+// FINDING 7 — automatic raw-pointer field access checks cleanly but does not
+// lower.
+//
+// AGENTS.md (closures milestone, marked done): "Postfix field access such as
+// `pointer.value` automatically dereferences the pointer and therefore
+// requires an ordinary `unsafe:` block, performs the required null and
+// alignment checks, and permits a write only through `*var T`."
+// SPEC 4.1 states the same rule for raw-pointer tuple receivers.
+//
+// Expected: compiles; prints 7.
+// Actual:   `elamc check` exits 0 with no diagnostic; `elamc build` fails with
+//           error: an expression whose type belongs to a later milestone is
+//           not supported by the Milestone 8 executable subset
+//
+// The tuple form (`pointer.0`, including assignment through `*var`) is fully
+// implemented, so only the named-struct-field form is missing. Converting the
+// pointer with `pointer as &Cell` first is the working spelling.
+
+struct Cell:
+    value: i32
+
+fn main():
+    var cell = Cell { value: 7 }
+    let pointer: *Cell = &cell as *Cell
+    unsafe:
+        println(f"{pointer.value}")

@@ -1,0 +1,164 @@
+/// # Safe references (`SPEC.md` 3.2)
+///
+/// A reference names storage. Every assignment that overwrites that storage is
+/// observable through the reference, and a reference into an aggregate keeps
+/// its whole container reachable.
+
+struct City:
+    name: String
+
+struct Address:
+    city: City
+    postcode: i32
+
+struct Account:
+    owner: String
+    address: Address
+
+struct Node:
+    value: i32
+    next: Option[&Node]
+
+struct Watcher:
+    /// A reference is a valid struct field.
+    seen: &var i32
+
+enum Slot:
+    /// A reference is a valid enum payload.
+    Occupied(&i32)
+    Empty
+
+/// A reference formed from a binding observes later assignment to that
+/// binding, and a reference into a nested aggregate observes replacement of
+/// its container.
+fn references_name_storage() -> ():
+    var account = Account {
+        owner: String.from("Ari"),
+        address: Address { city: City { name: String.from("Aster") }, postcode: 1 },
+    }
+
+    let whole = &account
+    let city = &account.address.city.name
+    let postcode = &var account.address.postcode
+
+    println(f"initial: {whole.owner}/{city}/{*postcode}")
+
+    account = Account {
+        owner: String.from("Bea"),
+        address: Address { city: City { name: String.from("Beacon") }, postcode: 2 },
+    }
+
+    println(f"after container replacement: {whole.owner}/{city}/{*postcode}")
+
+    // Mutation through an interior reference is visible in the container.
+    *postcode = 3
+    println(f"after interior mutation: {account.address.postcode}")
+
+/// References are not exclusive. Any number of shared and mutable references
+/// may name one storage cell, and later writes replace earlier ones.
+fn aliasing_is_permitted() -> ():
+    var count = 0
+    let first = &var count
+    let second = &var count
+    let observer = &count
+
+    *first = 1
+    *second = *second + 1
+    *first += 10
+
+    println(f"aliased writes: {count} / {*observer} / {*first} / {*second}")
+
+/// A reference to a local escapes safely because the compiler promotes the
+/// required storage to managed storage.
+fn escaping_local() -> &i32:
+    let value = 42
+    return &value
+
+/// An interior reference keeps the entire container reachable, so the escaped
+/// reference below stays valid even though only one field is named.
+fn escaping_interior() -> &String:
+    let account = Account {
+        owner: String.from("Cyd"),
+        address: Address { city: City { name: String.from("Calder") }, postcode: 9 },
+    }
+    return &account.address.city.name
+
+/// A referenced composite literal creates a managed target with no separate
+/// source-level binding.
+fn referenced_composite_literal() -> &City:
+    return &City { name: String.from("Cove") }
+
+fn escape_and_promotion() -> ():
+    let escaped = escaping_local()
+    let interior = escaping_interior()
+    let literal = referenced_composite_literal()
+    println(f"escaped: {*escaped} / {interior} / {literal.name}")
+
+/// Reference equality compares storage identity, never contents.
+fn reference_identity() -> ():
+    var left = City { name: String.from("same") }
+    var right = City { name: String.from("same") }
+
+    let left_ref = &left
+    let left_again = &left
+    let right_ref = &right
+
+    println(f"same storage: {left_ref == left_again}")
+    println(f"different storage: {left_ref == right_ref}")
+    println(f"equal contents: {left_ref.name == right_ref.name}")
+
+/// References in fields and enum payloads keep identity through copies of the
+/// containing aggregate.
+fn references_inside_aggregates() -> ():
+    var observed = 0
+    let watcher = Watcher { seen: &var observed }
+    let watcher_copy = watcher
+    *watcher_copy.seen = 7
+    println(f"watcher through copy: {observed} / {*watcher.seen}")
+
+    let anchor = 5
+    let slot = Slot.Occupied(&anchor)
+    match slot:
+        Slot.Occupied(value):
+            println(f"enum payload reference: {*value}")
+        Slot.Empty:
+            println("empty")
+
+/// A recursive graph built from `Option[&T]` stays reachable through the
+/// collector while any strong path remains.
+fn recursive_graph() -> ():
+    let tail = Node { value: 3, next: Option.None }
+    let middle = Node { value: 2, next: Option.Some(&tail) }
+    let head = Node { value: 1, next: Option.Some(&middle) }
+    println(f"graph total: {total(&head)}")
+
+fn total(node: &Node) -> i32:
+    match node.next:
+        Option.Some(next):
+            return node.value + total(next)
+        Option.None:
+            return node.value
+
+/// Field and method access through a reference dereferences automatically,
+/// and a bound call borrows an addressable receiver.
+fn automatic_dereference() -> ():
+    var city = City { name: String.from("Auto") }
+    let shared = &city
+    let mutable = &var city
+
+    // No explicit `*` is needed for field access through a reference.
+    println(f"auto field: {shared.name} / {mutable.name}")
+
+    // Explicit dereference produces an independent copy of the whole value.
+    let copied: City = *shared
+    println(f"explicit dereference copy: {copied.name}")
+
+pub fn run() -> ():
+    println("== 3.2 references ==")
+    references_name_storage()
+    aliasing_is_permitted()
+    escape_and_promotion()
+    reference_identity()
+    references_inside_aggregates()
+    recursive_graph()
+    automatic_dereference()

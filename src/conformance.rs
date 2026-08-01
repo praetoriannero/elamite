@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::config::Target;
+use crate::config::{CompilerFeatures, Target};
 use crate::diagnostics::Diagnostic;
 use crate::driver::{BuildOptions, Optimization, build, run_with_environment};
 use crate::package::PackageGraph;
@@ -17,6 +17,7 @@ pub struct RunnerOptions {
     pub filter: Option<String>,
     pub targets: Vec<Target>,
     pub optimizations: Vec<Optimization>,
+    pub features: CompilerFeatures,
     pub c_flags: Vec<std::ffi::OsString>,
     pub runtime_environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
@@ -27,6 +28,7 @@ impl Default for RunnerOptions {
             filter: None,
             targets: vec![Target::host()],
             optimizations: vec![Optimization::Debug],
+            features: CompilerFeatures::default(),
             c_flags: Vec::new(),
             runtime_environment: Vec::new(),
         }
@@ -112,8 +114,7 @@ pub fn run_suite(suite: &Path, options: &RunnerOptions) -> Result<RunnerReport, 
                     *target,
                     *optimization,
                     output_directory,
-                    &options.c_flags,
-                    &options.runtime_environment,
+                    options,
                 ));
             }
         }
@@ -164,8 +165,7 @@ fn run_case(
     target: Target,
     optimization: Optimization,
     output_directory: PathBuf,
-    c_flags: &[std::ffi::OsString],
-    runtime_environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    options: &RunnerOptions,
 ) -> CaseResult {
     let expected_stdout = match fs::read(expected_path(case, target, "stdout")) {
         Ok(output) => output,
@@ -202,10 +202,11 @@ fn run_case(
         &BuildOptions {
             target,
             optimization,
+            features: options.features,
             output_directory,
             keep_generated_c: true,
             c_compiler: None,
-            c_flags: c_flags.to_vec(),
+            c_flags: options.c_flags.clone(),
         },
     ) {
         Ok(artifact) => artifact,
@@ -218,7 +219,7 @@ fn run_case(
             );
         }
     };
-    let output = match run_with_environment(&artifact, runtime_environment) {
+    let output = match run_with_environment(&artifact, &options.runtime_environment) {
         Ok(output) => output,
         Err(diagnostic) => {
             return failure(

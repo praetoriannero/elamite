@@ -39,6 +39,11 @@
 - `src/config.rs` owns target and optimization policy. `src/backend/` owns only
   C naming, type/layout emission, runtime helpers, function/control-flow
   emission, and the executable entry shim.
+- `src/expansion/ast.rs` owns the versioned, compile-time-only `std.ast`
+  façade. Keep its values immutable and detached from `SyntaxNode`, resolution,
+  inferred types, layout, runtime state, and mutable compiler tables. Only the
+  expansion layer may mint origin handles; builders and transforms must retain
+  provenance without fabricating physical spans.
 - `src/promotion.rs` decides which locals need managed storage. It answers only
   "is this local's address taken", deliberately conservatively; precise escape
   analysis belongs to the **Post-conformance optimization** milestone, not
@@ -204,13 +209,27 @@ all user-defined forms behind `--unstable-macros` until stabilization.
 Do not fold compile-time execution or expansion into the lexer, ordinary
 parser, resolver, checker, or backend. Token trees and provenance belong at the
 parsed-to-expanded boundary in `src/expansion.rs`,
-`src/expansion/token_tree.rs`, and `src/expansion/provenance.rs`; custom
-fragment grammar remains owned by `src/parser.rs`, and
+`src/expansion/token_tree.rs`, and `src/expansion/provenance.rs`; stable
+compile-time declarations, imports, module identities, and separate namespaces
+belong in `src/expansion/namespace.rs`. Deterministic work ordering,
+dependency staging, generated-output re-entry, active-chain cycle detection,
+recovery nodes, and the shared/per-execution resource meters belong in
+`src/expansion/scheduler.rs`. Resource exhaustion must admit no partial output,
+and a failed interpreter fuel or live-value charge remains sticky even if its
+immediate result is ignored. `src/expansion/gate.rs` owns the
+`CompilerFeatures::unstable_macros` check over physical user declarations,
+imports, attachments, and invocations; every compiling driver entry point must
+default to the stable feature set. Custom fragment grammar remains owned by
+`src/parser.rs`, and
 `src/expansion/fragment.rs` only adapts token trees to those entry points. The
 compile-time interpreter has no ambient capabilities or mutable compiler-table
 access. Never expose compiler-private AST nodes through `std.ast` or project a
 generated origin onto a physical `Span`; keep generated input separate until
 the expanded-syntax representation owns origin-aware locations.
+`tests/expansion_robustness.rs` owns property coverage across arbitrary
+token-tree/fragment input and deep generated provenance; scheduler properties
+remain beside `src/expansion/scheduler.rs`. Preserve those adversarial layers
+when changing the expansion boundary.
 
 Recent commits use short, lowercase descriptive subjects, such as `repo
 cleanup`. Keep commits focused and imperative. Pull requests should summarize

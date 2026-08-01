@@ -33,7 +33,7 @@ impl OriginId {
 ///
 /// This remains meaningful for generated trees whose endpoints have no
 /// physical byte offsets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OriginRange {
     pub first: OriginId,
     pub last: OriginId,

@@ -1,0 +1,185 @@
+/// # Errors and deterministic cleanup (`SPEC.md` 8)
+
+use std.io
+
+pub enum LocalError:
+    Missing
+    Invalid(i32)
+
+struct ResourceState:
+    closed: bool
+    closes: i32
+
+/// Copies share state because the handle explicitly contains a reference.
+struct Resource:
+    label: str
+    state: &var ResourceState
+
+    fn close(self: &Self) -> ():
+        // This API defines `close` as idempotent.
+        if self.state.closed:
+            println(f"  {self.label}: close is idempotent")
+            return
+        self.state.closed = true
+        self.state.closes += 1
+        println(f"  {self.label}: closed")
+
+    fn is_closed(self: &Self) -> bool:
+        return self.state.closed
+
+/// `?` propagates only the exact enclosing error type and evaluates its
+/// operand exactly once.
+fn propagate(value: Result[i32, LocalError]) -> Result[i32, LocalError]:
+    let unwrapped = evaluated_once(value)?
+    return Result.Ok(unwrapped + 1)
+
+fn evaluated_once(value: Result[i32, LocalError]) -> Result[i32, LocalError]:
+    println("  operand evaluated")
+    return value
+
+/// A different error type must be converted explicitly before `?` applies.
+fn convert(value: Result[i32, io.IoError]) -> Result[i32, LocalError]:
+    match value:
+        Result.Ok(number):
+            return Result.Ok(number)
+        Result.Err(error):
+            return Result.Err(LocalError.Missing)
+
+fn propagation() -> ():
+    println("successful propagation:")
+    match propagate(Result.Ok(41)):
+        Result.Ok(value):
+            println(f"  ok: {value}")
+        Result.Err(error):
+            println("  unexpected error")
+
+    println("failing propagation:")
+    match propagate(Result.Err(LocalError.Invalid(7))):
+        Result.Ok(value):
+            println(f"  unexpected ok: {value}")
+        Result.Err(error):
+            match error:
+                LocalError.Invalid(code):
+                    println(f"  err: invalid {code}")
+                LocalError.Missing:
+                    println("  err: missing")
+
+    println("explicit conversion:")
+    match convert(Result.Err(io.IoError.NotFound)):
+        Result.Ok(value):
+            println(f"  unexpected ok: {value}")
+        Result.Err(error):
+            println("  converted to a local error")
+
+/// Deferred calls run in reverse registration order, innermost block first.
+fn ordering() -> ():
+    println("defer ordering:")
+    defer println("  outer registered first")
+    defer println("  outer registered second")
+
+    if true:
+        defer println("  inner registered first")
+        defer println("  inner registered second")
+        println("  inner body")
+
+    println("  outer body")
+
+/// A `defer:` block is one registration whose statements run together.
+fn block_form() -> ():
+    println("defer block:")
+    var state = ResourceState { closed: false, closes: 0 }
+    let left = Resource { label: "left", state: &var state }
+
+    defer:
+        let closing = "  running the deferred block"
+        println(closing)
+        left.close()
+
+    println("  block body")
+
+/// The deferred call reads the values its expressions have at execution time,
+/// not at registration time.
+fn execution_time_values() -> ():
+    println("execution-time values:")
+    var value = 1
+    defer report(value)
+    value = 2
+    println(f"  reassigned to {value} after registering")
+
+fn report(value: i32) -> ():
+    println(f"  deferred call observed {value}")
+
+/// Cleanup runs on every exit edge: fallthrough, `return`, `?`, `break`, and
+/// `continue`.
+fn exit_edges() -> ():
+    println("exit edges:")
+    println(f"  early return: {early_return(true)}")
+    println(f"  fallthrough return: {early_return(false)}")
+
+    match propagating_cleanup(Result.Err(LocalError.Missing)):
+        Result.Ok(value):
+            println(f"  unexpected ok: {value}")
+        Result.Err(error):
+            println("  propagation ran cleanup")
+
+    loop_edges()
+
+fn early_return(early: bool) -> i32:
+    defer println("    early_return cleanup")
+    if early:
+        return 1
+    return 2
+
+fn propagating_cleanup(value: Result[i32, LocalError]) -> Result[i32, LocalError]:
+    defer println("    propagating_cleanup cleanup")
+    let unwrapped = value?
+    return Result.Ok(unwrapped)
+
+fn loop_edges() -> ():
+    var index_value = 0
+    while index_value < 3:
+        defer println(f"    loop body cleanup {index_value}")
+        index_value += 1
+        if index_value == 2:
+            continue
+        if index_value == 3:
+            break
+
+/// A return value is evaluated and copied before deferred calls begin, so an
+/// unconditionally deferred `close()` also closes a returned handle.
+fn returned_handle() -> ():
+    println("returned handle:")
+    var state = ResourceState { closed: false, closes: 0 }
+    let handle = produce_and_close(&var state)
+    println(f"  handle closed after return: {handle.is_closed()}")
+    println(f"  close count: {state.closes}")
+
+fn produce_and_close(state: &var ResourceState) -> Resource:
+    let resource = Resource { label: "returned", state: state }
+    defer resource.close()
+    return resource
+
+/// Cleanup is explicit: leaving a scope calls nothing on its own, and the
+/// collector never runs a cleanup method.
+fn explicit_cleanup_only() -> ():
+    println("explicit cleanup only:")
+    var leaked_state = ResourceState { closed: false, closes: 0 }
+    let leaked = Resource { label: "leaked", state: &var leaked_state }
+    println(f"  never deferred, still open: {leaked.is_closed()}")
+
+    var closed_state = ResourceState { closed: false, closes: 0 }
+    let managed = Resource { label: "managed", state: &var closed_state }
+    managed.close()
+    // The API documents `close` as idempotent, so a second call is safe.
+    managed.close()
+    println(f"  closes recorded: {closed_state.closes}")
+
+pub fn run() -> ():
+    println("== 8 errors and cleanup ==")
+    propagation()
+    ordering()
+    block_form()
+    execution_time_values()
+    exit_edges()
+    returned_handle()
+    explicit_cleanup_only()

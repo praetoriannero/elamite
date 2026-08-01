@@ -1,0 +1,122 @@
+/// # Logical value copies (`SPEC.md` 3.1)
+///
+/// Every ordinary copy must be recursively and observably independent, while
+/// explicit-alias types keep identity through the same copy.
+
+struct Inner:
+    label: String
+    counts: Vec[i32]
+
+struct Outer:
+    name: String
+    inner: Inner
+    tags: Set[str]
+    lookup: Map[str, i32]
+    fixed: [i32; 3]
+    pair: (i32, String)
+
+struct AliasCarrier:
+    /// An ordinary field copies independently.
+    plain: i32
+    /// An explicit alias keeps identity across the same copy.
+    shared: &var i32
+
+fn make_outer() -> Outer:
+    return Outer {
+        name: String.from("original"),
+        inner: Inner {
+            label: String.from("inner"),
+            counts: @vec[1, 2, 3],
+        },
+        tags: @set{ "alpha", "beta" },
+        lookup: @map{ "one": 1, "two": 2 },
+        fixed: [10, 20, 30],
+        pair: (7, String.from("seven")),
+    }
+
+/// Mutating every reachable ordinary component of one copy must leave the
+/// source untouched at every nesting depth.
+fn deep_independence() -> ():
+    let source = make_outer()
+    var copy = source
+
+    copy.name = String.from("changed")
+    copy.inner.label = String.from("changed inner")
+    copy.inner.counts[0] = 99
+    copy.inner.counts.append(4)
+    copy.tags.insert("gamma")
+    copy.lookup.insert("three", 3)
+    copy.fixed[1] = 999
+    copy.pair.0 = 70
+    copy.pair.1 = String.from("seventy")
+
+    println(f"source name: {source.name}")
+    println(f"source inner label: {source.inner.label}")
+    println(f"source inner counts[0]: {source.inner.counts[0]}")
+    println(f"source inner counts len: {source.inner.counts.len()}")
+    println(f"source tags len: {source.tags.len()}")
+    println(f"source lookup len: {source.lookup.len()}")
+    println(f"source fixed[1]: {source.fixed[1]}")
+    println(f"source pair: {source.pair.0}/{source.pair.1}")
+    println(f"copy pair: {copy.pair.0}/{copy.pair.1}")
+
+/// Copying an aggregate preserves its explicit aliases while ordinary fields
+/// stay independent.
+fn alias_survives_copy() -> ():
+    var target = 1
+    let carrier = AliasCarrier { plain: 10, shared: &var target }
+    var carried = carrier
+
+    carried.plain = 20
+    *carried.shared = 2
+
+    println(f"alias plain source: {carrier.plain}, copy: {carried.plain}")
+    println(f"alias target through source: {*carrier.shared}")
+    println(f"alias target directly: {target}")
+
+/// A copy taken before a mutation is a snapshot; a copy taken after observes
+/// the mutation. Copy order is the only thing that distinguishes them.
+fn copy_is_a_snapshot() -> ():
+    var counter = Inner {
+        label: String.from("counter"),
+        counts: @vec[0],
+    }
+    let before = counter
+    counter.counts[0] = 5
+    let after = counter
+
+    println(
+        f"before: {before.counts[0]}, live: {counter.counts[0]}, after: {after.counts[0]}"
+    )
+
+/// Arguments and returns copy. The callee cannot reach the caller's storage
+/// through an ordinary value parameter.
+fn consume(mut_copy: Inner) -> Inner:
+    var local = mut_copy
+    local.counts[0] = -1
+    local.label = String.from("consumed")
+    return local
+
+fn argument_and_return_copy() -> ():
+    let original = Inner { label: String.from("caller"), counts: @vec[42] }
+    let returned = consume(original)
+
+    println(f"caller label: {original.label}, counts[0]: {original.counts[0]}")
+    println(f"returned label: {returned.label}, counts[0]: {returned.counts[0]}")
+
+/// A `let` aggregate is not a mutable place, but an `&var` stored inside one
+/// still mutates its target (`SPEC.md` 3.1).
+fn let_does_not_disable_stored_aliases() -> ():
+    var storage = 100
+    let frozen = AliasCarrier { plain: 1, shared: &var storage }
+    // `frozen.plain = 2` and `&var frozen.plain` are both invalid.
+    *frozen.shared = 101
+    println(f"stored alias mutation: {storage}")
+
+pub fn run() -> ():
+    println("== 3.1 logical copies ==")
+    deep_independence()
+    alias_survives_copy()
+    copy_is_a_snapshot()
+    argument_and_return_copy()
+    let_does_not_disable_stored_aliases()

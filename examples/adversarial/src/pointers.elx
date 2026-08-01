@@ -1,0 +1,145 @@
+/// # Raw pointers (`SPEC.md` 3.3)
+///
+/// Forming, copying, storing, passing, and comparing a raw pointer is safe.
+/// Dereferencing one, converting one to a reference, or changing its pointee
+/// type requires a lexical `unsafe:` block.
+
+struct Cell:
+    value: i32
+
+    /// A `*Self` receiver takes an already exact raw pointer without any
+    /// borrow, cast, downgrade, dereference, or null check. Reading the
+    /// pointee needs an explicit conversion inside `unsafe:`; the
+    /// `self.value` form checks but does not build, per
+    /// known_failures/raw_pointer_field_access.elx.
+    fn read_through_pointer(self: *Self) -> i32:
+        unsafe:
+            let target: &Self = self as &Self
+            return target.value
+
+    /// Only `*var Self` may write through the receiver.
+    fn write_through_pointer(self: *var Self, next: i32) -> ():
+        unsafe:
+            let target: &var Self = self as &var Self
+            target.value = next
+
+    unsafe fn recover(self: *Self) -> &Self:
+        unsafe:
+            return self as &Self
+
+struct PointerCarrier:
+    /// A raw pointer defaults to `null` and copies by address.
+    shared: *i32
+    writable: *var i32
+
+/// Safe conversions: `&T` to `*T`, `&var T` to `*var T` or `*T`, and the
+/// `*var T` to `*T` downgrade. No conversion in this function is unsafe.
+fn safe_conversions() -> ():
+    var storage = 41
+    let shared_ref = &storage
+    let mutable_ref = &var storage
+
+    let from_shared: *i32 = shared_ref as *i32
+    let from_mutable: *var i32 = mutable_ref as *var i32
+    let mutable_to_const: *i32 = mutable_ref as *i32
+    let downgraded: *i32 = from_mutable as *i32
+
+    // Comparison is address-only and is safe, including against `null`.
+    println(f"same address: {from_shared == mutable_to_const}")
+    println(f"downgrade keeps address: {downgraded == from_shared}")
+    println(f"non-null: {from_shared != null}")
+
+    let empty: *i32 = null
+    println(f"null equals null: {empty == null}")
+    println(f"null differs: {empty == from_shared}")
+
+/// Reads and writes require `unsafe:`, and a write additionally requires
+/// `*var T`.
+fn unsafe_access() -> ():
+    var storage = 1
+    let writable: *var i32 = &var storage as *var i32
+    let readable: *i32 = writable as *i32
+
+    unsafe:
+        *writable = 2
+        println(f"write through *var: {*readable}")
+
+        // A raw-to-reference conversion asserts non-null, aligned, and valid.
+        let recovered: &var i32 = writable as &var i32
+        *recovered = 3
+
+    println(f"after unsafe region: {storage}")
+
+/// A pointee-type cast preserves address, provenance, extent, and mutability.
+/// It does not make the storage hold a valid value of the new type.
+fn pointee_casts() -> ():
+    var cell = Cell { value: 7 }
+    let cell_pointer: *var Cell = &var cell as *var Cell
+
+    unsafe:
+        // `Cell` is a single-field aggregate, so its first member shares the
+        // struct's address. This is an explicit unsafe contract, not an
+        // inference the compiler makes.
+        let as_int: *var i32 = cell_pointer as *var i32
+        let reinterpreted: &var i32 = as_int as &var i32
+        println(f"reinterpreted first field: {*reinterpreted}")
+        *reinterpreted = 8
+
+    println(f"write through reinterpreted pointer: {cell.value}")
+
+/// Raw-pointer receivers pass the pointer unchanged.
+fn pointer_receivers() -> ():
+    var cell = Cell { value: 10 }
+    let const_pointer: *Cell = &cell as *Cell
+    let mut_pointer: *var Cell = &var cell as *var Cell
+
+    println(f"read through *Self receiver: {const_pointer.read_through_pointer()}")
+    mut_pointer.write_through_pointer(11)
+    println(f"after *var Self receiver: {cell.value}")
+
+    // Calling an `unsafe` method needs `unsafe:` at the call site even though
+    // taking its unbound reference is safe.
+    let recover: &unsafe fn(*Cell) -> &Cell = Cell.recover
+    unsafe:
+        let bound = const_pointer.recover()
+        let unbound = recover(const_pointer)
+        println(f"recovered: {bound.value} / {unbound.value}")
+
+/// Raw pointers are storable and copy by address, preserving identity exactly
+/// as other explicit aliases do.
+fn pointers_in_aggregates() -> ():
+    var first = 1
+    var second = 2
+    let carrier = PointerCarrier {
+        shared: &first as *i32,
+        writable: &var second as *var i32,
+    }
+    let copied = carrier
+
+    println(f"copied pointer identity: {copied.shared == carrier.shared}")
+    unsafe:
+        *copied.writable = 20
+    println(f"write through copied pointer: {second}")
+
+    let defaulted = PointerCarrier { shared: null, writable: null }
+    println(f"null fields: {defaulted.shared == null} {defaulted.writable == null}")
+
+/// Pointer validity is expression-local. Facts do not propagate through
+/// bindings or branch conditions, so an unreachable null dereference below a
+/// guard is accepted and simply never executes.
+fn validity_is_expression_local() -> ():
+    let empty: *i32 = null
+    if empty != null:
+        unsafe:
+            println(f"unreachable: {*empty}")
+    else:
+        println("guarded null pointer was never dereferenced")
+
+pub fn run() -> ():
+    println("== 3.3 raw pointers ==")
+    safe_conversions()
+    unsafe_access()
+    pointee_casts()
+    pointer_receivers()
+    pointers_in_aggregates()
+    validity_is_expression_local()

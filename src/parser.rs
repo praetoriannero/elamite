@@ -67,6 +67,9 @@ struct Parser<'a> {
 enum ItemHead {
     Module,
     Use,
+    Macro,
+    Attribute,
+    Derive,
     TypeAlias,
     Struct,
     Enum,
@@ -140,6 +143,11 @@ impl<'a> Parser<'a> {
         match self.classify_item() {
             ItemHead::Module => self.parse_module(),
             ItemHead::Use => self.parse_use(),
+            ItemHead::Macro => self.parse_compile_time_declaration(CompileTimeDeclaration::Macro),
+            ItemHead::Attribute => {
+                self.parse_compile_time_declaration(CompileTimeDeclaration::Attribute)
+            }
+            ItemHead::Derive => self.parse_compile_time_declaration(CompileTimeDeclaration::Derive),
             ItemHead::TypeAlias => self.parse_type_alias(),
             ItemHead::Struct => self.parse_struct(false),
             ItemHead::Enum => self.parse_enum(),
@@ -189,6 +197,9 @@ impl<'a> Parser<'a> {
         match self.kind_at(offset) {
             Some(TokenKind::Keyword(Keyword::Mod)) => ItemHead::Module,
             Some(TokenKind::Keyword(Keyword::Use)) => ItemHead::Use,
+            Some(TokenKind::Keyword(Keyword::Macro)) => ItemHead::Macro,
+            Some(TokenKind::Keyword(Keyword::Attr)) => ItemHead::Attribute,
+            Some(TokenKind::Keyword(Keyword::Derive)) => ItemHead::Derive,
             Some(TokenKind::Keyword(Keyword::Type)) => ItemHead::TypeAlias,
             Some(TokenKind::Keyword(Keyword::Struct)) => ItemHead::Struct,
             Some(TokenKind::Keyword(Keyword::Enum)) => ItemHead::Enum,
@@ -215,6 +226,14 @@ impl<'a> Parser<'a> {
         let mut children = self.take_item_prefix();
         self.eat_keyword(Keyword::Pub, &mut children);
         self.expect_keyword(Keyword::Use, &mut children, "expected `use`");
+        if matches!(
+            self.current_kind(),
+            Some(TokenKind::Keyword(
+                Keyword::Macro | Keyword::Attr | Keyword::Derive
+            ))
+        ) {
+            children.push(self.bump());
+        }
         self.parse_path_tokens(&mut children);
         if self.at_keyword(Keyword::As) {
             children.push(self.bump());
@@ -222,6 +241,34 @@ impl<'a> Parser<'a> {
         }
         self.expect_line_end(&mut children);
         SyntaxNode::new(SyntaxKind::Use, children, fallback)
+    }
+
+    fn parse_compile_time_declaration(
+        &mut self,
+        declaration: CompileTimeDeclaration,
+    ) -> SyntaxNode {
+        let fallback = self.current_span();
+        let mut children = self.take_docs();
+        self.eat_keyword(Keyword::Pub, &mut children);
+        self.expect_keyword(
+            declaration.keyword(),
+            &mut children,
+            declaration.expected_keyword_message(),
+        );
+        if declaration == CompileTimeDeclaration::Derive {
+            self.parse_path_tokens(&mut children);
+        } else {
+            self.expect_identifier(&mut children, declaration.expected_name_message());
+        }
+        children.push(node(self.parse_parameters()));
+        self.expect_simple(
+            &TokenKind::Arrow,
+            &mut children,
+            "a compile-time declaration requires an explicit return type",
+        );
+        children.push(node(self.parse_return_type()));
+        self.parse_statement_block(&mut children);
+        SyntaxNode::new(declaration.syntax_kind(), children, fallback)
     }
 
     fn parse_type_alias(&mut self) -> SyntaxNode {
@@ -1528,24 +1575,31 @@ impl<'a> Parser<'a> {
     fn parse_attribute(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = vec![self.bump()];
-        self.expect_identifier(&mut children, "expected attribute name after `@`");
+        if matches!(
+            self.current_kind(),
+            Some(TokenKind::Keyword(Keyword::Attr | Keyword::Derive))
+        ) {
+            children.push(self.bump());
+        } else {
+            self.expect_identifier(&mut children, "expected attribute name after `@`");
+        }
         self.expect_simple(
             &TokenKind::LParen,
             &mut children,
             "expected `(` after attribute name",
         );
-        while !self.at_eof() && !self.at_simple(&TokenKind::RParen) {
-            if matches!(self.current_kind(), Some(TokenKind::StringLiteral(_))) {
-                children.push(self.bump());
-            } else {
-                self.error_here("attribute arguments must be string literals");
-                if !self.at_simple(&TokenKind::Comma) {
-                    children.push(self.bump());
+        let mut nested = 0usize;
+        while !self.at_eof() && (nested > 0 || !self.at_simple(&TokenKind::RParen)) {
+            match self.current_kind() {
+                Some(TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace) => {
+                    nested += 1;
                 }
+                Some(TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace) if nested > 0 => {
+                    nested -= 1;
+                }
+                _ => {}
             }
-            if !self.eat_simple(&TokenKind::Comma, &mut children) {
-                break;
-            }
+            children.push(self.bump());
         }
         self.expect_simple(&TokenKind::RParen, &mut children, "expected `)`");
         SyntaxNode::new(SyntaxKind::Attribute, children, fallback)
@@ -1798,6 +1852,47 @@ enum FunctionBody {
     Required,
     Optional,
     Forbidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompileTimeDeclaration {
+    Macro,
+    Attribute,
+    Derive,
+}
+
+impl CompileTimeDeclaration {
+    fn keyword(self) -> Keyword {
+        match self {
+            Self::Macro => Keyword::Macro,
+            Self::Attribute => Keyword::Attr,
+            Self::Derive => Keyword::Derive,
+        }
+    }
+
+    fn syntax_kind(self) -> SyntaxKind {
+        match self {
+            Self::Macro => SyntaxKind::MacroDeclaration,
+            Self::Attribute => SyntaxKind::AttributeDeclaration,
+            Self::Derive => SyntaxKind::DeriveDeclaration,
+        }
+    }
+
+    fn expected_keyword_message(self) -> &'static str {
+        match self {
+            Self::Macro => "expected `macro`",
+            Self::Attribute => "expected `attr`",
+            Self::Derive => "expected `derive`",
+        }
+    }
+
+    fn expected_name_message(self) -> &'static str {
+        match self {
+            Self::Macro => "expected macro name",
+            Self::Attribute => "expected attribute name",
+            Self::Derive => "expected derive trait path",
+        }
+    }
 }
 
 fn node(node: SyntaxNode) -> SyntaxElement {

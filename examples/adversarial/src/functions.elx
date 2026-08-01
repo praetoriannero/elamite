@@ -1,0 +1,161 @@
+/// # Functions and function references (`SPEC.md` 5)
+
+struct Session:
+    active: bool
+    name: String
+
+    fn stop(self: &var Self) -> ():
+        self.active = false
+
+    fn status(self: &Self) -> str:
+        if self.active:
+            return "active"
+        return "inactive"
+
+    unsafe fn from_pointer(pointer: *Session) -> &Session:
+        unsafe:
+            return pointer as &Session
+
+struct Callbacks:
+    /// A function reference is an ordinary storable field.
+    safe: &fn(i32) -> i32
+    unsafe_ref: &unsafe fn(*Session) -> &Session
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn double(value: i32) -> i32:
+    return value * 2
+
+/// Every reachable path of a non-unit function must return explicitly; there
+/// is no implicit tail-expression return.
+fn classify(value: i32) -> str:
+    if value < 0:
+        return "negative"
+    else:
+        if value == 0:
+            return "zero"
+        else:
+            return "positive"
+
+/// A unit function may fall off the end or use a bare `return`.
+fn unit_paths(flag: bool) -> ():
+    if flag:
+        return
+    println("unit fallthrough")
+
+/// A variadic tail is homogeneous, final, and lowered as a slice with a
+/// runtime length for checked indexing.
+fn variadic_first(fallback: i32, rest: ...i32) -> i32:
+    return rest[0]
+
+fn variadic_none(fallback: i32, rest: ...i32) -> i32:
+    return fallback
+
+/// Function references compare by target identity and carry no environment.
+fn reference_identity() -> ():
+    let first: &fn(i32) -> i32 = increment
+    let second: &fn(i32) -> i32 = increment
+    let other: &fn(i32) -> i32 = double
+
+    println(f"same target: {first == second}")
+    println(f"different target: {first == other}")
+    println(f"call through reference: {first(41)} {other(21)}")
+
+    // A reference stored in an aggregate keeps identity through a copy.
+    let callbacks = Callbacks { safe: increment, unsafe_ref: Session.from_pointer }
+    let copied = callbacks
+    println(f"stored reference identity: {copied.safe == callbacks.safe}")
+    // Field selection composes with call syntax and performs no receiver
+    // adaptation, because the field itself is the callable.
+    println(f"call through field: {copied.safe(1)}")
+
+/// Selecting a method from a type yields an unbound reference that retains
+/// its receiver parameter and safety qualifier.
+fn unbound_selection() -> ():
+    var session = Session { active: true, name: String.from("demo") }
+
+    let stop: &fn(&var Session) -> () = Session.stop
+    let status: &fn(&Session) -> str = Session.status
+
+    println(f"before unbound stop: {status(&session)}")
+    stop(&var session)
+    println(f"after unbound stop: {status(&session)}")
+
+    // Selecting an `unsafe` method is safe; only calling it needs `unsafe:`.
+    let recover: &unsafe fn(*Session) -> &Session = Session.from_pointer
+    let pointer: *Session = &session as *Session
+    unsafe:
+        let recovered = recover(pointer)
+        println(f"recovered through unbound unsafe reference: {recovered.status()}")
+
+/// A safe function reference converts explicitly to a matching raw function
+/// pointer. Calling any raw function pointer requires `unsafe:`.
+fn raw_function_pointers() -> ():
+    let safe_reference: &fn(i32) -> i32 = increment
+    let raw: *fn(i32) -> i32 = safe_reference as *fn(i32) -> i32
+
+    println(f"raw pointer is non-null: {raw != null}")
+
+    unsafe:
+        println(f"raw call: {raw(41)}")
+
+    // A raw function pointer is storable and comparable while never called.
+    let copied = raw
+    println(f"raw identity: {copied == raw}")
+
+    let empty: *fn(i32) -> i32 = null
+    println(f"null raw function pointer: {empty == null}")
+
+/// Higher-order functions accept references by name.
+fn apply(callback: &fn(i32) -> i32, value: i32) -> i32:
+    return callback(value)
+
+fn compose(outer: &fn(i32) -> i32, inner: &fn(i32) -> i32, value: i32) -> i32:
+    return outer(inner(value))
+
+fn higher_order() -> ():
+    println(f"apply: {apply(increment, 41)}")
+    println(f"compose: {compose(double, increment, 20)}")
+
+    // A collection of function references is homogeneous by complete type.
+    let pipeline = @vec[increment, double, increment]
+    var value = 1
+    for step in pipeline:
+        value = step(value)
+    println(f"pipeline result: {value}")
+
+/// Receiver adaptation applies only to the receiver, never to another
+/// argument, and never upgrades a shared reference to a mutable one.
+fn receiver_adaptation() -> ():
+    var session = Session { active: true, name: String.from("adapt") }
+
+    // An addressable value auto-borrows for `&Self` and `&var Self`.
+    println(f"auto borrow shared: {session.status()}")
+    session.stop()
+    println(f"auto borrow mutable: {session.status()}")
+
+    // A matching reference receiver passes directly.
+    let mutable = &var session
+    mutable.stop()
+    let shared = &session
+    println(f"reference receiver: {shared.status()}")
+
+fn variadics() -> ():
+    println(f"variadic with arguments: {variadic_first(0, 7, 8, 9)}")
+    println(f"variadic with none: {variadic_none(5)}")
+
+    // A variadic call site accepts zero trailing arguments.
+    println(f"variadic zero tail: {variadic_none(1)}")
+
+pub fn run() -> ():
+    println("== 5 functions ==")
+    println(f"classify: {classify(-1)} {classify(0)} {classify(1)}")
+    unit_paths(true)
+    unit_paths(false)
+    variadics()
+    reference_identity()
+    unbound_selection()
+    raw_function_pointers()
+    higher_order()
+    receiver_adaptation()

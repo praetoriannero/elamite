@@ -1,0 +1,19 @@
+/// A file-backed child module of `root.layout`.
+
+// This import closes a cycle: `root.layout` imports from this module and this
+// module imports from `root.layout`. Circular imports within one package are
+// permitted because declarations are collected before imports are resolved.
+use super.public_constant
+
+pub fn describe() -> str:
+    return "file-backed module"
+
+/// A package-private declaration in the parent module is reachable here.
+pub fn read_parent() -> i32:
+    return super.shared_constant()
+
+pub fn leaf_value() -> i32:
+    return 7
+
+pub fn through_cycle() -> i32:
+    return public_constant() + leaf_value()

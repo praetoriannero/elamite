@@ -12,13 +12,15 @@ use codespan_reporting::term::{
     self,
     termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor},
 };
-use elamite::config::{Optimization, Target};
+use elamite::config::{CompilerFeatures, Optimization, Target};
 use elamite::diagnostics::Diagnostic;
-use elamite::driver::{BuildOptions, DumpStage, build, build_to, check_frontend, dump, run};
+use elamite::driver::{
+    BuildOptions, DumpStage, build, build_to, check_frontend_with_features, dump_with_features, run,
+};
 use elamite::formatter::{FormatOptions, format_source};
 use elamite::manifest::TargetKind;
 use elamite::package::{Package, PackageGraph};
-use elamite::resolution::resolve;
+use elamite::resolution::resolve_with_features;
 use elamite::scaffold::init_package;
 use elamite::source::SourceManager;
 
@@ -78,6 +80,9 @@ struct DirectBuildArgs {
     target: Option<CliTarget>,
 
     #[command(flatten)]
+    features: FeatureArgs,
+
+    #[command(flatten)]
     native: NativeBuildArgs,
 
     /// Write the executable to this exact path.
@@ -130,6 +135,16 @@ struct PackageArgs {
     /// Native target architecture; defaults to the host architecture.
     #[arg(long, value_enum, value_name = "ARCH")]
     target: Option<CliTarget>,
+
+    #[command(flatten)]
+    features: FeatureArgs,
+}
+
+#[derive(Debug, Clone, Copy, Default, Args)]
+struct FeatureArgs {
+    /// Enable incomplete user-defined macros, attributes, and derives.
+    #[arg(long)]
+    unstable_macros: bool,
 }
 
 #[derive(Debug, Args)]
@@ -162,6 +177,9 @@ struct DocArgs {
     /// Package directory containing elamite.toml.
     #[arg(value_name = "PACKAGE", default_value = ".")]
     package_dir: PathBuf,
+
+    #[command(flatten)]
+    features: FeatureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -188,6 +206,9 @@ struct PackageTestArgs {
     /// Native target architecture; defaults to the host architecture.
     #[arg(long, value_enum, value_name = "ARCH")]
     target: Option<CliTarget>,
+
+    #[command(flatten)]
+    features: FeatureArgs,
 
     #[command(flatten)]
     native: NativeBuildArgs,
@@ -222,6 +243,9 @@ struct ConformanceArgs {
     /// Run both debug and release configurations.
     #[arg(long)]
     all_modes: bool,
+
+    #[command(flatten)]
+    features: FeatureArgs,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -271,6 +295,14 @@ impl From<CliTarget> for Target {
     }
 }
 
+impl From<FeatureArgs> for CompilerFeatures {
+    fn from(features: FeatureArgs) -> Self {
+        Self {
+            unstable_macros: features.unstable_macros,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompileCommand {
     Check,
@@ -283,6 +315,7 @@ struct CompileRequest {
     input: PathBuf,
     target: Target,
     optimization: Optimization,
+    features: CompilerFeatures,
     output_directory: PathBuf,
     output_file: Option<PathBuf>,
     keep_generated_c: bool,
@@ -303,6 +336,7 @@ impl CompileRequest {
             input,
             output_file: None,
             optimization: Optimization::Debug,
+            features: arguments.package.features.into(),
             keep_generated_c: false,
             c_compiler: None,
             c_flags: Vec::new(),
@@ -337,6 +371,7 @@ impl CompileRequest {
             } else {
                 Optimization::Debug
             },
+            features: package.features.into(),
             output_directory,
             output_file,
             keep_generated_c: native.keep_c,
@@ -393,6 +428,7 @@ fn main() -> ExitCode {
                     .source
                     .expect("Clap requires SOURCE when no subcommand is present"),
                 target: arguments.direct.target,
+                features: arguments.direct.features,
             },
             arguments.direct.native,
             arguments.direct.output,
@@ -577,7 +613,13 @@ fn dump_package(arguments: DumpArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match dump(&graph, &mut sources, target, arguments.stage.into()) {
+    match dump_with_features(
+        &graph,
+        &mut sources,
+        target,
+        arguments.stage.into(),
+        arguments.package.features.into(),
+    ) {
         Ok(output) => {
             print!("{output}");
             ExitCode::SUCCESS
@@ -599,7 +641,7 @@ fn document_package(arguments: DocArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let output = resolve(&graph, &mut sources);
+    let output = resolve_with_features(&graph, &mut sources, arguments.features.into());
     let documentation = elamite::docs::extract(&output.program, &sources, &graph.root);
     print!("{}", documentation.markdown());
     if output.diagnostics.is_empty() {
@@ -627,6 +669,7 @@ fn test_packages(arguments: ConformanceArgs) -> ExitCode {
         filter: arguments.filter,
         targets,
         optimizations,
+        features: arguments.features.into(),
         c_flags: Vec::new(),
         runtime_environment: Vec::new(),
     };
@@ -658,6 +701,7 @@ fn test_package(arguments: PackageTestArgs) -> ExitCode {
     let PackageTestArgs {
         package_dir,
         target,
+        features,
         native,
         filter,
     } = arguments;
@@ -666,6 +710,7 @@ fn test_package(arguments: PackageTestArgs) -> ExitCode {
         PackageArgs {
             input: package_dir,
             target,
+            features,
         },
         native,
         None,
@@ -686,6 +731,7 @@ fn test_package(arguments: PackageTestArgs) -> ExitCode {
             build: BuildOptions {
                 target: request.target,
                 optimization: request.optimization,
+                features: request.features,
                 output_directory: request.output_directory.join("tests"),
                 keep_generated_c: request.keep_generated_c,
                 c_compiler: request.c_compiler,
@@ -810,6 +856,7 @@ fn compile_package(request: CompileRequest) -> ExitCode {
                 let options = BuildOptions {
                     target: request.target,
                     optimization: request.optimization,
+                    features: request.features,
                     output_directory: request.output_directory,
                     keep_generated_c: request.keep_generated_c,
                     c_compiler: request.c_compiler,
@@ -843,7 +890,12 @@ fn compile_package(request: CompileRequest) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             let root = &graph.packages[&graph.root];
-            let frontend = match check_frontend(&graph, &mut sources, request.target) {
+            let frontend = match check_frontend_with_features(
+                &graph,
+                &mut sources,
+                request.target,
+                request.features,
+            ) {
                 Ok(frontend) => frontend,
                 Err(diagnostics) => {
                     render_diagnostics(&sources, &diagnostics);

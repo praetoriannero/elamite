@@ -1,0 +1,231 @@
+/// # Numeric boundaries (`SPEC.md` 4.1)
+///
+/// Every operation here stays inside defined behavior. The trapping partners
+/// of these cases live in `root.traps`, which asserts them with `expect`.
+
+/// Literal bases, separators, and suffixes all denote the same value.
+fn literal_forms() -> ():
+    let decimal = 1_000_000
+    let binary = 0b1111_0100_0010_0100_0000
+    let octal = 0o3641100
+    let hex = 0xF_4240
+    println(
+        f"literal agreement: {decimal == binary} {decimal == octal} {decimal == hex}"
+    )
+
+    // An unsuffixed integer literal defaults to `i32`; a float literal
+    // defaults to `f64`. An expected type overrides the default.
+    let defaulted = 7
+    let widened: i64 = 7
+    let narrow: u8 = 7
+    println(f"contextual materialization: {defaulted} {widened} {narrow}")
+
+    // Unary `-` is an operator, but range checking folds an immediately
+    // applied minus so each signed minimum is expressible.
+    let min8: i8 = -128
+    let min16: i16 = -32768
+    let min32: i32 = -2147483648
+    let min64: i64 = -9223372036854775808
+    println(f"signed minima: {min8} {min16} {min32} {min64}")
+
+    let max8: i8 = 127
+    let max_unsigned: u8 = 255
+    println(f"maxima: {max8} {max_unsigned}")
+
+/// The three alternative families replace the trapping operators exactly at
+/// the width boundary.
+fn alternatives_at_the_boundary() -> ():
+    let max32: i32 = 2147483647
+    let min32: i32 = -2147483648
+
+    match max32.checked_add(1):
+        Option.Some(value):
+            println(f"unexpected checked_add: {value}")
+        Option.None:
+            println("checked_add at max: None")
+
+    println(f"wrapping_add at max: {max32.wrapping_add(1)}")
+    println(f"saturating_add at max: {max32.saturating_add(1)}")
+
+    match min32.checked_sub(1):
+        Option.Some(value):
+            println(f"unexpected checked_sub: {value}")
+        Option.None:
+            println("checked_sub at min: None")
+
+    println(f"wrapping_sub at min: {min32.wrapping_sub(1)}")
+    println(f"saturating_sub at min: {min32.saturating_sub(1)}")
+
+    // Negating the signed minimum has no representable result.
+    match min32.checked_neg():
+        Option.Some(value):
+            println(f"unexpected checked_neg: {value}")
+        Option.None:
+            println("checked_neg at min: None")
+    println(f"wrapping_neg at min: {min32.wrapping_neg()}")
+
+    // Signed minimum divided by -1 overflows rather than dividing.
+    match min32.checked_div(-1):
+        Option.Some(value):
+            println(f"unexpected checked_div: {value}")
+        Option.None:
+            println("checked_div min by -1: None")
+
+    match max32.checked_div(0):
+        Option.Some(value):
+            println(f"unexpected checked_div by zero: {value}")
+        Option.None:
+            println("checked_div by zero: None")
+
+    match max32.checked_rem(0):
+        Option.Some(value):
+            println(f"unexpected checked_rem by zero: {value}")
+        Option.None:
+            println("checked_rem by zero: None")
+
+    println(f"wrapping_mul at max: {max32.wrapping_mul(2)}")
+    println(f"saturating_mul at max: {max32.saturating_mul(2)}")
+
+/// Unsigned types underflow at zero rather than at a negative minimum.
+fn unsigned_boundary() -> ():
+    let zero: u8 = 0
+    let max: u8 = 255
+
+    match zero.checked_sub(1):
+        Option.Some(value):
+            println(f"unexpected unsigned checked_sub: {value}")
+        Option.None:
+            println("u8 checked_sub below zero: None")
+
+    println(f"u8 wrapping_sub below zero: {zero.wrapping_sub(1)}")
+    println(f"u8 saturating_sub below zero: {zero.saturating_sub(1)}")
+    println(f"u8 wrapping_add above max: {max.wrapping_add(1)}")
+    println(f"u8 saturating_add above max: {max.saturating_add(1)}")
+
+/// Shift counts are checked against the left operand's width. The operand
+/// *typing* rule is not the specified one; see
+/// known_failures/shift_operand_typing.elx.
+fn shift_boundary() -> ():
+    let one: i32 = 1
+    println(f"widest legal shift: {one.wrapping_shl(31)}")
+
+    match one.checked_shl(32):
+        Option.Some(value):
+            println(f"unexpected checked_shl: {value}")
+        Option.None:
+            println("checked_shl at width: None")
+
+    match one.checked_shr(32):
+        Option.Some(value):
+            println(f"unexpected checked_shr: {value}")
+        Option.None:
+            println("checked_shr at width: None")
+
+    // An arithmetic right shift of a negative value keeps its sign.
+    let negative: i32 = -8
+    println(f"arithmetic shift right: {negative >> 1}")
+
+    // A logical right shift of the corresponding unsigned value does not.
+    let unsigned: u32 = 4294967288
+    println(f"logical shift right: {unsigned >> 1}")
+
+    println(f"bitwise complement: {~0i32} {~0u8}")
+
+/// Explicit conversion never happens implicitly, and the checked form reports
+/// instead of trapping. Statically evident invalid arithmetic is specified to
+/// be a compile error but is not; see
+/// known_failures/static_arithmetic_evidence.elx.
+fn conversions() -> ():
+    let large: i32 = 300
+
+    match u8.try_from(large):
+        Result.Ok(value):
+            println(f"unexpected try_from: {value}")
+        Result.Err(error):
+            match error:
+                NumericError.OutOfRange:
+                    println("u8.try_from(300): OutOfRange")
+                NumericError.NotANumber:
+                    println("u8.try_from(300): NotANumber")
+
+    println(f"u8.wrapping_from(300): {u8.wrapping_from(large)}")
+    println(f"u8.saturating_from(300): {u8.saturating_from(large)}")
+
+    let negative: i32 = -1
+    println(f"u8.saturating_from(-1): {u8.saturating_from(negative)}")
+    println(f"u8.wrapping_from(-1): {u8.wrapping_from(negative)}")
+
+    // Float to integer truncates toward zero in both directions.
+    println(f"trunc positive: {2.9f64 as i32}")
+    println(f"trunc negative: {-2.9f64 as i32}")
+    println(f"trunc toward zero at .5: {-0.5f64 as i32}")
+
+    // A checked float conversion reports NaN separately from range failure.
+    var zero = 0.0f64
+    let nan = zero / zero
+    match i32.try_from(nan):
+        Result.Ok(value):
+            println(f"unexpected NaN conversion: {value}")
+        Result.Err(error):
+            match error:
+                NumericError.NotANumber:
+                    println("i32.try_from(NaN): NotANumber")
+                NumericError.OutOfRange:
+                    println("i32.try_from(NaN): OutOfRange")
+
+    // Widening and narrowing round trips inside range are exact.
+    let byte: u8 = 200
+    let widened = byte as i32
+    println(f"round trip: {widened} {u8.saturating_from(widened)}")
+
+/// Floating-point arithmetic follows IEEE 754, including unordered NaN.
+fn ieee_behavior() -> ():
+    var zero = 0.0f64
+    let positive_infinity = 1.0f64 / zero
+    let negative_infinity = -1.0f64 / zero
+    let nan = zero / zero
+
+    // NaN is unordered against everything, including itself. The printed
+    // spelling of a NaN is left to the C library, so only comparisons are
+    // shown here.
+    println(f"nan equals itself: {nan == nan}")
+    println(f"nan not equal to itself: {nan != nan}")
+    println(f"nan less than one: {nan < 1.0}")
+    println(f"nan greater than one: {nan > 1.0}")
+    println(f"infinities differ: {positive_infinity != negative_infinity}")
+    println(f"infinity ordering: {negative_infinity < positive_infinity}")
+
+    // Signed zero compares equal but is a distinct bit pattern.
+    let negative_zero = -0.0f64
+    println(f"signed zero equality: {negative_zero == 0.0}")
+
+    // Float division by zero does not trap; only integer division does.
+    println(f"float divide by zero is infinite: {positive_infinity > 0.0}")
+
+    // f32 has less precision than f64 for the same decimal literal.
+    let narrow: f32 = 0.1
+    let wide: f64 = 0.1
+    println(f"f32 widened differs from f64: {narrow as f64 != wide}")
+
+/// `isize` and `usize` follow the selected target's pointer width, so this
+/// line differs between the x86 and x86-64 targets by design.
+fn target_width() -> ():
+    var bits: u32 = 0
+    var probe: usize = 1
+    while probe != 0:
+        bits += 1
+        probe = probe.wrapping_shl(1)
+    println(f"usize bit width: {bits}")
+
+    let max_usize: usize = 0
+    println(f"usize wraps below zero: {max_usize.wrapping_sub(1) > 0}")
+
+pub fn run() -> ():
+    println("== 4.1 numeric boundaries ==")
+    literal_forms()
+    alternatives_at_the_boundary()
+    unsigned_boundary()
+    shift_boundary()
+    conversions()
+    ieee_behavior()
+    target_width()

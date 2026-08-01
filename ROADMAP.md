@@ -3,8 +3,8 @@
 > Status: Active — completed legacy work is omitted from this forward-looking
 > plan; remaining milestones and work packages use stable descriptive names
 >
-> Next required work package: **Macro expansion foundations** —
-> **Compile-time identities and namespace collection**
+> Next required work package: **Compile-time AST and interpreter** —
+> **Quote and interpolation syntax**
 >
 > Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
@@ -235,7 +235,7 @@ The implementation must preserve these boundaries throughout the transition:
 
 ### Macro expansion foundations
 
-> Status: In progress — revised compile-time design accepted in `SPEC.md`
+> Status: Complete against the revised compile-time design in `SPEC.md`
 > 0.9.0-draft.
 >
 > Blocked by: **None**. It is independent of **Package tests, typed traps, and
@@ -252,24 +252,24 @@ destabilizing the existing compiler.
 | **Expansion identities and provenance (done)** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
 | **Fragment parser entry points (done)** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
 | **Expansion pipeline boundary (done)** | Replace the compiler-architecture refactor's pass-through seam with expansion-owned unit identities, lossless token trees, provenance, and an owned package result consumed before name resolution. | Macro-free packages preserve their source inputs and the explicit parse → expand → resolve path is equivalent to the normal resolver entry point; the complete downstream suite preserves diagnostics, typed IR, runtime behavior, and generated C. |
-| **Compile-time identities and namespace collection** | Add stable macro, attribute, and derive declaration identities plus the accepted package, module, import, visibility, and separate-namespace rules without folding lookup into ordinary value or type resolution. | Same-name, renamed, private, re-exported, and cross-package declarations resolve predictably. |
-| **Deterministic expansion scheduler** | Implement the structural fixed-point queue and dependency graph, including attribute-before-derive ordering, outermost-first function macros, generated-item re-entry, cycle diagnostics, and stable recovery nodes. | Repeated builds schedule and diagnose the same expansions in the same order. |
-| **Resource accounting seam** | Give the scheduler shared depth, execution, generated-node, interpreter-fuel, and live-value budgets before execution exists. | Limit charging is stable and cannot be bypassed by nested or generated work. |
-| **Experimental gate** | Keep incomplete user-defined macro behavior behind an explicit unstable compiler gate. | Stable invocations cannot accidentally depend on unfinished behavior. |
-| **Foundation validation** | Add token-tree, fragment-parser, provenance, scheduler, limit, fuzz, malformed-input, and macro-free equivalence tests. | The foundation is robust before user-defined compile-time execution is enabled. |
+| **Compile-time identities and namespace collection (done)** | Parse the minimal physical declaration/import surface and add stable macro, attribute, and derive declaration/import/module identities plus package, module, visibility, alias, re-export, and separate-namespace collection before ordinary resolution. Signature semantics and execution remain later packages. | Same-name declarations across ordinary/macro/attribute/derive namespaces, renamed nested-module imports, duplicates, private bindings, public re-exports, and cross-package declarations resolve or diagnose predictably. |
+| **Deterministic expansion scheduler (done)** | Implement the structural fixed-point queue and dependency graph, including attribute-before-derive ordering, outermost-first function macros, generated-item re-entry, cycle diagnostics, and stable recovery nodes. The scheduler is execution-independent until the compile-time interpreter supplies output. | Repeated builds schedule and diagnose the same expansions in the same order. |
+| **Resource accounting seam (done)** | Give the scheduler shared depth, execution, generated-node, interpreter-fuel, and live-value budgets before execution exists. Generated output is admitted atomically, and per-execution exhaustion remains sticky even when a driver ignores the immediate charge result. | Limit charging is stable and cannot be bypassed by nested or generated work. |
+| **Experimental gate (done)** | Keep incomplete user-defined macro behavior behind the explicit `--unstable-macros` compiler gate across package and single-file check/build/run, semantic dumps, documentation, package tests, and conformance. Token/syntax dumps and formatting remain syntax-aware tooling; compiler macros, FFI attributes, and compact built-in derives remain ungated. | Stable invocations cannot accidentally depend on unfinished behavior, and library entry points default to the stable feature set. |
+| **Foundation validation (done)** | Add directed and property coverage for token-tree losslessness, every fragment parser role, generated provenance chains, deterministic scheduler staging, resource limits, malformed input, the experimental gate, and macro-free equivalence across all shipped package examples. | Arbitrary lexer output recovers without panics or fabricated spans, generated chains terminate at their configured bounds, and the complete compiler suite preserves macro-free behavior. |
 
 ### Compile-time AST and interpreter
 
-> Status: Pending.
+> Status: In progress — the versioned `std.ast` façade is complete.
 >
-> Blocked by: **Macro expansion foundations**.
+> Blocked by: **None** — **Macro expansion foundations** is complete.
 
 **Goal:** Implement the target-independent `std.ast` façade, quotation, and a
 bounded interpreter for ordinary safe Elamite compile-time code.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Versioned `std.ast` façade** | Define opaque immutable structural syntax values, stable accessors and `with_` transforms, builders, persistent AST lists, origin handles, pattern variants, and `std.ast.error` without exposing compiler-owned nodes or tables. | Interface-version tests cover every admitted value, transform, invalid construction, and version mismatch. |
+| **Versioned `std.ast` façade (done)** | Define opaque immutable structural syntax values, stable accessors and `with_` transforms, validating builders, persistent AST lists, origin handles, pattern variants, and contained `std.ast.error` failures without exposing compiler-owned nodes or tables. The exact `1.0` handshake and sorted intrinsic type inventory are carried by every expanded package; only expansion can mint origins, and generated failures retain invocation/definition context without fabricated spans. | Directed and property tests cover every admitted value family and variant, every published transform, invalid identifiers and paths, exact version skew, arbitrary persistent-list concatenation, physical diagnostics, and generated diagnostic context. |
 | **Quote and interpolation syntax** | Lex and parse typed `quote:` bodies, `$name`, and `$(expression)` with scalar insertion, collection splicing, expected-role inference, and full structural validation. | Every AST role has positive, ambiguous-role, wrong-role, malformed, nesting, and indentation tests. |
 | **Concatenation operator** | Add binary `++` at additive precedence for strings, supported sequences, and AST lists while keeping numeric `+` separate and rejecting arbitrary AST-expression concatenation. | Lexer, parser, checker, runtime, formatter, and editor tests agree on the new operator. |
 | **Compile-time checking and lowering** | Check compile-time signatures and bodies through the ordinary language front end, reject runtime-only and unsafe capabilities, and lower the admitted subset to a versioned interpreter representation. | Invalid signatures and operations fail before execution with ordinary source spans. |

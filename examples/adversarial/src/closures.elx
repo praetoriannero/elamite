@@ -1,0 +1,199 @@
+/// # Explicit-capture closures (`SPEC.md` 5.1)
+///
+/// Captures are constructed exactly once, left to right, when evaluation
+/// reaches the closure expression.
+
+struct Counter:
+    value: i32
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+/// A generic bound accepts any concrete callable, including a named function
+/// reference.
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+/// A trait object erases the concrete callable type.
+fn apply_erased(callback: &Callable[(i32,), i32], value: i32) -> i32:
+    return callback(value)
+
+/// A closure environment is managed, so it may outlive the frame that built
+/// it.
+fn make_adder(offset: i32) -> &Callable[(i32,), i32]:
+    let add = fn[offset](value: i32) -> i32:
+        return value + offset
+    return &add
+
+/// Every capture form: plain copy, shared reference, mutable reference,
+/// const raw pointer, and mutable raw pointer.
+fn capture_forms() -> ():
+    var snapshot = 1
+    var observed = 2
+    var mutated = 3
+    var pointed = 4
+    var written = 5
+
+    let shared = &observed
+    let const_pointer: *i32 = &pointed as *i32
+    let write_pointer: *var i32 = &var written as *var i32
+
+    let closure = fn[
+        snapshot,
+        &observed as watch,
+        &var mutated as edit,
+        *const_pointer as read_only,
+        *var write_pointer as writable,
+    ](delta: i32) -> i32:
+        *edit += delta
+        unsafe:
+            let readable: &i32 = read_only as &i32
+            let target: &var i32 = writable as &var i32
+            *target += delta
+            return snapshot + *watch + *edit + *readable + *target
+
+    // Rebinding a plainly captured source does not change the snapshot.
+    snapshot = 100
+    observed = 20
+
+    println(f"capture result: {closure(10)}")
+    println(f"mutable capture wrote through: {mutated}")
+    println(f"pointer capture wrote through: {written}")
+    println(f"shared reference capture sees updates: {*shared}")
+
+/// A plain capture is a private snapshot, so copying the closure copies its
+/// captured values independently.
+fn closure_copies() -> ():
+    var total = 0
+    let accumulate = fn[&var total as sink](value: i32) -> i32:
+        *sink += value
+        return *sink
+
+    // A reference capture keeps identity across a closure copy.
+    let copied_accumulate = accumulate
+    println(f"first: {accumulate(1)}")
+    println(f"through copy: {copied_accumulate(2)}")
+    println(f"shared target: {total}")
+
+    let base = 10
+    let snapshot_closure = fn[base](value: i32) -> i32:
+        return base + value
+    let copied_snapshot = snapshot_closure
+    println(f"snapshot copies agree: {snapshot_closure(1)} {copied_snapshot(1)}")
+
+/// Captures are evaluated exactly once, left to right, when the closure
+/// expression is reached — not at call time.
+fn capture_evaluation_order() -> ():
+    let first = announce("first", 1)
+    let second = announce("second", 2)
+    let closure = fn[first, second]() -> i32:
+        return first + second
+    println(f"captured sum: {closure()}")
+    println(f"second call reuses the same captures: {closure()}")
+
+fn announce(label: str, value: i32) -> i32:
+    println(f"evaluating capture source {label}")
+    return value
+
+/// Return inference: an omitted annotation is inferred from explicit returns
+/// and from an expected callable result, and reachable fallthrough is unit.
+fn return_inference() -> ():
+    let inferred = fn(value: i32):
+        return value * 3
+    println(f"inferred result: {inferred(4)}")
+
+    let unit_closure = fn(value: i32):
+        println(f"unit closure body: {value}")
+    unit_closure(7)
+
+    let annotated = fn(value: i32) -> i32:
+        if value > 0:
+            return value
+        return 0
+    println(f"annotated result: {annotated(-5)} {annotated(5)}")
+
+/// Each closure expression has a distinct anonymous nominal type, but all of
+/// them satisfy the same `Callable` contract.
+fn callable_contracts() -> ():
+    let offset = 5
+    let closure = fn[offset](value: i32) -> i32:
+        return value + offset
+
+    println(f"generic bound with closure: {apply(closure, 1)}")
+    println(f"generic bound with named function: {apply(increment, 41)}")
+    println(f"erased closure: {apply_erased(&closure, 2)}")
+
+    // A vector of erased callables holds several distinct closure types.
+    // A named `&fn` reference satisfies a `Callable` *bound* (above) but is
+    // not itself convertible to `&Callable`; see
+    // known_failures/callable_erasure_of_function_reference.elx.
+    let doubler = fn(value: i32) -> i32:
+        return value * 2
+    let callables = @vec[
+        &closure as &Callable[(i32,), i32],
+        &doubler as &Callable[(i32,), i32],
+    ]
+    var total = 0
+    for callable in callables:
+        total += callable(10)
+    println(f"erased dispatch total: {total}")
+
+/// A closure body is its own function boundary with its own control flow.
+fn closure_boundaries() -> ():
+    let escaping = make_adder(20)
+    println(f"escaped environment: {escaping(2)}")
+
+    // A closure has its own loop and return context.
+    let count_down = fn(start: i32) -> i32:
+        var remaining = start
+        var steps = 0
+        while remaining > 0:
+            remaining -= 1
+            steps += 1
+            if steps > 100:
+                return -1
+        return steps
+    println(f"closure loop: {count_down(4)}")
+
+    // A closure may register and run its own deferred cleanup.
+    let with_cleanup = fn(value: i32) -> i32:
+        defer println("closure deferred cleanup")
+        return value * 2
+    println(f"closure with defer: {with_cleanup(21)}")
+
+/// A captureless closure refers to no enclosing local, but may still use
+/// module declarations and named functions without a capture.
+fn captureless() -> ():
+    let square = fn(value: i32) -> i32:
+        return value * value
+    println(f"captureless: {square(6)}")
+
+    let uses_declaration = fn(value: i32) -> i32:
+        return increment(value)
+    println(f"named function needs no capture: {uses_declaration(41)}")
+
+/// Capturing a struct by value snapshots it; capturing `&var` mutates the
+/// original.
+fn aggregate_captures() -> ():
+    var counter = Counter { value: 1 }
+    let snapshot_closure = fn[counter]() -> i32:
+        return counter.value
+
+    let mutate = fn[&var counter as live](delta: i32) -> i32:
+        live.value += delta
+        return live.value
+
+    println(f"mutated through capture: {mutate(10)}")
+    println(f"snapshot is independent: {snapshot_closure()}")
+    println(f"original observed the mutation: {counter.value}")
+
+pub fn run() -> ():
+    println("== 5.1 closures ==")
+    capture_forms()
+    closure_copies()
+    capture_evaluation_order()
+    return_inference()
+    callable_contracts()
+    closure_boundaries()
+    captureless()
+    aggregate_captures()

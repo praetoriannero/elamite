@@ -67,6 +67,7 @@ fn options(filter: Option<&str>) -> RunnerOptions {
         filter: filter.map(str::to_string),
         targets: vec![Target::X86_64],
         optimizations: vec![Optimization::Debug],
+        features: Default::default(),
         c_flags: Vec::new(),
         runtime_environment: Vec::new(),
     }
@@ -142,6 +143,7 @@ fn authoritative_demo_matches_in_debug_and_release() {
             filter: None,
             targets: vec![Target::X86_64],
             optimizations: vec![Optimization::Debug, Optimization::Release],
+            features: Default::default(),
             c_flags: Vec::new(),
             runtime_environment: Vec::new(),
         },
@@ -173,6 +175,7 @@ fn generated_c_is_clean_under_address_and_undefined_behavior_sanitizers() {
             filter: None,
             targets: vec![Target::X86_64],
             optimizations: vec![Optimization::Debug],
+            features: Default::default(),
             c_flags: vec![
                 OsString::from("-fsanitize=address,undefined"),
                 OsString::from("-fno-omit-frame-pointer"),
@@ -205,6 +208,7 @@ fn runtime_stress_is_stable_across_repeated_debug_and_release_runs() {
                 filter: None,
                 targets: vec![Target::X86_64],
                 optimizations: vec![Optimization::Debug, Optimization::Release],
+                features: Default::default(),
                 c_flags: Vec::new(),
                 runtime_environment: Vec::new(),
             },

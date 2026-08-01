@@ -404,7 +404,11 @@ impl<'a> Resolver<'a> {
         for item in direct_item_nodes(container) {
             match item.kind {
                 SyntaxKind::Module | SyntaxKind::PassStatement | SyntaxKind::Error => {}
-                SyntaxKind::Use => self.collect_import(module, item),
+                SyntaxKind::Use if !is_compile_time_use(item) => self.collect_import(module, item),
+                SyntaxKind::Use
+                | SyntaxKind::MacroDeclaration
+                | SyntaxKind::AttributeDeclaration
+                | SyntaxKind::DeriveDeclaration => {}
                 SyntaxKind::Impl => self.collect_impl(module, item),
                 SyntaxKind::TypeAlias
                 | SyntaxKind::Struct
@@ -1011,4 +1015,21 @@ impl<'a> Resolver<'a> {
         }
         self.diagnostics.push(diagnostic);
     }
+}
+
+fn is_compile_time_use(node: &SyntaxNode) -> bool {
+    let mut saw_use = false;
+    node.children.iter().any(|child| {
+        let SyntaxElement::Token(token) = child else {
+            return false;
+        };
+        match token.kind {
+            TokenKind::Keyword(Keyword::Use) => {
+                saw_use = true;
+                false
+            }
+            TokenKind::Keyword(Keyword::Macro | Keyword::Attr | Keyword::Derive) if saw_use => true,
+            _ => false,
+        }
+    })
 }

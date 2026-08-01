@@ -1,0 +1,63 @@
+/// # Modules, imports, and visibility (`SPEC.md` 2.3)
+///
+/// This file defines `root.layout`; files beneath `layout/` define its
+/// children, and `layout/deep/` is a directory namespace with no owning file.
+
+// An inline nested module may live beside file-backed children.
+pub mod inline:
+    // Imports are not inherited, so a nested module imports for itself.
+    use super.shared_constant
+
+    pub fn describe() -> str:
+        return "inline module"
+
+    pub fn read_parent() -> i32:
+        return shared_constant()
+
+    /// `super` names the parent module in an expression path. The `self`
+    /// path root resolves in a `use` declaration (below) but not in an
+    /// expression path; see known_failures/self_expression_path.elx.
+    pub fn qualified() -> i32:
+        return local() + super.shared_constant()
+
+    fn local() -> i32:
+        return 1
+
+/// A package-private declaration is reachable from every module in this
+/// package but not from a dependent package.
+fn shared_constant() -> i32:
+    return 10
+
+pub fn public_constant() -> i32:
+    return 20
+
+/// A re-export binds a public declaration under a new path without changing
+/// its identity or defining module.
+pub use root.layout.inner.leaf_value as reexported_leaf
+pub use root.layout.deep.leaf as deep_leaf
+
+/// An explicit alias resolves what would otherwise be a duplicate import.
+/// The `self` path root is accepted here even though an expression path
+/// rejects it.
+use self.inner.leaf_value
+use self.deep.leaf.marker as deep_marker
+
+pub fn run() -> ():
+    println("== 2.3 modules and visibility ==")
+    println(f"inline module: {inline.describe()}")
+    println(f"inline reads parent private: {inline.read_parent()}")
+    println(f"self and super paths: {inline.qualified()}")
+
+    // A file-backed child is bound in its parent's namespace directly.
+    println(f"file-backed child: {inner.describe()}")
+    println(f"child reads package-private parent: {inner.read_parent()}")
+
+    // A directory with no owning file is still a namespace component.
+    println(f"directory namespace: {deep.leaf.describe()}")
+
+    // The imported name and the re-exported alias name the same declaration.
+    println(f"import and re-export agree: {leaf_value() == reexported_leaf()}")
+    println(f"aliased import: {deep_marker()}")
+
+    // Circular imports within one package are legal.
+    println(f"circular import: {inner.through_cycle()}")

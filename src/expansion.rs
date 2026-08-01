@@ -1,17 +1,24 @@
 //! Parsed-to-resolved macro expansion boundary.
 //!
-//! Compile-time execution remains disabled while **Macro expansion
-//! foundations** is implemented. This phase consumes parsed units into its own
-//! unit identities and constructs a lossless token-tree view beside each
-//! unchanged syntax tree. Resolution consumes only this owned result, so later
-//! rewriting can replace unit syntax without reaching back into parsing.
+//! Compile-time execution remains disabled while the interpreter layers are
+//! implemented. This phase consumes parsed units into its own unit identities,
+//! constructs a lossless token-tree view beside each unchanged syntax tree,
+//! and owns the detached versioned [`ast`] façade. Resolution consumes only
+//! this owned result, so later rewriting can replace unit syntax without
+//! reaching back into parsing.
 
+pub mod ast;
 pub mod fragment;
+mod gate;
+pub mod namespace;
 pub mod provenance;
+pub mod scheduler;
 pub mod token_tree;
 
 use std::path::PathBuf;
 
+use crate::config::CompilerFeatures;
+use crate::package::PackageGraph;
 use crate::package::{ModulePath, PackageId};
 use crate::parsed::StandardModule;
 use crate::parsed::{ParsedPackage, ParsedPackageOutput, ParsedUnit, ParsedUnitIdentity};
@@ -69,6 +76,28 @@ impl ExpandedUnit {
 pub struct ExpandedPackage {
     pub units: Vec<ExpandedUnit>,
     pub provenance: ProvenanceTable,
+    /// Versioned, compile-time-only structural syntax interface. The value is
+    /// deliberately independent of the compiler's parsed and resolved trees.
+    pub ast: ast::AstInterface,
+    pub compile_time: namespace::CompileTimeEnvironment,
+    pub schedule: scheduler::ExpansionScheduler,
+}
+
+impl ExpandedPackage {
+    /// Creates a `std.ast` builder whose products inherit one represented
+    /// token's origin. Interpreter and quote lowering use the equivalent
+    /// expansion-local path for generated inputs.
+    #[must_use]
+    pub fn ast_builder_for_token(&self, token: &token_tree::TokenTreeToken) -> ast::AstBuilder {
+        // Looking the identity up catches an origin from an unrelated table at
+        // this compiler-owned boundary before it can enter an AST value.
+        let _ = self.provenance.origin(token.origin);
+        self.ast
+            .builder(ast::OriginHandle::from_range(provenance::OriginRange::new(
+                token.origin,
+                token.origin,
+            )))
+    }
 }
 
 pub struct ExpansionOutput {
@@ -77,7 +106,24 @@ pub struct ExpansionOutput {
 }
 
 #[must_use]
-pub fn expand(parsed: ParsedPackageOutput) -> ExpansionOutput {
+pub fn expand(graph: &PackageGraph, parsed: ParsedPackageOutput) -> ExpansionOutput {
+    expand_with_features(graph, parsed, CompilerFeatures::default())
+}
+
+#[must_use]
+pub fn expand_with_features(
+    graph: &PackageGraph,
+    parsed: ParsedPackageOutput,
+    features: CompilerFeatures,
+) -> ExpansionOutput {
+    let mut output = expand_units(parsed);
+    output.package.compile_time =
+        namespace::collect(graph, &output.package.units, &mut output.diagnostics);
+    gate::validate(&output.package.units, features, &mut output.diagnostics);
+    output
+}
+
+fn expand_units(parsed: ParsedPackageOutput) -> ExpansionOutput {
     let ParsedPackageOutput {
         package: ParsedPackage { units },
         diagnostics,
@@ -88,7 +134,13 @@ pub fn expand(parsed: ParsedPackageOutput) -> ExpansionOutput {
         .map(|unit| expand_unit(unit, &mut provenance))
         .collect();
     ExpansionOutput {
-        package: ExpandedPackage { units, provenance },
+        package: ExpandedPackage {
+            units,
+            provenance,
+            ast: ast::AstInterface::current(),
+            compile_time: namespace::CompileTimeEnvironment::default(),
+            schedule: scheduler::ExpansionScheduler::new(),
+        },
         diagnostics,
     }
 }
@@ -118,6 +170,7 @@ fn expand_unit(unit: ParsedUnit, provenance: &mut ProvenanceTable) -> ExpandedUn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expansion::ast::{HasOrigin, INTERFACE_VERSION};
     use crate::lexer::lex;
     use crate::parsed::StandardModule;
     use crate::parser::parse;
@@ -133,7 +186,7 @@ mod tests {
         let parsed = parse(&lexed.tokens);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 
-        expand(ParsedPackageOutput {
+        expand_units(ParsedPackageOutput {
             package: ParsedPackage {
                 units: vec![ParsedUnit {
                     identity: ParsedUnitIdentity::Standard(StandardModule::Root),
@@ -163,7 +216,7 @@ mod tests {
         let expected_tree = parsed.tree.clone();
         let expected_tokens = lexed.tokens.clone();
 
-        let output = expand(ParsedPackageOutput {
+        let output = expand_units(ParsedPackageOutput {
             package: ParsedPackage {
                 units: vec![ParsedUnit {
                     identity: ParsedUnitIdentity::Standard(StandardModule::Root),
@@ -195,6 +248,19 @@ mod tests {
                 .iter()
                 .map(|token| (&token.kind, Some(token.span)))
                 .collect::<Vec<_>>()
+        );
+        assert_eq!(output.package.ast.version(), INTERFACE_VERSION);
+        let token = unit.token_trees.flattened()[0].clone();
+        let builder = output.package.ast_builder_for_token(&token);
+        let identifier = builder.identifier("generated_name").unwrap();
+        let expression = builder.identifier_expression(identifier.clone());
+        assert_eq!(expression.origin(), identifier.origin());
+        assert_eq!(
+            output.package.provenance.physical_span(token.origin),
+            output
+                .package
+                .provenance
+                .physical_range(expression.origin().range())
         );
     }
 

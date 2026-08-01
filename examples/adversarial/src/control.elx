@@ -1,0 +1,223 @@
+/// # Expressions and control flow (`SPEC.md` 7)
+
+struct Point(PartialEq):
+    x: i32
+    y: i32
+
+enum Command:
+    Stop
+    Go(i32)
+    Turn { degrees: i32, sharp: bool }
+
+/// Records evaluation order so left-to-right evaluation is observable.
+fn note(label: str, value: i32) -> i32:
+    println(f"  evaluating {label}")
+    return value
+
+fn sum3(first: i32, second: i32, third: i32) -> i32:
+    return first + second + third
+
+/// A call evaluates its callee or receiver first, then each argument in
+/// source order.
+fn evaluation_order() -> ():
+    println("argument order:")
+    let total = sum3(note("first", 1), note("second", 2), note("third", 3))
+    println(f"  total: {total}")
+
+    println("operand order:")
+    let combined = note("left", 10) + note("right", 20) * note("factor", 2)
+    println(f"  combined: {combined}")
+
+    println("interpolation order:")
+    let interpolated = note("a", 1)
+    println(f"  {interpolated}")
+
+/// `&&` and `||` short-circuit, so the right operand may never evaluate.
+fn short_circuit() -> ():
+    println("short circuit and:")
+    let conjunction = false && truthy("right of &&")
+    println(f"  result: {conjunction}")
+
+    println("short circuit or:")
+    let disjunction = true || truthy("right of ||")
+    println(f"  result: {disjunction}")
+
+    println("both operands evaluate:")
+    let both = truthy("left") && truthy("right")
+    println(f"  result: {both}")
+
+fn truthy(label: str) -> bool:
+    println(f"  evaluating {label}")
+    return true
+
+/// The precedence table resolves each level without parentheses.
+fn precedence() -> ():
+    println(f"multiplicative before additive: {1 + 2 * 3}")
+    println(f"shift after additive: {1 + 1 << 2}")
+    println(f"bitwise and after shift: {1 << 2 & 6}")
+    println(f"bitwise xor after and: {6 & 3 ^ 1}")
+    println(f"bitwise or after xor: {4 ^ 1 | 2}")
+    println(f"relational after bitwise: {1 | 2 > 2}")
+    println(f"equality after relational: {(1 < 2) == true}")
+    println(f"logical and after equality: {1 == 1 && 2 == 2}")
+    println(f"logical or after and: {false && false || true}")
+    println(f"unary binds tighter than binary: {-2 + 3}")
+    println(f"cast binds tighter than multiply: {2 * 3.9f64 as i32}")
+
+    // A chained comparison such as `a < b < c` is invalid, so it is written
+    // with an explicit conjunction.
+    let middle = 2
+    println(f"explicit chain: {1 < middle && middle < 3}")
+
+/// Compound assignment evaluates its destination place exactly once.
+fn compound_assignment() -> ():
+    var values = @vec[10, 20]
+    println("compound assignment destination:")
+    values[index("destination", 1)] += 5
+    println(f"  result: {values[1]}")
+
+    var point = Point { x: 1, y: 2 }
+    point.x *= 10
+    point.y -= 2
+    println(f"  fields: {point.x}/{point.y}")
+
+fn index(label: str, value: usize) -> usize:
+    println(f"  evaluating {label}")
+    return value
+
+/// Match arms are tested in source order, never fall through, and guards do
+/// not contribute to exhaustiveness.
+fn match_ordering() -> ():
+    println(f"guarded first: {classify(4)}")
+    println(f"guard fails through: {classify(5)}")
+    println(f"catch all: {classify(-1)}")
+
+fn classify(value: i32) -> str:
+    match value:
+        0:
+            return "zero"
+        candidate if candidate > 0 && candidate % 2 == 0:
+            return "positive even"
+        candidate if candidate > 0:
+            return "positive odd"
+        _:
+            return "negative"
+
+/// Patterns cover literals, alternatives, tuples, structs, and every enum
+/// variant shape.
+fn pattern_shapes() -> ():
+    println(f"alternatives: {word(1)} {word(2)} {word(9)}")
+
+    let pair = (1, "one")
+    match pair:
+        (1, text):
+            println(f"tuple pattern: {text}")
+        (_, text):
+            println(f"tuple fallback: {text}")
+
+    let point = Point { x: 0, y: 5 }
+    match point:
+        Point { x: 0, y }:
+            println(f"struct pattern with literal field: y={y}")
+        Point { x, .. }:
+            println(f"struct pattern with rest: x={x}")
+
+    let commands = @vec[
+        Command.Stop,
+        Command.Go(3),
+        Command.Turn { degrees: 90, sharp: true },
+    ]
+    for command in commands:
+        println(f"command: {execute(command)}")
+
+    // A `str` literal pattern compares exact code points.
+    let name = "grace"
+    match name:
+        "ada":
+            println("string pattern: ada")
+        "grace":
+            println("string pattern: grace")
+        _:
+            println("string pattern: other")
+
+fn word(value: i32) -> str:
+    match value:
+        1 | 2 | 3:
+            return "small"
+        _:
+            return "large"
+
+fn execute(command: Command) -> str:
+    match command:
+        Command.Stop:
+            return "stop"
+        Command.Go(distance) if distance > 10:
+            return "far"
+        Command.Go(distance):
+            return "go"
+        // A literal sub-pattern inside an enum variant wrongly marks every
+        // later arm on that variant unreachable, so the distinction is drawn
+        // with a guard; see known_failures/variant_literal_arm.elx.
+        Command.Turn { degrees, sharp } if sharp:
+            return "sharp turn"
+        Command.Turn { degrees, sharp }:
+            return "turn"
+
+/// Matching a reference does not implicitly dereference it.
+fn matching_references() -> ():
+    let value = 7
+    let reference = &value
+
+    match *reference:
+        7:
+            println("explicit dereference matched the content")
+        _:
+            println("unexpected content")
+
+    // Pattern bindings are independent copies that behave as `let`.
+    let point = Point { x: 1, y: 2 }
+    match point:
+        Point { x, y }:
+            var local = x
+            local += 100
+            println(f"binding is a copy: {local} vs {point.x}")
+
+/// Loop control reaches the nearest enclosing loop only.
+fn loops() -> ():
+    var total = 0
+    var index_value = 0
+    while index_value < 10:
+        index_value += 1
+        if index_value % 2 == 0:
+            continue
+        if index_value > 7:
+            break
+        total += index_value
+    println(f"while with continue and break: {total} after {index_value}")
+
+    // A nested loop breaks only its own level.
+    var pairs = 0
+    for outer in [1, 2, 3]:
+        for inner in [1, 2, 3]:
+            if inner == 2:
+                break
+            pairs += 1
+    println(f"nested break: {pairs}")
+
+    // `for` over a vector of tuples destructures through the loop binding's
+    // positional selectors.
+    var weighted = 0
+    for entry in @vec[(1, 10), (2, 20)]:
+        weighted += entry.0 * entry.1
+    println(f"tuple elements: {weighted}")
+
+pub fn run() -> ():
+    println("== 7 control flow ==")
+    evaluation_order()
+    short_circuit()
+    precedence()
+    compound_assignment()
+    match_ordering()
+    pattern_shapes()
+    matching_references()
+    loops()

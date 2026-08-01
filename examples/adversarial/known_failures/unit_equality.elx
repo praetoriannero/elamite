@@ -1,0 +1,16 @@
+// FINDING 8 — unit equality emits invalid C.
+//
+// SPEC 4.5: "Integral primitives, `bool`, `char`, unit, and `str` provide
+// total equality, ordering, and hashing."
+//
+// Expected: compiles; prints true.
+// Actual:   `elamc check` exits 0; the C compiler then rejects the output:
+//           error: invalid operands to binary == (have 'el_unit' and
+//           'el_unit')
+//
+// The backend emits `==` directly on the `el_unit` struct type instead of a
+// generated comparison helper.
+
+fn main():
+    let unit: () = ()
+    println(f"{unit == ()}")

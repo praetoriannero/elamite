@@ -1,0 +1,26 @@
+// FINDING 14 — ambiguity, not a confirmed defect.
+//
+// LEDGER 5 states: "named safe function references also satisfy matching
+// callable APIs; `&Callable` provides erasure". A `Callable` *bound* does
+// accept a named function reference:
+//     fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32
+//     apply(increment, 41)   // works
+//
+// Erasing that same reference behind `&Callable` does not:
+//     increment as &Callable[(i32,), i32]
+//     -> error: this type does not implement trait `Callable`
+//
+// A defensible reading says this is correct — SPEC 6 converts "a concrete safe
+// reference ... when its target implements the trait", and the target of an
+// `&fn` is a function rather than a type implementing `Callable`. Worth an
+// explicit sentence in SPEC 5.1 either way, since the ledger wording reads as
+// though both forms work.
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn apply_erased(callback: &Callable[(i32,), i32], value: i32) -> i32:
+    return callback(value)
+
+fn main():
+    println(f"{apply_erased(increment as &Callable[(i32,), i32], 41)}")

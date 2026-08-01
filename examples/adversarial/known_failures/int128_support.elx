@@ -1,0 +1,20 @@
+// FINDING 13 — `i128` and `u128` are specified primitives with no backend.
+//
+// SPEC 4.1 lists `i128` and `u128` in the signed and unsigned integer tables
+// with no caveat, and LEDGER 4.1 records the primitive row as compile-pass.
+// SPEC 10.1 excludes them from the C ABI only, which implies they are
+// otherwise ordinary.
+//
+// Expected: compiles, or the specification records the limitation.
+// Actual:   error: 128-bit integer constants are deferred past the Milestone 8
+//           backend skeleton (canonical type 9: Primitive(I128))
+//           error: 128-bit values cannot yet be displayed
+//
+// This one is diagnosed clearly rather than silently miscompiled, so it is a
+// documentation gap rather than a defect: ROADMAP 2.5 requires temporary
+// limitations to be "recorded explicitly rather than silently accepted", and
+// no top-level document records this one.
+
+fn main():
+    let big: i128 = 170141183460469231731687303715884105727
+    println(f"{big}")

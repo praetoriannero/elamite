@@ -1,0 +1,171 @@
+/// # Traits, objects, and dispatch (`SPEC.md` 6)
+
+trait Greet:
+    fn greeting(self: &Self) -> str
+
+    /// A default method participates in the vtable.
+    fn greet_twice(self: &Self) -> String:
+        return String.from(f"{self.greeting()} {self.greeting()}")
+
+trait Measure:
+    fn size(self: &Self) -> i32
+
+/// A trait with a `Self`-mentioning method is usable statically but cannot
+/// form a trait object.
+trait Combine:
+    fn combine(self: &Self, other: &Self) -> i32
+
+trait Mutate:
+    fn bump(self: &var Self) -> ()
+
+struct Dog:
+    name: String
+
+    /// An inherent method wins over a same-named trait method.
+    fn greeting(self: &Self) -> str:
+        return "inherent woof"
+
+struct Cat:
+    lives: i32
+
+struct Counter:
+    value: i32
+
+impl Greet for Dog:
+    fn greeting(self: &Self) -> str:
+        return "trait woof"
+
+impl Greet for Cat:
+    fn greeting(self: &Self) -> str:
+        return "meow"
+
+    /// An implementation may override a default method.
+    fn greet_twice(self: &Self) -> String:
+        return String.from("meow meow (overridden)")
+
+impl Measure for Dog:
+    fn size(self: &Self) -> i32:
+        return 10
+
+impl Measure for Cat:
+    fn size(self: &Self) -> i32:
+        return self.lives
+
+impl Combine for Counter:
+    fn combine(self: &Self, other: &Self) -> i32:
+        return self.value + other.value
+
+impl Mutate for Counter:
+    fn bump(self: &var Self) -> ():
+        self.value += 1
+
+/// Static dispatch through a bound resolves at monomorphization.
+fn describe[T: Greet + Measure](value: &T) -> String:
+    return String.from(f"{value.greeting()}/{value.size()}")
+
+/// Dynamic dispatch through a trait object reads the vtable.
+fn describe_object(value: &Greet) -> str:
+    return value.greeting()
+
+fn measure_object(value: &Measure) -> i32:
+    return value.size()
+
+/// A mutable trait object dispatches a `&var Self` method.
+fn bump_object(value: &var Mutate) -> ():
+    value.bump()
+
+/// Inherent methods win over same-named trait methods; explicit qualification
+/// reaches the shadowed one.
+fn inherent_versus_trait() -> ():
+    let dog = Dog { name: String.from("Rex") }
+
+    println(f"bound call selects inherent: {dog.greeting()}")
+    println(f"qualified selects trait: {Dog.Greet.greeting(&dog)}")
+
+    // The default method is defined in terms of the trait method, so it sees
+    // the trait implementation rather than the inherent one.
+    println(f"default method uses trait method: {dog.greet_twice()}")
+
+/// An overridden default replaces the vtable slot for that type only.
+fn defaults_and_overrides() -> ():
+    let cat = Cat { lives: 9 }
+    println(f"overridden default: {cat.greet_twice()}")
+
+    let dog = Dog { name: String.from("Rex") }
+    let dog_ref = &dog
+    let cat_ref = &cat
+
+    // A concrete reference converts automatically where a trait object is
+    // contextually expected.
+    let as_object: &Greet = cat_ref
+    println(f"contextual conversion: {as_object.greeting()}")
+
+    // The explicit conversion is equivalent.
+    println(f"explicit conversion: {describe_object(dog_ref as &Greet)}")
+    println(f"argument position conversion: {describe_object(cat_ref)}")
+
+/// Heterogeneous concrete types coexist behind one trait-object element type.
+fn heterogeneous_objects() -> ():
+    let dog = Dog { name: String.from("Rex") }
+    let cat = Cat { lives: 9 }
+
+    let greeters = @vec[&dog as &Greet, &cat as &Greet]
+    var transcript = String.from("")
+    for greeter in greeters:
+        transcript = String.from(f"{transcript}[{greeter.greeting()}]")
+    println(f"heterogeneous dispatch: {transcript}")
+
+    let measurables = @vec[&dog as &Measure, &cat as &Measure]
+    var total = 0
+    for measurable in measurables:
+        total += measure_object(measurable)
+    println(f"heterogeneous measure total: {total}")
+
+/// A mutable trait object mutates its concrete target.
+fn mutable_objects() -> ():
+    var counter = Counter { value: 1 }
+    let object = &var counter
+    bump_object(object)
+    bump_object(object)
+    println(f"mutated through trait object: {counter.value}")
+
+/// A trait that mentions `Self` outside the receiver stays available for
+/// static dispatch.
+fn static_only_trait() -> ():
+    let left = Counter { value: 2 }
+    let right = Counter { value: 3 }
+    println(f"non-object-safe trait statically: {left.combine(&right)}")
+    println(f"qualified selection: {Counter.Combine.combine(&left, &right)}")
+
+/// Generic bounds combine with `+` and resolve statically.
+fn static_dispatch() -> ():
+    let dog = Dog { name: String.from("Rex") }
+    let cat = Cat { lives: 9 }
+    println(f"generic static: {describe(&dog)}")
+    println(f"generic static: {describe(&cat)}")
+
+/// Trait-object references are specified to compare concrete target
+/// identity, but `==` on a trait object does not survive C emission; see
+/// known_failures/trait_object_equality.elx. Concrete safe-reference identity
+/// is compared here instead.
+fn object_identity() -> ():
+    let dog = Dog { name: String.from("Rex") }
+    let first = &dog
+    let second = &dog
+    let cat = Cat { lives: 9 }
+    let other = &cat
+
+    println(f"same target: {first == second}")
+    println(
+        f"distinct targets have distinct greetings: {describe_object(first) != describe_object(other)}"
+    )
+
+pub fn run() -> ():
+    println("== 6 traits ==")
+    inherent_versus_trait()
+    defaults_and_overrides()
+    heterogeneous_objects()
+    mutable_objects()
+    static_only_trait()
+    static_dispatch()
+    object_identity()

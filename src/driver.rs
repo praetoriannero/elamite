@@ -7,12 +7,15 @@ use std::process::{Command, Output};
 use crate::backend::{COptions, emit_c};
 use crate::check::check_for_target;
 pub use crate::config::Optimization;
-use crate::config::Target;
+use crate::config::{CompilerFeatures, Target};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{ControlFlowProgram, TypedIrProgram, lower_control_flow, lower_typed_ir};
 use crate::manifest::TargetKind;
 use crate::package::PackageGraph;
-use crate::resolution::{DeclarationId, DeclarationKind, ResolvedProgram, resolve};
+use crate::resolution::{
+    DeclarationId, DeclarationKind, ResolvedProgram, resolve_for_tests_with_features,
+    resolve_with_features,
+};
 use crate::source::SourceManager;
 use crate::types::{TypedProgram, resolve_types};
 
@@ -32,6 +35,7 @@ pub enum DumpStage {
 pub struct BuildOptions {
     pub target: Target,
     pub optimization: Optimization,
+    pub features: CompilerFeatures,
     pub output_directory: PathBuf,
     pub keep_generated_c: bool,
     pub c_compiler: Option<OsString>,
@@ -45,6 +49,7 @@ impl Default for BuildOptions {
         Self {
             target: Target::host(),
             optimization: Optimization::Debug,
+            features: CompilerFeatures::default(),
             output_directory: PathBuf::from("build"),
             keep_generated_c: false,
             c_compiler: None,
@@ -106,7 +111,17 @@ pub fn check_frontend(
     sources: &mut SourceManager,
     target: Target,
 ) -> Result<FrontendOutput, Vec<Diagnostic>> {
-    let resolution = resolve(graph, sources);
+    check_frontend_with_features(graph, sources, target, CompilerFeatures::default())
+}
+
+/// Runs the frontend with explicit unstable-language feature opt-ins.
+pub fn check_frontend_with_features(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+    features: CompilerFeatures,
+) -> Result<FrontendOutput, Vec<Diagnostic>> {
+    let resolution = resolve_with_features(graph, sources, features);
     if !resolution.diagnostics.is_empty() {
         return Err(resolution.diagnostics);
     }
@@ -138,10 +153,21 @@ pub fn dump(
     target: Target,
     stage: DumpStage,
 ) -> Result<String, Vec<Diagnostic>> {
+    dump_with_features(graph, sources, target, stage, CompilerFeatures::default())
+}
+
+/// Dumps one compiler stage with explicit unstable-language feature opt-ins.
+pub fn dump_with_features(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+    stage: DumpStage,
+    features: CompilerFeatures,
+) -> Result<String, Vec<Diagnostic>> {
     match stage {
         DumpStage::Tokens | DumpStage::Syntax => dump_source_stage(graph, sources, stage),
         DumpStage::Resolution => {
-            let output = resolve(graph, sources);
+            let output = resolve_with_features(graph, sources, features);
             if output.diagnostics.is_empty() {
                 Ok(format!(
                     "{}{}",
@@ -153,7 +179,7 @@ pub fn dump(
             }
         }
         DumpStage::Types => {
-            let frontend = check_frontend(graph, sources, target)?;
+            let frontend = check_frontend_with_features(graph, sources, target, features)?;
             Ok(format!(
                 "{}{}",
                 source_identity_table(sources),
@@ -164,7 +190,7 @@ pub fn dump(
         | DumpStage::ControlFlow
         | DumpStage::Monomorphized
         | DumpStage::GeneratedC => {
-            let compilation = compile(graph, sources, target)?;
+            let compilation = compile_with_features(graph, sources, target, features)?;
             let body = match stage {
                 DumpStage::TypedIr => compilation.high_level_ir.dump(),
                 DumpStage::ControlFlow => compilation.control_flow_ir.dump(),
@@ -240,7 +266,17 @@ pub fn compile(
     sources: &mut SourceManager,
     target: Target,
 ) -> Result<Compilation, Vec<Diagnostic>> {
-    let frontend = check_frontend(graph, sources, target)?;
+    compile_with_features(graph, sources, target, CompilerFeatures::default())
+}
+
+/// Compiles with explicit unstable-language feature opt-ins.
+pub fn compile_with_features(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+    features: CompilerFeatures,
+) -> Result<Compilation, Vec<Diagnostic>> {
+    let frontend = check_frontend_with_features(graph, sources, target, features)?;
     let resolved = frontend.resolved;
     let mut typed = frontend.typed;
     let checked = frontend.checked;
@@ -287,7 +323,17 @@ pub fn compile_tests(
     sources: &mut SourceManager,
     target: Target,
 ) -> Result<(Compilation, Vec<TestCase>), Vec<Diagnostic>> {
-    let resolution = crate::resolution::resolve_for_tests(graph, sources);
+    compile_tests_with_features(graph, sources, target, CompilerFeatures::default())
+}
+
+/// Compiles package tests with explicit unstable-language feature opt-ins.
+pub fn compile_tests_with_features(
+    graph: &PackageGraph,
+    sources: &mut SourceManager,
+    target: Target,
+    features: CompilerFeatures,
+) -> Result<(Compilation, Vec<TestCase>), Vec<Diagnostic>> {
+    let resolution = resolve_for_tests_with_features(graph, sources, features);
     if !resolution.diagnostics.is_empty() {
         return Err(resolution.diagnostics);
     }
@@ -371,7 +417,7 @@ pub fn build(
     sources: &mut SourceManager,
     options: &BuildOptions,
 ) -> Result<BuildArtifact, Vec<Diagnostic>> {
-    let compilation = compile(graph, sources, options.target)?;
+    let compilation = compile_with_features(graph, sources, options.target, options.features)?;
     build_compilation(graph, sources, options, compilation, false, None)
 }
 
@@ -384,7 +430,7 @@ pub fn build_to(
     options: &BuildOptions,
     output_path: &Path,
 ) -> Result<BuildArtifact, Vec<Diagnostic>> {
-    let compilation = compile(graph, sources, options.target)?;
+    let compilation = compile_with_features(graph, sources, options.target, options.features)?;
     build_compilation(
         graph,
         sources,
@@ -401,7 +447,8 @@ pub fn build_tests(
     sources: &mut SourceManager,
     options: &BuildOptions,
 ) -> Result<TestBuild, Vec<Diagnostic>> {
-    let (compilation, cases) = compile_tests(graph, sources, options.target)?;
+    let (compilation, cases) =
+        compile_tests_with_features(graph, sources, options.target, options.features)?;
     let artifact = build_compilation(graph, sources, options, compilation, true, None)?;
     Ok(TestBuild { artifact, cases })
 }

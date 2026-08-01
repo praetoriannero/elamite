@@ -1,0 +1,26 @@
+// FINDING 3 — SPEC's own normative example does not compile.
+//
+// SPEC 5 binds a variadic tail to the slice type `[T]` and then shows exactly
+// this body:
+//
+//     pub fn variadic(x: i32, y: ...String) -> ():
+//         for value in y:
+//             println(f"{x}: {value}")
+//
+// SPEC 7.1 says `for` "directly supports arrays, `Vec`, `Map`, and `Set`",
+// which does not include a slice, so the specification contradicts itself.
+//
+// Expected: either the example compiles, or SPEC 5 stops using `for` on a
+//           variadic tail.
+// Actual:   error: `for` supports only arrays, `Vec`, `Map`, and `Set`
+//
+// Indexing a variadic tail does work (`rest[0]`), so the slice is otherwise
+// usable. `rest.len()` also fails, which leaves no portable way to bound the
+// index.
+
+pub fn variadic(x: i32, y: ...String) -> ():
+    for value in y:
+        println(f"{x}: {value}")
+
+fn main():
+    variadic(7, String.from("one"), String.from("two"))
