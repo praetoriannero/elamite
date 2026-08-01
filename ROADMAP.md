@@ -173,6 +173,65 @@ intermediate semantics that contradict it.
 
 ## 3. Active implementation roadmap
 
+### Memory cost model documentation
+
+> Status: Planned. This milestone documents the current implementation before
+> optimization and records intended improvements without making premature
+> normative complexity guarantees.
+>
+> Blocked by: **None**. Its measured baseline should precede
+> **Value-copy and allocation optimization**.
+
+**Goal:** Give programmers a usable, versioned account of where Elamite copies,
+allocates, promotes storage, retains memory, and synchronizes, while keeping
+semantic guarantees distinct from current implementation costs and future
+targets.
+
+The initial cost model is non-normative. `SPEC.md` continues to own observable
+value behavior; the cost document describes the shipped compiler and clearly
+labels intended bounds that are not yet achieved. A bound moves into `SPEC.md`
+only after its implementation, measurements, target coverage, and compatibility
+costs have been reviewed separately.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Copy and allocation inventory** | Inventory binding, assignment, argument, return, pattern, closure-capture, iteration-snapshot, transfer, concatenation, collection mutation, reference-promotion, and synchronization costs by type family. | Each operation distinguishes semantic copying, physical copying, allocation, retained storage, and implementation freedom; x86 and x86-64 differences are explicit. |
+| **Reproducible memory baseline** | Add release-mode microbenchmarks and allocation/byte-copy instrumentation for representative `String`, `Vec`, `Map`, `Set`, nested aggregate, closure, function-call, loop, and cross-thread workloads. | Results are reproducible enough to compare revisions, record input sizes and toolchain/target identity, and avoid timing or allocation thresholds in ordinary conformance tests. |
+| **Published cost model** | Add a non-normative `COST_MODEL.md` describing current asymptotic behavior, likely allocation sites, GC retention and nondeterminism, conservative promotion, explicit alias and synchronized-handle costs, and the intended optimized model. | A programmer can predict which source operations may allocate or copy proportionally to data size and can tell a guarantee from an implementation note or optimization target. |
+| **Cost-document maintenance contract** | Define the review rule for representation, lowering, runtime, and optimizer changes that alter documented costs, including required before/after measurements and release-note updates. | A cost-changing implementation cannot be marked complete while `COST_MODEL.md` still describes the previous behavior. |
+
+### Value-copy and allocation optimization
+
+> Status: Planned. The accepted direction preserves independent logical value
+> semantics, explicit `&T`/`&var T` aliasing, and data-race-free safe
+> concurrency; it does not adopt Go-style mutable shallow copies or add a
+> source-level move operation.
+>
+> Blocked by: **Memory cost model documentation** for its baseline and by
+> **Standard-library concurrency — Concurrency conformance** before final
+> cross-thread COW validation. Earlier single-threaded packages may proceed
+> once the baseline exists.
+
+**Goal:** Approach the cost of read-only Go-style descriptor passing without
+adopting Go-style implicit mutable aliasing. The compiler may borrow, reuse, or
+share physical storage only when ordinary Elamite copying remains
+observationally independent.
+
+Work packages are ordered. Each must retain a conservative eager-copy fallback
+when its proof or representation preconditions are not met.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Copy-cost instrumentation seam** | Carry logical-copy kind, source/destination lifetime, allocation class, and transfer-versus-ordinary purpose far enough through typed and control-flow IR to measure and select optimizations without backend guesswork. | Debug instrumentation accounts for every emitted logical copy exactly once and has no release-build semantic effect. |
+| **Read-only call borrowing** | Pass large ordinary arguments through hidden read-only storage when local or interprocedural analysis proves the callee cannot mutate, retain, return, or expose that storage; materialize an ordinary copy before any unproven escape. This is an implementation choice, not an implicit source `T` to `&T` conversion. | Direct, generic, trait, closure, recursive, FFI-adjacent, deferred, and escaping calls preserve value behavior, evaluation order, source lifetime, and the explicit reference type system. |
+| **Temporary and return copy elision** | Reuse fresh temporary, argument, aggregate-construction, closure-environment, and return storage when the source is dead and independence cannot become observable. Record the decision as an explicit internal move/reuse operation with no source syntax. | Branches, traps, postfix `?`, `defer`, patterns, repeated use, and nested aggregates never consume a source that remains observably usable. |
+| **Copy-on-write `String`** | Replace eager owned-text copies with constant-size logical handles and shared immutable backing, detaching before every mutation and preserving exact text, formatting, comparison, and concatenation behavior. | Read-only copies cease copying bytes; first mutation detaches once; aliases to the value's place, transfer boundaries, and OOM behavior remain correct. |
+| **Copy-on-write `Vec`** | Give each logical vector value an independently redirectable descriptor over potentially shared backing; lower mutable receiver operations against the owning place so detach changes only that value. | Element and nested-place mutation, growth, removal, clear, concatenation, indexing, closure capture, and loop snapshots remain independent under adversarial copy/mutate sequences. |
+| **Copy-on-write `Map` and `Set`** | Add independently redirectable COW backing for maps and sets after the vector representation is proven, retaining key stability, value copying, hashes, and unspecified iteration order. | Insert, replace, remove, clear, nested values, iteration snapshots, and collision-heavy workloads preserve semantics and detach only when required. |
+| **Ordinary/transfer copy separation** | Make ordinary logical-copy and cross-thread transfer-copy operations distinct in IR and generated helpers. Initially detach or deep-copy ordinary backing at transfer; permit physical cross-thread COW sharing only after its shared-state protocol is race-free on x86 and x86-64. | Spawn environments/results, channel messages, mutex values, and repeated joins remain independent; synchronized identity handles remain shared; sanitizer and contention suites detect no unsynchronized backing access. |
+| **Precise escape analysis** | Keep proven nonescaping address-taken locals and referenced temporaries on the stack while retaining conservative managed promotion for returned, stored, captured, trait-object, deferred, foreign, or otherwise uncertain references. | Root lifetime and identity match the current conservative implementation, including interior and aggregate references, while measured nonescaping cases allocate no managed cell. |
+| **Optimization and cost-model conformance** | Run the full semantic suite plus before/after time, allocation, copied-byte, retained-memory, and cross-thread stress comparisons; update `COST_MODEL.md` with achieved behavior and separately review any proposed normative bound. | Read-heavy copies and calls improve materially on the recorded workloads, mutation-heavy regressions are reported rather than hidden, and no cost claim exceeds the tested target matrix. |
+
 ### Post-conformance optimization
 
 > Status: Candidate work; select a measured problem before implementation.
@@ -181,16 +240,13 @@ intermediate semantics that contradict it.
 
 **Goal:** Improve implementation quality without changing language behavior.
 
-Candidate work packages are independent proposals, not a promise to implement
-all of them in table order:
+The memory-cost and value-copy packages above are planned work rather than
+members of this optional pool. The remaining candidate packages are independent
+proposals, not a promise to implement all of them in table order:
 
 | Task | Candidate change | Required semantic guard |
 | --- | --- | --- |
 | **Optimization benchmark gate** | Choose a measured problem, record a reproducible before-state, and define the expected improvement before changing lowering. | The complete compiler-architecture refactor baseline remains available for comparison. |
-| **Precise escape analysis** | Keep proven nonescaping address-taken storage on the stack while retaining conservative promotion as the fallback. | Escaping, interior, returned, trait-object, and deferred references preserve root lifetime and identity. |
-| **Copy elision** | Elide backend copies or reuse storage when independence cannot become observable. This is not a source-level move operation. | Mutation, alias, evaluation-order, return, pattern, and cleanup tests remain unchanged. |
-| **Copy-on-write text** | Replace eager `String` copies with COW storage behind the existing logical-copy interface. | First mutation detaches exactly once; independent copies, explicit aliases, and evaluation order retain specified behavior. |
-| **Copy-on-write collections** | Add COW independently for `Vec`, `Map`, and `Set`, one collection at a time. | Mutation, indexing places, iteration snapshots, hashes, and returned removed values remain independent. |
 | **Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and copy semantics do not change. |
 | **Devirtualization** | Replace a trait-object call with static dispatch only when the concrete target is proven and evaluation is unchanged. | Vtable-visible behavior, target identity, object safety, and source-order evaluation remain intact. |
 | **Incremental queries** | Introduce stable query boundaries for parsing, resolution, typing, and lowering. | Cache keys include all semantic inputs and clean/incremental outputs are byte-identical. |
