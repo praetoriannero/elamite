@@ -3,17 +3,15 @@
 Companion to [`examples/adversarial`](../adversarial), covering the
 compile-time syntax-generation surface from `SPEC.md` §12.
 
-This package is **checked, not run**. `ROADMAP.md` places *Compile-time
-checking and lowering* and *Bounded interpreter* after the just-completed
-`std.ast` façade, quotation syntax, and `++` work, so no compile-time
-declaration executes yet. Everything here exercises the surface that does
-exist: declaration grammar, the three namespaces and their imports, visibility
-across a package boundary, all twelve `quote:` roles, both interpolation
-forms, and the `--unstable-macros` gate.
+This package is **checked, not run** because it is a compile-time surface
+fixture rather than an executable. It exercises the bounded interpreter,
+declaration grammar, the three namespaces and their imports, visibility across
+a package boundary, all twelve `quote:` roles, both interpolation forms,
+attributes, derives, and function-like macro execution.
 
 ```sh
-cargo run -- check examples/adversarial_macros --unstable-macros
-cargo run -- check examples/adversarial_macros            # 40 gate errors
+cargo run -- check examples/adversarial_macros
+cargo run -- dump expanded examples/adversarial_macros
 cargo run -- fmt --check examples/adversarial_macros
 ```
 
@@ -54,23 +52,23 @@ adversarially and behaved correctly:
   imports, a package-private one reports "macro `name` is package-private",
   and `pub use macro` of a package-private declaration is rejected with a
   related span pointing at the offending declaration;
-- the gate covers declarations, imports, attachments, and quotation, and the
-  compiler's own `@vec`/`@map`/`@set`, `@importc`, and `@exportc` stay ungated;
+- user forms are stable, while `@vec`/`@map`/`@set`, `@importc`, and
+  `@exportc` retain their compatible built-in behavior;
 - the formatter round-trips every construct here without changing meaning.
 
 ## Findings
 
 | # | File | Status | Summary |
 | --- | --- | --- | --- |
-| M1 | `macro_invocation_form.elx` | **defect** | `@path(...)`, the only function-like invocation syntax SPEC 12.4 defines, cannot be parsed. `recover_macro_invocation` in `src/parser.rs` accepts only `[` or `{`, so the form has no representation. Two knock-on effects: with `--unstable-macros` *on* and the macro declared and collected, the message is "unknown compiler macro `@make`; expected `@vec`, `@map`, or `@set`"; and the `MacroExpression` branch in `src/expansion/gate.rs` that produces "user-defined macro invocations require `--unstable-macros`" is unreachable for that form |
-| M2 | `attribute_attachment_form.elx` | on plan, bad diagnostic | `@attr(tag)` reports "unknown compiler attribute `@tag`". The wrapper unwraps its argument and looks it up among `@importc`/`@exportc`, never consulting the attribute namespace `src/expansion/namespace.rs` already populates |
-| M3 | `attached_derive_form.elx` | on plan, bad diagnostic | `@derive(Default)` reports "unknown compiler attribute `@Default`". SPEC 4.3 calls the attached spelling the *general* derivation form and the compact `struct Point(Default):` the compatibility form, but only the compact one works |
-| M4 | `signature_validation.elx` | on plan | a checklist, not a defect report. Six signatures violating stated SPEC 12.1 rules are accepted today — runtime return and parameter types, reference and raw-pointer parameters, a misplaced variadic, and a two-parameter derive — along with unchecked bodies. Each should be rejected once *Compile-time checking and lowering* lands |
+| M1 | `macro_invocation_form.elx` | resolved | `@path(...)` is role-neutral at parse time, resolves in the macro namespace, and expands in expression, pattern, type, statement, and item positions. |
+| M2 | `attribute_attachment_form.elx` | resolved | `@attr(tag)` resolves and executes structural attributes, including replacement, removal, sibling output, and interacting transforms. |
+| M3 | `attached_derive_form.elx` | resolved | `@derive(...)` runs after attributes for user derives and compiler-supported derives; the compact built-in form remains compatibility syntax. |
+| M4 | `signature_validation.elx` | resolved | Compile-time signatures reject runtime-only types, invalid variadic placement, unsafe capabilities, and invalid derive/attribute contracts before execution. |
 
-M2, M3, and M4 are scheduled work, not regressions; they are recorded so the
-pending milestone has concrete cases and so the diagnostic-quality issues in
-M2 and M3 are not lost. M1 is the one that needs a decision now, because the
-grammar cannot express the specified syntax at all.
+All four findings are retained as regression fixtures. The bounded interpreter,
+fixed-point scheduler, hygiene/provenance handling, deterministic limits, and
+ordinary semantic re-entry are covered in `tests/expansion.rs` and
+`tests/expansion_robustness.rs`.
 
 One finding from this round landed in the sibling package instead, because it
 is not macro-specific:

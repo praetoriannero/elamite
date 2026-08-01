@@ -88,7 +88,7 @@ pub struct ExecutionResources {
 }
 
 impl ExecutionResources {
-    fn new(limits: ExpansionLimits) -> Self {
+    pub(crate) fn new(limits: ExpansionLimits) -> Self {
         Self {
             step_limit: limits.interpreter_steps,
             live_value_limit: limits.live_value_bytes,

@@ -132,6 +132,17 @@ impl ProvenanceTable {
         id
     }
 
+    /// Finds the stable origin registered for one exact physical token span.
+    /// Expansion uses this to connect parsed invocation/definition nodes back
+    /// to the lossless token-tree provenance table.
+    #[must_use]
+    pub fn origin_for_physical(&self, span: Span) -> Option<OriginId> {
+        self.origins
+            .iter()
+            .position(|origin| matches!(origin, Origin::Physical { span: found } if *found == span))
+            .map(|index| OriginId(index as u32))
+    }
+
     /// Registers one expansion. Invocation and definition origins must already
     /// exist; a generated invocation automatically establishes the parent.
     pub fn register_expansion(

@@ -3,8 +3,8 @@
 > Status: Active — completed legacy work is omitted from this forward-looking
 > plan; remaining milestones and work packages use stable descriptive names
 >
-> Next required work package: **Compile-time AST and interpreter** —
-> **Concatenation operator**
+> Next required work package: **Standard-library concurrency** —
+> **Normative concurrency contract**
 >
 > Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
@@ -255,13 +255,14 @@ destabilizing the existing compiler.
 | **Compile-time identities and namespace collection (done)** | Parse the minimal physical declaration/import surface and add stable macro, attribute, and derive declaration/import/module identities plus package, module, visibility, alias, re-export, and separate-namespace collection before ordinary resolution. Signature semantics and execution remain later packages. | Same-name declarations across ordinary/macro/attribute/derive namespaces, renamed nested-module imports, duplicates, private bindings, public re-exports, and cross-package declarations resolve or diagnose predictably. |
 | **Deterministic expansion scheduler (done)** | Implement the structural fixed-point queue and dependency graph, including attribute-before-derive ordering, outermost-first function macros, generated-item re-entry, cycle diagnostics, and stable recovery nodes. The scheduler is execution-independent until the compile-time interpreter supplies output. | Repeated builds schedule and diagnose the same expansions in the same order. |
 | **Resource accounting seam (done)** | Give the scheduler shared depth, execution, generated-node, interpreter-fuel, and live-value budgets before execution exists. Generated output is admitted atomically, and per-execution exhaustion remains sticky even when a driver ignores the immediate charge result. | Limit charging is stable and cannot be bypassed by nested or generated work. |
-| **Experimental gate (done)** | Keep incomplete user-defined macro behavior behind the explicit `--unstable-macros` compiler gate across package and single-file check/build/run, semantic dumps, documentation, package tests, and conformance. Token/syntax dumps and formatting remain syntax-aware tooling; compiler macros, FFI attributes, and compact built-in derives remain ungated. | Stable invocations cannot accidentally depend on unfinished behavior, and library entry points default to the stable feature set. |
+| **Experimental gate (done, retired)** | The explicit `--unstable-macros` gate covered every compiler entry point while execution was incomplete. Stabilization removed it after the conformance audit. | No stable build accidentally depended on partial behavior during development. |
 | **Foundation validation (done)** | Add directed and property coverage for token-tree losslessness, every fragment parser role, generated provenance chains, deterministic scheduler staging, resource limits, malformed input, the experimental gate, and macro-free equivalence across all shipped package examples. | Arbitrary lexer output recovers without panics or fabricated spans, generated chains terminate at their configured bounds, and the complete compiler suite preserves macro-free behavior. |
 
 ### Compile-time AST and interpreter
 
-> Status: In progress — the versioned `std.ast` façade and typed quotation
-> syntax are complete.
+> Status: Complete. The `std.ast` 1.0 façade, typed quotation, checked lowering,
+> bounded interpreter, capability boundary, identities, and validation are
+> implemented.
 >
 > Blocked by: **None** — **Macro expansion foundations** is complete.
 
@@ -273,15 +274,15 @@ bounded interpreter for ordinary safe Elamite compile-time code.
 | **Versioned `std.ast` façade (done)** | Define opaque immutable structural syntax values, stable accessors and `with_` transforms, validating builders, persistent AST lists, origin handles, pattern variants, and contained `std.ast.error` failures without exposing compiler-owned nodes or tables. The exact `1.0` handshake and sorted intrinsic type inventory are carried by every expanded package; only expansion can mint origins, and generated failures retain invocation/definition context without fabricated spans. | Directed and property tests cover every admitted value family and variant, every published transform, invalid identifiers and paths, exact version skew, arbitrary persistent-list concatenation, physical diagnostics, and generated diagnostic context. |
 | **Quote and interpolation syntax (done)** | Lex and parse role-neutral, indentation-delimited `quote:` templates and `$name`/`$(expression)` sites without parsing quoted source prematurely. Infer explicit binding and compile-time return roles for every admitted `std.ast` scalar, list, item, and definition type; distinguish scalar insertion from collection splicing; validate adapted bodies through the ordinary hand-written grammar; preserve physical spans; reject runtime quotation; and retain parameter-driven inference for compile-time signature checking. Hygiene context assignment and conversion to actual façade values remain interpreter-lowering work. | Lexer, parser, formatter, editor, expansion, directed role/malformed/wrong-role/nesting/indentation tests, and property-generated named/computed interpolation streams cover the complete syntax boundary. |
 | **Concatenation operator (done)** | Add binary `++` at additive precedence for strings, supported sequences, and AST lists while keeping numeric `+` separate and rejecting arbitrary AST-expression concatenation. | Lexer, parser, checker, runtime, formatter, and editor tests agree on the new operator. |
-| **Compile-time checking and lowering** | Check compile-time signatures and bodies through the ordinary language front end, reject runtime-only and unsafe capabilities, and lower the admitted subset to a versioned interpreter representation. | Invalid signatures and operations fail before execution with ordinary source spans. |
-| **Bounded interpreter** | Execute safe Elamite control flow, values, pattern matching, functions, and `std.ast` intrinsics deterministically with explicit fuel and live-value accounting. | Repeated execution is identical; recursion, loops, allocation, panics, and invalid intrinsics are contained diagnostics. |
-| **Capability and host/target boundary** | Deny FFI and ambient filesystem, environment, process, network, clock, randomness, target, runtime, and compiler-internal access; keep compile-time execution independent of the selected output target. | Capability probes fail predictably and x86/x86-64 builds expand identically. |
-| **Artifact and dependency identity** | Serialize or rebuild public compile-time bodies and `std.ast` ABI metadata with identities keyed by source, transitive compile-time dependencies, and compiler/spec/interface versions. | Clean, cached, local, and cross-package execution produce equivalent results and reject version skew. |
-| **Interpreter validation** | Add unit, property, fuzz, adversarial, reproducibility, limit, recovery, host/target, version-skew, and cross-package suites. | The interpreter cannot hang, crash, escape its capability boundary, or mutate compiler state. |
+| **Compile-time checking and lowering (done)** | Check compile-time signatures and bodies through the ordinary language front end, reject runtime-only and unsafe capabilities, and lower the admitted subset to a versioned interpreter representation. | Invalid signatures and operations fail before execution with ordinary source spans. |
+| **Bounded interpreter (done)** | Execute safe Elamite control flow, values, pattern matching, functions, and `std.ast` intrinsics deterministically with explicit fuel and live-value accounting. | Repeated execution is identical; recursion, loops, allocation, panics, and invalid intrinsics are contained diagnostics. |
+| **Capability and host/target boundary (done)** | Deny FFI and ambient filesystem, environment, process, network, clock, randomness, target, runtime, and compiler-internal access; keep compile-time execution independent of the selected output target. | Capability probes fail predictably and x86/x86-64 builds expand identically. |
+| **Artifact and dependency identity (done)** | Serialize or rebuild public compile-time bodies and `std.ast` ABI metadata with identities keyed by source, transitive compile-time dependencies, and compiler/spec/interface versions. | Clean, cached, local, and cross-package execution produce equivalent results and reject version skew. |
+| **Interpreter validation (done)** | Add unit, property, fuzz, adversarial, reproducibility, limit, recovery, host/target, version-skew, and cross-package suites. | The interpreter cannot hang, crash, escape its capability boundary, or mutate compiler state. |
 
 ### Interpreter-backed macros, attributes, and derives
 
-> Status: Pending.
+> Status: Complete.
 >
 > Blocked by: **Compile-time AST and interpreter**.
 
@@ -291,34 +292,35 @@ validation.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Declaration syntax and lookup** | Parse `[pub] macro`, `[pub] attr`, and `[pub] derive` signatures and bodies, including one final homogeneous variadic AST parameter where §12 permits it; collect physical declarations/imports in separate namespaces with stable identities, visibility, aliases, and re-exports. | Local, duplicate, renamed, private, malformed, variadic-placement, and cross-package cases resolve or diagnose predictably. |
-| **Function-like macros** | Parse `@path(...)` in expression, pattern, type, whole-statement, and module-item roles; construct fixed and variadic typed AST arguments, execute the declaration, and validate the declared return role. | Each role has successful, zero/many variadic, empty, wrong-role, trailing, nested, and recovery coverage. |
-| **Structural attributes** | Attach `@attr(path)`/`@attr(path(...))` to accepted definitions, supply the typed target implicitly, pack any final variadic explicit AST arguments, run top-to-bottom, and admit same-kind replacement or validated `ItemList` output. | Field/method addition, fixed/variadic arguments, replacement, removal, sibling emission, bad target, and interacting attributes behave deterministically. |
-| **Trait derives** | Run `@derive(...)` after attributes, validate the exact trait and target identity of each returned `Implementation`, and retain the original definition. | Struct/enum, generic, duplicate, bad-output, orphan, overlap, bound, and coherence cases use ordinary diagnostics. |
-| **Quote hygiene and provenance** | Assign definition-site contexts to literal quote syntax, preserve interpolated contexts and origin chains, and deny fabricated physical locations or caller contexts. | Capture, shadowing, private helper, nested expansion, and diagnostic snapshots demonstrate the specified contexts. |
-| **Fixed-point integration** | Re-enter generated ordinary items, imports, attachments, and invocations through the deterministic scheduler while forbidding generated compile-time declarations/imports. | Attribute/derive/macro nesting and cycles terminate in stable source/provenance order. |
-| **Ordinary semantic integration** | Route all generated syntax through normal resolution, visibility, generics, trait conformance/coherence, safety, cleanup, checking, lowering, and C emission. | Generated code cannot bypass any handwritten-code restriction. |
-| **Built-in compatibility and migration** | Preserve `@vec`/`@map`/`@set`, FFI attributes, and compact compiler derives; implement the attached form for built-in derives and migrate internals only after output and diagnostics are equivalent. | Existing fixtures remain unchanged and attached built-in derives gain equivalent coverage. |
-| **Expansion conformance** | Add compile-pass/fail, run-pass, cross-module/package, hygiene, determinism, architecture, nesting, adversarial, capability, and resource-limit suites. | All three forms pass the Linux x86 and x86-64 matrix behind the gate. |
+| **Declaration syntax and lookup (done)** | Parse `[pub] macro`, `[pub] attr`, and `[pub] derive` signatures and bodies, including one final homogeneous variadic AST parameter where §12 permits it; collect physical declarations/imports in separate namespaces with stable identities, visibility, aliases, and re-exports. | Local, duplicate, renamed, private, malformed, variadic-placement, and cross-package cases resolve or diagnose predictably. |
+| **Function-like macros (done)** | Parse `@path(...)` in expression, pattern, type, whole-statement, and module-item roles; construct fixed and variadic typed AST arguments, execute the declaration, and validate the declared return role. | Each role has successful, zero/many variadic, empty, wrong-role, trailing, nested, and recovery coverage. |
+| **Structural attributes (done)** | Attach `@attr(path)`/`@attr(path(...))` to accepted definitions, supply the typed target implicitly, pack any final variadic explicit AST arguments, run top-to-bottom, and admit same-kind replacement or validated `ItemList` output. | Field/method addition, fixed/variadic arguments, replacement, removal, sibling emission, bad target, and interacting attributes behave deterministically. |
+| **Trait derives (done)** | Run `@derive(...)` after attributes, validate the exact trait and target identity of each returned `Implementation`, and retain the original definition. | Struct/enum, generic, duplicate, bad-output, orphan, overlap, bound, and coherence cases use ordinary diagnostics. |
+| **Quote hygiene and provenance (done)** | Assign definition-site contexts to literal quote syntax, preserve interpolated contexts and origin chains, and deny fabricated physical locations or caller contexts. | Capture, shadowing, private helper, nested expansion, and diagnostic snapshots demonstrate the specified contexts. |
+| **Fixed-point integration (done)** | Re-enter generated ordinary items, imports, attachments, and invocations through the deterministic scheduler while forbidding generated compile-time declarations/imports. | Attribute/derive/macro nesting and cycles terminate in stable source/provenance order. |
+| **Ordinary semantic integration (done)** | Route all generated syntax through normal resolution, visibility, generics, trait conformance/coherence, safety, cleanup, checking, lowering, and C emission. | Generated code cannot bypass any handwritten-code restriction. |
+| **Built-in compatibility and migration (done)** | Preserve `@vec`/`@map`/`@set`, FFI attributes, and compact compiler derives; implement the attached form for built-in derives and migrate internals only after output and diagnostics are equivalent. | Existing fixtures remain unchanged and attached built-in derives gain equivalent coverage. |
+| **Expansion conformance (done)** | Add compile-pass/fail, run-pass, cross-module/package, hygiene, determinism, architecture, nesting, adversarial, capability, and resource-limit suites. | All three forms pass the Linux x86 and x86-64 matrix as stable language features. |
 
 ### Compile-time diagnostics, tooling, and stabilization
 
-> Status: Pending.
+> Status: Complete. User compile-time forms are stable and the former
+> `--unstable-macros` gate has been removed.
 >
 > Blocked by: **Interpreter-backed macros, attributes, and derives**.
 
 **Goal:** Make generated syntax diagnosable, inspectable, reproducible, and
-ready to leave the experimental gate.
+stable without an experimental gate.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Expansion-aware diagnostics** | Render generated primary locations with attachment/invocation and definition spans, bounded execution backtraces, `std.ast.error` messages, and stable categories. | Nested snapshots identify both the failure and its complete source chain. |
-| **Recovery across executions** | Contain invalid output and nested execution failures so independent diagnostics continue without duplicate cascades or partial syntax. | One failed execution does not suppress or multiply unrelated diagnostics. |
-| **Expansion inspection** | Add a CLI mode showing expanded syntax, compile-time execution order, and origin information deterministically for tests and editor tooling. | Repeated dumps are byte-identical and make attribute/derive/macro staging visible. |
-| **Dependency and cache identities** | Define stable hashes for declarations, invocations, attachments, imported metadata, interpreter artifacts, compiler/spec/AST versions, and every admitted input. | Input changes invalidate exactly the affected artifact or result. |
-| **Robustness campaign** | Fuzz quotation, interpolation, AST transforms, interpreter execution, hygiene, span handling, nesting, and every limit; retain all crash, hang, escape, and nondeterminism regressions. | The retained corpus finishes without an internal failure or unbounded cascade. |
-| **Compatibility audit** | Verify macro-free diagnostic, IR, runtime, and generated-C equivalence and built-in behavior on Linux x86 and x86-64. | Enabling the expansion pipeline changes only programs using the new surface. |
-| **Stabilization** | Complete documentation and ledger coverage, freeze the initial `std.ast` ABI, decide the long-term compact-derive compatibility policy, and remove `--unstable-macros`. | Local and cross-package conformance suites pass before the gate is removed. |
+| **Expansion-aware diagnostics (done)** | Render generated primary locations with attachment/invocation and definition spans, bounded execution backtraces, `std.ast.error` messages, and stable categories. | Nested snapshots identify both the failure and its complete source chain. |
+| **Recovery across executions (done)** | Contain invalid output and nested execution failures so independent diagnostics continue without duplicate cascades or partial syntax. | One failed execution does not suppress or multiply unrelated diagnostics. |
+| **Expansion inspection (done)** | Add a CLI mode showing expanded syntax, compile-time execution order, and origin information deterministically for tests and editor tooling. | Repeated dumps are byte-identical and make attribute/derive/macro staging visible. |
+| **Dependency and cache identities (done)** | Define stable hashes for declarations, invocations, attachments, imported metadata, interpreter artifacts, compiler/spec/AST versions, and every admitted input. | Input changes invalidate exactly the affected artifact or result. |
+| **Robustness campaign (done)** | Fuzz quotation, interpolation, AST transforms, interpreter execution, hygiene, span handling, nesting, and every limit; retain all crash, hang, escape, and nondeterminism regressions. | The retained corpus finishes without an internal failure or unbounded cascade. |
+| **Compatibility audit (done)** | Verify macro-free diagnostic, IR, runtime, and generated-C equivalence and built-in behavior on Linux x86 and x86-64. | Enabling the expansion pipeline changes only programs using the new surface. |
+| **Stabilization (done)** | Complete documentation and ledger coverage, freeze the initial `std.ast` ABI, retain compact built-in derives as compatibility syntax alongside attached `@derive(...)`, and remove `--unstable-macros`. | Local and cross-package conformance suites pass with the stable surface. |
 
 ## 6. Closures
 

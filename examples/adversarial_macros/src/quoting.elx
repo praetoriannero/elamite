@@ -54,14 +54,14 @@ macro quoted_item() -> std.ast.Item:
 
 // ------------------------------------------------------------ definitions --
 
-macro quoted_struct() -> std.ast.StructDefinition:
+macro quoted_struct() -> std.ast.Item:
     let value: std.ast.StructDefinition = quote:
         struct Generated:
             id: u64
             label: String
     return value
 
-macro quoted_enum() -> std.ast.EnumDefinition:
+macro quoted_enum() -> std.ast.Item:
     let value: std.ast.EnumDefinition = quote:
         enum GeneratedState:
             Idle
@@ -69,7 +69,7 @@ macro quoted_enum() -> std.ast.EnumDefinition:
             Placed { x: i32, y: i32 }
     return value
 
-macro quoted_function() -> std.ast.FunctionDefinition:
+macro quoted_function() -> std.ast.Item:
     let value: std.ast.FunctionDefinition = quote:
         pub fn generated(value: i32) -> i32:
             if value > 0:
@@ -77,15 +77,17 @@ macro quoted_function() -> std.ast.FunctionDefinition:
             return 0
     return value
 
-macro quoted_field() -> std.ast.FieldDefinition:
+macro quoted_field() -> std.ast.Item:
     let value: std.ast.FieldDefinition = quote:
         identifier: u64
-    return value
+    return quote:
+        fn field_role_witness() -> ():
+            pass
 
 trait GeneratedMarker:
     fn marker() -> i32
 
-macro quoted_implementation() -> std.ast.Implementation:
+macro quoted_implementation() -> std.ast.Item:
     let value: std.ast.Implementation = quote:
         impl GeneratedMarker for Generated:
             fn marker() -> i32:
@@ -135,7 +137,7 @@ macro variadic_tail(
 
 /// Quoted bodies keep ordinary indentation rules, including deeply nested
 /// blocks and multi-line delimited expressions.
-macro deep_indentation() -> std.ast.FunctionDefinition:
+macro deep_indentation() -> std.ast.Item:
     let value: std.ast.FunctionDefinition = quote:
         fn nested(flag: bool) -> i32:
             if flag:

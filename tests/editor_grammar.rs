@@ -283,7 +283,7 @@ fn grammar_accepts_exactly_the_parser_macros() {
     let expected = some_literals(slice_between(
         &parser,
         "fn parse_macro_expression(",
-        "Some(name) =>",
+        "_ => self.parse_user_macro_arguments",
     ));
 
     let grammar = read(GRAMMAR);

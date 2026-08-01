@@ -1,0 +1,31 @@
+macro pair(left: std.ast.Expression, right: std.ast.Expression) -> std.ast.Expression:
+    return quote:
+        ($left, $right)
+
+attr identifiable(target: std.ast.StructDefinition) -> std.ast.StructDefinition:
+    let additions: std.ast.MemberList = quote:
+        pub id: u64
+
+        pub fn identifier(self: &Self) -> u64:
+            return self.id
+    return target.with_members(target.members() ++ additions)
+
+trait FieldCount:
+    fn field_count() -> usize
+
+derive FieldCount(target: std.ast.StructDefinition) -> std.ast.Implementation:
+    let target_type = target.type_syntax()
+    let count = std.ast.literal(target.fields().length())
+    return quote:
+        impl FieldCount for $target_type:
+            fn field_count() -> usize:
+                return $count
+
+@attr(identifiable)
+@derive(FieldCount)
+struct Entity:
+    pub name: String
+
+fn main() -> ():
+    let values = @pair(20, 22)
+    println(f"macro pair: {values.0}, {values.1}")

@@ -13,13 +13,14 @@ implementation.
   Elamite's C interoperability layer.
 - [`examples/sdl`](examples/sdl) demonstrates an SDL2 window and animation
   through a narrow C99 interoperability shim.
+- [`examples/macros`](examples/macros) demonstrates stable function-like
+  macros, structural attributes, derives, quotation, and interpolation.
 - [`examples/adversarial`](examples/adversarial) pushes the implemented
   language to its specified boundaries and records, in
   [`known_failures`](examples/adversarial/known_failures), the cases where
   `SPEC.md` and the compiler currently disagree.
 - [`examples/adversarial_macros`](examples/adversarial_macros) does the same
-  for the `SPEC.md` §12 compile-time surface; it requires `--unstable-macros`
-  and is checked rather than run until the bounded interpreter exists.
+  for the stable `SPEC.md` §12 compile-time surface and bounded interpreter.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.
@@ -51,6 +52,7 @@ Check, build, run, or inspect a package with:
 cargo run -- check path/to/package
 cargo run -- build path/to/package
 cargo run -- run path/to/package
+cargo run -- dump expanded path/to/package
 cargo run -- dump typed-ir path/to/package
 cargo run -- doc path/to/package
 ```

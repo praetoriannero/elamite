@@ -57,10 +57,11 @@ without removing the driver's C99 and warning flags. Executable packages
 produce an executable; library packages produce a relocatable object and
 versioned `.elamite-meta` public metadata.
 
-`dump` accepts `tokens`, `syntax`, `resolution`, `types`, `typed-ir`,
+`dump` accepts `tokens`, `syntax`, `expanded`, `resolution`, `types`, `typed-ir`,
 `control-flow`, `monomorphized`, or `generated-c`. Dumps are deterministic for
 identical inputs and start with enough source identity information to interpret
-their spans.
+their spans. The `expanded` stage additionally lists stable compile-time
+artifact identities, execution order, resource use, and provenance totals.
 
 `doc` emits Markdown for externally reachable declarations, including attached
 documentation, signatures, and source links. Extraction does not depend on

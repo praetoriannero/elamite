@@ -43,10 +43,13 @@ pub enum Optimization {
     Release,
 }
 
-/// Explicit opt-ins for language features that are not yet stable.
+/// Language feature policy carried through compiler entry points.
+///
+/// User-defined compile-time syntax generation is stable; this empty value is
+/// retained so future, unrelated experiments do not churn driver APIs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CompilerFeatures {
-    pub unstable_macros: bool,
+    _reserved: (),
 }
 
 impl Optimization {

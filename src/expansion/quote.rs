@@ -7,7 +7,6 @@
 //! grammar. It never converts a compiler `SyntaxNode` into the public AST
 //! façade; that conversion belongs to interpreter lowering.
 
-use crate::config::CompilerFeatures;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::parser::{ParseOutput, QuoteFragmentKind, parse_quote_fragment};
 use crate::source::Span;
@@ -254,14 +253,7 @@ fn element_token_kind(element: &SyntaxElement) -> Option<&TokenKind> {
     }
 }
 
-pub(super) fn validate(
-    units: &[ExpandedUnit],
-    features: CompilerFeatures,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if !features.unstable_macros {
-        return;
-    }
+pub(super) fn validate(units: &[ExpandedUnit], diagnostics: &mut Vec<Diagnostic>) {
     for unit in units.iter().filter(|unit| !unit.is_standard()) {
         validate_node(&unit.tree, None, false, diagnostics);
     }

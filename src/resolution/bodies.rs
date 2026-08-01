@@ -257,6 +257,7 @@ impl<'a> Resolver<'a> {
             .filter(|token| !matches!(token.kind, TokenKind::Dot))
             .collect::<Vec<_>>();
         let first = meaningful.first().copied()?;
+        let module = self.syntax_context_module(first.span, module);
         let span = Span::new(
             first.span.file,
             first.span.start,
@@ -660,6 +661,7 @@ impl<'a> Resolver<'a> {
             .filter(|token| !matches!(token.kind, TokenKind::Dot))
             .collect::<Vec<_>>();
         let first = meaningful.first().copied()?;
+        let module = self.syntax_context_module(first.span, module);
         if meaningful.len() == 1 {
             return self.resolve_token_path(module, tokens, generics, self_allowed, fallback);
         }
@@ -721,7 +723,8 @@ impl<'a> Resolver<'a> {
                 if let (Some(NameTarget::Item(ItemId::Module(base))), Some(member)) = (base, member)
                 {
                     let name = self.intern(token_text(member));
-                    let require_public = self.module_access_is_external(module, base);
+                    let context = self.syntax_context_module(member.span, module);
+                    let require_public = self.module_access_is_external(context, base);
                     let result =
                         self.lookup_module_name(base, name, require_public, member.span)?;
                     let target = NameTarget::Item(result.item);
@@ -978,6 +981,7 @@ impl<'a> Resolver<'a> {
             self.record_reference(token.span, target, Vec::new());
             return Some(target);
         }
+        let module = self.syntax_context_module(token.span, module);
         let result = match special {
             Some(Keyword::Root) => self.resolve_module_path(module, &[PathPart::Root], token.span),
             Some(Keyword::Super) => {

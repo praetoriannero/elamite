@@ -209,8 +209,8 @@ Macros may use one final homogeneous variadic AST parameter; attributes may do
 so after their implicit target and fixed explicit parameters; derives remain
 fixed at one target parameter.
 Attributes run before derives on one definition, then generated ordinary items
-and function-like macros follow the deterministic fixed-point scheduler. Keep
-all user-defined forms behind `--unstable-macros` until stabilization.
+and function-like macros follow the deterministic fixed-point scheduler. The
+surface is stable; do not reintroduce the retired `--unstable-macros` gate.
 
 Do not fold compile-time execution or expansion into the lexer, ordinary
 parser, resolver, checker, or backend. Token trees and provenance belong at the

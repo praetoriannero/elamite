@@ -23,6 +23,7 @@ use crate::types::{TypedProgram, resolve_types};
 pub enum DumpStage {
     Tokens,
     Syntax,
+    Expanded,
     Resolution,
     Types,
     TypedIr,
@@ -166,6 +167,15 @@ pub fn dump_with_features(
 ) -> Result<String, Vec<Diagnostic>> {
     match stage {
         DumpStage::Tokens | DumpStage::Syntax => dump_source_stage(graph, sources, stage),
+        DumpStage::Expanded => {
+            let parsed = crate::parsed::parse_package(graph, sources);
+            let output = crate::expansion::expand_with_features(graph, parsed, features);
+            if output.diagnostics.is_empty() {
+                Ok(output.package.dump())
+            } else {
+                Err(output.diagnostics)
+            }
+        }
         DumpStage::Resolution => {
             let output = resolve_with_features(graph, sources, features);
             if output.diagnostics.is_empty() {
@@ -198,6 +208,7 @@ pub fn dump_with_features(
                 DumpStage::GeneratedC => compilation.generated_c,
                 DumpStage::Tokens
                 | DumpStage::Syntax
+                | DumpStage::Expanded
                 | DumpStage::Resolution
                 | DumpStage::Types => unreachable!("handled above"),
             };

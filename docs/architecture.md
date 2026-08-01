@@ -85,8 +85,8 @@ before ordinary resolution. It resolves aliases, public re-exports, package
 privacy, inline modules, and dependency roots without adding those bindings to
 the ordinary value/type namespace. Stored signatures and bodies remain inert
 until compile-time checking and interpretation are implemented.
-`src/expansion/scheduler.rs` is the execution-independent fixed-point engine
-for that future interpreter. It orders ready work by package, module, and
+`src/expansion/scheduler.rs` is the deterministic fixed-point engine driven by
+the bounded interpreter. It orders ready work by package, module, and
 provenance; represents attributes-before-derives and generated-output
 dependencies explicitly; re-enters generated invocations and definitions; and
 turns structurally repeated active-chain requests into stable recovery nodes.
@@ -94,13 +94,10 @@ It also owns the normative graph-wide depth, execution, and generated-node
 budgets plus the per-execution interpreter-step and live-value meters.
 Generated-node charging is atomic, while per-execution exhaustion is sticky,
 so failed work cannot leak partial syntax even through an incorrect driver.
-No macro body is executed by this layer.
-`src/expansion/gate.rs` rejects physical user-defined compile-time
-declarations, namespace imports, attachments, and invocations unless
-`CompilerFeatures::unstable_macros` is enabled. Compiler library entry points
-default to the stable feature set, and the CLI threads `--unstable-macros`
-through every compiling workflow. Syntax-only tooling remains able to inspect
-the experimental grammar without enabling execution.
+Macro bodies execute through `src/expansion/interpreter.rs`, while
+`src/expansion/engine.rs` connects typed arguments and returned syntax to the
+scheduler and ordinary semantic pipeline. User-defined forms are stable; the
+former experimental gate and CLI option were removed after conformance.
 The completed foundation is guarded by directed integration tests and property
 tests over arbitrary token streams, every fragment role, deep generated
 provenance, randomized expansion depth, atomic limit recovery, and explicit

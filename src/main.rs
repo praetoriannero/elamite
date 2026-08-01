@@ -141,11 +141,7 @@ struct PackageArgs {
 }
 
 #[derive(Debug, Clone, Copy, Default, Args)]
-struct FeatureArgs {
-    /// Enable incomplete user-defined macros, attributes, and derives.
-    #[arg(long)]
-    unstable_macros: bool,
-}
+struct FeatureArgs {}
 
 #[derive(Debug, Args)]
 struct InitArgs {
@@ -260,6 +256,7 @@ enum CliTarget {
 enum CliDumpStage {
     Tokens,
     Syntax,
+    Expanded,
     Resolution,
     Types,
     #[value(name = "typed-ir")]
@@ -276,6 +273,7 @@ impl From<CliDumpStage> for DumpStage {
         match stage {
             CliDumpStage::Tokens => Self::Tokens,
             CliDumpStage::Syntax => Self::Syntax,
+            CliDumpStage::Expanded => Self::Expanded,
             CliDumpStage::Resolution => Self::Resolution,
             CliDumpStage::Types => Self::Types,
             CliDumpStage::TypedIr => Self::TypedIr,
@@ -296,10 +294,8 @@ impl From<CliTarget> for Target {
 }
 
 impl From<FeatureArgs> for CompilerFeatures {
-    fn from(features: FeatureArgs) -> Self {
-        Self {
-            unstable_macros: features.unstable_macros,
-        }
+    fn from(_features: FeatureArgs) -> Self {
+        Self::default()
     }
 }
 

@@ -8,8 +8,10 @@
 //! reaching back into parsing.
 
 pub mod ast;
+mod engine;
 pub mod fragment;
-mod gate;
+pub mod identity;
+pub mod interpreter;
 pub mod namespace;
 pub mod provenance;
 pub mod quote;
@@ -82,6 +84,9 @@ pub struct ExpandedPackage {
     pub ast: ast::AstInterface,
     pub compile_time: namespace::CompileTimeEnvironment,
     pub schedule: scheduler::ExpansionScheduler,
+    /// Stable compiler/spec/interface/source identity used by compile-time
+    /// metadata and future persistent caches.
+    pub identities: identity::ExpansionIdentities,
 }
 
 impl ExpandedPackage {
@@ -99,6 +104,48 @@ impl ExpandedPackage {
                 token.origin,
             )))
     }
+
+    /// Deterministic expanded-syntax and execution inspection.
+    #[must_use]
+    pub fn dump(&self) -> String {
+        let mut output = format!(
+            "expansion package={} interface={}\n",
+            self.identities.package, self.identities.interface
+        );
+        for (index, identity) in self.identities.declarations.iter().enumerate() {
+            output.push_str(&format!("declaration {index} {identity}\n"));
+        }
+        for unit in &self.units {
+            output.push_str(&format!(
+                "file {} {}\n",
+                unit.file.index(),
+                unit.path.display()
+            ));
+            for line in unit.tree.dump().lines() {
+                output.push_str("  ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+        for work in self.schedule.work() {
+            output.push_str(&format!(
+                "execution {} declaration={} role={:?} state={:?} depth={} location={:?} resources={:?}\n",
+                work.id.index(),
+                work.request.declaration.index(),
+                work.request.role,
+                work.state,
+                work.depth,
+                work.request.location,
+                work.resources
+            ));
+        }
+        output.push_str(&format!(
+            "provenance origins={} expansions={}\n",
+            self.provenance.origins().len(),
+            self.provenance.expansions().len()
+        ));
+        output
+    }
 }
 
 pub struct ExpansionOutput {
@@ -115,13 +162,35 @@ pub fn expand(graph: &PackageGraph, parsed: ParsedPackageOutput) -> ExpansionOut
 pub fn expand_with_features(
     graph: &PackageGraph,
     parsed: ParsedPackageOutput,
-    features: CompilerFeatures,
+    _features: CompilerFeatures,
+) -> ExpansionOutput {
+    expand_with_limits(graph, parsed, scheduler::ExpansionLimits::default())
+}
+
+/// Expands with explicit deterministic budgets. Compiler entry points use the
+/// normative defaults; tests and embedding tools may choose smaller budgets
+/// without changing language semantics below those limits.
+#[must_use]
+pub fn expand_with_limits(
+    graph: &PackageGraph,
+    parsed: ParsedPackageOutput,
+    limits: scheduler::ExpansionLimits,
 ) -> ExpansionOutput {
     let mut output = expand_units(parsed);
+    output.package.schedule = scheduler::ExpansionScheduler::with_limits(limits);
     output.package.compile_time =
         namespace::collect(graph, &output.package.units, &mut output.diagnostics);
-    gate::validate(&output.package.units, features, &mut output.diagnostics);
-    quote::validate(&output.package.units, features, &mut output.diagnostics);
+    quote::validate(&output.package.units, &mut output.diagnostics);
+    engine::execute_package(
+        graph,
+        &mut output.package.units,
+        &output.package.compile_time,
+        &mut output.package.schedule,
+        &mut output.package.provenance,
+        &mut output.diagnostics,
+    );
+    output.package.identities =
+        identity::calculate(&output.package.units, &output.package.compile_time);
     output
 }
 
@@ -142,6 +211,7 @@ fn expand_units(parsed: ParsedPackageOutput) -> ExpansionOutput {
             ast: ast::AstInterface::current(),
             compile_time: namespace::CompileTimeEnvironment::default(),
             schedule: scheduler::ExpansionScheduler::new(),
+            identities: identity::ExpansionIdentities::default(),
         },
         diagnostics,
     }

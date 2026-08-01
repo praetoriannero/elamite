@@ -630,8 +630,8 @@ A fixed array type is `[T; N]`, where `N` is a compile-time nonnegative `usize`
 value. `[first, second]` constructs an array. The compiler-handled built-in
 macro forms `@vec[first, second]`, `@map{key: value, ...}`, and
 `@set{value, ...}` construct a `Vec`, `Map`, and `Set`, respectively. The
-`@name` namespace is reserved for macro invocation. These three built-ins are
-available without the experimental user-macro gate described in Section 12.
+`@name` namespace is reserved for macro invocation. These three built-ins
+share the stable macro namespace described in Section 12.
 Their lowercase macro names are distinct from the `Vec[T]`, `Map[K, V]`, and
 `Set[T]` type names.
 
@@ -2007,10 +2007,10 @@ bodies are ordinary Elamite code executed by the compiler's bounded
 compile-time interpreter. They operate on the public `std.ast` model rather
 than token matcher/transcriber rules or compiler-private syntax structures.
 
-All user-defined compile-time declarations and their uses remain behind
-`--unstable-macros` until the stabilization milestone removes the gate. The
-compiler-handled `@vec`, `@map`, and `@set` forms and compiler-defined
-`@importc` and `@exportc` attributes remain ungated.
+User-defined compile-time declarations and their uses are stable language
+features. The compiler-handled `@vec`, `@map`, and `@set` forms and
+compiler-defined `@importc` and `@exportc` attributes remain built-in
+compatibility forms.
 
 ### 12.1 Declarations, namespaces, and visibility
 

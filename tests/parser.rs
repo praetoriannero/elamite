@@ -533,9 +533,9 @@ fn reports_required_invalid_surface_forms_at_source_spans() {
             "derive list cannot be empty",
         ),
         (
-            "unknown compiler macro",
+            "user macro with the wrong delimiter",
             "fn bad():\n    let value = @custom[1]\n",
-            "unknown compiler macro",
+            "expected `(` after user macro path",
         ),
         (
             "map entry without value separator",

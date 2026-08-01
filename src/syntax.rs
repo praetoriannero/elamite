@@ -281,7 +281,17 @@ impl SyntaxNode {
             (Some(first), Some(last)) => {
                 let first = first.span();
                 let last = last.span();
-                Span::new(first.file, first.start, last.end)
+                if first.file == last.file && first.start <= last.end {
+                    Span::new(first.file, first.start, last.end)
+                } else {
+                    // Expanded syntax may interleave definition-side literal
+                    // tokens with invocation-side interpolations. There is no
+                    // single honest physical byte range for such a node; its
+                    // origin chain lives in expansion provenance, while this
+                    // phase-neutral compatibility span stays at the parser's
+                    // real physical fallback location.
+                    fallback
+                }
             }
             _ => fallback,
         };

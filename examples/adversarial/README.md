@@ -75,10 +75,10 @@ lowering remains unavailable.
 ## Compile-time surface
 
 `SPEC.md` §12 and the compile-time half of `++` live in the sibling
-[`examples/adversarial_macros`](../adversarial_macros) package, which needs
-`--unstable-macros` and is checked rather than run until the bounded
-interpreter lands. Its findings are listed in that package's README; the one
-that is not macro-specific, finding 15 above, is filed here instead.
+[`examples/adversarial_macros`](../adversarial_macros) package. The surface and
+bounded interpreter are stable; the package is checked rather than run because
+it is a compile-time fixture. Its resolved findings remain listed there as
+regression evidence.
 
 ## Behaviors confirmed correct
 

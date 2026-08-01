@@ -769,9 +769,9 @@ fn rejects_invalid_c_contracts_and_unsafe_calls() {
             "cannot derive",
         ),
         (
-            "unknown item attribute",
+            "unknown item macro",
             "@unknown(\"value\")\nfn main() -> ():\n    pass\n",
-            "unknown compiler attribute",
+            "cannot resolve macro",
         ),
         (
             "safe imported call",
@@ -1940,8 +1940,8 @@ fn command_line_help_lists_the_supported_workflows() {
 }
 
 #[test]
-fn command_line_requires_an_explicit_gate_for_user_defined_macros() {
-    let tree = TestTree::new("unstable-macro-gate");
+fn command_line_accepts_stable_user_defined_macros() {
+    let tree = TestTree::new("stable-macros");
     tree.executable(
         r#"
 macro inert(value: std.ast.Expression) -> std.ast.Expression:
@@ -1952,26 +1952,24 @@ fn main() -> ():
 "#,
     );
 
-    let denied = Command::new(env!("CARGO_BIN_EXE_elamc"))
+    let checked = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("check")
         .arg(&tree.root)
         .output()
-        .expect("run stable check");
-    assert!(!denied.status.success());
-    let stderr = String::from_utf8(denied.stderr).expect("UTF-8 diagnostics");
-    assert!(stderr.contains("require `--unstable-macros`"), "{stderr}");
+        .expect("run check");
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
 
-    let enabled = Command::new(env!("CARGO_BIN_EXE_elamc"))
+    let obsolete = Command::new(env!("CARGO_BIN_EXE_elamc"))
         .arg("check")
         .arg(&tree.root)
         .arg("--unstable-macros")
         .output()
-        .expect("run experimental check");
-    assert!(
-        enabled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&enabled.stderr)
-    );
+        .expect("run obsolete option check");
+    assert!(!obsolete.status.success());
 }
 
 #[test]

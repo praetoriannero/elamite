@@ -199,6 +199,27 @@ impl<'a> Resolver<'a> {
     fn intern(&mut self, text: &str) -> Symbol {
         Symbol(self.program.symbols.get_or_intern(text))
     }
+
+    /// Returns the physical module context carried by one expanded token.
+    /// Quote literals keep definition spans and interpolations keep invocation
+    /// spans, so this implements hygiene without fabricating source offsets.
+    fn syntax_context_module(&self, span: Span, fallback: ModuleId) -> ModuleId {
+        self.program
+            .modules
+            .iter()
+            .filter(|module| {
+                module.span.is_some_and(|owner| {
+                    owner.file == span.file && owner.start <= span.start && span.end <= owner.end
+                })
+            })
+            .max_by_key(|module| {
+                (
+                    module.path.len(),
+                    std::cmp::Reverse(module.span.map_or(u32::MAX, |span| span.end - span.start)),
+                )
+            })
+            .map_or(fallback, |module| module.id)
+    }
 }
 
 fn direct_item_nodes(node: &SyntaxNode) -> Vec<&SyntaxNode> {

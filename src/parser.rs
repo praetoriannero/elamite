@@ -91,6 +91,7 @@ enum ItemHead {
     Macro,
     Attribute,
     Derive,
+    MacroInvocation,
     TypeAlias,
     Struct,
     Enum,
@@ -251,6 +252,12 @@ impl<'a> Parser<'a> {
                 self.parse_compile_time_declaration(CompileTimeDeclaration::Attribute)
             }
             ItemHead::Derive => self.parse_compile_time_declaration(CompileTimeDeclaration::Derive),
+            ItemHead::MacroInvocation => {
+                let mut invocation = self.parse_macro_expression();
+                let mut children = std::mem::take(&mut invocation.children);
+                self.expect_line_end(&mut children);
+                SyntaxNode::new(SyntaxKind::MacroExpression, children, invocation.span)
+            }
             ItemHead::TypeAlias => self.parse_type_alias(),
             ItemHead::Struct => self.parse_struct(false),
             ItemHead::Enum => self.parse_enum(),
@@ -282,6 +289,16 @@ impl<'a> Parser<'a> {
             Some(TokenKind::DocComment(_) | TokenKind::Newline)
         ) {
             offset += 1;
+        }
+        let attached = matches!(
+            self.kind_at(offset + 1),
+            Some(TokenKind::Keyword(Keyword::Attr | Keyword::Derive))
+        ) || matches!(
+            self.kind_at(offset + 1),
+            Some(TokenKind::Identifier(name)) if matches!(name.as_str(), "importc" | "exportc")
+        );
+        if matches!(self.kind_at(offset), Some(TokenKind::At)) && !attached {
+            return ItemHead::MacroInvocation;
         }
         while matches!(self.kind_at(offset), Some(TokenKind::At)) {
             while !matches!(
@@ -610,6 +627,9 @@ impl<'a> Parser<'a> {
     fn parse_type(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = Vec::new();
+        if self.at_simple(&TokenKind::At) {
+            return self.parse_macro_expression();
+        }
         if self.at_simple(&TokenKind::Bang) {
             children.push(self.bump());
             return SyntaxNode::new(SyntaxKind::Type, children, fallback);
@@ -1487,8 +1507,17 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Identifier(name)) => Some(name.clone()),
             _ => None,
         };
-        self.expect_identifier(&mut children, "expected macro name after `@`");
-        match macro_name.as_deref() {
+        self.parse_path_tokens(&mut children);
+        let unqualified = !children.iter().any(|child| {
+            matches!(
+                child,
+                SyntaxElement::Token(Token {
+                    kind: TokenKind::Dot,
+                    ..
+                })
+            )
+        });
+        match macro_name.as_deref().filter(|_| unqualified) {
             Some("vec") => {
                 self.parse_macro_sequence(&mut children, TokenKind::LBracket, TokenKind::RBracket);
             }
@@ -1515,15 +1544,37 @@ impl<'a> Parser<'a> {
             Some("set") => {
                 self.parse_macro_sequence(&mut children, TokenKind::LBrace, TokenKind::RBrace);
             }
-            Some(name) => {
-                self.error_here(format!(
-                    "unknown compiler macro `@{name}`; expected `@vec`, `@map`, or `@set`"
-                ));
-                self.recover_macro_invocation(&mut children);
-            }
-            None => self.recover_macro_invocation(&mut children),
+            _ => self.parse_user_macro_arguments(&mut children),
         }
         SyntaxNode::new(SyntaxKind::MacroExpression, children, fallback)
+    }
+
+    /// Retains user-macro arguments as role-neutral tokens. Expansion parses
+    /// each argument only after resolving the declaration and learning the
+    /// corresponding `std.ast` parameter role.
+    fn parse_user_macro_arguments(&mut self, children: &mut Vec<SyntaxElement>) {
+        if !self.at_simple(&TokenKind::LParen) {
+            self.error_here("expected `(` after user macro path");
+            self.recover_macro_invocation(children);
+            return;
+        }
+        children.push(self.bump());
+        let mut depth = 0usize;
+        while !self.at_eof() && (depth > 0 || !self.at_simple(&TokenKind::RParen)) {
+            match self.current_kind() {
+                Some(TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace) => depth += 1,
+                Some(TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace) if depth > 0 => {
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            children.push(self.bump());
+        }
+        self.expect_simple(
+            &TokenKind::RParen,
+            children,
+            "expected `)` after user macro arguments",
+        );
     }
 
     fn parse_macro_sequence(
@@ -1688,6 +1739,9 @@ impl<'a> Parser<'a> {
 
     fn parse_pattern_atom(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
+        if self.at_simple(&TokenKind::At) {
+            return self.parse_macro_expression();
+        }
         if self.at_simple(&TokenKind::Star) {
             let children = vec![self.bump(), node(self.parse_pattern_atom())];
             return SyntaxNode::new(SyntaxKind::DereferencePattern, children, fallback);
