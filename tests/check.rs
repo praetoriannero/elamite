@@ -2532,8 +2532,37 @@ fn main():
 fn named_function_references_do_not_directly_erase_to_callable_objects() {
     assert_has_category(
         include_str!(
-            "../examples/adversarial/known_failures/callable_erasure_of_function_reference.elx"
+            "../tests/fixtures/regression/adversarial/regressions/callable_erasure_of_function_reference.elx"
         ),
         Category::TypeSystem,
     );
+}
+
+#[test]
+fn concurrency_boundaries_reject_unsynchronized_aliases() {
+    let (sources, diagnostics) = check_diagnostics(
+        r#"
+fn main() -> ():
+    let value = 7
+    let borrowed = &value
+    let worker = fn[borrowed]() -> i32:
+        return *borrowed
+    let _ = std.thread.spawn(worker)
+    let _ = std.sync.unbounded_channel[&i32]()
+    let _ = std.sync.Mutex[&i32].new(borrowed)
+"#,
+    );
+    let rendered = render(&sources, &diagnostics);
+    for needle in [
+        "spawned callable does not satisfy `Transfer`",
+        "channel elements must satisfy `Transfer`",
+        "mutex values must satisfy `Transfer`",
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(needle)),
+            "missing `{needle}` in:\n{rendered}"
+        );
+    }
 }

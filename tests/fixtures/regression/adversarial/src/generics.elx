@@ -18,7 +18,7 @@ trait Describe:
     fn describe(self: &Self) -> str
 
 /// A user trait implemented for a *primitive* type is accepted here but is
-/// unusable downstream; see known_failures/trait_impl_for_primitive.elx.
+/// unusable downstream; see regressions/trait_impl_for_primitive.elx.
 /// These nominal targets exercise the working path.
 struct Tag:
     id: i32

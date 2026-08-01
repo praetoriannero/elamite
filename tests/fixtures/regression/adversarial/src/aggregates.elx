@@ -3,7 +3,7 @@
 /// A transparent alias fixing one parameter and leaving another variable.
 /// Annotating a binding with a collection alias does not survive C emission,
 /// so `Registry` is exercised only in signature position; see
-/// known_failures/alias_collection.elx.
+/// regressions/alias_collection.elx.
 type Registry[V] = Map[str, V]
 type Counter = i32
 type Pairing = (i32, String)
@@ -54,7 +54,7 @@ fn tuple_shapes() -> ():
     println(f"pair: {pair.0}/{pair.1}")
     println(f"deep selector: {nested.1.1.1}")
     // Unit is specified to provide total equality, but `unit == ()` does not
-    // survive C emission; see known_failures/unit_equality.elx.
+    // survive C emission; see regressions/unit_equality.elx.
     println(f"unit binding is inhabited: {is_unit(unit)}")
 
 /// Local `let` and `var` accept irrefutable nested tuple binding patterns.
@@ -122,7 +122,7 @@ fn struct_literals() -> ():
     println(f"literal forms agree: {shorthand == reordered} {reordered == trailing}")
 
     // A field-less `struct Name: pass` declaration does not survive C
-    // emission; see known_failures/field_less_struct.elx.
+    // emission; see regressions/field_less_struct.elx.
 
 /// Derived `Default` is fieldwise and recursive.
 fn derived_defaults() -> ():

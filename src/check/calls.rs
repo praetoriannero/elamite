@@ -1268,6 +1268,24 @@ impl<'a> Checker<'a> {
                     }
                 }
                 NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))
+                    if self.resolved.builtin_name(builtin_id) == "spawn" =>
+                {
+                    return self.check_thread_spawn(node.span, arguments);
+                }
+                NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))
+                    if matches!(
+                        self.resolved.builtin_name(builtin_id),
+                        "channel" | "unbounded_channel"
+                    ) =>
+                {
+                    return self.check_channel_create(
+                        node.span,
+                        callee,
+                        arguments,
+                        self.resolved.builtin_name(builtin_id) == "channel",
+                    );
+                }
+                NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))
                     if matches!(self.resolved.builtin_name(builtin_id), "print" | "println") =>
                 {
                     self.program.calls.insert(
@@ -1425,6 +1443,217 @@ impl<'a> Checker<'a> {
             );
         }
         (self.typed.types.error(), PlaceKind::Value)
+    }
+
+    fn check_thread_spawn(
+        &mut self,
+        call_span: Span,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        if arguments.len() != 1 {
+            self.report_call_arity(call_span, arguments.len(), 1, false);
+        }
+        let Some(body) = arguments.first().copied() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let (callable, _) = self.check_expr(body, ExpectedType::None);
+        self.program.copies.insert(body.span);
+        for extra in arguments.iter().skip(1) {
+            self.check_expr(extra, ExpectedType::None);
+        }
+        let callable = self.typed.types.resolve_inference(callable);
+        let (entry, closure_entry, return_type) = match self.typed.types.kind(callable).clone() {
+            TypeKind::Closure {
+                declaration,
+                parameters,
+                return_type,
+                ..
+            } if parameters.is_empty() => (declaration, true, return_type),
+            TypeKind::Reference { target, .. } => {
+                let TypeKind::Function {
+                    safety: Safety::Safe,
+                    receiver: None,
+                    parameters,
+                    return_type,
+                    ..
+                } = self
+                    .typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(target))
+                    .clone()
+                else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            "`spawn` requires a safe zero-argument callable",
+                        )
+                        .with_primary(body.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                };
+                let Some(instance) = self.program.function_references.get(&body.span).cloned()
+                else {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            "`spawn` requires an exact named function reference or closure",
+                        )
+                        .with_primary(body.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                };
+                if !parameters.is_empty() || !instance.arguments.is_empty() {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Call,
+                            "`spawn` requires a nongeneric zero-argument function reference",
+                        )
+                        .with_primary(body.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                (instance.declaration, false, return_type)
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        "`spawn` requires a safe zero-argument callable",
+                    )
+                    .with_primary(body.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+        };
+        for (ty, description) in [(callable, "callable"), (return_type, "result")] {
+            if !crate::traits::provides(self.resolved, self.typed, ty, "Transfer") {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        format!("spawned {description} does not satisfy `Transfer`"),
+                    )
+                    .with_primary(body.span),
+                );
+            }
+        }
+        let Some(thread_builtin) = self.resolved.builtin_named("Thread") else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let thread = self.typed.types.intern(TypeKind::Builtin {
+            builtin: thread_builtin,
+            arguments: vec![return_type],
+        });
+        let result = self.standard_result_type(call_span, thread, "SpawnError");
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::Standard(StandardCall::ThreadSpawn {
+                thread,
+                callable,
+                entry,
+                closure_entry,
+                return_type,
+            }),
+        );
+        (result, PlaceKind::Value)
+    }
+
+    fn standard_result_type(&mut self, span: Span, ok: TypeId, error_name: &str) -> TypeId {
+        let (Some(result), Some(error)) = (
+            self.resolved.standard_declaration("Result"),
+            self.resolved.standard_declaration(error_name),
+        ) else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    format!(
+                        "the standard `Result` and `{error_name}` declarations are unavailable"
+                    ),
+                )
+                .with_primary(span),
+            );
+            return self.typed.types.error();
+        };
+        let Some(error) = self
+            .typed
+            .instantiate_declaration_type(self.resolved, error, &[])
+        else {
+            return self.typed.types.error();
+        };
+        self.typed
+            .instantiate_declaration_type(self.resolved, result, &[ok, error])
+            .unwrap_or_else(|| self.typed.types.error())
+    }
+
+    fn check_channel_create(
+        &mut self,
+        call_span: Span,
+        callee: &SyntaxNode,
+        arguments: &[&SyntaxNode],
+        bounded: bool,
+    ) -> (TypeId, PlaceKind) {
+        let type_nodes = if callee.kind == SyntaxKind::BracketExpression {
+            child_nodes(callee).into_iter().skip(1).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let element = if type_nodes.len() == 1 {
+            self.type_from_expression(type_nodes[0])
+                .unwrap_or_else(|| self.typed.types.error())
+        } else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "channel construction requires one explicit element type",
+                )
+                .with_primary(call_span),
+            );
+            self.typed.types.error()
+        };
+        let parameters = if bounded {
+            vec![self.typed.types.primitive(PrimitiveType::Usize)]
+        } else {
+            Vec::new()
+        };
+        self.check_standard_arguments(call_span, "channel", arguments, &parameters);
+        if element != self.typed.types.error()
+            && !crate::traits::provides(self.resolved, self.typed, element, "Transfer")
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "channel elements must satisfy `Transfer`",
+                )
+                .with_primary(call_span),
+            );
+        }
+        let (Some(sender_builtin), Some(receiver_builtin)) = (
+            self.resolved.builtin_named("Sender"),
+            self.resolved.builtin_named("Receiver"),
+        ) else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let sender = self.typed.types.intern(TypeKind::Builtin {
+            builtin: sender_builtin,
+            arguments: vec![element],
+        });
+        let receiver = self.typed.types.intern(TypeKind::Builtin {
+            builtin: receiver_builtin,
+            arguments: vec![element],
+        });
+        let tuple = self
+            .typed
+            .types
+            .intern(TypeKind::Tuple(vec![sender, receiver]));
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::Standard(StandardCall::ChannelCreate {
+                sender,
+                receiver,
+                element,
+                bounded,
+            }),
+        );
+        (tuple, PlaceKind::Value)
     }
 
     fn callable_bound_signature(
@@ -1663,6 +1892,68 @@ impl<'a> Checker<'a> {
             return Some((handle, PlaceKind::Value));
         }
 
+        // Synchronization handles use associated constructors so their
+        // shared runtime identity cannot be forged as an ordinary value.
+        if member_name == "new"
+            && let Some(handle) = self.type_from_expression(base)
+            && let TypeKind::Builtin {
+                builtin,
+                arguments: type_arguments,
+            } = self.typed.types.kind(handle).clone()
+        {
+            let builtin_name = self.resolved.builtin_name(builtin);
+            let selected = match (builtin_name, type_arguments.as_slice()) {
+                ("Mutex", [value_type]) => {
+                    if !crate::traits::provides(self.resolved, self.typed, *value_type, "Transfer")
+                    {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "mutex values must satisfy `Transfer`",
+                            )
+                            .with_primary(call_span),
+                        );
+                    }
+                    Some((
+                        StandardCall::MutexNew {
+                            mutex: handle,
+                            value_type: *value_type,
+                        },
+                        *value_type,
+                    ))
+                }
+                ("AtomicBool", []) => Some((
+                    StandardCall::AtomicNew {
+                        atomic: handle,
+                        value_type: self.typed.types.primitive(PrimitiveType::Bool),
+                    },
+                    self.typed.types.primitive(PrimitiveType::Bool),
+                )),
+                ("AtomicI32", []) => Some((
+                    StandardCall::AtomicNew {
+                        atomic: handle,
+                        value_type: self.typed.types.primitive(PrimitiveType::I32),
+                    },
+                    self.typed.types.primitive(PrimitiveType::I32),
+                )),
+                ("AtomicUsize", []) => Some((
+                    StandardCall::AtomicNew {
+                        atomic: handle,
+                        value_type: self.typed.types.primitive(PrimitiveType::Usize),
+                    },
+                    self.typed.types.primitive(PrimitiveType::Usize),
+                )),
+                _ => None,
+            };
+            if let Some((operation, value_type)) = selected {
+                self.check_standard_arguments(call_span, &member_name, arguments, &[value_type]);
+                self.program
+                    .calls
+                    .insert(call_span, CheckedCall::Standard(operation));
+                return Some((handle, PlaceKind::Value));
+            }
+        }
+
         // Empty collection constructors are associated functions. Their
         // element types come from explicit generic arguments or from the
         // expected result type.
@@ -1890,6 +2181,20 @@ impl<'a> Checker<'a> {
         }
 
         let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
+        if member_name == "update"
+            && let TypeKind::Builtin {
+                builtin,
+                arguments: type_arguments,
+            } = self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(base_type))
+                .clone()
+            && self.resolved.builtin_name(builtin) == "Mutex"
+            && let [value_type] = type_arguments.as_slice()
+        {
+            return Some(self.check_mutex_update(call_span, base_type, *value_type, arguments));
+        }
         if let Some((operation, parameters, result, mutable)) =
             self.standard_receiver_call(base_type, &member_name, call_span)
         {
@@ -2265,6 +2570,82 @@ impl<'a> Checker<'a> {
         result
     }
 
+    fn check_mutex_update(
+        &mut self,
+        call_span: Span,
+        mutex: TypeId,
+        value_type: TypeId,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        if arguments.len() != 1 {
+            self.report_call_arity(call_span, arguments.len(), 1, false);
+        }
+        let Some(body) = arguments.first().copied() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let (callable, _) = self.check_expr(body, ExpectedType::None);
+        self.program.copies.insert(body.span);
+        for extra in arguments.iter().skip(1) {
+            self.check_expr(extra, ExpectedType::None);
+        }
+        let callable = self.typed.types.resolve_inference(callable);
+        let selected = match self.typed.types.kind(callable).clone() {
+            TypeKind::Closure {
+                declaration,
+                parameters,
+                return_type,
+                ..
+            } if parameters.len() == 1
+                && self.typed.types.exactly_equal(parameters[0], value_type)
+                && self.typed.types.exactly_equal(return_type, value_type) =>
+            {
+                Some((declaration, true))
+            }
+            TypeKind::Reference { target, .. } => {
+                let valid_signature = matches!(
+                    self.typed.types.kind(self.typed.types.resolve_inference(target)),
+                    TypeKind::Function {
+                        safety: Safety::Safe,
+                        receiver: None,
+                        parameters,
+                        return_type,
+                        ..
+                    } if parameters.len() == 1
+                        && !parameters[0].variadic
+                        && self.typed.types.exactly_equal(parameters[0].ty, value_type)
+                        && self.typed.types.exactly_equal(*return_type, value_type)
+                );
+                self.program
+                    .function_references
+                    .get(&body.span)
+                    .filter(|instance| instance.arguments.is_empty() && valid_signature)
+                    .map(|instance| (instance.declaration, false))
+            }
+            _ => None,
+        };
+        let Some((entry, closure_entry)) = selected else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "`Mutex.update` requires a safe nongeneric callable of type `fn(T) -> T`",
+                )
+                .with_primary(body.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::Standard(StandardCall::MutexUpdate {
+                mutex,
+                value_type,
+                callable,
+                entry,
+                closure_entry,
+            }),
+        );
+        (value_type, PlaceKind::Value)
+    }
+
     pub(super) fn check_standard_arguments(
         &mut self,
         call_span: Span,
@@ -2438,6 +2819,179 @@ impl<'a> Checker<'a> {
                         unit_type,
                         false,
                     )),
+                    ("Thread", "join", [result]) => Some((
+                        StandardCall::ThreadJoin {
+                            thread: receiver,
+                            return_type: *result,
+                        },
+                        Vec::new(),
+                        *result,
+                        false,
+                    )),
+                    ("Thread", "is_finished", [_]) => Some((
+                        StandardCall::ThreadIsFinished { thread: receiver },
+                        Vec::new(),
+                        bool_type,
+                        false,
+                    )),
+                    ("Sender", "send", [element]) => Some((
+                        StandardCall::ChannelSend {
+                            sender: receiver,
+                            element: *element,
+                            nonblocking: false,
+                        },
+                        vec![*element],
+                        self.standard_result_type(span, unit_type, "SendError"),
+                        false,
+                    )),
+                    ("Sender", "try_send", [element]) => Some((
+                        StandardCall::ChannelSend {
+                            sender: receiver,
+                            element: *element,
+                            nonblocking: true,
+                        },
+                        vec![*element],
+                        self.standard_result_type(span, unit_type, "TrySendError"),
+                        false,
+                    )),
+                    ("Sender", "close", [_]) => Some((
+                        StandardCall::ChannelClose {
+                            handle: receiver,
+                            sender: true,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        false,
+                    )),
+                    ("Receiver", "receive", [element]) => Some((
+                        StandardCall::ChannelReceive {
+                            receiver,
+                            element: *element,
+                            nonblocking: false,
+                        },
+                        Vec::new(),
+                        self.option_type(span, *element),
+                        false,
+                    )),
+                    ("Receiver", "try_receive", [element]) => Some((
+                        StandardCall::ChannelReceive {
+                            receiver,
+                            element: *element,
+                            nonblocking: true,
+                        },
+                        Vec::new(),
+                        self.standard_result_type(span, *element, "TryReceiveError"),
+                        false,
+                    )),
+                    ("Receiver", "close", [_]) => Some((
+                        StandardCall::ChannelClose {
+                            handle: receiver,
+                            sender: false,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        false,
+                    )),
+                    ("Mutex", "read", [value_type]) => Some((
+                        StandardCall::MutexRead {
+                            mutex: receiver,
+                            value_type: *value_type,
+                        },
+                        Vec::new(),
+                        *value_type,
+                        false,
+                    )),
+                    ("Mutex", "replace", [value_type]) => Some((
+                        StandardCall::MutexReplace {
+                            mutex: receiver,
+                            value_type: *value_type,
+                        },
+                        vec![*value_type],
+                        *value_type,
+                        false,
+                    )),
+                    ("AtomicBool", "load", []) => Some((
+                        StandardCall::AtomicLoad {
+                            atomic: receiver,
+                            value_type: bool_type,
+                        },
+                        Vec::new(),
+                        bool_type,
+                        false,
+                    )),
+                    ("AtomicI32", "load", []) => Some((
+                        StandardCall::AtomicLoad {
+                            atomic: receiver,
+                            value_type: self.typed.types.primitive(PrimitiveType::I32),
+                        },
+                        Vec::new(),
+                        self.typed.types.primitive(PrimitiveType::I32),
+                        false,
+                    )),
+                    ("AtomicUsize", "load", []) => Some((
+                        StandardCall::AtomicLoad {
+                            atomic: receiver,
+                            value_type: usize_type,
+                        },
+                        Vec::new(),
+                        usize_type,
+                        false,
+                    )),
+                    ("AtomicBool" | "AtomicI32" | "AtomicUsize", atomic_method, [])
+                        if matches!(atomic_method, "store" | "exchange" | "compare_exchange") =>
+                    {
+                        let value_type = match self.resolved.builtin_name(builtin) {
+                            "AtomicBool" => bool_type,
+                            "AtomicI32" => self.typed.types.primitive(PrimitiveType::I32),
+                            _ => usize_type,
+                        };
+                        let (operation, parameters, result) = match atomic_method {
+                            "store" => (
+                                StandardCall::AtomicStore {
+                                    atomic: receiver,
+                                    value_type,
+                                },
+                                vec![value_type],
+                                unit_type,
+                            ),
+                            "exchange" => (
+                                StandardCall::AtomicExchange {
+                                    atomic: receiver,
+                                    value_type,
+                                },
+                                vec![value_type],
+                                value_type,
+                            ),
+                            _ => (
+                                StandardCall::AtomicCompareExchange {
+                                    atomic: receiver,
+                                    value_type,
+                                },
+                                vec![value_type, value_type],
+                                bool_type,
+                            ),
+                        };
+                        Some((operation, parameters, result, false))
+                    }
+                    ("AtomicI32" | "AtomicUsize", atomic_method, [])
+                        if matches!(atomic_method, "fetch_add" | "fetch_sub") =>
+                    {
+                        let value_type = if self.resolved.builtin_name(builtin) == "AtomicI32" {
+                            self.typed.types.primitive(PrimitiveType::I32)
+                        } else {
+                            usize_type
+                        };
+                        Some((
+                            StandardCall::AtomicFetchAdd {
+                                atomic: receiver,
+                                value_type,
+                                subtract: atomic_method == "fetch_sub",
+                            },
+                            vec![value_type],
+                            value_type,
+                            false,
+                        ))
+                    }
                     ("Vec", "len", [_]) => Some((
                         StandardCall::VecLen {
                             collection: receiver,

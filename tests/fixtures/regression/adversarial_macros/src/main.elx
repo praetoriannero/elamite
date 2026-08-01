@@ -1,0 +1,8 @@
+// Compile-time surface stress package: see README.md.
+//
+// This package is checked, not run: it is a compile-time surface fixture, so
+// its declarations are exercised by expansion rather than by a running binary.
+//
+
+pub fn main() -> ():
+    println("compile-time surface package")

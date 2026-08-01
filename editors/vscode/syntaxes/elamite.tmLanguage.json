@@ -166,17 +166,17 @@
 
     "type-builtin": {
       "name": "support.type.builtin.elx",
-      "match": "\\b(ForeignRootMut|ForeignRoot|NumericError|BuiltinTrap|RuntimeTrap|Formatter|Identity|IoError|Option|Result|String|CVoid|Vec|Map|Set)\\b"
+      "match": "\\b(ForeignRootMut|ForeignRoot|TryReceiveError|TrySendError|NumericError|BuiltinTrap|RuntimeTrap|AtomicUsize|AtomicBool|AtomicI32|SpawnError|SendError|Formatter|Receiver|Identity|Thread|Sender|Mutex|IoError|Option|Result|String|CVoid|Vec|Map|Set)\\b"
     },
 
     "type-builtin-trait": {
       "name": "support.type.trait.elx",
-      "match": "\\b(StableHash|PartialOrd|PartialEq|Callable|Default|Display|Hash|Ord|Eq)\\b"
+      "match": "\\b(StableHash|PartialOrd|PartialEq|Callable|Transfer|Default|Display|Hash|Ord|Eq)\\b"
     },
 
     "function-builtin": {
       "name": "support.function.builtin.elx",
-      "match": "\\b(println|assert|print|panic|trap|fail)\\b"
+      "match": "\\b(unbounded_channel|println|channel|assert|spawn|print|panic|trap|fail)\\b"
     },
 
     "type-name": {

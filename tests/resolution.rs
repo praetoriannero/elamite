@@ -950,6 +950,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
             "Set",
             "StableHash",
             "String",
+            "Transfer",
             "Vec",
             "bool",
             "char",
@@ -981,7 +982,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
         .iter()
         .filter(|module| module.origin == elamite::resolution::ModuleOrigin::Standard)
         .collect::<Vec<_>>();
-    assert_eq!(standard_modules.len(), 4);
+    assert_eq!(standard_modules.len(), 6);
     for module in standard_modules {
         assert!(
             module.source_file.is_some(),

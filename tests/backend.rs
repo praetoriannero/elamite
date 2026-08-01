@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -141,48 +142,74 @@ fn build_and_run(source: &str, optimization: Optimization) -> (String, String, i
 fn adversarial_regressions_build_and_run_with_specified_behavior() {
     let cases = [
         (
-            include_str!("../examples/adversarial/known_failures/variant_literal_arm.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/variant_literal_arm.elx"
+            ),
             "nonzero\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/trait_impl_for_primitive.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/trait_impl_for_primitive.elx"
+            ),
             "bound call: i32\nqualified: i32\ngeneric bound: i32\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/self_expression_path.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/self_expression_path.elx"
+            ),
             "1\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/alias_collection.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/alias_collection.elx"
+            ),
             "2\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/raw_pointer_field_access.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/raw_pointer_field_access.elx"
+            ),
             "7\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/unit_equality.elx"),
+            include_str!("../tests/fixtures/regression/adversarial/regressions/unit_equality.elx"),
             "true\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/trait_object_equality.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/trait_object_equality.elx"
+            ),
             "true\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/field_less_struct.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/field_less_struct.elx"
+            ),
             "constructed\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/zero_length_array.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/zero_length_array.elx"
+            ),
             "0\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/shift_operand_typing.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/shift_operand_typing.elx"
+            ),
             "unsigned shift count: 8\n",
         ),
         (
-            include_str!("../examples/adversarial/known_failures/variadic_iteration.elx"),
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/variadic_iteration.elx"
+            ),
             "length: 2\n7: one\n7: two\n",
+        ),
+        (
+            include_str!(
+                "../tests/fixtures/regression/adversarial/regressions/non_final_variadic.elx"
+            ),
+            "3\n",
         ),
     ];
     for (source, expected) in cases {
@@ -238,6 +265,302 @@ fn main() -> ():
         assert_eq!(stderr, "");
         assert_eq!(status, 0);
     }
+}
+
+#[test]
+fn native_threads_transfer_closures_join_once_and_copy_results() {
+    let source = r#"
+fn main() -> ():
+    let message = String.from("worker result")
+    let worker = fn[message]() -> String:
+        return message
+    let started = std.thread.spawn(worker)
+    match started:
+        Result.Ok(thread):
+            let copy = thread
+            println(thread.join())
+            println(copy.join())
+            println(copy.is_finished())
+        Result.Err(_):
+            println("spawn failed")
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "worker result\nworker result\ntrue\n");
+}
+
+#[test]
+fn discarded_and_nested_threads_are_waited_for_at_shutdown() {
+    let source = r#"
+fn child() -> ():
+    println("child")
+
+fn parent() -> ():
+    let _ = std.thread.spawn(child)
+    println("parent")
+
+fn main() -> ():
+    let _ = std.thread.spawn(parent)
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    let lines = stdout.lines().collect::<BTreeSet<_>>();
+    assert_eq!(lines, BTreeSet::from(["child", "parent"]));
+}
+
+#[test]
+fn joining_the_current_thread_traps_the_process() {
+    let source = r#"
+fn main() -> ():
+    let (sender, receiver) = std.sync.unbounded_channel[std.thread.Thread[()]]()
+    let body = fn[receiver]() -> ():
+        match receiver.receive():
+            Option.Some(thread):
+                thread.join()
+            Option.None:
+                pass
+    let started = std.thread.spawn(body)
+    match started:
+        Result.Ok(thread):
+            let _ = sender.send(thread)
+            thread.join()
+        Result.Err(_):
+            pass
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 101, "{stdout}\n{stderr}");
+    assert!(stderr.contains("E-RUN-SELF-JOIN"), "{stderr}");
+}
+
+#[test]
+fn never_returning_thread_bodies_and_joins_reach_c99_lowering() {
+    let tree = TestTree::new("never-thread");
+    tree.executable(
+        r#"
+fn diverge() -> !:
+    panic("worker stopped")
+
+fn main() -> ():
+    let started = std.thread.spawn(diverge)
+    match started:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let artifact = build(
+        &graph,
+        &mut sources,
+        &BuildOptions {
+            target: Target::X86_64,
+            optimization: Optimization::Debug,
+            features: Default::default(),
+            output_directory: tree.root.join("out"),
+            keep_generated_c: true,
+            c_compiler: None,
+            c_flags: Vec::new(),
+        },
+    )
+    .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(artifact.path.is_file());
+}
+
+#[test]
+fn channels_mutexes_and_atomics_share_only_synchronized_identity() {
+    let source = r#"
+use std.sync.TrySendError
+
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let (sender, receiver) = std.sync.channel[i32](1)
+    match sender.try_send(7):
+        Result.Ok(_):
+            println("sent")
+        Result.Err(_):
+            println("unexpected send error")
+    match sender.try_send(8):
+        Result.Ok(_):
+            println("unexpected capacity")
+        Result.Err(reason):
+            match reason:
+                TrySendError.Full:
+                    println("full")
+                TrySendError.Closed:
+                    println("unexpected closed")
+    match receiver.receive():
+        Option.Some(value):
+            println(value)
+        Option.None:
+            println("unexpected close")
+    sender.close()
+    match receiver.receive():
+        Option.Some(_):
+            println("unexpected value")
+        Option.None:
+            println("drained")
+
+    let (rendezvous_sender, rendezvous_receiver) = std.sync.channel[i32](0)
+    let handoff = fn[rendezvous_sender]() -> ():
+        let _ = rendezvous_sender.send(9)
+        rendezvous_sender.close()
+    let handoff_thread = std.thread.spawn(handoff)
+    match rendezvous_receiver.receive():
+        Option.Some(value):
+            println(value)
+        Option.None:
+            println("unexpected rendezvous close")
+    match handoff_thread:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+
+    let mutex = std.sync.Mutex[i32].new(0)
+    let update = fn[mutex]() -> i32:
+        var index = 0
+        while index < 100:
+            let _ = mutex.update(increment)
+            index += 1
+        return mutex.read()
+    let left = std.thread.spawn(update)
+    let right = std.thread.spawn(update)
+    match left:
+        Result.Ok(thread):
+            let _ = thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    match right:
+        Result.Ok(thread):
+            let _ = thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    println(mutex.read())
+
+    let atomic = std.sync.AtomicI32.new(0)
+    let add = fn[atomic]() -> ():
+        var index = 0
+        while index < 100:
+            let _ = atomic.fetch_add(1)
+            index += 1
+    let first = std.thread.spawn(add)
+    let second = std.thread.spawn(add)
+    match first:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    match second:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    println(atomic.load())
+"#;
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "sent\nfull\n7\ndrained\n9\n200\n200\n");
+    }
+}
+
+#[test]
+fn synchronization_without_spawn_links_and_transfer_copies_messages() {
+    let source = r#"
+fn main() -> ():
+    let (sender, receiver) = std.sync.unbounded_channel[Vec[i32]]()
+    var original = @vec[1]
+    let _ = sender.send(original)
+    original.append(2)
+    sender.close()
+    match receiver.receive():
+        Option.Some(message):
+            println(message.len())
+            println(original.len())
+        Option.None:
+            println("unexpected close")
+    let atomic = std.sync.AtomicUsize.new(3)
+    println(atomic.exchange(4))
+    println(atomic.compare_exchange(4, 5))
+    println(atomic.fetch_sub(2))
+    atomic.store(9)
+    println(atomic.load())
+    let flag = std.sync.AtomicBool.new(false)
+    println(flag.compare_exchange(false, true))
+    println(flag.exchange(false))
+
+    let mutex = std.sync.Mutex[i32].new(1)
+    let offset = 2
+    let add_offset = fn[offset](value: i32) -> i32:
+        return value + offset
+    println(mutex.update(add_offset))
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "1\n2\n3\ntrue\n5\n9\ntrue\ntrue\n3\n");
+}
+
+#[test]
+fn bounded_channels_sustain_mpmc_contention() {
+    let source = r#"
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let (sender, receiver) = std.sync.channel[i32](8)
+    let total = std.sync.Mutex[i32].new(0)
+    let received = std.sync.AtomicUsize.new(0)
+    let produce = fn[sender]() -> ():
+        var index = 0
+        while index < 1000:
+            let _ = sender.send(1)
+            index += 1
+    let consume = fn[receiver, total, received]() -> ():
+        var index = 0
+        while index < 1000:
+            match receiver.receive():
+                Option.Some(_):
+                    let _ = total.update(increment)
+                    let _ = received.fetch_add(1)
+                Option.None:
+                    pass
+            index += 1
+    let first_consumer = std.thread.spawn(consume)
+    let second_consumer = std.thread.spawn(consume)
+    let first_producer = std.thread.spawn(produce)
+    let second_producer = std.thread.spawn(produce)
+    match first_producer:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    match second_producer:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    sender.close()
+    match first_consumer:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    match second_consumer:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    receiver.close()
+    println(total.read())
+    println(received.load())
+"#;
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
+    assert_eq!(status, 0, "{stderr}");
+    assert_eq!(stdout, "2000\n2000\n");
 }
 
 #[test]

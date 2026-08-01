@@ -16,7 +16,7 @@ pub mod inline:
 
     /// `super` names the parent module in an expression path. The `self`
     /// path root resolves in a `use` declaration (below) but not in an
-    /// expression path; see known_failures/self_expression_path.elx.
+    /// expression path; see regressions/self_expression_path.elx.
     pub fn qualified() -> i32:
         return local() + super.shared_constant()
 

@@ -179,9 +179,16 @@ impl<'a> Resolver<'a> {
     }
 
     fn run(mut self) -> ResolutionOutput {
-        let (io_module, ffi_module, testing_module) = self.install_standard_library_names();
+        let (io_module, ffi_module, testing_module, thread_module, sync_module) =
+            self.install_standard_library_names();
         self.create_file_module_graph();
-        self.install_expanded_units(io_module, ffi_module, testing_module);
+        self.install_expanded_units(
+            io_module,
+            ffi_module,
+            testing_module,
+            thread_module,
+            sync_module,
+        );
         self.discover_inline_modules();
         self.collect_all_declarations();
         self.check_exported_c_symbol_conflicts();

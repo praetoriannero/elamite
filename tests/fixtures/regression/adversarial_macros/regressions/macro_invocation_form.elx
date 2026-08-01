@@ -15,12 +15,12 @@
 //
 // Two consequences beyond the missing feature:
 //
-//   1. The diagnostic is misleading *with* `--unstable-macros` enabled and the
+//   1. The diagnostic is misleading *with* the macro namespace populated and the
 //      macro declared, collected, and importable. It reports a declared user
 //      macro as an unknown compiler macro and suggests three unrelated names.
 //   2. src/expansion/gate.rs carries a `SyntaxKind::MacroExpression if
 //      is_user_macro_invocation(node)` branch producing "user-defined macro
-//      invocations require `--unstable-macros`". That branch is unreachable
+//      invocations are gated". That branch is unreachable
 //      for the `(` form, because parsing fails first. Without the gate this
 //      file emits the two parse errors *and* the gate error; with the gate it
 //      emits only the parse errors.
@@ -28,7 +28,6 @@
 // Path-qualified invocation (`@helpers.make(1)`) is likewise unparseable: the
 // macro name is read as a single identifier, not a path.
 //
-// Run with: elamc check macro_invocation_form.elx --unstable-macros
 
 macro make(value: std.ast.Expression) -> std.ast.Expression:
     let result: std.ast.Expression = quote:

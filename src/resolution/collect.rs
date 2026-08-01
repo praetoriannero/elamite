@@ -25,10 +25,14 @@ impl<'a> Resolver<'a> {
         id
     }
 
-    pub(super) fn install_standard_library_names(&mut self) -> (ModuleId, ModuleId, ModuleId) {
+    pub(super) fn install_standard_library_names(
+        &mut self,
+    ) -> (ModuleId, ModuleId, ModuleId, ModuleId, ModuleId) {
         let io = self.intern("io");
         let ffi = self.intern("ffi");
         let testing = self.intern("testing");
+        let thread = self.intern("thread");
+        let sync = self.intern("sync");
         let std = self.intern("std");
         let io_module = self.push_module(
             None,
@@ -45,6 +49,18 @@ impl<'a> Resolver<'a> {
         let testing_module = self.push_module(
             None,
             vec![std, testing],
+            Some(self.program.std_root),
+            ModuleOrigin::Standard,
+        );
+        let thread_module = self.push_module(
+            None,
+            vec![std, thread],
+            Some(self.program.std_root),
+            ModuleOrigin::Standard,
+        );
+        let sync_module = self.push_module(
+            None,
+            vec![std, sync],
             Some(self.program.std_root),
             ModuleOrigin::Standard,
         );
@@ -66,6 +82,20 @@ impl<'a> Resolver<'a> {
             self.program.std_root,
             testing,
             NamespaceTarget::Item(ItemId::Module(testing_module)),
+            Visibility::Public,
+            None,
+        );
+        self.insert_namespace(
+            self.program.std_root,
+            thread,
+            NamespaceTarget::Item(ItemId::Module(thread_module)),
+            Visibility::Public,
+            None,
+        );
+        self.insert_namespace(
+            self.program.std_root,
+            sync,
+            NamespaceTarget::Item(ItemId::Module(sync_module)),
             Visibility::Public,
             None,
         );
@@ -124,6 +154,20 @@ impl<'a> Resolver<'a> {
         for (module, names) in [
             (io_module, &["print", "println"][..]),
             (ffi_module, &["ForeignRoot", "ForeignRootMut", "CVoid"][..]),
+            (thread_module, &["Thread", "spawn"][..]),
+            (
+                sync_module,
+                &[
+                    "Sender",
+                    "Receiver",
+                    "Mutex",
+                    "AtomicBool",
+                    "AtomicI32",
+                    "AtomicUsize",
+                    "channel",
+                    "unbounded_channel",
+                ][..],
+            ),
         ] {
             for name in names {
                 let symbol = self.intern(name);
@@ -145,7 +189,13 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
-        (io_module, ffi_module, testing_module)
+        (
+            io_module,
+            ffi_module,
+            testing_module,
+            thread_module,
+            sync_module,
+        )
     }
 
     pub(super) fn push_builtin(&mut self, name: Symbol) -> BuiltinId {
@@ -248,6 +298,8 @@ impl<'a> Resolver<'a> {
         io_module: ModuleId,
         ffi_module: ModuleId,
         testing_module: ModuleId,
+        thread_module: ModuleId,
+        sync_module: ModuleId,
     ) {
         for unit in std::mem::take(&mut self.expanded.units) {
             let module = match unit.identity {
@@ -255,6 +307,8 @@ impl<'a> Resolver<'a> {
                 ExpandedUnitIdentity::Standard(StandardModule::Io) => io_module,
                 ExpandedUnitIdentity::Standard(StandardModule::Ffi) => ffi_module,
                 ExpandedUnitIdentity::Standard(StandardModule::Testing) => testing_module,
+                ExpandedUnitIdentity::Standard(StandardModule::Thread) => thread_module,
+                ExpandedUnitIdentity::Standard(StandardModule::Sync) => sync_module,
                 ExpandedUnitIdentity::PackageRoot(package) => self.program.package_roots[&package],
                 ExpandedUnitIdentity::PackageModule { package, path } => {
                     self.program.module_keys[&(package, path.components().to_vec())]

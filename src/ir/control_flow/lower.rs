@@ -1083,12 +1083,17 @@ impl<'a> FunctionLowerer<'a> {
                 callee: TypedCallee::Print { newline },
                 arguments,
             } => {
-                for argument in arguments {
-                    self.lower_print(argument);
-                }
-                if *newline {
-                    self.emit(Instruction::PrintNewline {
-                        span: expression.span,
+                let values = arguments
+                    .iter()
+                    .map(|argument| (self.lower_expression(argument), argument.ty, argument.span))
+                    .collect::<Vec<_>>();
+                let last = values.len().saturating_sub(1);
+                for (index, (value, ty, span)) in values.into_iter().enumerate() {
+                    self.emit(Instruction::PrintValue {
+                        value,
+                        ty,
+                        span,
+                        newline: *newline && index == last,
                     });
                 }
                 Rvalue::Constant(Constant::Unit)
@@ -1250,6 +1255,16 @@ impl<'a> FunctionLowerer<'a> {
                 reason: self.lower_expression(arguments.first()?),
                 reason_type: *reason_type,
                 trait_declaration: *trait_declaration,
+            }),
+            TypedExpressionKind::StandardCall {
+                operation,
+                arguments,
+            } => Some(NeverCall::Standard {
+                operation: *operation,
+                arguments: arguments
+                    .iter()
+                    .map(|argument| self.lower_expression(argument))
+                    .collect(),
             }),
             TypedExpressionKind::Call {
                 callee: TypedCallee::Function(instance),
@@ -1471,15 +1486,6 @@ impl<'a> FunctionLowerer<'a> {
             span,
         });
         payload
-    }
-
-    fn lower_print(&mut self, expression: &TypedExpression) {
-        let temporary = self.lower_expression(expression);
-        self.emit(Instruction::PrintValue {
-            value: temporary,
-            ty: expression.ty,
-            span: expression.span,
-        });
     }
 
     fn lower_place(&mut self, place: &TypedPlace) -> ControlFlowPlace {

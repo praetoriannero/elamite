@@ -4,7 +4,7 @@
 > plan; remaining milestones and work packages use stable descriptive names
 >
 > Next required work package: **Standard-library concurrency** —
-> **Normative concurrency contract**
+> **Concurrency conformance**
 >
 > Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
@@ -30,10 +30,9 @@ document defines an implementation order, not new language semantics. When it
 conflicts with the specification, the specification wins and this plan must be
 updated.
 
-Concurrency is not part of the initial implementation plan. The
-**Standard-library concurrency** milestone records the accepted post-closure
-native-thread and synchronization design; its normative specification is
-blocked by **Explicit-capture closures**.
+Concurrency is a post-closure extension to the initial implementation plan.
+The **Standard-library concurrency** milestone records its normative
+native-thread and synchronization design and implemented runtime surface.
 
 ## 1. Implementation strategy
 
@@ -419,7 +418,8 @@ before adding any of them.
 
 ### Standard-library concurrency
 
-> Status: Accepted design; pending normative specification.
+> Status: Runtime implementation complete; final target and stress conformance
+> remains.
 >
 > Blocked by: **Explicit-capture closures**.
 >
@@ -517,17 +517,17 @@ trampoline and concurrency contract.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Normative concurrency contract** | Record the thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, the standard-library documentation, and close or split I-015. | Every concurrency operation and exclusion has one normative result before any standard declaration or runtime hook is enabled. |
-| **Structural transfer capability** | Add canonical `Transfer` facts and generic bounds, structural derivation for ordinary values, conditional derivation for closures and standard handles, explicit exclusions for reference/pointer/trait-object aliases, and the accepted unsafe FFI opt-in. | Spawn inputs and results cannot hide an unapproved alias; diagnostics identify the exact nontransferable capture, field, element, or generic obligation. |
-| **Standard concurrency declarations** | Add the accepted `std.thread` and `std.sync` modules and source declarations for thread handles, spawn errors, channels and endpoint outcomes, mutexes, and atomic cells, keeping only representation and lowering hooks intrinsic. | All APIs resolve and type-check through ordinary module, generic, trait, visibility, and standard-library paths. |
-| **Transfer-copy lowering** | Lower cross-thread arguments, results, channel messages, and synchronized cell values through an explicit transfer-copy operation that recursively detaches ordinary backing storage while preserving approved synchronized handles. | Mutation on either side cannot observe shared ordinary storage, explicit synchronized identity remains shared, and evaluation occurs exactly once. |
-| **Native thread lifecycle** | Implement eager Linux native-thread creation, runtime identity, recoverable creation failure, synchronized result publication, copyable handles, single OS join, repeated logical-result copies, self-join detection, and shutdown waiting on x86 and x86-64. | Successful, failed, nested, multiply joined, handle-discarded, self-joined, and entry-return cases match the accepted lifecycle without implicit detach or cancellation. |
-| **Thread body and failure integration** | Lower spawned `Callable[(), R]` bodies as safe function boundaries with ordinary return, `Result`, `!`, trap, panic, and `defer` behavior; synchronize complete output calls without imposing an order. | Normal results and recoverable errors cross predictably, while a trap on any thread terminates the process and never becomes a join value. |
-| **Channel implementation** | Implement bounded and unbounded synchronized queues, rendezvous behavior, transfer-copy sends, blocking and nonblocking operations, explicit idempotent closure, draining, and copyable endpoint identity. | MPMC stress, full/empty/closed distinctions, close races, wakeups, ordering within one sender, and abandoned-handle behavior are deterministic where specified and race-free. |
-| **Mutex implementation** | Implement copyable `Mutex[T]` identity and copy-based `new`, `read`, `replace`, and callback-driven atomic `update` without exposing protected-storage references. | Concurrent updates do not lose changes, returned values are independent, callback traps remain process-fatal, recursive locking may deadlock, and no safe reference escapes. |
-| **Sequentially consistent atomics** | Implement shared `AtomicBool`, `AtomicI32`, and target-width `AtomicUsize` cells with the accepted load, store, exchange, compare-exchange, and integer read-modify-write operations without emitting C11 `_Atomic` into the C99 backend. | Operations are sequentially consistent on both targets, copies retain cell identity, runtime/compiler hooks preserve C99 output, and target-width behavior never assumes 64-bit atomics on x86. |
-| **Collector and root integration** | Register and unregister runtime-created threads, scan their stacks, queues, environments, synchronized handles, and unpublished/published results, and make shutdown cooperate with collection. | Stress collection cannot reclaim reachable cross-thread state, raw pointers acquire no rooting behavior, and completed thread state is reclaimable after all roots disappear. |
-| **C callback boundary** | Permit synchronous same-registered-thread reentry from C on the initializer or an Elamite-created thread while retaining the prohibition on foreign-created-thread and asynchronous foreign entry. | Nested registered callbacks preserve roots and traps never unwind through C; unsupported foreign-thread entry remains explicitly documented and tested where a harness can detect it. |
+| **Normative concurrency contract (done)** | Record the thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, the standard-library documentation, and close the prior umbrella design issue. | Every concurrency operation and exclusion has one normative result before any standard declaration or runtime hook is enabled. |
+| **Structural transfer capability (done)** | Add canonical `Transfer` facts and generic bounds, structural derivation for ordinary values, conditional derivation for closures and standard handles, explicit exclusions for reference/pointer/trait-object aliases, and the accepted unsafe FFI opt-in. | Spawn inputs and results cannot hide an unapproved alias; diagnostics identify the exact nontransferable capture, field, element, or generic obligation. |
+| **Standard concurrency declarations (done)** | Add the accepted `std.thread` and `std.sync` modules and source declarations for thread handles, spawn errors, channels and endpoint outcomes, mutexes, and atomic cells, keeping only representation and lowering hooks intrinsic. | All APIs resolve and type-check through ordinary module, generic, trait, visibility, and standard-library paths. |
+| **Transfer-copy lowering (done)** | Lower cross-thread arguments, results, channel messages, and synchronized cell values through an explicit transfer-copy operation that recursively detaches ordinary backing storage while preserving approved synchronized handles. | Mutation on either side cannot observe shared ordinary storage, explicit synchronized identity remains shared, and evaluation occurs exactly once. |
+| **Native thread lifecycle (done)** | Implement eager Linux native-thread creation, runtime identity, recoverable creation failure, synchronized result publication, copyable handles, single OS join, repeated logical-result copies, self-join detection, and shutdown waiting on x86 and x86-64. | Successful, failed, nested, multiply joined, handle-discarded, self-joined, and entry-return cases match the accepted lifecycle without implicit detach or cancellation. |
+| **Thread body and failure integration (done)** | Lower spawned `Callable[(), R]` bodies as safe function boundaries with ordinary return, `Result`, `!`, trap, panic, and `defer` behavior; synchronize complete output calls without imposing an order. | Normal results and recoverable errors cross predictably, while a trap on any thread terminates the process and never becomes a join value. |
+| **Channel implementation (done)** | Implement bounded and unbounded synchronized queues, rendezvous behavior, transfer-copy sends, blocking and nonblocking operations, explicit idempotent closure, draining, and copyable endpoint identity. | MPMC stress, full/empty/closed distinctions, close races, wakeups, ordering within one sender, and abandoned-handle behavior are deterministic where specified and race-free. |
+| **Mutex implementation (done)** | Implement copyable `Mutex[T]` identity and copy-based `new`, `read`, `replace`, and callback-driven atomic `update` without exposing protected-storage references. | Concurrent updates do not lose changes, returned values are independent, callback traps remain process-fatal, recursive locking may deadlock, and no safe reference escapes. |
+| **Sequentially consistent atomics (done)** | Implement shared `AtomicBool`, `AtomicI32`, and target-width `AtomicUsize` cells with the accepted load, store, exchange, compare-exchange, and integer read-modify-write operations without emitting C11 `_Atomic` into the C99 backend. | Operations are sequentially consistent on both targets, copies retain cell identity, runtime/compiler hooks preserve C99 output, and target-width behavior never assumes 64-bit atomics on x86. |
+| **Collector and root integration (done)** | Register and unregister runtime-created threads, scan their stacks, queues, environments, synchronized handles, and unpublished/published results, and make shutdown cooperate with collection. | Stress collection cannot reclaim reachable cross-thread state, raw pointers acquire no rooting behavior, and completed thread state is reclaimable after all roots disappear. |
+| **C callback boundary (done)** | Permit synchronous same-registered-thread reentry from C on the initializer or an Elamite-created thread while retaining the prohibition on foreign-created-thread and asynchronous foreign entry. | Nested registered callbacks preserve roots and traps never unwind through C; unsupported foreign-thread entry remains explicitly documented and tested where a harness can detect it. |
 | **Concurrency conformance** | Add compile-pass/fail transfer cases, runtime lifecycle and synchronization tests, trap-process tests, high-contention and repeated stress suites, sanitizer-capable native harnesses, debug/release coverage, and the Linux x86/x86-64 matrix. | The complete pre-concurrency suite remains green, safe suites show no races or hangs under their bounded contracts, and every normative concurrency rule is mapped in `LEDGER.md`. |
 
 Cooperative tasks, executors, `async`/`await`, futures, detached execution,

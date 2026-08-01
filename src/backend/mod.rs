@@ -210,8 +210,8 @@ impl<'a> CEmitter<'a> {
                 self.emit_hash_helper(ty, None);
             }
         }
-        self.emit_standard_runtime_helpers();
         self.emit_prototypes();
+        self.emit_standard_runtime_helpers();
         for ty in self.defaulted_types() {
             if self.needs_default_helper(ty) {
                 self.emit_default_helper(ty, None);
@@ -232,7 +232,7 @@ impl<'a> CEmitter<'a> {
             self.emit_function(function);
         }
         self.emit_entry();
-        let native_libraries = if self.program.requires_managed_memory {
+        let mut native_libraries = if self.program.requires_managed_memory {
             self.strategy
                 .native_libraries()
                 .iter()
@@ -241,6 +241,9 @@ impl<'a> CEmitter<'a> {
         } else {
             Vec::new()
         };
+        if self.uses_native_threads() {
+            native_libraries.push("pthread".to_string());
+        }
         COutput {
             source: self.output,
             diagnostics: self.diagnostics,
@@ -399,6 +402,23 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::ForeignRootRetain { .. }
         | StandardCall::ForeignRootPointer { .. }
         | StandardCall::ForeignRootClose { .. }
+        | StandardCall::ThreadSpawn { .. }
+        | StandardCall::ThreadJoin { .. }
+        | StandardCall::ThreadIsFinished { .. }
+        | StandardCall::ChannelCreate { .. }
+        | StandardCall::ChannelSend { .. }
+        | StandardCall::ChannelReceive { .. }
+        | StandardCall::ChannelClose { .. }
+        | StandardCall::MutexNew { .. }
+        | StandardCall::MutexRead { .. }
+        | StandardCall::MutexReplace { .. }
+        | StandardCall::MutexUpdate { .. }
+        | StandardCall::AtomicNew { .. }
+        | StandardCall::AtomicLoad { .. }
+        | StandardCall::AtomicStore { .. }
+        | StandardCall::AtomicExchange { .. }
+        | StandardCall::AtomicCompareExchange { .. }
+        | StandardCall::AtomicFetchAdd { .. }
         | StandardCall::FormatterWrite { .. } => {
             return None;
         }

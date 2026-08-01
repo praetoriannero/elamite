@@ -72,7 +72,7 @@ impl ManagedMemoryStrategy for BoehmGarbageCollector {
     }
 
     fn emit_c_prelude(&self, output: &mut dyn Write) -> fmt::Result {
-        output.write_str("#include <gc.h>\n")
+        output.write_str("#define GC_THREADS 1\n#include <gc.h>\n")
     }
 
     fn emit_c_operation(

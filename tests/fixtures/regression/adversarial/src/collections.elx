@@ -163,7 +163,7 @@ fn array_boundaries() -> ():
     println(f"nested array: {grid[1][1]} vs {grid_snapshot[1][1]}")
 
     // A zero-length `[T; 0]` array is specified but does not survive C
-    // emission; see known_failures/zero_length_array.elx.
+    // emission; see regressions/zero_length_array.elx.
 
 /// The iterable is evaluated once and copied into hidden loop state, so later
 /// mutation of the source cannot affect the active loop.

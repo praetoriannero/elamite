@@ -17,7 +17,7 @@
 //                          references, raw pointers, or function values."
 //   takes_raw_pointer      same rule.
 //   misplaced_variadic     SPEC 5 requires a variadic to be final; see also
-//                          ../../adversarial/known_failures/non_final_variadic.elx,
+//                          ../../adversarial/regressions/non_final_variadic.elx,
 //                          where the same hole corrupts generated C for
 //                          ordinary functions.
 //   Marker (derive)        SPEC 12.1: "A derive has exactly its one implicit
@@ -27,7 +27,6 @@
 // (`let bad: i32 = "text"`) or call an ordinary runtime function, and neither
 // is diagnosed.
 //
-// Run with: elamc check signature_validation.elx --unstable-macros
 
 macro returns_runtime_type() -> i32:
     return 1

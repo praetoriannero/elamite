@@ -391,7 +391,7 @@ removed.
 | --- | --- | --- | --- |
 | `@exportc("c_name")` gives an ABI-safe module-level function definition an exact unmangled link symbol without creating a separate function kind; any exact ordinary `&fn`/`&unsafe fn` can explicitly become a raw callback pointer | M17 (done) | — | C harness (`a_c_harness_calls_an_exported_elamite_function`), callback run-pass |
 | Foreign code may retain a callback pointer indefinitely; retained managed callback state passes through a raw context pointer backed by an open `ForeignRoot` registration; the callback recovers a reference only within `unsafe:`; the registration must stay open until both callback and context pointer are released per the foreign API's contract | M17 (done) | Boehm GC | integration (`a_foreign_callback_can_use_registered_managed_context`) |
-| Until concurrency is specified, C callback entry is supported only on the OS thread that initialized the runtime; direct/nested and later same-thread callbacks are allowed; foreign-created-thread/concurrent invocation is UB and is not generally compiler-detectable; broader threading is deferred to [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution) | M17 (documented) + I-015 gate | — | integration, doc |
+| C callback entry is supported synchronously on the same registered initializer or Elamite-created thread that entered C; foreign-created-thread and asynchronous foreign entry remain UB and are not generally compiler-detectable | M17 plus Standard-library concurrency | registered-thread runtime | integration/native harness |
 | Recoverable Elamite errors don't cross the ABI automatically (wrapper translates to a status code/out-params); `errno`/foreign error channels are observed only through explicit wrapper ops; a trap during foreign code/callback terminates the process without unwinding through C; foreign unwinding (C++ exceptions, `longjmp`) across an Elamite frame is forbidden and is UB | M17 (done) | trap path | integration/documentation |
 
 ## 11. Conformance example (§11)
@@ -462,26 +462,24 @@ are the outcomes the initial driver must support, independent of spelling:
 | Run conformance fixtures | Select fixtures and target/optimization matrices, compare stable output/status expectations, isolate builds, and retain failure artifacts | M18 (done) |
 | Run package tests | Discover selected-package `test` declarations, check and compile test-only bodies, run each in isolation with deterministic filtering/reporting, and distinguish test failure from command failure | **Package tests, typed traps, and runner** (done) |
 
-## 15. Concurrency: planned, not yet normative
+## 15. Native concurrency (`SPEC.md` §10.4)
 
-`ROADMAP.md` §7 **Standard-library concurrency** records the accepted design.
-Until its **Normative concurrency contract** package makes that contract
-normative, no thread API, channel, synchronization type, transfer capability,
-or broader cross-thread callback rule exists in the language. Concretely:
+The concurrency contract is normative. It reserves no task or async grammar;
+ordinary declarations in `std.thread` and `std.sync` expose the complete
+initial surface.
 
-- No lexical or grammatical form in `SPEC.md` reserves task/async/await
-  syntax. **Standard-library concurrency** deliberately retains that absence
-  and plans ordinary declarations in `std.thread` and `std.sync`.
-- §10.3's callback thread restriction (foreign invocation only on a thread
-  already executing Elamite code) is the *only* concurrency-adjacent rule in
-  the initial language, and it is a restriction, not a capability — see the
-  §10.3 table above.
-- **Normative concurrency contract** owns the normative resolution of
-  [I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution). Later
-  packages in that milestone add structural transfer checking, standard
-  declarations, transfer-copy and thread lowering, native runtime
-  synchronization, collector integration, the restricted registered-thread
-  callback extension, and stress/race testing as one vertical slice.
+| Rule | Pass | Runtime | Tests |
+| --- | --- | --- | --- |
+| `spawn` evaluates one safe zero-argument callable once, transfer-copies its environment, starts eagerly, and reports OS creation failure through `SpawnError` | Standard-library concurrency | pthread-compatible C99 hooks | compile/run/failure harness |
+| Structural `Transfer` admits independently copyable primitives, strings, functions, recursive aggregates, collections, and closures; references, raw pointers, slices, and trait objects are excluded; reviewed synchronized handles preserve identity | types/check | transfer-copy helpers | structural/generic/capture compile-pass/fail |
+| `Thread[R]` is a copyable joinable identity with one native join, independently copied repeated results, a self-join trap, no detach/cancellation, and shutdown waiting | check/lowering/backend | thread registry and result state | lifecycle/trap/shutdown stress |
+| A thread body is a safe function boundary with ordinary `defer`, `Result`, and `!`; any trap, panic, or OOM remains process-fatal | check/control-flow/backend | process trap path | cleanup/result/process tests |
+| Bounded, rendezvous, and unbounded MPMC channels transfer-copy messages, distinguish full/empty/closed states, drain after explicit idempotent closure, and never infer closure from GC reachability | check/lowering/backend | synchronized queues | ordering/closure/contention stress |
+| `Mutex[T]` shares synchronized identity but exposes only independent `read`, `replace`, and locked `update` values, never an escaping protected reference | check/lowering/backend | native mutex | race/reference-escape tests |
+| Atomic bool, i32, and target-width usize cells share identity and use sequentially consistent load/store/exchange/compare-exchange/read-modify-write operations without C11 `_Atomic` output | check/lowering/backend | C99 atomic hooks | x86/x86-64 contention tests |
+| Runtime-created threads register with the collector and retain stacks, environments, synchronized cells, queues, and result state as roots until publication/unregistration | backend/runtime | Boehm thread registration | allocation/collection stress |
+| Synchronous C reentry is valid on the same registered initializer or Elamite-created thread; foreign-created and asynchronous foreign entry remains UB, and traps never unwind through C | FFI/backend/runtime | registered-thread callback boundary | native callback harness |
+| Safe programs are data-race free; scheduling, fairness, completion order, output-call order, and general deadlock detection are unspecified | complete concurrency slice | synchronized output | sanitizer/stress matrix |
 
 ## 16. Demonstration coverage
 

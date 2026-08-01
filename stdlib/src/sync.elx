@@ -1,0 +1,17 @@
+/// A send attempted after channel closure.
+pub enum SendError:
+    Closed
+
+/// The outcome of a nonblocking send that could not complete.
+pub enum TrySendError:
+    Full
+    Closed
+
+/// The outcome of a nonblocking receive that could not complete.
+pub enum TryReceiveError:
+    Empty
+    Closed
+
+// Channel endpoints, mutexes, atomics, and their constructors require native
+// representation and lowering hooks and are installed from the reviewed
+// intrinsic catalog.

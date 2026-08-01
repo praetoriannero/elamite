@@ -1859,6 +1859,10 @@ impl<'a> TypedLowerer<'a> {
                         | StandardCall::StringFrom
                         | StandardCall::IdentityFrom { .. }
                         | StandardCall::ForeignRootRetain { .. }
+                        | StandardCall::ThreadSpawn { .. }
+                        | StandardCall::ChannelCreate { .. }
+                        | StandardCall::MutexNew { .. }
+                        | StandardCall::AtomicNew { .. }
                         | StandardCall::VecNew { .. }
                         | StandardCall::MapNew { .. }
                         | StandardCall::SetNew { .. }

@@ -15,12 +15,13 @@ implementation.
   through a narrow C99 interoperability shim.
 - [`examples/macros`](examples/macros) demonstrates stable function-like
   macros, structural attributes, derives, quotation, and interpolation.
-- [`examples/adversarial`](examples/adversarial) pushes the implemented
-  language to its specified boundaries and records, in
-  [`known_failures`](examples/adversarial/known_failures), the cases where
-  `SPEC.md` and the compiler currently disagree.
-- [`examples/adversarial_macros`](examples/adversarial_macros) does the same
-  for the stable `SPEC.md` §12 compile-time surface and bounded interpreter.
+- [`examples/concurrency`](examples/concurrency) demonstrates native threads,
+  transfer-copy closures, channels, copy-based mutexes, and atomic cells.
+- [`tests/fixtures/regression`](tests/fixtures/regression) holds the two
+  adversarial packages that push the implemented language and the `SPEC.md`
+  §12 compile-time surface to their specified boundaries. They are regression
+  fixtures rather than examples: `cargo test` drives them, and every
+  observation the runtime package prints is a rule from `SPEC.md`.
 - [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
 - [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
   implementation milestone, runtime dependency, and test layer.

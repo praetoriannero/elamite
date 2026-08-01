@@ -140,14 +140,14 @@ stateful callbacks may use a closure or `&Trait`; C callbacks continue to carry
 registered state through a separate raw context pointer, and recursion uses
 named functions.
 
-`ROADMAP.md` **Standard-library concurrency** records the accepted concurrency
-direction. It adds no concurrency syntax: native threads are created through
-`std.thread`, and channels, copy-based mutexes, and sequentially consistent
-atomic cells live in `std.sync`. Do not implement these declarations, the
-structural `Transfer` capability, runtime thread entry, or broader callback
-behavior until the **Normative concurrency contract** package has made the
-complete contract normative. Until then, retain `SPEC.md` §10.3's
-single-runtime-thread callback restriction.
+`SPEC.md` §10.4 owns the normative concurrency contract. It adds no concurrency
+syntax: native threads are created through `std.thread`, and channels,
+copy-based mutexes, and sequentially consistent atomic cells live in
+`std.sync`. Cross-thread ordinary values use structural `Transfer` and an
+independent transfer copy; safe references, raw pointers, slices, and trait
+objects are not transferable. Only reviewed synchronized handles preserve
+shared identity. Retain the registered-thread callback restriction and the
+process-fatal trap contract.
 
 `SPEC.md` §3.1 and §4.1 define local tuple destructuring and positional fields.
 Keep local binding patterns irrefutable and limited to nested tuples,

@@ -1,35 +1,44 @@
-# Adversarial conformance package
+# Adversarial regression package
 
 A single executable package that pushes the implemented parts of Elamite to
 their specified boundaries, plus a directory of minimal reproductions for the
-places where `SPEC.md` and the compiler currently disagree.
+divergences the original audit found between `SPEC.md` and the compiler.
+
+Every divergence this package found has since been resolved, so nothing here
+fails. It is kept as a behavioral lock, not a bug list.
 
 Two halves:
 
-- **`src/`** — a package that builds, runs, and passes its own tests today.
-  Every observation it prints is a rule from `SPEC.md`. If a change to the
-  compiler alters any line of its output, a specified behavior moved.
-- **`known_failures/`** — the original standalone reproductions. Resolved
-  cases remain here as regression fixtures; intentional rejections and known
+- **`src/`** — a package that builds, runs, and passes its own tests. Every
+  observation it prints is a rule from `SPEC.md`. If a change to the compiler
+  alters any line of its output, a specified behavior moved.
+- **`regressions/`** — the original standalone reproductions. Resolved cases
+  remain as regression fixtures; intentional rejections and known
   implementation limitations document their settled contract.
 
-## Running it
+## How it runs
+
+`cargo test` drives this package through [`tests/regression.rs`](../../../regression.rs),
+which pins the full output against `expected.stdout` in both debug and
+release. Nothing here needs to be run by hand, but it can be:
 
 ```sh
-cargo run -- run examples/adversarial            # 411 observations
-cargo run -- test examples/adversarial           # 26 trap and assertion tests
-cargo run -- run examples/adversarial --release
-cargo run -- run examples/adversarial --target=x86
+cargo run -- run tests/fixtures/regression/adversarial            # 411 observations
+cargo run -- test tests/fixtures/regression/adversarial           # 26 trap and assertion tests
+cargo run -- run tests/fixtures/regression/adversarial --release
+cargo run -- run tests/fixtures/regression/adversarial --target=x86
 ```
 
 One line of output is target-dependent by design: `usize bit width` reports 64
-on x86-64 and 32 on x86 (`SPEC.md` 4.1). Map and set iteration order is
-unspecified, so nothing observes it — only order-independent aggregates.
+on x86-64 and 32 on x86 (`SPEC.md` 4.1), so the expectation is stored twice, as
+`expected.stdout` and `expected.x86.stdout`, differing on exactly that line.
+Map and set iteration order is unspecified, so nothing observes it — only
+order-independent aggregates.
 
-Reproduce a divergence with:
+Reproduce a single case with:
 
 ```sh
-cargo run -- build examples/adversarial/known_failures/variant_literal_arm.elx
+cargo run -- build tests/fixtures/regression/adversarial/regressions/variant_literal_arm.elx
 ```
 
 ## What `src/` covers
@@ -55,11 +64,16 @@ cargo run -- build examples/adversarial/known_failures/variant_literal_arm.elx
 
 ## Findings
 
-The compiler defects from this audit are now regression-tested. Findings 1,
-2, 4–12, and 15 cover enum-pattern reachability, primitive trait
+Every compiler defect from this audit is resolved and regression-tested.
+Findings 1, 2, 4–12, and 15 cover enum-pattern reachability, primitive trait
 implementations, shift typing, module `self` paths, transparent collection
 aliases, raw-pointer named fields, unit and trait-object equality, fieldless
 structs, zero-length arrays, static invalid arithmetic, and variadic placement.
+
+Finding 15 (`non_final_variadic.elx`) is the most recent: a misplaced or
+repeated variadic parameter is now rejected by the parser, on ordinary
+functions and compile-time declarations alike. The shipped source witnesses the
+accepted final form; the rejected forms are asserted in `tests/parser.rs`.
 
 The two language questions found by the audit are settled:
 
@@ -75,7 +89,7 @@ lowering remains unavailable.
 ## Compile-time surface
 
 `SPEC.md` §12 and the compile-time half of `++` live in the sibling
-[`examples/adversarial_macros`](../adversarial_macros) package. The surface and
+[`adversarial_macros`](../adversarial_macros) package. The surface and
 bounded interpreter are stable; the package is checked rather than run because
 it is a compile-time fixture. Its resolved findings remain listed there as
 regression evidence.
@@ -124,5 +138,5 @@ argument list.
 - Keep map and set observations order-independent.
 - Do not print a NaN: its sign is left to the C library, which prints `-nan`
   for `0.0 / 0.0` here. Compare instead.
-- `known_failures/` sits outside `src/`, so its files are not discovered as
+- `regressions/` sits outside `src/`, so its files are not discovered as
   package modules and never affect the build.

@@ -43,11 +43,46 @@ pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> Tra
     check_derivations(resolved, typed, &mut output.diagnostics);
     let implementations = collect(resolved, typed);
     for implementation in &implementations {
+        check_unsafe_implementation(resolved, *implementation, &mut output.diagnostics);
         check_conformance(resolved, typed, *implementation, &mut output.diagnostics);
     }
     check_coherence(resolved, typed, &implementations, &mut output.diagnostics);
     output.implementations = implementations;
     output
+}
+
+fn check_unsafe_implementation(
+    resolved: &ResolvedProgram,
+    implementation: TraitImplementation,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let block = &resolved.impls[implementation.implementation.index()];
+    let marked_unsafe = crate::syntax::direct_tokens(&block.syntax)
+        .into_iter()
+        .any(|token| {
+            matches!(
+                token.kind,
+                crate::lexer::TokenKind::Keyword(crate::syntax::Keyword::Unsafe)
+            )
+        });
+    let name = declaration_name(resolved, implementation.trait_declaration);
+    if name == "Transfer" && !marked_unsafe {
+        diagnostics.push(
+            Diagnostic::new(
+                Category::TypeSystem,
+                "a manual `Transfer` implementation must be declared `unsafe impl`",
+            )
+            .with_primary(implementation.span),
+        );
+    } else if marked_unsafe && name != "Transfer" {
+        diagnostics.push(
+            Diagnostic::new(
+                Category::TypeSystem,
+                "`unsafe impl` is reserved for the `Transfer` capability",
+            )
+            .with_primary(implementation.span),
+        );
+    }
 }
 
 fn check_derivations(
@@ -1210,7 +1245,12 @@ fn provides_inner(
             visiting,
         ),
         TypeKind::Reference { target, .. } => {
-            matches!(trait_name, "PartialEq" | "Eq" | "Hash")
+            (trait_name == "Transfer"
+                && matches!(
+                    typed.types.kind(typed.types.resolve_inference(*target)),
+                    TypeKind::Function { .. }
+                ))
+                || matches!(trait_name, "PartialEq" | "Eq" | "Hash")
                 || (trait_name == "Callable"
                     && matches!(
                         typed.types.kind(typed.types.resolve_inference(*target)),
@@ -1245,8 +1285,22 @@ fn provides_inner(
         TypeKind::RawPointer { .. } => {
             matches!(trait_name, "Default" | "PartialEq" | "Eq" | "Hash")
         }
-        TypeKind::Function { .. } => matches!(trait_name, "PartialEq" | "Eq"),
-        TypeKind::Closure { .. } => trait_name == "Callable",
+        TypeKind::Function { .. } => matches!(trait_name, "PartialEq" | "Eq" | "Transfer"),
+        TypeKind::Closure { captures, .. } => {
+            trait_name == "Callable"
+                || (trait_name == "Transfer"
+                    && captures.iter().all(|capture| {
+                        provides_inner(
+                            resolved,
+                            typed,
+                            *capture,
+                            trait_name,
+                            substitution,
+                            assume_parameters,
+                            visiting,
+                        )
+                    }))
+        }
         TypeKind::Builtin { builtin, arguments } => {
             let name = resolved.builtin_name(*builtin);
             match (name, trait_name) {
@@ -1262,6 +1316,31 @@ fn provides_inner(
                         visiting,
                     )
                 }),
+                ("Vec" | "Map" | "Set", "Transfer") => arguments.iter().all(|argument| {
+                    provides_inner(
+                        resolved,
+                        typed,
+                        *argument,
+                        trait_name,
+                        substitution,
+                        assume_parameters,
+                        visiting,
+                    )
+                }),
+                ("Thread" | "Sender" | "Receiver" | "Mutex", "Transfer") => {
+                    arguments.iter().all(|argument| {
+                        provides_inner(
+                            resolved,
+                            typed,
+                            *argument,
+                            trait_name,
+                            substitution,
+                            assume_parameters,
+                            visiting,
+                        )
+                    })
+                }
+                ("AtomicBool" | "AtomicI32" | "AtomicUsize", "Transfer") => true,
                 ("Vec", "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash") => {
                     arguments.first().is_some_and(|argument| {
                         provides_inner(
@@ -1328,6 +1407,7 @@ fn provides_inner(
             assume_parameters,
             visiting,
         ),
+        TypeKind::Never if trait_name == "Transfer" => true,
         TypeKind::Never
         | TypeKind::GenericParameter(_)
         | TypeKind::Alias { .. }
@@ -1353,6 +1433,7 @@ fn provides_inner(
 
 fn primitive_provides(primitive: PrimitiveType, trait_name: &str) -> bool {
     match trait_name {
+        "Transfer" => true,
         "Default" | "PartialEq" | "PartialOrd" | "Display" => true,
         "Eq" | "Ord" | "Hash" => !primitive.is_float(),
         "StableHash" => !primitive.is_float() && primitive != PrimitiveType::String,
@@ -1375,6 +1456,33 @@ fn nominal_provides(
     // field obligations a derivation would impose (`SPEC.md` 4.3).
     if intrinsic_derivation(resolved, declaration, trait_name) {
         return true;
+    }
+    if trait_name == "Transfer" {
+        let mut substitution = outer_substitution.clone();
+        for (parameter, argument) in resolved.declarations[declaration.index()]
+            .generic_parameters
+            .iter()
+            .zip(arguments)
+        {
+            substitution.insert(*parameter, *argument);
+        }
+        return resolved
+            .fields
+            .iter()
+            .filter(|field| field.parent_declaration == declaration)
+            .all(|field| {
+                typed.field_types.get(&field.id).is_some_and(|field_type| {
+                    provides_inner(
+                        resolved,
+                        typed,
+                        *field_type,
+                        trait_name,
+                        &substitution,
+                        assume_parameters,
+                        visiting,
+                    )
+                })
+            });
     }
     let derivation = if trait_name == "StableHash" {
         derives(resolved, declaration, "Eq") && derives(resolved, declaration, "Hash")

@@ -19,6 +19,8 @@ pub enum StandardModule {
     Io,
     Ffi,
     Testing,
+    Thread,
+    Sync,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +108,16 @@ fn parse_package_inner(
                 ParsedUnitIdentity::Standard(StandardModule::Testing),
                 PathBuf::from("<std>/testing.elx"),
                 crate::standard::TESTING_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Thread),
+                PathBuf::from("<std>/thread.elx"),
+                crate::standard::THREAD_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Sync),
+                PathBuf::from("<std>/sync.elx"),
+                crate::standard::SYNC_SOURCE,
             ),
         ] {
             let file = sources.add_text(path.clone(), source.to_string());

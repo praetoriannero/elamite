@@ -126,7 +126,7 @@ fn callable_contracts() -> ():
     // A vector of erased callables holds several distinct closure types.
     // A named `&fn` reference satisfies a `Callable` *bound* (above) but is
     // not itself convertible to `&Callable`; see
-    // known_failures/callable_erasure_of_function_reference.elx.
+    // regressions/callable_erasure_of_function_reference.elx.
     let doubler = fn(value: i32) -> i32:
         return value * 2
     let callables = @vec[

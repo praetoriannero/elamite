@@ -8,12 +8,18 @@ impl<'a> CEmitter<'a> {
             self.output.push_str("int main(void) {\n");
             if self.program.requires_managed_memory {
                 self.emit_managed_operation(ManagedMemoryOperation::Initialize);
+                if self.uses_thread_lifecycle() {
+                    self.output.push_str("    GC_allow_register_threads();\n");
+                }
             }
             self.output
                 .push_str("    const char *selected = getenv(\"ELAMITE_TEST\");\n");
             if entries.is_empty() {
-                self.output
-                    .push_str("    (void)selected;\n    return 0;\n}\n");
+                self.output.push_str("    (void)selected;\n");
+                if self.uses_thread_lifecycle() {
+                    self.output.push_str("    el_thread_shutdown_all();\n");
+                }
+                self.output.push_str("    return 0;\n}\n");
                 return;
             }
             self.output
@@ -27,8 +33,13 @@ impl<'a> CEmitter<'a> {
                 let symbol = self.function_symbol(&instance);
                 let _ = writeln!(
                     self.output,
-                    "    if (strcmp(selected, {}) == 0) {{ (void){symbol}(); return 0; }}",
-                    c_string(name)
+                    "    if (strcmp(selected, {}) == 0) {{ (void){symbol}();{} return 0; }}",
+                    c_string(name),
+                    if self.uses_thread_lifecycle() {
+                        " el_thread_shutdown_all();"
+                    } else {
+                        ""
+                    }
                 );
             }
             self.output.push_str("    return 2;\n}\n");
@@ -98,7 +109,14 @@ impl<'a> CEmitter<'a> {
         self.output.push_str("int main(void) {\n");
         if self.program.requires_managed_memory {
             self.emit_managed_operation(ManagedMemoryOperation::Initialize);
+            if self.uses_thread_lifecycle() {
+                self.output.push_str("    GC_allow_register_threads();\n");
+            }
         }
-        let _ = writeln!(self.output, "    (void){symbol}();\n    return 0;\n}}");
+        let _ = writeln!(self.output, "    (void){symbol}();");
+        if self.uses_thread_lifecycle() {
+            self.output.push_str("    el_thread_shutdown_all();\n");
+        }
+        self.output.push_str("    return 0;\n}\n");
     }
 }

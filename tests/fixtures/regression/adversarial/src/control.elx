@@ -157,7 +157,7 @@ fn execute(command: Command) -> str:
             return "go"
         // A literal sub-pattern inside an enum variant wrongly marks every
         // later arm on that variant unreachable, so the distinction is drawn
-        // with a guard; see known_failures/variant_literal_arm.elx.
+        // with a guard; see regressions/variant_literal_arm.elx.
         Command.Turn { degrees, sharp } if sharp:
             return "sharp turn"
         Command.Turn { degrees, sharp }:

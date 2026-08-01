@@ -6,7 +6,7 @@
 /// increment operator.
 ///
 /// The compile-time AST list types that `SPEC.md` 7 also admits are exercised
-/// in the sibling `examples/adversarial_macros` package, because they exist
+/// in the sibling `adversarial_macros` package, because they exist
 /// only inside a compile-time declaration body.
 
 struct Tag(PartialEq):

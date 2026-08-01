@@ -11,7 +11,7 @@ struct Cell:
     /// borrow, cast, downgrade, dereference, or null check. Reading the
     /// pointee needs an explicit conversion inside `unsafe:`; the
     /// `self.value` form checks but does not build, per
-    /// known_failures/raw_pointer_field_access.elx.
+    /// regressions/raw_pointer_field_access.elx.
     fn read_through_pointer(self: *Self) -> i32:
         unsafe:
             let target: &Self = self as &Self

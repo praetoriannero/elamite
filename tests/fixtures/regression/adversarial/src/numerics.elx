@@ -104,7 +104,7 @@ fn unsigned_boundary() -> ():
 
 /// Shift counts are checked against the left operand's width. The operand
 /// *typing* rule is not the specified one; see
-/// known_failures/shift_operand_typing.elx.
+/// regressions/shift_operand_typing.elx.
 fn shift_boundary() -> ():
     let one: i32 = 1
     println(f"widest legal shift: {one.wrapping_shl(31)}")
@@ -134,7 +134,7 @@ fn shift_boundary() -> ():
 /// Explicit conversion never happens implicitly, and the checked form reports
 /// instead of trapping. Statically evident invalid arithmetic is specified to
 /// be a compile error but is not; see
-/// known_failures/static_arithmetic_evidence.elx.
+/// regressions/static_arithmetic_evidence.elx.
 fn conversions() -> ():
     let large: i32 = 300
 

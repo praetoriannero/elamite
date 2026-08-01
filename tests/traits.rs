@@ -825,3 +825,74 @@ fn main() -> ():
         "cannot be derived",
     );
 }
+
+#[test]
+fn transfer_is_structural_and_excludes_aliasing_types() {
+    assert_clean(
+        r#"
+struct Packet[T]:
+    value: T
+    labels: Vec[String]
+
+fn cross[T: Transfer](value: T) -> ():
+    pass
+
+fn callback() -> ():
+    pass
+
+fn main() -> ():
+    let packet = Packet[i32] { value: 7, labels: @vec["ok"] }
+    cross(packet)
+    let function: &fn() -> () = callback
+    cross(function)
+"#,
+    );
+
+    assert_reports(
+        r#"
+fn cross[T: Transfer](value: T) -> ():
+    pass
+
+fn main() -> ():
+    let value = 7
+    cross(&value)
+"#,
+        "does not satisfy required `Transfer` capability",
+    );
+}
+
+#[test]
+fn manual_transfer_opt_in_requires_unsafe_impl() {
+    assert_clean(
+        r#"
+struct SharedForeign:
+    pointer: *var i32
+
+unsafe impl Transfer for SharedForeign:
+    pass
+
+fn cross[T: Transfer](value: T) -> ():
+    pass
+
+fn accept(value: SharedForeign) -> ():
+    cross(value)
+
+fn main() -> ():
+    pass
+"#,
+    );
+
+    assert_reports(
+        r#"
+struct SharedForeign:
+    pointer: *var i32
+
+impl Transfer for SharedForeign:
+    pass
+
+fn main() -> ():
+    pass
+"#,
+        "must be declared `unsafe impl`",
+    );
+}

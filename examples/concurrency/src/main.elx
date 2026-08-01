@@ -1,0 +1,32 @@
+fn increment(value: i32) -> i32:
+    return value + 1
+
+fn main() -> ():
+    let (sender, receiver) = std.sync.unbounded_channel[i32]()
+    let worker = fn[sender]() -> i32:
+        let _ = sender.send(41)
+        sender.close()
+        return 42
+    let started = std.thread.spawn(worker)
+    match receiver.receive():
+        Option.Some(value):
+            println(value)
+        Option.None:
+            println("channel closed")
+    match started:
+        Result.Ok(thread):
+            let copy = thread
+            println(thread.join())
+            println(copy.join())
+            println(copy.is_finished())
+        Result.Err(_):
+            println("spawn failed")
+
+    let mutex = std.sync.Mutex[i32].new(10)
+    println(mutex.update(increment))
+    println(mutex.replace(20))
+    println(mutex.read())
+
+    let atomic = std.sync.AtomicI32.new(5)
+    println(atomic.fetch_add(3))
+    println(atomic.load())

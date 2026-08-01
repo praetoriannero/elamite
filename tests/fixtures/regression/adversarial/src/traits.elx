@@ -146,7 +146,7 @@ fn static_dispatch() -> ():
 
 /// Trait-object references are specified to compare concrete target
 /// identity, but `==` on a trait object does not survive C emission; see
-/// known_failures/trait_object_equality.elx. Concrete safe-reference identity
+/// regressions/trait_object_equality.elx. Concrete safe-reference identity
 /// is compared here instead.
 fn object_identity() -> ():
     let dog = Dog { name: String.from("Rex") }

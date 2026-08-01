@@ -20,7 +20,6 @@
 // so this is on plan. It is recorded because SPEC 4.3 presents the attached
 // spelling as the general one while only the compact spelling works.
 //
-// Run with: elamc check attached_derive_form.elx --unstable-macros
 
 @derive(Default)
 struct Point:

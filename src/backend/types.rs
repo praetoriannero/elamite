@@ -138,6 +138,16 @@ impl<'a> CEmitter<'a> {
                             "typedef struct {name} {{ void *target; }} {name};\n"
                         );
                     }
+                    ("Sender" | "Receiver", [element]) => {
+                        let _ = writeln!(
+                            self.output,
+                            "typedef struct el_channel_t{}_data *{name};\n",
+                            element.index()
+                        );
+                    }
+                    ("Thread" | "Mutex" | "AtomicBool" | "AtomicI32" | "AtomicUsize", _) => {
+                        let _ = writeln!(self.output, "typedef struct {name}_data *{name};\n");
+                    }
                     _ => {}
                 }
             }
@@ -614,7 +624,11 @@ impl<'a> CEmitter<'a> {
             TypeKind::Builtin { builtin, arguments }
                 if matches!(
                     (self.resolved.builtin_name(*builtin), arguments.len()),
-                    ("Vec" | "Set" | "Identity", 1) | ("Map", 2) | ("Formatter", 0)
+                    (
+                        "Vec" | "Set" | "Identity" | "Thread" | "Sender" | "Receiver" | "Mutex",
+                        1
+                    ) | ("Map", 2)
+                        | ("Formatter" | "AtomicBool" | "AtomicI32" | "AtomicUsize", 0)
                 ) =>
             {
                 collection_type_name(ty)

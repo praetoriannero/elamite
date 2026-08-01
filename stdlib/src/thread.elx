@@ -1,0 +1,6 @@
+/// A recoverable operating-system thread creation failure.
+pub enum SpawnError:
+    Unavailable
+
+// `Thread` and `spawn` require native representation and lowering hooks and
+// are installed from the reviewed intrinsic catalog.

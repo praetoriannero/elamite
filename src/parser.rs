@@ -474,6 +474,9 @@ impl<'a> Parser<'a> {
     fn parse_impl(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = self.take_item_prefix();
+        if self.at_keyword(Keyword::Unsafe) {
+            children.push(self.bump());
+        }
         self.expect_keyword(Keyword::Impl, &mut children, "expected `impl`");
         if self.at_simple(&TokenKind::LBracket) {
             children.push(node(self.parse_generic_parameters()));

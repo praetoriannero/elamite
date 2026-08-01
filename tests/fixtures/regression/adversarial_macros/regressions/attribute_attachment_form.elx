@@ -17,7 +17,6 @@
 // misattributing a declared user attribute to the compiler-defined set is the
 // reportable part.
 //
-// Run with: elamc check attribute_attachment_form.elx --unstable-macros
 
 attr tag(target: std.ast.StructDefinition) -> std.ast.StructDefinition:
     return target

@@ -212,9 +212,7 @@ pub enum Instruction {
         value: TemporaryId,
         ty: TypeId,
         span: Span,
-    },
-    PrintNewline {
-        span: Span,
+        newline: bool,
     },
     CompleteExpectation {
         span: Span,
@@ -237,6 +235,10 @@ pub enum NeverCall {
         reason: TemporaryId,
         reason_type: TypeId,
         trait_declaration: DeclarationId,
+    },
+    Standard {
+        operation: StandardCall,
+        arguments: Vec<TemporaryId>,
     },
     Direct {
         instance: FunctionInstance,

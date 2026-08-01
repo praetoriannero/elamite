@@ -79,6 +79,101 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         StandardCall::ForeignRootRetain { handle, .. } => ("foreign_root_retain", handle),
         StandardCall::ForeignRootPointer { handle, .. } => ("foreign_root_pointer", handle),
         StandardCall::ForeignRootClose { handle } => ("foreign_root_close", handle),
+        StandardCall::ThreadSpawn {
+            thread,
+            callable,
+            entry,
+            ..
+        } => {
+            return format!(
+                "el_thread_spawn_t{}_t{}_d{}",
+                thread.index(),
+                callable.index(),
+                entry.index()
+            );
+        }
+        StandardCall::ThreadJoin { thread, .. } => {
+            return format!("el_thread_join_t{}", thread.index());
+        }
+        StandardCall::ThreadIsFinished { thread } => {
+            return format!("el_thread_is_finished_t{}", thread.index());
+        }
+        StandardCall::ChannelCreate {
+            element, bounded, ..
+        } => {
+            return format!(
+                "el_channel_{}_t{}",
+                if bounded { "bounded" } else { "unbounded" },
+                element.index()
+            );
+        }
+        StandardCall::ChannelSend {
+            sender,
+            nonblocking,
+            ..
+        } => {
+            return format!(
+                "el_channel_{}_t{}",
+                if nonblocking { "try_send" } else { "send" },
+                sender.index()
+            );
+        }
+        StandardCall::ChannelReceive {
+            receiver,
+            nonblocking,
+            ..
+        } => {
+            return format!(
+                "el_channel_{}_t{}",
+                if nonblocking {
+                    "try_receive"
+                } else {
+                    "receive"
+                },
+                receiver.index()
+            );
+        }
+        StandardCall::ChannelClose { handle, sender } => {
+            return format!(
+                "el_channel_close_{}_t{}",
+                if sender { "sender" } else { "receiver" },
+                handle.index()
+            );
+        }
+        StandardCall::MutexNew { mutex, .. } => return format!("el_mutex_new_t{}", mutex.index()),
+        StandardCall::MutexRead { mutex, .. } => {
+            return format!("el_mutex_read_t{}", mutex.index());
+        }
+        StandardCall::MutexReplace { mutex, .. } => {
+            return format!("el_mutex_replace_t{}", mutex.index());
+        }
+        StandardCall::MutexUpdate {
+            mutex, callable, ..
+        } => return format!("el_mutex_update_t{}_t{}", mutex.index(), callable.index()),
+        StandardCall::AtomicNew { atomic, .. } => {
+            return format!("el_atomic_new_t{}", atomic.index());
+        }
+        StandardCall::AtomicLoad { atomic, .. } => {
+            return format!("el_atomic_load_t{}", atomic.index());
+        }
+        StandardCall::AtomicStore { atomic, .. } => {
+            return format!("el_atomic_store_t{}", atomic.index());
+        }
+        StandardCall::AtomicExchange { atomic, .. } => {
+            return format!("el_atomic_exchange_t{}", atomic.index());
+        }
+        StandardCall::AtomicCompareExchange { atomic, .. } => {
+            return format!("el_atomic_compare_exchange_t{}", atomic.index());
+        }
+        StandardCall::AtomicFetchAdd {
+            atomic, subtract, ..
+        } => {
+            return format!(
+                "el_atomic_fetch_{}_t{}",
+                if subtract { "sub" } else { "add" },
+                atomic.index()
+            );
+        }
         StandardCall::FormatterWrite { formatter } => ("formatter_write", formatter),
         ArrayLen { collection } => ("array_len", collection),
         ArrayGet { collection } => ("array_get", collection),

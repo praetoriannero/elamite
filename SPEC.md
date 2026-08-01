@@ -1961,13 +1961,13 @@ responsible for recovering a reference only within an `unsafe:` block, and the
 registration must remain open until both callback and context pointer have
 been released under the foreign API's contract.
 
-Until concurrency is specified, C may invoke an Elamite callback only on the OS
-thread that initialized the Elamite runtime. Direct and nested reentry, and
-later calls such as process-exit callbacks on that same thread, are allowed.
-Invocation on a foreign-created thread or concurrently with Elamite execution
-is undefined behavior; this initial restriction is a foreign contract and is
-not generally detectable by the compiler. Broader callback threading follows
-[I-015](ISSUES.md#i-015-concurrency-and-asynchronous-execution).
+C may invoke an Elamite callback synchronously on the same registered runtime
+thread that entered C. This includes the initializer thread and any
+Elamite-created thread. Direct and nested reentry and later same-thread calls
+are allowed. A foreign-created thread is not registered and cannot enter
+Elamite; asynchronous or concurrent callbacks originating on such a thread are
+undefined behavior. This restriction is a foreign contract and is not
+generally detectable by the compiler.
 
 Recoverable Elamite errors do not cross the ABI automatically; a wrapper must
 translate them to an ABI-safe result such as a status code and out-parameters.
@@ -1977,6 +1977,103 @@ Elamite callback terminates the process and never unwinds through C frames.
 C++ exceptions, `longjmp`, or any other foreign unwinding across an Elamite
 frame are forbidden and cause undefined behavior. Foreign code must catch or
 contain them and translate them before returning through the C boundary.
+
+### 10.4 Native threads, transfer, and synchronization
+
+Elamite exposes native parallelism through ordinary declarations in
+`std.thread` and `std.sync`. It adds no thread, task, `concurrent`, `async`, or
+`await` grammar. `std.thread.spawn` accepts one safe zero-argument callable,
+evaluates it exactly once, makes a transfer copy of its environment, starts one
+native thread eagerly, and returns
+`Result[std.thread.Thread[R], std.thread.SpawnError]`. Operating-system thread
+creation failure is recoverable; allocation failure retains the process-fatal
+out-of-memory behavior.
+
+A spawned callable and its result must satisfy the compiler-recognized
+structural `Transfer` capability. `Transfer` means that an independent logical
+copy may be used on another thread while the source remains usable. Primitive
+values, strings, function references, and ordinary tuples, arrays, structs,
+enums, closures, and collections satisfy `Transfer` exactly when every
+contained value does. A generic value is transferable only under a matching
+`Transfer` bound. Safe references, mutable references, raw pointers, mutable
+raw pointers, slices, and trait-object references do not satisfy `Transfer`.
+Concurrency-aware standard handles have explicit compiler-reviewed
+`Transfer` behavior. A foreign wrapper may opt in only with an `unsafe impl
+Transfer`; its author guarantees the validity, lifetime, and synchronization
+of every shared address reachable through its copies.
+
+A transfer copy recursively detaches ordinary owned backing storage before the
+destination thread may observe it. Copy-on-write storage may remain physically
+shared only when its reference counts, reads, and detach-on-write operations
+are thread-safe. Approved synchronization handles are the deliberate
+exception: copying a thread, channel endpoint, mutex, or atomic handle
+preserves its synchronized runtime identity.
+
+`std.thread.Thread[R]` is a copyable identity handle. Every copy names the same
+native thread and cached result. The runtime performs the operating-system join
+at most once, and each successful `join()` returns an independent transfer copy
+of the cached `R`. Joining the current thread traps. Cyclic joins may deadlock
+and need not be detected. A thread handle is transferable exactly when `R` is
+transferable. Threads are joinable and never implicitly detached; losing every
+source handle neither stops nor detaches a thread. After the program entry
+function returns normally and its deferred cleanup completes, runtime shutdown
+waits for every remaining Elamite-created thread. There is no initial
+cancellation, interruption, or detach operation.
+
+A thread body is a safe function boundary. Its `defer` registrations run on
+every ordinary exit, including postfix `?`. Returning `Result[T, E]` produces
+the ordinary value `Thread[Result[T, E]]`; it is not a thread-failure channel.
+A runtime trap, `std.panic`, or out-of-memory failure on any thread terminates
+the complete process and is never converted to a join result or unwound through
+another thread or C frame.
+
+`std.sync.channel[T](capacity: usize)` creates a bounded multi-producer,
+multi-consumer channel and returns `(Sender[T], Receiver[T])`. Capacity zero is
+a rendezvous channel. `std.sync.unbounded_channel[T]()` creates an unbounded
+channel. Sending evaluates its argument once, makes a transfer copy, and
+reports closure recoverably. Blocking receive returns `Option[T]`, with `None`
+only after closure and draining. Nonblocking operations distinguish full,
+empty, and closed states. Copies of an endpoint share synchronized identity.
+Closure is explicit and idempotent; garbage collection or loss of the last
+visible endpoint never closes a channel.
+
+`std.sync.Mutex[T]` is a copyable synchronized identity handle containing a
+transferable value. It provides copy-based `new`, `read`, `replace`, and atomic
+`update` operations. No operation exposes `&T`, `&var T`, or a guard containing
+one, so a reference into protected storage cannot escape after unlocking. An
+update callable receives an independent `T` and returns its replacement while
+the mutex remains locked. Recursive locking and general lock cycles may
+deadlock. Mutex poisoning is unnecessary because an unrecoverable thread
+failure terminates the process.
+
+`std.sync.AtomicBool`, `std.sync.AtomicI32`, and `std.sync.AtomicUsize` are
+copyable handles to shared atomic cells rather than independent scalar values.
+They provide load, store, exchange, compare-exchange, and the applicable
+integer read-modify-write operations. Spawn, completion, join, channel, mutex,
+and atomic operations are sequentially consistent and establish the documented
+publication and observation edges. Weaker memory-ordering arguments are not
+exposed. The C99 backend implements these operations through runtime/compiler
+hooks rather than C11 `_Atomic`, including target-width `usize` behavior on
+x86.
+
+Safe Elamite programs are data-race free. Scheduling, fairness, relative
+completion, and cross-thread output-call order are unspecified. Each complete
+standard-output call is internally synchronized so concurrent calls cannot
+corrupt one another. Blocking synchronization may deadlock; self-join is the
+only initially required deadlock trap. Unsynchronized concurrent access
+constructed through unsafe code or FFI is undefined behavior.
+
+Every runtime-created thread registers with the garbage collector before it
+executes Elamite code. Its stack, transfer environment, synchronized queues and
+cells, and unpublished or published result remain visible roots. It unregisters
+only after publishing its result. Completed thread state becomes reclaimable
+after all managed roots to its handles and result disappear.
+
+Cooperative tasks, executors, futures, `async`/`await`, detached execution,
+cancellation, interruption, timeouts, thread-local storage, relaxed atomics,
+scoped reference transfer, guards exposing protected references, parallel
+iterators, fairness guarantees, general deadlock detection, and foreign-thread
+attachment are outside this contract.
 
 ## 11. Conformance example
 

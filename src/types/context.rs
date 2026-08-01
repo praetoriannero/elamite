@@ -983,7 +983,20 @@ pub(crate) fn primitive_from_name(name: &str) -> Option<PrimitiveType> {
 pub(super) fn builtin_has_layout(name: &str) -> bool {
     matches!(
         name,
-        "Vec" | "Map" | "Set" | "Formatter" | "Identity" | "ForeignRoot" | "ForeignRootMut"
+        "Vec"
+            | "Map"
+            | "Set"
+            | "Formatter"
+            | "Identity"
+            | "ForeignRoot"
+            | "ForeignRootMut"
+            | "Thread"
+            | "Sender"
+            | "Receiver"
+            | "Mutex"
+            | "AtomicBool"
+            | "AtomicI32"
+            | "AtomicUsize"
     )
 }
 

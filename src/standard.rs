@@ -16,6 +16,8 @@ pub const ROOT_SOURCE: &str = include_str!("../stdlib/src/lib.elx");
 pub const IO_SOURCE: &str = include_str!("../stdlib/src/io.elx");
 pub const FFI_SOURCE: &str = include_str!("../stdlib/src/ffi.elx");
 pub const TESTING_SOURCE: &str = include_str!("../stdlib/src/testing.elx");
+pub const THREAD_SOURCE: &str = include_str!("../stdlib/src/thread.elx");
+pub const SYNC_SOURCE: &str = include_str!("../stdlib/src/sync.elx");
 
 /// Exact source-backed public declarations shipped by the compiler.
 pub const SOURCE_DECLARATIONS: &[&str] = &[
@@ -26,11 +28,16 @@ pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.panic",
     "std.trap",
     "std.Result",
+    "std.Transfer",
     "std.io.IoError",
     "std.testing.RuntimeTrap",
     "std.testing.BuiltinTrap",
     "std.testing.assert",
     "std.testing.fail",
+    "std.thread.SpawnError",
+    "std.sync.SendError",
+    "std.sync.TryReceiveError",
+    "std.sync.TrySendError",
 ];
 
 /// Exact compiler-known entity inventory.
@@ -178,6 +185,46 @@ pub const INTRINSICS: &[Intrinsic] = &[
     Intrinsic {
         path: "std.ffi.CVoid",
         reason: "opaque C void correspondence",
+    },
+    Intrinsic {
+        path: "std.thread.Thread",
+        reason: "native thread identity and cached-result representation",
+    },
+    Intrinsic {
+        path: "std.thread.spawn",
+        reason: "native thread creation and callable transfer lowering",
+    },
+    Intrinsic {
+        path: "std.sync.Sender",
+        reason: "synchronized channel endpoint representation",
+    },
+    Intrinsic {
+        path: "std.sync.Receiver",
+        reason: "synchronized channel endpoint representation",
+    },
+    Intrinsic {
+        path: "std.sync.Mutex",
+        reason: "native synchronized shared-cell representation",
+    },
+    Intrinsic {
+        path: "std.sync.AtomicBool",
+        reason: "C99 sequentially consistent atomic-cell hook",
+    },
+    Intrinsic {
+        path: "std.sync.AtomicI32",
+        reason: "C99 sequentially consistent atomic-cell hook",
+    },
+    Intrinsic {
+        path: "std.sync.AtomicUsize",
+        reason: "target-width C99 sequentially consistent atomic-cell hook",
+    },
+    Intrinsic {
+        path: "std.sync.channel",
+        reason: "bounded native channel construction",
+    },
+    Intrinsic {
+        path: "std.sync.unbounded_channel",
+        reason: "unbounded native channel construction",
     },
 ];
 

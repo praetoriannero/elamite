@@ -1,7 +1,7 @@
 /// # Typed runtime traps and package tests (`SPEC.md` 8.1)
 ///
 /// Every case below is the trapping partner of a defined-behavior case in
-/// another module. Run them with `elamc test examples/adversarial`.
+/// another module. Run them with `elamc test tests/fixtures/regression/adversarial`.
 
 use std.testing
 use std.testing.BuiltinTrap

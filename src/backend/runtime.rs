@@ -3,6 +3,92 @@
 use super::*;
 
 impl<'a> CEmitter<'a> {
+    pub(super) fn uses_synchronized_output(&self) -> bool {
+        self.uses_native_threads()
+            && self.program.functions.iter().any(|function| {
+                function.blocks.iter().any(|block| {
+                    block
+                        .instructions
+                        .iter()
+                        .any(|instruction| matches!(instruction, Instruction::PrintValue { .. }))
+                })
+            })
+    }
+
+    pub(super) fn uses_thread_lifecycle(&self) -> bool {
+        self.program.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::StandardCall {
+                                operation: StandardCall::ThreadSpawn { .. }
+                                    | StandardCall::ThreadJoin { .. }
+                                    | StandardCall::ThreadIsFinished { .. },
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                }) || matches!(
+                    block.terminator,
+                    Terminator::NeverCall {
+                        call: NeverCall::Standard {
+                            operation: StandardCall::ThreadJoin { .. },
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+    }
+
+    pub(super) fn uses_native_threads(&self) -> bool {
+        self.program.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::StandardCall {
+                                operation: StandardCall::ThreadSpawn { .. }
+                                    | StandardCall::ThreadJoin { .. }
+                                    | StandardCall::ThreadIsFinished { .. }
+                                    | StandardCall::ChannelCreate { .. }
+                                    | StandardCall::ChannelSend { .. }
+                                    | StandardCall::ChannelReceive { .. }
+                                    | StandardCall::ChannelClose { .. }
+                                    | StandardCall::MutexNew { .. }
+                                    | StandardCall::MutexRead { .. }
+                                    | StandardCall::MutexReplace { .. }
+                                    | StandardCall::MutexUpdate { .. }
+                                    | StandardCall::AtomicNew { .. }
+                                    | StandardCall::AtomicLoad { .. }
+                                    | StandardCall::AtomicStore { .. }
+                                    | StandardCall::AtomicExchange { .. }
+                                    | StandardCall::AtomicCompareExchange { .. }
+                                    | StandardCall::AtomicFetchAdd { .. },
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                }) || matches!(
+                    block.terminator,
+                    Terminator::NeverCall {
+                        call: NeverCall::Standard {
+                            operation: StandardCall::ThreadJoin { .. },
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+    }
+
     pub(super) fn emit_foreign_root_runtime(&mut self, used_types: &BTreeSet<TypeId>) {
         let needed = used_types.iter().any(|ty| {
             matches!(
@@ -380,6 +466,7 @@ impl<'a> CEmitter<'a> {
              #include <limits.h>\n\
              #include <float.h>\n\
              #include <math.h>\n\
+             #include <pthread.h>\n\
              #include <stdio.h>\n\
              #include <stdlib.h>\n\n\
              #include <string.h>\n\
@@ -606,6 +693,10 @@ impl<'a> CEmitter<'a> {
                  \x20\x20\x20\x20el_typed_trap(EL_BUILTIN_TRAP_TYPE, code, message, path, line, column);\n\
                  }\n\n",
             );
+        }
+        if self.uses_synchronized_output() {
+            self.output
+                .push_str("static pthread_mutex_t el_stdout_lock = PTHREAD_MUTEX_INITIALIZER;\n\n");
         }
         self.emit_checked_integer_helpers();
     }
@@ -943,6 +1034,17 @@ impl<'a> CEmitter<'a> {
                             .or_insert((function.temporary_types[destination.index()], *span));
                     }
                 }
+                if let Terminator::NeverCall {
+                    call: NeverCall::Standard { operation, .. },
+                    span,
+                } = &block.terminator
+                {
+                    let result = match operation {
+                        StandardCall::ThreadJoin { return_type, .. } => *return_type,
+                        _ => continue,
+                    };
+                    calls.entry(*operation).or_insert((result, *span));
+                }
             }
         }
         calls
@@ -1109,11 +1211,61 @@ impl<'a> CEmitter<'a> {
         }
     }
 
+    fn enum_unit_variant_expression(&mut self, ty: TypeId, variant: VariantId) -> String {
+        let c_type = self
+            .c_type(ty, None)
+            .unwrap_or_else(|| "el_unit".to_string());
+        format!("({c_type}){{ .tag = UINT32_C({}) }}", variant.index())
+    }
+
+    fn result_expression(
+        &mut self,
+        result: TypeId,
+        variant_name: &str,
+        value: (&str, TypeId),
+    ) -> String {
+        let Some(enumeration) = self.enums.get(&result).copied() else {
+            return zero_value(result, &self.typed.types);
+        };
+        let Some(variant_id) = self.resolved.standard_variant("Result", variant_name) else {
+            return zero_value(result, &self.typed.types);
+        };
+        let Some(variant) = enumeration
+            .variants
+            .iter()
+            .find(|variant| variant.id == variant_id)
+        else {
+            return zero_value(result, &self.typed.types);
+        };
+        let Some((field, _, _)) = variant.fields.first() else {
+            return zero_value(result, &self.typed.types);
+        };
+        let c_type = self
+            .c_type(result, None)
+            .unwrap_or_else(|| "el_unit".to_string());
+        let copied = format!(
+            "{}({})",
+            copy_helper_name(self.resolve_alias(value.1)),
+            value.0
+        );
+        format!(
+            "({c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = {} }} }}",
+            variant_id.index(),
+            variant_member_name(variant_id),
+            field_name(*field),
+            copied
+        )
+    }
+
     pub(super) fn emit_standard_runtime_helpers(&mut self) {
         for (slice, element, length) in self.variadic_slice_instances() {
             self.emit_variadic_slice_helper(slice, element, length);
         }
         let calls = self.standard_call_instances();
+        self.emit_thread_helpers(&calls);
+        self.emit_channel_helpers(&calls);
+        self.emit_mutex_helpers(&calls);
+        self.emit_atomic_helpers(&calls);
         let literals = self.collection_literal_instances();
         let mut concatenated_types = BTreeSet::new();
         for function in &self.program.functions {
@@ -1225,6 +1377,831 @@ impl<'a> CEmitter<'a> {
                     );
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn emit_thread_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        let thread_calls = calls
+            .iter()
+            .filter(|(operation, _)| {
+                matches!(
+                    operation,
+                    StandardCall::ThreadSpawn { .. }
+                        | StandardCall::ThreadJoin { .. }
+                        | StandardCall::ThreadIsFinished { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        if thread_calls.is_empty() {
+            return;
+        }
+        self.output.push_str(
+            "typedef void (*el_thread_shutdown_join)(void *);\n\
+             typedef struct el_thread_registry_node {\n\
+             \x20\x20\x20\x20void *state;\n\
+             \x20\x20\x20\x20el_thread_shutdown_join join;\n\
+             \x20\x20\x20\x20struct el_thread_registry_node *next;\n\
+             } el_thread_registry_node;\n\
+             static pthread_mutex_t el_thread_registry_lock = PTHREAD_MUTEX_INITIALIZER;\n\
+             static el_thread_registry_node *el_thread_registry = NULL;\n\
+             static void el_thread_register(void *state, el_thread_shutdown_join join) {\n\
+             \x20\x20\x20\x20el_thread_registry_node *node = (el_thread_registry_node *)GC_MALLOC(sizeof(*node));\n\
+             \x20\x20\x20\x20if (node == NULL) el_out_of_memory();\n\
+             \x20\x20\x20\x20node->state = state; node->join = join;\n\
+             \x20\x20\x20\x20(void)pthread_mutex_lock(&el_thread_registry_lock);\n\
+             \x20\x20\x20\x20node->next = el_thread_registry; el_thread_registry = node;\n\
+             \x20\x20\x20\x20(void)pthread_mutex_unlock(&el_thread_registry_lock);\n\
+             }\n\
+             static void el_thread_unregister(void *state) {\n\
+             \x20\x20\x20\x20el_thread_registry_node *node;\n\
+             \x20\x20\x20\x20(void)pthread_mutex_lock(&el_thread_registry_lock);\n\
+             \x20\x20\x20\x20for (node = el_thread_registry; node != NULL; node = node->next) { if (node->state == state) { node->state = NULL; node->join = NULL; break; } }\n\
+             \x20\x20\x20\x20(void)pthread_mutex_unlock(&el_thread_registry_lock);\n\
+             }\n\
+             void el_thread_shutdown_all(void) {\n\
+             \x20\x20\x20\x20for (;;) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20el_thread_registry_node *node; void *state = NULL; el_thread_shutdown_join join = NULL;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20(void)pthread_mutex_lock(&el_thread_registry_lock);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20for (node = el_thread_registry; node != NULL; node = node->next) { if (node->state != NULL) { state = node->state; join = node->join; break; } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20(void)pthread_mutex_unlock(&el_thread_registry_lock);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20if (state == NULL) break;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20join(state);\n\
+             \x20\x20\x20\x20}\n\
+             }\n\n",
+        );
+        let mut emitted = BTreeSet::new();
+        for (operation, (_, span)) in &thread_calls {
+            let thread = match operation {
+                StandardCall::ThreadSpawn { thread, .. }
+                | StandardCall::ThreadJoin { thread, .. }
+                | StandardCall::ThreadIsFinished { thread } => *thread,
+                _ => continue,
+            };
+            if !emitted.insert(thread) {
+                continue;
+            }
+            let return_type = calls
+                .keys()
+                .find_map(|operation| match operation {
+                    StandardCall::ThreadSpawn {
+                        thread: candidate,
+                        return_type,
+                        ..
+                    }
+                    | StandardCall::ThreadJoin {
+                        thread: candidate,
+                        return_type,
+                    } if *candidate == thread => Some(*return_type),
+                    _ => None,
+                })
+                .or_else(|| {
+                    let TypeKind::Builtin { arguments, .. } =
+                        self.typed.types.kind(self.resolve_alias(thread))
+                    else {
+                        return None;
+                    };
+                    arguments.first().copied()
+                });
+            let Some(return_type) = return_type else {
+                continue;
+            };
+            let needs_join = calls.keys().any(|operation| {
+                matches!(operation, StandardCall::ThreadJoin { thread: candidate, .. } if *candidate == thread)
+            });
+            let needs_finished = calls.keys().any(|operation| {
+                matches!(operation, StandardCall::ThreadIsFinished { thread: candidate } if *candidate == thread)
+            });
+            self.emit_thread_type_helpers(thread, return_type, *span, needs_join, needs_finished);
+            let _ = span;
+        }
+        for (operation, (result, span)) in thread_calls {
+            if matches!(operation, StandardCall::ThreadSpawn { .. }) {
+                self.emit_thread_spawn_helper(*operation, *result, *span);
+            }
+        }
+    }
+
+    fn emit_thread_type_helpers(
+        &mut self,
+        thread: TypeId,
+        return_type: TypeId,
+        span: Span,
+        needs_join: bool,
+        needs_finished: bool,
+    ) {
+        let Some(thread_c) = self.c_type(thread, Some(span)) else {
+            return;
+        };
+        let never = matches!(
+            self.typed.types.kind(self.resolve_alias(return_type)),
+            TypeKind::Never
+        );
+        let return_c = if never {
+            "el_unit".to_string()
+        } else {
+            let Some(return_c) = self.c_type(return_type, Some(span)) else {
+                return;
+            };
+            return_c
+        };
+        let state_name = format!("{}_data", collection_type_name(thread));
+        let copy_result = (!never).then(|| copy_helper_name(self.resolve_alias(return_type)));
+        let join_name = standard_call_name(StandardCall::ThreadJoin {
+            thread,
+            return_type,
+        });
+        let finished_name = standard_call_name(StandardCall::ThreadIsFinished { thread });
+        let _ = writeln!(
+            self.output,
+            "struct {state_name} {{\n    pthread_t thread;\n    pthread_mutex_t join_lock;\n    pthread_mutex_t status_lock;\n    bool joined;\n    bool finished;\n    void *startup;\n    {return_c} result;\n}};\n\
+             static void {join_name}_shutdown(void *raw) {{\n    {thread_c} state = ({thread_c})raw;\n    (void)pthread_mutex_lock(&state->join_lock);\n    if (!state->joined) {{ (void)pthread_join(state->thread, NULL); state->joined = true; }}\n    (void)pthread_mutex_unlock(&state->join_lock);\n    el_thread_unregister(state);\n}}\n"
+        );
+        if needs_join {
+            if let Some(copy_result) = copy_result {
+                let _ = writeln!(
+                    self.output,
+                    "static {return_c} {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state);\n    return {copy_result}(state->result);\n}}\n"
+                );
+            } else {
+                let _ = writeln!(
+                    self.output,
+                    "static void {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state);\n    abort();\n}}\n"
+                );
+            }
+        }
+        if needs_finished {
+            let _ = writeln!(
+                self.output,
+                "static bool {finished_name}({thread_c} state) {{\n    bool finished; (void)pthread_mutex_lock(&state->status_lock); finished = state->finished; (void)pthread_mutex_unlock(&state->status_lock); return finished;\n}}\n"
+            );
+        }
+    }
+
+    fn emit_thread_spawn_helper(&mut self, operation: StandardCall, result: TypeId, span: Span) {
+        let StandardCall::ThreadSpawn {
+            thread,
+            callable,
+            entry,
+            closure_entry,
+            return_type,
+        } = operation
+        else {
+            return;
+        };
+        let (Some(thread_c), Some(callable_c), Some(result_c)) = (
+            self.c_type(thread, Some(span)),
+            self.c_type(callable, Some(span)),
+            self.c_type(result, Some(span)),
+        ) else {
+            return;
+        };
+        let entry_symbol = self.function_symbol(&FunctionInstance {
+            declaration: entry,
+            arguments: Vec::new(),
+            self_type: None,
+        });
+        let call = if closure_entry {
+            format!("{entry_symbol}(context->body)")
+        } else {
+            format!("{entry_symbol}()")
+        };
+        let publish_result = if matches!(
+            self.typed.types.kind(self.resolve_alias(return_type)),
+            TypeKind::Never
+        ) {
+            format!("{call}; abort();")
+        } else if matches!(
+            self.typed.types.kind(self.resolve_alias(return_type)),
+            TypeKind::Primitive(PrimitiveType::Unit)
+        ) {
+            format!("{call}; state->result = (el_unit){{0}};")
+        } else {
+            format!("state->result = {call};")
+        };
+        let Some(ok_variant) = self.resolved.standard_variant("Result", "Ok") else {
+            return;
+        };
+        let Some(err_variant) = self.resolved.standard_variant("Result", "Err") else {
+            return;
+        };
+        let (Some(ok_field), Some(err_field)) = (
+            self.resolved.variants[ok_variant.index()].fields.first(),
+            self.resolved.variants[err_variant.index()].fields.first(),
+        ) else {
+            return;
+        };
+        let Some(error_decl) = self.resolved.standard_declaration("SpawnError") else {
+            return;
+        };
+        let Some(error_ty) = self.typed.declaration_types.get(&error_decl).copied() else {
+            return;
+        };
+        let Some(error_c) = self.c_type(error_ty, Some(span)) else {
+            return;
+        };
+        let Some(unavailable) = self.resolved.standard_variant("SpawnError", "Unavailable") else {
+            return;
+        };
+        let spawn_name = standard_call_name(operation);
+        let context_name = format!("{spawn_name}_context");
+        let join_name = standard_call_name(StandardCall::ThreadJoin {
+            thread,
+            return_type,
+        });
+        let copy_callable = copy_helper_name(self.resolve_alias(callable));
+        let _ = writeln!(
+            self.output,
+            "typedef struct {context_name} {{ {thread_c} state; {callable_c} body; }} {context_name};\n\
+             static void *{spawn_name}_entry(void *raw) {{\n    {context_name} *context = ({context_name} *)raw;\n    {thread_c} state = context->state;\n    state->startup = NULL;\n    {publish_result}\n    (void)pthread_mutex_lock(&state->status_lock); state->finished = true; (void)pthread_mutex_unlock(&state->status_lock);\n    return NULL;\n}}\n\
+             static {result_c} {spawn_name}({callable_c} body) {{\n    {thread_c} state; {context_name} *context; {result_c} outcome = {{0}}; int status;"
+        );
+        self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::Scanned);
+        self.emit_runtime_allocate("context", "sizeof(*context)", AllocationClass::Scanned);
+        let _ = writeln!(
+            self.output,
+            "    state->joined = false; state->finished = false; context->state = state; context->body = {copy_callable}(body); state->startup = context;\n    (void)pthread_mutex_init(&state->join_lock, NULL); (void)pthread_mutex_init(&state->status_lock, NULL);\n    status = pthread_create(&state->thread, NULL, {spawn_name}_entry, context);\n    if (status != 0) {{\n        state->startup = NULL; (void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock);\n        outcome.tag = UINT32_C({});\n        outcome.payload.{}.{} = ({error_c}){{ .tag = UINT32_C({}) }};\n        return outcome;\n    }}\n    el_thread_register(state, {join_name}_shutdown);\n    outcome.tag = UINT32_C({});\n    outcome.payload.{}.{} = state;\n    return outcome;\n}}\n",
+            err_variant.index(),
+            variant_member_name(err_variant),
+            field_name(*err_field),
+            unavailable.index(),
+            ok_variant.index(),
+            variant_member_name(ok_variant),
+            field_name(*ok_field),
+        );
+    }
+
+    fn channel_error_expression(
+        &mut self,
+        error_name: &str,
+        variant_name: &str,
+    ) -> Option<(String, TypeId)> {
+        let declaration = self.resolved.standard_declaration(error_name)?;
+        let ty = *self.typed.declaration_types.get(&declaration)?;
+        let variant = self.resolved.standard_variant(error_name, variant_name)?;
+        Some((self.enum_unit_variant_expression(ty, variant), ty))
+    }
+
+    fn emit_channel_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        let mut elements = BTreeSet::new();
+        for operation in calls.keys() {
+            match operation {
+                StandardCall::ChannelCreate { element, .. }
+                | StandardCall::ChannelSend { element, .. }
+                | StandardCall::ChannelReceive { element, .. } => {
+                    elements.insert(self.resolve_alias(*element));
+                }
+                StandardCall::ChannelClose { handle, .. } => {
+                    if let TypeKind::Builtin { arguments, .. } =
+                        self.typed.types.kind(self.resolve_alias(*handle))
+                        && let Some(element) = arguments.first()
+                    {
+                        elements.insert(self.resolve_alias(*element));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for element in elements {
+            self.emit_channel_type_helpers(element, calls);
+        }
+    }
+
+    fn emit_channel_type_helpers(
+        &mut self,
+        element: TypeId,
+        calls: &BTreeMap<StandardCall, (TypeId, Span)>,
+    ) {
+        let Some(element_c) = self.c_type(element, None) else {
+            return;
+        };
+        let creates = calls
+            .iter()
+            .filter_map(|(operation, result)| match operation {
+                StandardCall::ChannelCreate {
+                    sender,
+                    receiver,
+                    element: candidate,
+                    bounded,
+                } if self.resolve_alias(*candidate) == element => {
+                    Some((*operation, *sender, *receiver, *bounded, *result))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let sender = creates
+            .first()
+            .map(|(_, sender, _, _, _)| *sender)
+            .or_else(|| {
+                calls.keys().find_map(|operation| match operation {
+                    StandardCall::ChannelSend { sender, .. } => Some(*sender),
+                    StandardCall::ChannelClose {
+                        handle,
+                        sender: true,
+                    } => Some(*handle),
+                    _ => None,
+                })
+            });
+        let receiver = creates
+            .first()
+            .map(|(_, _, receiver, _, _)| *receiver)
+            .or_else(|| {
+                calls.keys().find_map(|operation| match operation {
+                    StandardCall::ChannelReceive { receiver, .. } => Some(*receiver),
+                    StandardCall::ChannelClose {
+                        handle,
+                        sender: false,
+                    } => Some(*handle),
+                    _ => None,
+                })
+            });
+        if sender.is_none() && receiver.is_none() {
+            return;
+        }
+        let sender_c = sender.and_then(|sender| self.c_type(sender, None));
+        let receiver_c = receiver.and_then(|receiver| self.c_type(receiver, None));
+        let state = format!("el_channel_t{}_data", element.index());
+        let node = format!("el_channel_t{}_node", element.index());
+        let copy = copy_helper_name(element);
+        let _ = writeln!(
+            self.output,
+            "typedef struct {node} {{ {element_c} value; struct {node} *next; }} {node};\n\
+             struct {state} {{\n    pthread_mutex_t lock;\n    pthread_cond_t readable;\n    \
+             pthread_cond_t writable;\n    uintptr_t capacity;\n    uintptr_t count;\n    \
+             uintptr_t waiting_receivers;\n    bool unbounded;\n    bool sender_closed;\n    \
+             bool receiver_closed;\n    {node} *head;\n    {node} *tail;\n}};\n"
+        );
+
+        for (operation, _, _, bounded, (result, _)) in creates {
+            let (Some(sender_c), Some(receiver_c)) = (&sender_c, &receiver_c) else {
+                continue;
+            };
+            let Some(result_c) = self.c_type(result, None) else {
+                continue;
+            };
+            let name = standard_call_name(operation);
+            let parameters = if bounded {
+                "uintptr_t capacity"
+            } else {
+                "void"
+            };
+            let capacity = if bounded { "capacity" } else { "UINTPTR_MAX" };
+            let unbounded = if bounded { "false" } else { "true" };
+            let _ = writeln!(
+                self.output,
+                "static {result_c} {name}({parameters}) {{\n    {sender_c} channel;\n    \
+                 {result_c} result = {{0}};"
+            );
+            self.emit_runtime_allocate("channel", "sizeof(*channel)", AllocationClass::Scanned);
+            let _ = writeln!(
+                self.output,
+                "    (void)pthread_mutex_init(&channel->lock, NULL);\n    \
+                 (void)pthread_cond_init(&channel->readable, NULL);\n    \
+                 (void)pthread_cond_init(&channel->writable, NULL);\n    \
+                 channel->capacity = {capacity}; channel->count = 0U; \
+                 channel->waiting_receivers = 0U; channel->unbounded = {unbounded};\n    \
+                 channel->sender_closed = false; channel->receiver_closed = false;\n    \
+                 channel->head = NULL; channel->tail = NULL;\n    result.v0 = channel;\n    \
+                 result.v1 = ({receiver_c})channel;\n    return result;\n}}\n"
+            );
+        }
+
+        for (operation, (result, _)) in calls {
+            let StandardCall::ChannelSend {
+                sender: candidate,
+                element: candidate_element,
+                nonblocking,
+            } = operation
+            else {
+                continue;
+            };
+            if self.resolve_alias(*candidate_element) != element {
+                continue;
+            }
+            let Some(result_c) = self.c_type(*result, None) else {
+                continue;
+            };
+            let Some((closed_value, closed_ty)) = self.channel_error_expression(
+                if *nonblocking {
+                    "TrySendError"
+                } else {
+                    "SendError"
+                },
+                "Closed",
+            ) else {
+                continue;
+            };
+            let closed = self.result_expression(*result, "Err", (&closed_value, closed_ty));
+            let Some(unit) = self
+                .typed
+                .types
+                .id_for_kind(&TypeKind::Primitive(PrimitiveType::Unit))
+            else {
+                continue;
+            };
+            let ok = self.result_expression(*result, "Ok", ("(el_unit){0}", unit));
+            let full = if *nonblocking {
+                let Some((full_value, full_ty)) =
+                    self.channel_error_expression("TrySendError", "Full")
+                else {
+                    continue;
+                };
+                Some(self.result_expression(*result, "Err", (&full_value, full_ty)))
+            } else {
+                None
+            };
+            let name = standard_call_name(*operation);
+            let sender_type = self
+                .c_type(*candidate, None)
+                .or_else(|| sender_c.clone())
+                .unwrap_or_else(|| "void *".to_string());
+            let _ = writeln!(
+                self.output,
+                "static {result_c} {name}({sender_type} channel, {element_c} value) {{\n    \
+                 {node} *message;\n    (void)pthread_mutex_lock(&channel->lock);\n    \
+                 if (channel->sender_closed || channel->receiver_closed) {{ \
+                 (void)pthread_mutex_unlock(&channel->lock); return {closed}; }}"
+            );
+            if let Some(full) = full {
+                let _ = writeln!(
+                    self.output,
+                    "    if (!channel->unbounded && ((channel->capacity == 0U && \
+                     (channel->waiting_receivers == 0U || channel->count != 0U)) || \
+                     (channel->capacity != 0U && channel->count >= channel->capacity))) {{ \
+                     (void)pthread_mutex_unlock(&channel->lock); return {full}; }}"
+                );
+            } else {
+                self.output.push_str(
+                    "    while (!channel->sender_closed && !channel->receiver_closed && \
+                     !channel->unbounded && ((channel->capacity == 0U && \
+                     (channel->waiting_receivers == 0U || channel->count != 0U)) || \
+                     (channel->capacity != 0U && channel->count >= channel->capacity))) \
+                     (void)pthread_cond_wait(&channel->writable, &channel->lock);\n    \
+                     if (channel->sender_closed || channel->receiver_closed) { \
+                     (void)pthread_mutex_unlock(&channel->lock); return ",
+                );
+                self.output.push_str(&closed);
+                self.output.push_str("; }\n");
+            }
+            let _ = writeln!(
+                self.output,
+                "    message = ({node} *)el_runtime_alloc(sizeof(*message));\n    \
+                 if (message == NULL) el_out_of_memory();\n    message->value = {copy}(value); \
+                 message->next = NULL;\n    if (channel->tail == NULL) channel->head = message; \
+                 else channel->tail->next = message;\n    channel->tail = message; \
+                 ++channel->count;\n    (void)pthread_cond_signal(&channel->readable);"
+            );
+            if !*nonblocking {
+                self.output.push_str(
+                    "    if (channel->capacity == 0U) while (channel->count != 0U && \
+                     !channel->receiver_closed) (void)pthread_cond_wait(&channel->writable, \
+                     &channel->lock);\n",
+                );
+            }
+            let _ = writeln!(
+                self.output,
+                "    (void)pthread_mutex_unlock(&channel->lock);\n    return {ok};\n}}\n"
+            );
+        }
+
+        for (operation, (result, _)) in calls {
+            let StandardCall::ChannelReceive {
+                receiver: candidate,
+                element: candidate_element,
+                nonblocking,
+            } = operation
+            else {
+                continue;
+            };
+            if self.resolve_alias(*candidate_element) != element {
+                continue;
+            }
+            let Some(result_c) = self.c_type(*result, None) else {
+                continue;
+            };
+            let name = standard_call_name(*operation);
+            let receiver_type = self
+                .c_type(*candidate, None)
+                .or_else(|| receiver_c.clone())
+                .unwrap_or_else(|| "void *".to_string());
+            let _ = writeln!(
+                self.output,
+                "static {result_c} {name}({receiver_type} channel) {{\n    {node} *message; \
+                 {element_c} value;\n    (void)pthread_mutex_lock(&channel->lock);"
+            );
+            if *nonblocking {
+                let Some((empty_value, empty_ty)) =
+                    self.channel_error_expression("TryReceiveError", "Empty")
+                else {
+                    continue;
+                };
+                let Some((closed_value, closed_ty)) =
+                    self.channel_error_expression("TryReceiveError", "Closed")
+                else {
+                    continue;
+                };
+                let empty = self.result_expression(*result, "Err", (&empty_value, empty_ty));
+                let closed = self.result_expression(*result, "Err", (&closed_value, closed_ty));
+                let _ = writeln!(
+                    self.output,
+                    "    if (channel->receiver_closed || (channel->sender_closed && \
+                     channel->count == 0U)) {{ (void)pthread_mutex_unlock(&channel->lock); \
+                     return {closed}; }}\n    if (channel->count == 0U) {{ \
+                     (void)pthread_mutex_unlock(&channel->lock); return {empty}; }}"
+                );
+            } else {
+                let none = self.option_expression(*result, None);
+                let _ = writeln!(
+                    self.output,
+                    "    if (channel->receiver_closed) {{ (void)pthread_mutex_unlock(&channel->lock); \
+                     return {none}; }}\n    ++channel->waiting_receivers; \
+                     (void)pthread_cond_broadcast(&channel->writable);\n    while \
+                     (channel->count == 0U && !channel->sender_closed && \
+                     !channel->receiver_closed) (void)pthread_cond_wait(&channel->readable, \
+                     &channel->lock);\n    --channel->waiting_receivers;\n    if \
+                     (channel->count == 0U) {{ (void)pthread_mutex_unlock(&channel->lock); \
+                     return {none}; }}"
+                );
+            }
+            let _ = writeln!(
+                self.output,
+                "    message = channel->head; channel->head = message->next; \
+                 if (channel->head == NULL) channel->tail = NULL; --channel->count; \
+                 value = message->value;\n    (void)pthread_cond_broadcast(&channel->writable); \
+                 (void)pthread_mutex_unlock(&channel->lock);"
+            );
+            let outcome = if *nonblocking {
+                self.result_expression(*result, "Ok", ("value", element))
+            } else {
+                self.option_expression(*result, Some(("value", element)))
+            };
+            let _ = writeln!(self.output, "    return {outcome};\n}}\n");
+        }
+
+        for operation in calls.keys() {
+            let StandardCall::ChannelClose {
+                handle,
+                sender: closes_sender,
+            } = operation
+            else {
+                continue;
+            };
+            let TypeKind::Builtin { arguments, .. } =
+                self.typed.types.kind(self.resolve_alias(*handle))
+            else {
+                continue;
+            };
+            if arguments
+                .first()
+                .is_none_or(|candidate| self.resolve_alias(*candidate) != element)
+            {
+                continue;
+            }
+            let Some(handle_c) = self.c_type(*handle, None) else {
+                continue;
+            };
+            let name = standard_call_name(*operation);
+            let field = if *closes_sender {
+                "sender_closed"
+            } else {
+                "receiver_closed"
+            };
+            let discard = if *closes_sender {
+                ""
+            } else {
+                " channel->head = NULL; channel->tail = NULL; channel->count = 0U;"
+            };
+            let _ = writeln!(
+                self.output,
+                "static el_unit {name}({handle_c} channel) {{\n    \
+                 (void)pthread_mutex_lock(&channel->lock); channel->{field} = true;{discard}\n    \
+                 (void)pthread_cond_broadcast(&channel->readable); \
+                 (void)pthread_cond_broadcast(&channel->writable);\n    \
+                 (void)pthread_mutex_unlock(&channel->lock); return (el_unit){{0}};\n}}\n"
+            );
+        }
+    }
+
+    fn emit_mutex_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        let mut mutexes = BTreeMap::new();
+        for operation in calls.keys() {
+            match operation {
+                StandardCall::MutexNew { mutex, value_type }
+                | StandardCall::MutexRead { mutex, value_type }
+                | StandardCall::MutexReplace { mutex, value_type }
+                | StandardCall::MutexUpdate {
+                    mutex, value_type, ..
+                } => {
+                    mutexes.insert(*mutex, *value_type);
+                }
+                _ => {}
+            }
+        }
+        for (mutex, value_type) in mutexes {
+            let (Some(mutex_c), Some(value_c)) =
+                (self.c_type(mutex, None), self.c_type(value_type, None))
+            else {
+                continue;
+            };
+            let state = format!("{}_data", collection_type_name(mutex));
+            let copy = copy_helper_name(self.resolve_alias(value_type));
+            let _ = writeln!(
+                self.output,
+                "struct {state} {{ pthread_mutex_t lock; {value_c} value; }};\n"
+            );
+            let operation = StandardCall::MutexNew { mutex, value_type };
+            if calls.contains_key(&operation) {
+                let name = standard_call_name(operation);
+                let _ = writeln!(
+                    self.output,
+                    "static {mutex_c} {name}({value_c} value) {{\n    {mutex_c} state;"
+                );
+                self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::Scanned);
+                let _ = writeln!(
+                    self.output,
+                    "    (void)pthread_mutex_init(&state->lock, NULL); state->value = \
+                     {copy}(value); return state;\n}}\n"
+                );
+            }
+            let operation = StandardCall::MutexRead { mutex, value_type };
+            if calls.contains_key(&operation) {
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} {}({mutex_c} state) {{\n    {value_c} value; \
+                     (void)pthread_mutex_lock(&state->lock); value = {copy}(state->value); \
+                     (void)pthread_mutex_unlock(&state->lock); return value;\n}}\n",
+                    standard_call_name(operation)
+                );
+            }
+            let operation = StandardCall::MutexReplace { mutex, value_type };
+            if calls.contains_key(&operation) {
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} {}({mutex_c} state, {value_c} replacement) {{\n    \
+                     {value_c} previous; (void)pthread_mutex_lock(&state->lock); \
+                     previous = {copy}(state->value); state->value = {copy}(replacement); \
+                     (void)pthread_mutex_unlock(&state->lock); return previous;\n}}\n",
+                    standard_call_name(operation)
+                );
+            }
+            for operation in calls.keys() {
+                let StandardCall::MutexUpdate {
+                    mutex: candidate,
+                    value_type: candidate_value,
+                    callable,
+                    entry,
+                    closure_entry,
+                } = operation
+                else {
+                    continue;
+                };
+                if *candidate != mutex || *candidate_value != value_type {
+                    continue;
+                }
+                let Some(callable_c) = self.c_type(*callable, None) else {
+                    continue;
+                };
+                let symbol = self.function_symbol(&FunctionInstance {
+                    declaration: *entry,
+                    arguments: Vec::new(),
+                    self_type: None,
+                });
+                let invocation = if *closure_entry {
+                    format!("{symbol}(body, {copy}(state->value))")
+                } else {
+                    format!("{symbol}({copy}(state->value))")
+                };
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} {}({mutex_c} state, {callable_c} body) {{\n    \
+                     {value_c} replacement; (void)body; \
+                     (void)pthread_mutex_lock(&state->lock); replacement = {invocation}; \
+                     state->value = {copy}(replacement); replacement = {copy}(state->value); \
+                     (void)pthread_mutex_unlock(&state->lock); return replacement;\n}}\n",
+                    standard_call_name(*operation)
+                );
+            }
+        }
+    }
+
+    fn emit_atomic_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        let mut atomics = BTreeMap::new();
+        for operation in calls.keys() {
+            match operation {
+                StandardCall::AtomicNew { atomic, value_type }
+                | StandardCall::AtomicLoad { atomic, value_type }
+                | StandardCall::AtomicStore { atomic, value_type }
+                | StandardCall::AtomicExchange { atomic, value_type }
+                | StandardCall::AtomicCompareExchange { atomic, value_type }
+                | StandardCall::AtomicFetchAdd {
+                    atomic, value_type, ..
+                } => {
+                    atomics.insert(*atomic, *value_type);
+                }
+                _ => {}
+            }
+        }
+        for (atomic, value_type) in atomics {
+            let (Some(atomic_c), Some(value_c)) =
+                (self.c_type(atomic, None), self.c_type(value_type, None))
+            else {
+                continue;
+            };
+            let state = format!("{}_data", collection_type_name(atomic));
+            let _ = writeln!(
+                self.output,
+                "struct {state} {{ pthread_mutex_t lock; {value_c} value; }};\n"
+            );
+            let operation = StandardCall::AtomicNew { atomic, value_type };
+            if calls.contains_key(&operation) {
+                let name = standard_call_name(operation);
+                let _ = writeln!(
+                    self.output,
+                    "static {atomic_c} {name}({value_c} value) {{\n    {atomic_c} state;"
+                );
+                self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::PointerFree);
+                let _ = writeln!(
+                    self.output,
+                    "    (void)pthread_mutex_init(&state->lock, NULL); state->value = value; \
+                     return state;\n}}\n"
+                );
+            }
+            let operation = StandardCall::AtomicLoad { atomic, value_type };
+            if calls.contains_key(&operation) {
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} {}({atomic_c} state) {{ {value_c} value; \
+                     (void)pthread_mutex_lock(&state->lock); value = state->value; \
+                     (void)pthread_mutex_unlock(&state->lock); return value; }}\n",
+                    standard_call_name(operation)
+                );
+            }
+            let operation = StandardCall::AtomicStore { atomic, value_type };
+            if calls.contains_key(&operation) {
+                let _ = writeln!(
+                    self.output,
+                    "static el_unit {}({atomic_c} state, {value_c} value) {{ \
+                     (void)pthread_mutex_lock(&state->lock); state->value = value; \
+                     (void)pthread_mutex_unlock(&state->lock); return (el_unit){{0}}; }}\n",
+                    standard_call_name(operation)
+                );
+            }
+            let operation = StandardCall::AtomicExchange { atomic, value_type };
+            if calls.contains_key(&operation) {
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} {}({atomic_c} state, {value_c} value) {{ \
+                     {value_c} previous; (void)pthread_mutex_lock(&state->lock); \
+                     previous = state->value; state->value = value; \
+                     (void)pthread_mutex_unlock(&state->lock); return previous; }}\n",
+                    standard_call_name(operation)
+                );
+            }
+            let operation = StandardCall::AtomicCompareExchange { atomic, value_type };
+            if calls.contains_key(&operation) {
+                let _ = writeln!(
+                    self.output,
+                    "static bool {}({atomic_c} state, {value_c} expected, {value_c} replacement) {{ \
+                     bool exchanged; (void)pthread_mutex_lock(&state->lock); \
+                     exchanged = state->value == expected; if (exchanged) state->value = replacement; \
+                     (void)pthread_mutex_unlock(&state->lock); return exchanged; }}\n",
+                    standard_call_name(operation)
+                );
+            }
+            for subtract in [false, true] {
+                let operation = StandardCall::AtomicFetchAdd {
+                    atomic,
+                    value_type,
+                    subtract,
+                };
+                if !calls.contains_key(&operation) {
+                    continue;
+                }
+                let arithmetic = if subtract {
+                    if matches!(
+                        self.typed.types.kind(self.resolve_alias(value_type)),
+                        TypeKind::Primitive(PrimitiveType::I32)
+                    ) {
+                        "(int32_t)((uint32_t)state->value - (uint32_t)value)"
+                    } else {
+                        "(uintptr_t)(state->value - value)"
+                    }
+                } else if matches!(
+                    self.typed.types.kind(self.resolve_alias(value_type)),
+                    TypeKind::Primitive(PrimitiveType::I32)
+                ) {
+                    "(int32_t)((uint32_t)state->value + (uint32_t)value)"
+                } else {
+                    "(uintptr_t)(state->value + value)"
+                };
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} {}({atomic_c} state, {value_c} value) {{ \
+                     {value_c} previous; (void)pthread_mutex_lock(&state->lock); \
+                     previous = state->value; state->value = {arithmetic}; \
+                     (void)pthread_mutex_unlock(&state->lock); return previous; }}\n",
+                    standard_call_name(operation)
+                );
             }
         }
     }
@@ -2529,9 +3506,23 @@ impl<'a> CEmitter<'a> {
                     }
                 }
             }
-            TypeKind::Builtin { arguments, .. } => {
-                for argument in arguments {
-                    self.emit_copy_helper(*argument, span);
+            TypeKind::Builtin { builtin, arguments } => {
+                if !matches!(
+                    self.resolved.builtin_name(*builtin),
+                    "Identity"
+                        | "ForeignRoot"
+                        | "ForeignRootMut"
+                        | "Thread"
+                        | "Sender"
+                        | "Receiver"
+                        | "Mutex"
+                        | "AtomicBool"
+                        | "AtomicI32"
+                        | "AtomicUsize"
+                ) {
+                    for argument in arguments {
+                        self.emit_copy_helper(*argument, span);
+                    }
                 }
             }
             TypeKind::Closure { captures, .. } => {
@@ -2718,7 +3709,12 @@ impl<'a> CEmitter<'a> {
                              \x20   }}\n    return result;"
                         );
                     }
-                    ("Identity" | "ForeignRoot" | "ForeignRootMut", [_]) => {
+                    (
+                        "Identity" | "ForeignRoot" | "ForeignRootMut" | "Thread" | "Sender"
+                        | "Receiver" | "Mutex",
+                        [_],
+                    ) => self.output.push_str("    return value;\n"),
+                    ("AtomicBool" | "AtomicI32" | "AtomicUsize", []) => {
                         self.output.push_str("    return value;\n")
                     }
                     ("Formatter", []) => {

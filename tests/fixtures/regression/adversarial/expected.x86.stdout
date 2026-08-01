@@ -1,0 +1,411 @@
+== 2.3 modules and visibility ==
+inline module: inline module
+inline reads parent private: 10
+self and super paths: 11
+file-backed child: file-backed module
+child reads package-private parent: 10
+directory namespace: directory namespace leaf
+import and re-export agree: true
+aliased import: deep marker
+circular import: 27
+== 3.1 logical copies ==
+source name: original
+source inner label: inner
+source inner counts[0]: 1
+source inner counts len: 3
+source tags len: 2
+source lookup len: 2
+source fixed[1]: 20
+source pair: 7/seven
+copy pair: 70/seventy
+alias plain source: 10, copy: 20
+alias target through source: 2
+alias target directly: 2
+before: 0, live: 5, after: 5
+caller label: caller, counts[0]: 42
+returned label: consumed, counts[0]: -1
+stored alias mutation: 101
+== 3.2 references ==
+initial: Ari/Aster/1
+after container replacement: Bea/Beacon/2
+after interior mutation: 3
+aliased writes: 12 / 12 / 12 / 12
+escaped: 42 / Calder / Cove
+same storage: true
+different storage: false
+equal contents: true
+watcher through copy: 7 / 7
+enum payload reference: 5
+graph total: 6
+auto field: Auto / Auto
+explicit dereference copy: Auto
+== 3.3 raw pointers ==
+same address: true
+downgrade keeps address: true
+non-null: true
+null equals null: true
+null differs: false
+write through *var: 2
+after unsafe region: 3
+reinterpreted first field: 7
+write through reinterpreted pointer: 8
+read through *Self receiver: 10
+after *var Self receiver: 11
+recovered: 11 / 11
+copied pointer identity: true
+write through copied pointer: 20
+null fields: true true
+guarded null pointer was never dereferenced
+== 4.1 numeric boundaries ==
+literal agreement: true true true
+contextual materialization: 7 7 7
+signed minima: -128 -32768 -2147483648 -9223372036854775808
+maxima: 127 255
+checked_add at max: None
+wrapping_add at max: -2147483648
+saturating_add at max: 2147483647
+checked_sub at min: None
+wrapping_sub at min: 2147483647
+saturating_sub at min: -2147483648
+checked_neg at min: None
+wrapping_neg at min: -2147483648
+checked_div min by -1: None
+checked_div by zero: None
+checked_rem by zero: None
+wrapping_mul at max: -2
+saturating_mul at max: 2147483647
+u8 checked_sub below zero: None
+u8 wrapping_sub below zero: 255
+u8 saturating_sub below zero: 0
+u8 wrapping_add above max: 0
+u8 saturating_add above max: 255
+widest legal shift: -2147483648
+checked_shl at width: None
+checked_shr at width: None
+arithmetic shift right: -4
+logical shift right: 2147483644
+bitwise complement: -1 255
+u8.try_from(300): OutOfRange
+u8.wrapping_from(300): 44
+u8.saturating_from(300): 255
+u8.saturating_from(-1): 0
+u8.wrapping_from(-1): 255
+trunc positive: 2
+trunc negative: -2
+trunc toward zero at .5: 0
+i32.try_from(NaN): NotANumber
+round trip: 200 200
+nan equals itself: false
+nan not equal to itself: true
+nan less than one: false
+nan greater than one: false
+infinities differ: true
+infinity ordering: true
+signed zero equality: true
+float divide by zero is infinite: true
+f32 widened differs from f64: true
+usize bit width: 32
+usize wraps below zero: true
+== 4.1-4.4 aggregates ==
+grouped is a value: 42
+one element tuple: 42
+pair: 1/one
+deep selector: 5
+unit binding is inhabited: true
+nested destructure: 1 2 3
+ignored component: 10
+annotated: 7/seven
+independent components: 1/source vs 2/changed
+one element pattern: 99
+tuple place mutation: 12 20 3
+make_pair evaluated once
+call result selector: 2
+literal forms agree: true true
+default point: 0/0
+default nested: 0/false/
+default nested text is empty: true
+default raw pointers are null: true true
+Option defaults to None without a payload default
+primitive defaults: 0 false 0
+enum area total: 18
+single variant enum matched
+scalar alias: 15
+tuple alias: 7/seven/7
+tree sum: 6
+== 4.1/7.1 collections ==
+new vector: 0 true
+after inserts: 1 2 3 len 3
+removed head: 1, new head: 2, len: 2
+read is a copy: 102 vs 2
+indexed assignment: 25
+get past end: None
+cleared: 0 true
+mutated grid: 99 3
+snapshot unaffected: 1 2
+map value read is a copy: 4 vs 3
+duplicate literal key collapses: 2 value 3
+insert replaced: 3
+insert added a new key
+remove of an absent key: None
+removed: 5
+contains: true false
+indexed map assignment: 11
+get present: 11
+duplicate literal element collapses: 2
+insert new then existing: true false
+remove present then absent: true false
+contains: true false
+struct keys: true false true
+tuple keys: 2 10
+array copy independence: 99 vs 1
+array length is fixed: 3
+array get in range: 3
+array get out of range: None
+nested array: 40 vs 4
+loop visited: 3, total: 6
+source grew to: 6
+array iteration order: 312
+map iteration: 3 entries, total 6
+set iteration total: 60
+empty iteration visits: 0
+== 5 functions ==
+classify: negative zero positive
+unit fallthrough
+variadic with arguments: 7
+variadic with none: 5
+variadic zero tail: 1
+same target: true
+different target: false
+call through reference: 42 42
+stored reference identity: true
+call through field: 2
+before unbound stop: active
+after unbound stop: inactive
+recovered through unbound unsafe reference: inactive
+raw pointer is non-null: true
+raw call: 42
+raw identity: true
+null raw function pointer: true
+apply: 42
+compose: 42
+pipeline result: 5
+auto borrow shared: active
+auto borrow mutable: inactive
+reference receiver: inactive
+== 5.1 closures ==
+capture result: 53
+mutable capture wrote through: 13
+pointer capture wrote through: 15
+shared reference capture sees updates: 20
+first: 1
+through copy: 3
+shared target: 3
+snapshot copies agree: 11 11
+evaluating capture source first
+evaluating capture source second
+captured sum: 3
+second call reuses the same captures: 3
+inferred result: 12
+unit closure body: 7
+annotated result: 0 5
+generic bound with closure: 6
+generic bound with named function: 42
+erased closure: 7
+erased dispatch total: 35
+escaped environment: 22
+closure loop: 4
+closure deferred cleanup
+closure with defer: 42
+captureless: 36
+named function needs no capture: 42
+mutated through capture: 11
+snapshot is independent: 1
+original observed the mutation: 11
+== 6 generics ==
+inferred from argument: 1 / text
+nested instantiation: true
+inferred from expected type: 7
+explicit argument: 255
+literal inference: 1/one
+distinct instantiations: 200 200
+generic copy independence: 3 vs 2
+either: left right
+equivalent i32: true false
+equivalent String: true
+describe tag: tag
+describe flag: flag
+describe generic impl: wrapper
+mutual generic recursion: 6
+multi-parameter generic: 1
+instantiated generic reference: true
+same instantiation is one function: true
+== 6 traits ==
+bound call selects inherent: inherent woof
+qualified selects trait: trait woof
+default method uses trait method: trait woof trait woof
+overridden default: meow meow (overridden)
+contextual conversion: meow
+explicit conversion: trait woof
+argument position conversion: meow
+heterogeneous dispatch: [trait woof][meow]
+heterogeneous measure total: 19
+mutated through trait object: 3
+non-object-safe trait statically: 5
+qualified selection: 5
+generic static: trait woof/10
+generic static: meow/9
+same target: true
+distinct targets have distinct greetings: true
+== 7 control flow ==
+argument order:
+  evaluating first
+  evaluating second
+  evaluating third
+  total: 6
+operand order:
+  evaluating left
+  evaluating right
+  evaluating factor
+  combined: 50
+interpolation order:
+  evaluating a
+  1
+short circuit and:
+  result: false
+short circuit or:
+  result: true
+both operands evaluate:
+  evaluating left
+  evaluating right
+  result: true
+multiplicative before additive: 7
+shift after additive: 8
+bitwise and after shift: 4
+bitwise xor after and: 3
+bitwise or after xor: 7
+relational after bitwise: true
+equality after relational: true
+logical and after equality: true
+logical or after and: true
+unary binds tighter than binary: 1
+cast binds tighter than multiply: 6
+explicit chain: true
+compound assignment destination:
+  evaluating destination
+  result: 25
+  fields: 10/0
+guarded first: positive even
+guard fails through: positive odd
+catch all: negative
+alternatives: small small large
+tuple pattern: one
+struct pattern with literal field: y=5
+command: stop
+command: go
+command: sharp turn
+string pattern: grace
+explicit dereference matched the content
+binding is a copy: 101 vs 1
+while with continue and break: 16 after 9
+nested break: 3
+tuple elements: 50
+== 7 concatenation ==
+str ++ str: abcd
+str result is str: 1
+String ++ String: efgh
+String result is String: 2
+Vec ++ Vec: len 3 first 1 last 3
+concatenation order:
+  evaluating left
+  evaluating right
+  pair: ab
+chained order:
+  evaluating one
+  evaluating two
+  evaluating three
+  triple: 123
+joined len: 2, sources: 2/1
+joined is independent: 1/2
+self concatenation: abab
+tighter than equality: true
+tighter than relational: true
+associativity: true
+empty ++ filled: 2
+filled ++ empty: 2
+empty ++ empty: 0
+blank ++ text: x
+nested vectors: 2 inner 2
+struct elements: 2 second b
+rejected forms are listed in this function's documentation
+== 4.1/7.2 text and display ==
+defaults to str: literal
+materialized: immutable / owned / immutable
+string copy independence: changed / shared
+str equality: true
+String equality: true
+case is significant: false
+escapes: tab:	newline-follows:\n quote:" apostrophe:' nul-free
+unicode escapes: Az☃
+direct unicode: λ ← 雪
+character literals: a ☃ '
+interpolation evaluation:
+    evaluating first
+    evaluating second
+  first then second
+literal braces: {not an interpolation}
+mixed: {2}
+ordinary braces: {not an interpolation}
+empty formatted string is blank: true
+user display: <21 degrees>
+nested display: kitchen=<21 degrees>
+reference display: <21 degrees>
+print has no newline: <21 degrees>
+dynamic display: <-5 degrees>
+dynamic display: outside=<-5 degrees>
+bool: true false
+char: x
+integers: 0 -1 255 -32768
+floats: 1.5 2 -0.25
+str and String: text owned
+== 8 errors and cleanup ==
+successful propagation:
+  operand evaluated
+  ok: 42
+failing propagation:
+  operand evaluated
+  err: invalid 7
+explicit conversion:
+  converted to a local error
+defer ordering:
+  inner body
+  inner registered second
+  inner registered first
+  outer body
+  outer registered second
+  outer registered first
+defer block:
+  block body
+  running the deferred block
+  left: closed
+execution-time values:
+  reassigned to 2 after registering
+  deferred call observed 2
+exit edges:
+    early_return cleanup
+  early return: 1
+    early_return cleanup
+  fallthrough return: 2
+    propagating_cleanup cleanup
+  propagation ran cleanup
+    loop body cleanup 1
+    loop body cleanup 2
+    loop body cleanup 3
+returned handle:
+  returned: closed
+  handle closed after return: true
+  close count: 1
+explicit cleanup only:
+  never deferred, still open: false
+  managed: closed
+  managed: close is idempotent
+  closes recorded: 1

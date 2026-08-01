@@ -32,6 +32,84 @@ pub enum StandardCall {
     ForeignRootClose {
         handle: TypeId,
     },
+    ThreadSpawn {
+        thread: TypeId,
+        callable: TypeId,
+        entry: DeclarationId,
+        closure_entry: bool,
+        return_type: TypeId,
+    },
+    ThreadJoin {
+        thread: TypeId,
+        return_type: TypeId,
+    },
+    ThreadIsFinished {
+        thread: TypeId,
+    },
+    ChannelCreate {
+        sender: TypeId,
+        receiver: TypeId,
+        element: TypeId,
+        bounded: bool,
+    },
+    ChannelSend {
+        sender: TypeId,
+        element: TypeId,
+        nonblocking: bool,
+    },
+    ChannelReceive {
+        receiver: TypeId,
+        element: TypeId,
+        nonblocking: bool,
+    },
+    ChannelClose {
+        handle: TypeId,
+        sender: bool,
+    },
+    MutexNew {
+        mutex: TypeId,
+        value_type: TypeId,
+    },
+    MutexRead {
+        mutex: TypeId,
+        value_type: TypeId,
+    },
+    MutexReplace {
+        mutex: TypeId,
+        value_type: TypeId,
+    },
+    MutexUpdate {
+        mutex: TypeId,
+        value_type: TypeId,
+        callable: TypeId,
+        entry: DeclarationId,
+        closure_entry: bool,
+    },
+    AtomicNew {
+        atomic: TypeId,
+        value_type: TypeId,
+    },
+    AtomicLoad {
+        atomic: TypeId,
+        value_type: TypeId,
+    },
+    AtomicStore {
+        atomic: TypeId,
+        value_type: TypeId,
+    },
+    AtomicExchange {
+        atomic: TypeId,
+        value_type: TypeId,
+    },
+    AtomicCompareExchange {
+        atomic: TypeId,
+        value_type: TypeId,
+    },
+    AtomicFetchAdd {
+        atomic: TypeId,
+        value_type: TypeId,
+        subtract: bool,
+    },
     FormatterWrite {
         formatter: TypeId,
     },

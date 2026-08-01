@@ -1,6 +1,6 @@
 # Compile-time surface stress package
 
-Companion to [`examples/adversarial`](../adversarial), covering the
+Companion to [`adversarial`](../adversarial), covering the
 compile-time syntax-generation surface from `SPEC.md` §12.
 
 This package is **checked, not run** because it is a compile-time surface
@@ -10,9 +10,9 @@ a package boundary, all twelve `quote:` roles, both interpolation forms,
 attributes, derives, and function-like macro execution.
 
 ```sh
-cargo run -- check examples/adversarial_macros
-cargo run -- dump expanded examples/adversarial_macros
-cargo run -- fmt --check examples/adversarial_macros
+cargo run -- check tests/fixtures/regression/adversarial_macros
+cargo run -- dump expanded tests/fixtures/regression/adversarial_macros
+cargo run -- fmt --check tests/fixtures/regression/adversarial_macros
 ```
 
 `provider/` is a dependency package supplying public compile-time declarations,
@@ -26,7 +26,7 @@ rather than assumed.
 | `src/quoting.elx` | all twelve `quote:` roles — `Expression`, `Pattern`, `TypeSyntax`, `StatementList`, `MemberList`, `Item`, `ItemList`, `StructDefinition`, `EnumDefinition`, `FunctionDefinition`, `Implementation`, `FieldDefinition` — plus `$name` and `$(expression)` interpolation, nested quotes, role inference from a return position, a variadic tail, deep indentation inside a quoted body, and `++` joining a `MemberList` |
 | `src/namespaces.elx` | one spelling bound in four namespaces at once, `use macro`/`use attr`/`use derive`, aliases, re-exports, `self` path roots, package-private access inside the package, and imports across a package boundary |
 | `provider/src/lib.elx` | the dependency side: public and package-private compile-time declarations and a public re-export |
-| `known_failures/` | four reproductions, described below |
+| `regressions/` | four reproductions, described below |
 
 Each stress module ends with a documentation comment listing the forms that are
 correctly **rejected**, so the negative surface is recorded even though a
@@ -72,7 +72,7 @@ ordinary semantic re-entry are covered in `tests/expansion.rs` and
 
 One finding from this round landed in the sibling package instead, because it
 is not macro-specific:
-[`non_final_variadic.elx`](../adversarial/known_failures/non_final_variadic.elx)
+[`non_final_variadic.elx`](../adversarial/regressions/non_final_variadic.elx)
 — a misplaced or repeated variadic parameter on an *ordinary* function is
 accepted, silently loses its variadic marker in the checker, and reaches the C
 compiler as a type-incorrect call. SPEC 12.1 restates the same placement rule

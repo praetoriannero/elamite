@@ -241,11 +241,13 @@ impl<'a> CEmitter<'a> {
                     temporary_name(*value),
                 );
             }
-            Instruction::PrintValue { value, ty, span } => {
-                self.emit_print(*value, *ty, *span);
-            }
-            Instruction::PrintNewline { .. } => {
-                self.output.push_str("    fputc('\\n', stdout);\n");
+            Instruction::PrintValue {
+                value,
+                ty,
+                span,
+                newline,
+            } => {
+                self.emit_print(*value, *ty, *span, *newline);
             }
             Instruction::CompleteExpectation { .. } => {
                 self.output.push_str("    el_expect_complete();\n");
@@ -394,6 +396,16 @@ impl<'a> CEmitter<'a> {
                         .first()
                         .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
                     return Some(format!("({c_type}){{ .target = (void *){value} }}"));
+                }
+                if matches!(operation, StandardCall::ThreadJoin { .. }) {
+                    let receiver = arguments
+                        .first()
+                        .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
+                    return Some(format!(
+                        "{}({receiver}, {})",
+                        standard_call_name(*operation),
+                        self.trap_arguments(span)
+                    ));
                 }
                 let mut arguments = arguments
                     .iter()
@@ -1313,10 +1325,31 @@ impl<'a> CEmitter<'a> {
         }
     }
 
-    pub(super) fn emit_print(&mut self, value: TemporaryId, ty: TypeId, span: Span) {
+    pub(super) fn emit_print(&mut self, value: TemporaryId, ty: TypeId, span: Span, newline: bool) {
         let value_id = value;
         let value = temporary_name(value);
-        match self.typed.types.expanded_primitive(ty) {
+        let primitive = self.typed.types.expanded_primitive(ty);
+        let rendered = if primitive.is_none() {
+            let formatter = format!("el_print_fmt_{}", value_id.index());
+            let _ = writeln!(
+                self.output,
+                "    el_formatter {formatter} = {{NULL, 0U, 0U}};"
+            );
+            self.emit_formatter_value(&formatter, &value, ty, span);
+            let rendered = format!("el_print_text_{}", value_id.index());
+            let _ = writeln!(
+                self.output,
+                "    el_str {rendered} = el_fmt_finish(&{formatter});"
+            );
+            Some(rendered)
+        } else {
+            None
+        };
+        if self.uses_synchronized_output() {
+            self.output
+                .push_str("    (void)pthread_mutex_lock(&el_stdout_lock);\n");
+        }
+        match primitive {
             Some(PrimitiveType::Unit) => {
                 self.output.push_str("    fputs(\"()\", stdout);\n");
             }
@@ -1369,19 +1402,19 @@ impl<'a> CEmitter<'a> {
                 );
             }
             _ => {
-                let formatter = format!("el_print_fmt_{}", value_id.index());
+                let rendered = rendered.expect("nonprimitive print value was formatted");
                 let _ = writeln!(
                     self.output,
-                    "    el_formatter {formatter} = {{NULL, 0U, 0U}};"
-                );
-                self.emit_formatter_value(&formatter, &value, ty, span);
-                let rendered = format!("el_print_text_{}", value_id.index());
-                let _ = writeln!(
-                    self.output,
-                    "    el_str {rendered} = el_fmt_finish(&{formatter});\n    \
-                     fwrite({rendered}.bytes, 1U, {rendered}.length, stdout);"
+                    "    fwrite({rendered}.bytes, 1U, {rendered}.length, stdout);"
                 );
             }
+        }
+        if newline {
+            self.output.push_str("    fputc('\\n', stdout);\n");
+        }
+        if self.uses_synchronized_output() {
+            self.output
+                .push_str("    (void)pthread_mutex_unlock(&el_stdout_lock);\n");
         }
     }
 
@@ -1519,6 +1552,19 @@ impl<'a> CEmitter<'a> {
                             self.trap_arguments(*span),
                         );
                         "abort()".to_string()
+                    }
+                    NeverCall::Standard {
+                        operation,
+                        arguments,
+                    } => {
+                        let mut values = arguments
+                            .iter()
+                            .map(|argument| temporary_name(*argument))
+                            .collect::<Vec<_>>();
+                        if matches!(operation, StandardCall::ThreadJoin { .. }) {
+                            values.push(self.trap_arguments(*span));
+                        }
+                        format!("{}({})", standard_call_name(*operation), values.join(", "))
                     }
                     NeverCall::Direct {
                         instance,

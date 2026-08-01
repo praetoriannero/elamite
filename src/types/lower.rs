@@ -609,9 +609,10 @@ impl<'a> TypeBuilder<'a> {
             return self.types.primitive(primitive);
         }
         let arity = match name {
-            "Vec" | "Set" | "Identity" | "ForeignRoot" | "ForeignRootMut" => 1,
+            "Vec" | "Set" | "Identity" | "ForeignRoot" | "ForeignRootMut" | "Thread" | "Sender"
+            | "Receiver" | "Mutex" => 1,
             "Map" => 2,
-            "print" | "println" => {
+            "print" | "println" | "spawn" | "channel" | "unbounded_channel" => {
                 self.diagnostics.push(
                     Diagnostic::new(Category::TypeSystem, "this builtin name is not a type")
                         .with_primary(span),
@@ -899,6 +900,7 @@ impl<'a> TypeBuilder<'a> {
                     | "Ord"
                     | "Hash"
                     | "StableHash"
+                    | "Transfer"
                     | "Display"
             ),
             _ => false,
