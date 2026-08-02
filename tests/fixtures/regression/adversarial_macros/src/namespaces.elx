@@ -1,4 +1,4 @@
-/// # Compile-time namespaces, imports, and visibility (`SPEC.md` 12.1)
+/// # Compile-time namespaces, imports, and visibility (`docs/SPEC.md` 12.1)
 ///
 /// Macros, attributes, and derives occupy three namespaces that are separate
 /// from each other and from the ordinary module-item namespace, and their

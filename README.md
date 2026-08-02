@@ -1,37 +1,37 @@
-# Elamite
+# Elamite documentation
 
-Elamite is a statically typed, garbage-collected language that compiles to C.
-The language and compiler are currently under design and initial
-implementation.
+Elamite is a statically typed, garbage-collected language that compiles to C99.
+The compiler implements the 0.9.0-draft language on Linux x86 and x86-64, has
+completed its initial conformance, macro, closure, concurrency, and memory-cost
+documentation milestones, and is now focused on value-copy and allocation
+optimization.
 
-- [`SPEC.md`](SPEC.md) defines the language.
-- [`examples/spec_demo.elx`](examples/spec_demo.elx) is the authoritative
-  surface-language example.
-- [`examples/closures`](examples/closures) demonstrates explicit captures and
-  the `Callable` interface.
-- [`examples/raylib`](examples/raylib) demonstrates desktop graphics through
-  Elamite's C interoperability layer.
-- [`examples/sdl`](examples/sdl) demonstrates an SDL2 window and animation
-  through a narrow C99 interoperability shim.
-- [`examples/macros`](examples/macros) demonstrates stable function-like
-  macros, structural attributes, derives, quotation, and interpolation.
-- [`examples/concurrency`](examples/concurrency) demonstrates native threads,
-  transfer-copy closures, channels, copy-based mutexes, and atomic cells.
-- [`tests/fixtures/regression`](tests/fixtures/regression) holds the two
-  adversarial packages that push the implemented language and the `SPEC.md`
-  §12 compile-time surface to their specified boundaries. They are regression
-  fixtures rather than examples: `cargo test` drives them, and every
-  observation the runtime package prints is a rule from `SPEC.md`.
-- [`ROADMAP.md`](ROADMAP.md) describes the compiler implementation milestones.
-- [`LEDGER.md`](LEDGER.md) maps every normative `SPEC.md` rule to an
-  implementation milestone, runtime dependency, and test layer.
-- [`ISSUES.md`](ISSUES.md) records unresolved language-design questions.
-- [`docs/toolchain.md`](docs/toolchain.md) documents installation, commands,
-  developer interfaces, and deliberate initial limitations.
-- [`docs/architecture.md`](docs/architecture.md) records compiler phase
-  ownership and the Milestone 20 behavior-neutral refactor baseline.
-- [`docs/release.md`](docs/release.md) indexes the Milestone 19 conformance and
-  release evidence.
+## Documentation map
+
+- [`docs/SPEC.md`](docs/SPEC.md) is the normative language design.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) contains active and completed implementation work.
+- [`docs/LEDGER.md`](docs/LEDGER.md) maps every normative rule to its implementation,
+  runtime dependency, and test evidence.
+- [`docs/COST_MODEL.md`](docs/COST_MODEL.md) documents current non-normative copying,
+  allocation, retention, promotion, and synchronization costs.
+- [`docs/architecture.md`](docs/architecture.md) records compiler phase ownership and
+  expansion boundaries.
+- [`docs/toolchain.md`](docs/toolchain.md) documents installation, commands, supported
+  targets, and current limitations.
+- [`docs/release.md`](docs/release.md) indexes conformance and release evidence.
+- [`docs/ISSUES.md`](docs/ISSUES.md) contains active design questions; it is currently
+  empty of unresolved reviews.
+- [`docs/PROPOSALS.md`](docs/PROPOSALS.md) and [`docs/CRITIQUES.md`](docs/CRITIQUES.md) preserve
+  non-normative design history and review.
+
+The authoritative surface example is
+[`examples/spec_demo.elx`](examples/spec_demo.elx). Focused packages cover
+[`closures`](examples/closures), [`macros`](examples/macros),
+[`concurrency`](examples/concurrency), [C FFI](examples/c_ffi),
+[`raylib`](examples/raylib), [`SDL2`](examples/sdl), and the
+[billion-iteration Leibniz benchmark](examples/leibniz_pi). The two
+[`tests/fixtures/regression`](tests/fixtures/regression) packages are
+adversarial conformance fixtures rather than examples.
 
 ## Development
 
@@ -142,6 +142,9 @@ while future non-moving, cycle-reclaiming strategies can implement the same
 contract without changing language lowering. A program that needs no managed
 storage links no collector at all. Building one that does requires a Boehm
 development package (`libgc-dev` on Debian- and Ubuntu-family systems).
+The non-normative [memory cost model](COST_MODEL.md) documents current copy,
+allocation, retention, promotion, and synchronization costs and links the
+reproducible release-mode baseline.
 
 ## License
 

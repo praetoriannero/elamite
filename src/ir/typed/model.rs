@@ -91,7 +91,7 @@ pub enum TypedExpressionKind {
     /// `Type.default()` from a `Default` derivation: the type's structural
     /// default value.
     DefaultValue(TypeId),
-    /// Postfix `?` on a standard `Result[T, E]` operand (`SPEC.md` 8).
+    /// Postfix `?` on a standard `Result[T, E]` operand (`docs/SPEC.md` 8).
     ///
     /// The operand is evaluated exactly once. An `Ok` payload is copied into
     /// this expression's value; an `Err` payload is copied into an early
@@ -110,7 +110,7 @@ pub enum TypedExpressionKind {
         /// enclosing function's return type.
         error_type: TypeId,
     },
-    /// A standard nontrapping numeric conversion (`SPEC.md` 4.1). The operand
+    /// A standard nontrapping numeric conversion (`docs/SPEC.md` 4.1). The operand
     /// is evaluated once; the checked form's range test uses the same
     /// boundaries as the trapping `as` conversion, so the two never disagree
     /// about which values are representable.
@@ -120,7 +120,7 @@ pub enum TypedExpressionKind {
         target: TypeId,
     },
     /// `value.checked_add(other)` and the other standard alternatives to the
-    /// trapping arithmetic operators (`SPEC.md` 4.1). The receiver and any
+    /// trapping arithmetic operators (`docs/SPEC.md` 4.1). The receiver and any
     /// operand are evaluated left to right, exactly as for the operator.
     NumericAlternative {
         operation: NumericAlternative,
@@ -311,7 +311,7 @@ pub enum TypedStatementKind {
         arms: Vec<TypedMatchArm>,
     },
     Block(Vec<TypedStatement>),
-    /// One deferred registration owned by its lexical scope (`SPEC.md` 8).
+    /// One deferred registration owned by its lexical scope (`docs/SPEC.md` 8).
     ///
     /// The single-call form is a body holding that one call statement; the
     /// `defer:` block form is its statements in source order. Registration
@@ -387,7 +387,7 @@ pub struct TypedFunction {
     pub body: Vec<TypedStatement>,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
     /// Locals whose address is taken, and which therefore need managed storage
-    /// rather than a C stack slot (`ROADMAP.md` Milestone 10). Conservative: every
+    /// rather than a C stack slot (`docs/ROADMAP.md` Milestone 10). Conservative: every
     /// address-taken local is promoted.
     pub promoted_locals: BTreeSet<LocalBindingId>,
     /// Whether the body allocates a managed cell for a referenced composite

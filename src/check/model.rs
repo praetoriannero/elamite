@@ -91,7 +91,7 @@ pub enum CheckedCall {
         ty: TypeId,
     },
     /// `Target.try_from(value)`, `Target.wrapping_from(value)`, or
-    /// `Target.saturating_from(value)` (`SPEC.md` 4.1). A primitive has no
+    /// `Target.saturating_from(value)` (`docs/SPEC.md` 4.1). A primitive has no
     /// declaration, so this records the selection instead. `result` is
     /// `Result[Target, NumericError]` for the checked form and `Target`
     /// otherwise.
@@ -102,7 +102,7 @@ pub enum CheckedCall {
         result: TypeId,
     },
     /// `value.checked_add(other)` and the other standard alternatives to the
-    /// trapping arithmetic operators (`SPEC.md` 4.1).
+    /// trapping arithmetic operators (`docs/SPEC.md` 4.1).
     NumericAlternative {
         operation: NumericAlternative,
         operand_type: TypeId,

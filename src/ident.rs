@@ -1,7 +1,7 @@
 //! Shared identifier-syntax validation used by manifest parsing,
 //! module-path derivation, and the lexer.
 //!
-//! `SPEC.md` §2 defines an identifier as an ASCII letter or underscore
+//! `docs/SPEC.md` §2 defines an identifier as an ASCII letter or underscore
 //! followed by ASCII letters, decimal digits, or underscores. Keeping this
 //! predicate shared prevents manifest aliases, file-backed module paths, and
 //! source identifiers from diverging.

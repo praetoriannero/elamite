@@ -205,7 +205,9 @@ fn concurrency_contract_matches_the_available_target_and_optimization_matrix() {
     if x86_runtime_available() {
         targets.push(Target::X86);
     } else {
-        eprintln!("skipping x86 concurrency execution: the host has no 32-bit C/GC toolchain");
+        eprintln!(
+            "skipping x86 concurrency execution: the host cannot build and run a 32-bit C/GC/thread probe"
+        );
     }
     let report = run_suite(
         Path::new("tests/fixtures/conformance/14_concurrency"),
@@ -363,19 +365,30 @@ fn x86_runtime_available() -> bool {
     let executable = source.with_extension("bin");
     if fs::write(
         &source,
-        "#include <stdint.h>\n#include <pthread.h>\n#include <gc.h>\nint main(void) { return 0; }\n",
+        "#define GC_THREADS 1\n\
+         #include <stdint.h>\n\
+         #include <pthread.h>\n\
+         #include <gc.h>\n\
+         static void *worker(void *unused) { (void)unused; return GC_MALLOC(1U); }\n\
+         int main(void) { pthread_t thread; GC_INIT(); GC_allow_register_threads(); \
+         if (pthread_create(&thread, NULL, worker, NULL) != 0) return 1; \
+         return pthread_join(thread, NULL) == 0 ? 0 : 1; }\n",
     )
     .is_err()
     {
         return false;
     }
-    let available = Command::new("cc")
+    let compiled = Command::new("cc")
         .args(["-m32", "-std=c99"])
         .arg(&source)
         .args(["-lgc", "-lpthread", "-o"])
         .arg(&executable)
         .output()
         .is_ok_and(|output| output.status.success());
+    let available = compiled
+        && Command::new(&executable)
+            .output()
+            .is_ok_and(|output| output.status.success());
     let _ = fs::remove_file(source);
     let _ = fs::remove_file(executable);
     available

@@ -1,4 +1,4 @@
-/// # Numeric boundaries (`SPEC.md` 4.1)
+/// # Numeric boundaries (`docs/SPEC.md` 4.1)
 ///
 /// Every operation here stays inside defined behavior. The trapping partners
 /// of these cases live in `root.traps`, which asserts them with `expect`.

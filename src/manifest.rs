@@ -1,5 +1,5 @@
-//! Loads and validates an `elamite.toml` package manifest, per `ROADMAP.md`
-//! Milestone 1 and `SPEC.md` §2.3.
+//! Loads and validates an `elamite.toml` package manifest, per `docs/ROADMAP.md`
+//! Milestone 1 and `docs/SPEC.md` §2.3.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use crate::diagnostics::{Category, Diagnostic};
 use crate::ident::is_valid_identifier;
 use crate::source::{FileId, SourceManager, Span};
 
-/// `SPEC.md` §2.3: "Target kind is either `lib` or `exe`."
+/// `docs/SPEC.md` §2.3: "Target kind is either `lib` or `exe`."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetKind {
     Library,
@@ -29,7 +29,7 @@ impl TargetKind {
 
 /// One `[dependencies]` entry.
 ///
-/// The initial resolver supports only local path dependencies. `SPEC.md` §2.3
+/// The initial resolver supports only local path dependencies. `docs/SPEC.md` §2.3
 /// makes that model normative: a richer registry, Git, version-selecting, or
 /// lockfile-aware resolver may be introduced later without changing the
 /// resolved graph consumed by semantic analysis.
@@ -99,7 +99,7 @@ struct RawFormat {
 }
 
 /// Builds a diagnostic whose primary span is `spanned`'s location within
-/// `file`, per the `codespan-reporting` retrofit in `LEDGER.md` §18.
+/// `file`, per the `codespan-reporting` retrofit in `docs/LEDGER.md` §18.
 fn spanned_diagnostic<T>(
     file: FileId,
     spanned: &Spanned<T>,
@@ -130,7 +130,7 @@ impl Manifest {
     /// touching the filesystem (`sources.add_text` registers text directly).
     ///
     /// Every validation failure is collected rather than stopping at the
-    /// first one, per `ROADMAP.md` §2.3's "continue after locally recoverable
+    /// first one, per `docs/ROADMAP.md` §2.3's "continue after locally recoverable
     /// errors" rule.
     pub fn parse(file: FileId, sources: &SourceManager) -> Result<Manifest, Vec<Diagnostic>> {
         let text = sources.text(file);
@@ -138,7 +138,7 @@ impl Manifest {
             // `error.message()` is the short description alone; the full
             // `Display` impl also embeds its own source excerpt, which would
             // duplicate the span-based rendering `codespan-reporting`
-            // already does for `diagnostic.primary` (`LEDGER.md` §18).
+            // already does for `diagnostic.primary` (`docs/LEDGER.md` §18).
             let mut diagnostic = Diagnostic::new(
                 Category::ManifestInvalid,
                 format!("malformed manifest: {}", error.message()),

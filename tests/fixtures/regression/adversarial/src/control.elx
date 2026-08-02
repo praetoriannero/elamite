@@ -1,4 +1,4 @@
-/// # Expressions and control flow (`SPEC.md` 7)
+/// # Expressions and control flow (`docs/SPEC.md` 7)
 
 struct Point(PartialEq):
     x: i32

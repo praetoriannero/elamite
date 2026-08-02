@@ -1,4 +1,4 @@
-//! Core expression, function, method, and control-flow checker façade (`ROADMAP.md`
+//! Core expression, function, method, and control-flow checker façade (`docs/ROADMAP.md`
 //! Milestones 6, 7, 11, and 12).
 //!
 //! This module type-checks the pre-trait subset of the language: module-level
@@ -15,7 +15,7 @@
 //! binding, and match exhaustiveness/reachability (Milestone 7).
 //!
 //! Milestones 6 and 7 are implemented together in one pass rather than as
-//! separate modules: `ROADMAP.md` assigns pattern typing to Milestone 7, but a
+//! separate modules: `docs/ROADMAP.md` assigns pattern typing to Milestone 7, but a
 //! match arm's body (Milestone 6 territory) needs its pattern bindings typed
 //! at the exact point Milestone 6 already visits it, so splitting the two
 //! into a second full tree-walk would either duplicate this module's
@@ -80,7 +80,7 @@ enum Rebindable {
 /// inside an expression rather than a declared signature.
 /// Whether this expression is the `null` literal, looked at strictly within
 /// the expression itself: grouping changes nothing, and a pointee-changing
-/// cast preserves the address (`SPEC.md` 3.3), so a cast null is still null.
+/// cast preserves the address (`docs/SPEC.md` 3.3), so a cast null is still null.
 fn expression_locally_null(node: &SyntaxNode) -> bool {
     match node.kind {
         SyntaxKind::LiteralExpression => node.children.iter().any(|child| {
@@ -160,7 +160,7 @@ struct Checker<'a> {
     expect_depth: u32,
     current_is_test: bool,
     /// The enclosing function's declared return type, for postfix `?`
-    /// propagation-target checking (`SPEC.md` 8).
+    /// propagation-target checking (`docs/SPEC.md` 8).
     current_return_type: Option<TypeId>,
     /// Nesting depth of `unsafe` blocks being checked.
     unsafe_depth: u32,
@@ -295,7 +295,7 @@ impl<'a> Checker<'a> {
         }
         if let Some(block) = crate::syntax::direct_child(&syntax, SyntaxKind::Block) {
             // Postfix `?` needs the enclosing function's return type to
-            // validate its propagation target (`SPEC.md` 8), and expressions
+            // validate its propagation target (`docs/SPEC.md` 8), and expressions
             // are checked without threading `return_type` through every call.
             self.current_return_type = Some(signature.return_type);
             let definitely_returns = self.check_block(block, signature.return_type);
@@ -455,7 +455,7 @@ impl<'a> Checker<'a> {
                         self.check_block(block, return_type);
                     }
                     // `defer call` single-call form: exactly one safe
-                    // unit-returning call (`SPEC.md` 8). The parser already
+                    // unit-returning call (`docs/SPEC.md` 8). The parser already
                     // rejects a non-call expression.
                     None => {
                         if let Some(call) = child_nodes(node).into_iter().next() {
@@ -1083,7 +1083,7 @@ impl<'a> Checker<'a> {
             }
         }
         // Calling an unsafe or foreign function requires an `unsafe:` block
-        // at the call site (`SPEC.md` 10, Milestones 16.3 and 16.4);
+        // at the call site (`docs/SPEC.md` 10, Milestones 16.3 and 16.4);
         // referencing one without calling it stays safe. This single gate
         // covers direct calls, bound and unbound methods, trait dispatch, and
         // indirect calls through `&unsafe fn` values.
@@ -1323,7 +1323,7 @@ impl<'a> Checker<'a> {
                         (target, place)
                     }
                     TypeKind::RawPointer { mutability, target } => {
-                        // Raw dereference is unsafe-only (`SPEC.md` 3.3 and
+                        // Raw dereference is unsafe-only (`docs/SPEC.md` 3.3 and
                         // 10). A `*var T` target is an assignable place; a
                         // `*T` target is read-only even in unsafe code, and
                         // neither can form a safe reference — that path is
@@ -1840,7 +1840,7 @@ impl<'a> Checker<'a> {
         }
         let source_resolved = self.typed.types.resolve_inference(source_type);
         let target_resolved = self.typed.types.resolve_inference(target_type);
-        // The pointer conversion matrix (`SPEC.md` 3.3, Milestones 16.2 and
+        // The pointer conversion matrix (`docs/SPEC.md` 3.3, Milestones 16.2 and
         // 16.5). Every permitted conversion preserves the address and
         // provenance; none upgrades mutability.
         match (
@@ -1986,7 +1986,7 @@ impl<'a> Checker<'a> {
                 return (target_type, PlaceKind::Value);
             }
             // The initial language has no pointer/integer conversion in
-            // either direction (`SPEC.md` 3.3).
+            // either direction (`docs/SPEC.md` 3.3).
             (TypeKind::RawPointer { .. }, _) | (_, TypeKind::RawPointer { .. }) => {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -2014,7 +2014,7 @@ impl<'a> Checker<'a> {
     }
 
     fn check_try(&mut self, node: &SyntaxNode) -> (TypeId, PlaceKind) {
-        // Postfix `?` propagation (`SPEC.md` 8): the operand must be the
+        // Postfix `?` propagation (`docs/SPEC.md` 8): the operand must be the
         // *standard* `Result[T, E]` — a user type that merely shares the
         // spelling is an ordinary value — and the enclosing function must
         // return `Result[U, E]` with exactly the same `E`. There is no
@@ -2089,7 +2089,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Reports an unsafe-only operation used outside an `unsafe:` block
-    /// (`SPEC.md` 10). The lexical block is the only unsafe context: an
+    /// (`docs/SPEC.md` 10). The lexical block is the only unsafe context: an
     /// `unsafe` function's body is deliberately *not* one, so each unsafe
     /// assumption stays locally visible.
     fn require_unsafe_context(&mut self, span: Span, what: &str) {
@@ -2104,7 +2104,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// The mandatory expression-local validity determination (`SPEC.md` 3.3):
+    /// The mandatory expression-local validity determination (`docs/SPEC.md` 3.3):
     /// a raw dereference or raw-to-reference conversion is a compile-time
     /// error only when its pointer operand is an expression-local constant
     /// known to be null or misaligned.
@@ -2135,7 +2135,7 @@ impl<'a> Checker<'a> {
 
     /// Whether a checked call expression invokes an unsafe or foreign target.
     ///
-    /// `SPEC.md` 8: a direct unsafe or foreign call cannot be deferred;
+    /// `docs/SPEC.md` 8: a direct unsafe or foreign call cannot be deferred;
     /// native cleanup is wrapped in a safe unit-returning method. Milestone
     /// 17 applies this same recorded rule when foreign calls become
     /// executable.

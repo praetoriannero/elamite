@@ -1,6 +1,6 @@
 //! Span-preserving lexer and indentation engine.
 //!
-//! This module implements `ROADMAP.md` Milestone 2. It recognizes surface tokens
+//! This module implements `docs/ROADMAP.md` Milestone 2. It recognizes surface tokens
 //! and layout but deliberately performs no parsing, name resolution, or type
 //! checking.
 

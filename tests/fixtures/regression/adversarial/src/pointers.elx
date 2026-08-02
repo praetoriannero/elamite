@@ -1,4 +1,4 @@
-/// # Raw pointers (`SPEC.md` 3.3)
+/// # Raw pointers (`docs/SPEC.md` 3.3)
 ///
 /// Forming, copying, storing, passing, and comparing a raw pointer is safe.
 /// Dereferencing one, converting one to a reference, or changing its pointee

@@ -30,21 +30,18 @@ their established public paths. Compatibility re-exports for `Target` from
 users already import them there; new compiler code should use `config`
 directly.
 
-The expansion pass now builds a lossless nested token-tree view containing
-exact source spellings, layout tokens, and stable origin identities beside each
-unchanged syntax tree. Parsed units are consumed into expansion-owned unit
-identities, and resolution accepts only the owned expansion result. Its
-append-only provenance table distinguishes
-physical spans from spanless generated output and records definition,
-invocation, and nested-expansion chains. Execution and rewriting remain
-disabled. Strict expression, statement, pattern, type, and item fragment entry
-points reuse the ordinary parser through `src/expansion/fragment.rs`, including
-full-consumption checks and existing recovery. Generated token parsing waits
-for origin-aware generated-syntax integration rather than projecting an origin
-onto physical bytes, so macro-free syntax and every downstream phase still
-receive the behavior-neutral baseline.
+The expansion pass owns a lossless nested token-tree view containing exact
+source spellings, layout tokens, and stable origin identities. Parsed units are
+consumed into expansion-owned identities, user-defined compile-time code runs,
+generated syntax re-enters the fixed-point expansion queue, and resolution
+accepts only the completed expansion result. The append-only provenance table
+distinguishes physical spans from spanless generated output and records
+definition, invocation, and nested-expansion chains. Strict expression,
+statement, pattern, type, member, and item fragment entry points reuse the
+ordinary parser through `src/expansion/fragment.rs`, including full-consumption
+checks and existing recovery.
 
-The accepted next layers expose an opaque, versioned, pre-resolution `std.ast`
+The compile-time layer exposes an opaque, versioned, pre-resolution `std.ast`
 façade to a bounded interpreter for ordinary safe compile-time Elamite code.
 `macro`, `attr`, and `derive` share that runtime and the same provenance model;
 `quote:` plus `$` interpolation creates syntax with definition-site hygiene,
@@ -52,8 +49,8 @@ while interpolated values retain their context. The interpreter and AST façade
 must remain outside compiler-private parsed, resolved, and typed data models and
 must not gain ambient host or target capabilities.
 
-`src/expansion/ast.rs` now establishes the first of those layers. Expanded
-packages carry an exact `std.ast` 1.0 interface handshake and a stable intrinsic
+`src/expansion/ast.rs` owns that façade. Expanded packages carry an exact
+`std.ast` 1.0 interface handshake and a stable intrinsic
 type inventory. Its opaque, immutable values cover definitions, items,
 expressions, statements, patterns, written types, metadata, fields, variants,
 parameters, and implementations; persistent typed lists and `with_` methods
@@ -75,16 +72,14 @@ physical body back through the same expression, pattern, type, statement,
 member, and item grammars used by handwritten source. Definition-specific
 roles additionally require the matching struct, enum, function, field, or
 implementation node. Parameter-driven roles remain for compile-time signature
-checking. This layer validates structure but deliberately does not construct
-AST façade values or assign definition-site hygiene; those operations require
-the bounded interpreter and its execution context.
+checking. The interpreter constructs façade values and assigns hygiene through
+the execution context rather than through the parser.
 
 `src/expansion/namespace.rs` collects physical macro, attribute, and derive
 declarations and their explicit imports into stable, separate module namespaces
 before ordinary resolution. It resolves aliases, public re-exports, package
 privacy, inline modules, and dependency roots without adding those bindings to
-the ordinary value/type namespace. Stored signatures and bodies remain inert
-until compile-time checking and interpretation are implemented.
+the ordinary value/type namespace.
 `src/expansion/scheduler.rs` is the deterministic fixed-point engine driven by
 the bounded interpreter. It orders ready work by package, module, and
 provenance; represents attributes-before-derives and generated-output
@@ -98,11 +93,11 @@ Macro bodies execute through `src/expansion/interpreter.rs`, while
 `src/expansion/engine.rs` connects typed arguments and returned syntax to the
 scheduler and ordinary semantic pipeline. User-defined forms are stable; the
 former experimental gate and CLI option were removed after conformance.
-The completed foundation is guarded by directed integration tests and property
+The completed compile-time system is guarded by directed integration tests and property
 tests over arbitrary token streams, every fragment role, deep generated
 provenance, randomized expansion depth, atomic limit recovery, and explicit
 macro-free equivalence for every shipped package example. These tests preserve
-the behavior-neutral boundary while `std.ast` and execution are added above it.
+the phase boundary while generated syntax flows into ordinary semantic passes.
 Native-language test discovery and execution lives in `src/testing.rs` and
 remains separate from the conformance fixture runner.
 

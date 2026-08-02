@@ -1,4 +1,4 @@
-/// # Collections and iteration (`SPEC.md` 4.1, 7.1)
+/// # Collections and iteration (`docs/SPEC.md` 4.1, 7.1)
 ///
 /// Map and set iteration order is unspecified, so every observation here is
 /// order-independent.

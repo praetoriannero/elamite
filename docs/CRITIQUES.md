@@ -40,13 +40,13 @@ poisoning unnecessary; sequential consistency with no relaxed-ordering surface.
 Each deletes a class of defect instead of documenting it. The no-guard mutex in
 particular is a decision most languages get wrong and can never reverse.
 
-## 2. Principal critique: the cost model is unspecified
+## 2. Principal critique: copy costs have no normative guarantee
 
-> Planning response: accepted. `ROADMAP.md` now contains the planned
-> **Memory cost model documentation** and **Value-copy and allocation
-> optimization** milestones. This critique remains relevant until the measured
-> cost document and implementations land; no normative asymptotic guarantee has
-> been accepted merely by scheduling the work.
+> Current response: partially addressed. `COST_MODEL.md` now publishes the
+> measured eager-copy implementation model and its maintenance contract, while
+> `ROADMAP.md` keeps **Value-copy and allocation optimization** as the next
+> milestone. The remaining critique is about implementation cost and normative
+> asymptotic guarantees, not an absence of implementation documentation.
 
 ### 2.1 The gap
 
@@ -58,11 +58,11 @@ particular is a decision most languages get wrong and can never reverse.
 This is a license to optimize. It is not a guarantee a programmer can build on.
 Three facts together make that the language's most significant open risk:
 
-1. **The specification contains no cost model at all.** `SPEC.md` contains no
-   occurrence of *amortized*, *complexity*, *constant time*, *proportional*, or
-   any asymptotic notation. Every semantic property is pinned down — a reader
-   can predict exactly which `BuiltinTrap` identity a bad index raises — while
-   the cost of the language's single most common operation is unstated.
+1. **The specification contains no normative cost model.** `COST_MODEL.md`
+   documents current costs and measurements, but `SPEC.md` deliberately makes
+   no asymptotic promise. Every semantic property is pinned down — a reader can
+   predict exactly which `BuiltinTrap` identity a bad index raises — while the
+   future cost of the language's most common operation remains unguaranteed.
 
 2. **Copy-on-write is not implemented yet.** `ROADMAP.md` now commits planned
    value-copy and allocation work, including COW text and collections, but the
@@ -79,7 +79,7 @@ copy of a `String`, `Vec`, `Map`, or `Set` is O(n).* The language specification
 still permits a conforming implementation to keep it that way even though the
 compiler roadmap now plans otherwise. For a language whose defining
 characteristic is that copies are everywhere, this remains the load-bearing
-gap until the documented and optimized model lands.
+gap until the optimized model lands or reviewed normative bounds are accepted.
 
 ### 2.2 Why "unobservable" is the wrong framing
 
@@ -176,10 +176,9 @@ Committing to asymptotic bounds before copy-on-write exists carries its own
 risk: a bound could be pinned that some future target cannot meet. A lower-risk
 sequence:
 
-1. Add a **non-normative cost annex** now, stating intended bounds and marking
-   which are currently met. This costs nothing and gives users a cost model to
-   program against instead of guessing.
-2. Promote each bound to normative as its `ROADMAP.md` package lands, one
+1. **Completed:** publish a non-normative cost document stating current costs,
+   intended improvements, instrumentation limits, and reproducible baselines.
+2. Promote each bound to normative only as its `ROADMAP.md` package lands, one
    collection at a time, gated by the before-and-after measurement rule that
    section already requires.
 3. Independently, strengthen the `SPEC.md` 10.4 sentence "Copy-on-write storage
@@ -230,9 +229,9 @@ escape promotion may allocate implicitly. `ROADMAP.md` lists precise escape
 analysis as candidate work with conservative promotion as the fallback.
 
 This means locals are silently heap-promoted under rules the programmer cannot
-see, in a language that otherwise works hard to make costs explicit. It belongs
-in the same cost annex proposed in 2.6: users should be able to predict, from
-the source, which bindings can be promoted.
+see, in a language that otherwise works hard to make costs explicit.
+`COST_MODEL.md` now documents the conservative address-taken rule; precise
+escape analysis remains planned optimization work.
 
 ## 4. Summary
 
@@ -241,8 +240,8 @@ organizing idea — deep copies, explicitly-typed aliasing, and collection for
 lifetime, as an alternative to borrow checking. The concurrency chapter
 indicates the design instincts are sound and improving.
 
-The principal risk is not any individual rule. It is that the performance model
-is the least-specified part of an otherwise over-specified language, and the
-mechanism that would rescue it remains unimplemented and non-normative — despite
-the hardest enabling semantic decision having already been made. The planned
-cost-model and value-copy milestones directly address that risk once completed.
+The principal risk is not any individual rule. The current eager performance
+model is now measured and documented, but it remains expensive and
+non-normative. The value-copy optimization milestone must demonstrate that
+idiomatic independent-value code can approach descriptor-copy costs before the
+project considers promising asymptotic bounds in the specification.

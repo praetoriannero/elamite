@@ -1,7 +1,7 @@
 # Initial conformance fixtures
 
 Each numbered directory owns the positive run-pass fixture for the matching
-top-level `SPEC.md` section. The broader test suite supplies the associated
+top-level `docs/SPEC.md` section. The broader test suite supplies the associated
 negative, trap, and interaction layers listed below; names are stable evidence
 for the Milestone 19 ledger audit.
 

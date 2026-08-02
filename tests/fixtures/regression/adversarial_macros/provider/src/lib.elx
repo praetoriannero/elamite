@@ -1,5 +1,5 @@
 /// A dependency package supplying compile-time declarations across a package
-/// boundary (`SPEC.md` 12.1).
+/// boundary (`docs/SPEC.md` 12.1).
 
 /// Public compile-time declarations are importable by dependent packages.
 pub macro provided_expression() -> std.ast.Expression:

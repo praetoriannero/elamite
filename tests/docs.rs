@@ -10,6 +10,41 @@ use elamite::source::SourceManager;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn project_markdown_is_indexed_under_docs() {
+    let mut root_markdown = fs::read_dir(".")
+        .expect("read repository root")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .collect::<Vec<_>>();
+    root_markdown.sort();
+    assert_eq!(
+        root_markdown,
+        [PathBuf::from("./AGENTS.md"), PathBuf::from("./README.md")]
+    );
+
+    let agents = fs::read_to_string("AGENTS.md").expect("read contributor instructions");
+    let index = fs::read_to_string("README.md").expect("read documentation index");
+    for name in [
+        "SPEC.md",
+        "ROADMAP.md",
+        "LEDGER.md",
+        "ISSUES.md",
+        "PROPOSALS.md",
+        "CRITIQUES.md",
+        "COST_MODEL.md",
+    ] {
+        let path = format!("docs/{name}");
+        assert!(fs::metadata(&path).is_ok(), "missing {path}");
+        assert!(agents.contains(&path), "AGENTS.md does not mention {path}");
+        assert!(
+            index.contains(&format!("](docs/{name})")),
+            "index omits {name}"
+        );
+    }
+}
+
 struct TestPackage {
     root: PathBuf,
 }

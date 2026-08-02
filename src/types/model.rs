@@ -30,7 +30,7 @@ pub struct FunctionInstance {
 ///
 /// A trait has no value representation, so it names a type only as the target
 /// of a safe reference (`&Trait`), as a generic or impl bound, or as the trait
-/// of an `impl Trait for Type` (`SPEC.md` 6). Every other position is a value
+/// of an `impl Trait for Type` (`docs/SPEC.md` 6). Every other position is a value
 /// position where a bare trait name is an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TypePosition {
@@ -577,7 +577,7 @@ pub enum PlaceKind {
     /// The target of a `*var T` dereference: assignable in an `unsafe`
     /// context, but never the source of a safe reference — the sanctioned
     /// path from a raw pointer to a reference is the explicit, asserted
-    /// `as &var T` conversion (`SPEC.md` 3.3), not `&var *pointer`.
+    /// `as &var T` conversion (`docs/SPEC.md` 3.3), not `&var *pointer`.
     RawPointerTarget,
 }
 

@@ -1,4 +1,4 @@
-/// # Generics and monomorphization (`SPEC.md` 6)
+/// # Generics and monomorphization (`docs/SPEC.md` 6)
 
 struct Wrapper[T]:
     value: T

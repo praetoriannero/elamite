@@ -1,0 +1,13 @@
+fn main() -> ():
+    let source = String.from(
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ++ "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    )
+    var checksum = 0
+    var index = 0
+    while index < 10000:
+        let snapshot = source
+        if snapshot == source:
+            checksum += 1
+        index += 1
+    println(checksum)

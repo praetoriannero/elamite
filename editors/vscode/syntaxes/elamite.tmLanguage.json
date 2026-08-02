@@ -39,7 +39,7 @@
     "comments": {
       "patterns": [
         {
-          "comment": "SPEC.md 2.1: a line beginning `///` is a documentation comment. Must precede the `//` rule.",
+          "comment": "docs/SPEC.md 2.1: a line beginning `///` is a documentation comment. Must precede the `//` rule.",
           "name": "comment.line.documentation.elx",
           "begin": "///",
           "end": "$",
@@ -159,7 +159,7 @@
     },
 
     "type-primitive": {
-      "comment": "SPEC.md 4.1.",
+      "comment": "docs/SPEC.md 4.1.",
       "name": "support.type.primitive.elx",
       "match": "\\b(isize|usize|bool|char|i128|u128|i16|i32|i64|u16|u32|u64|f32|f64|str|i8|u8)\\b"
     },
@@ -265,7 +265,7 @@
     },
 
     "formatted-string": {
-      "comment": "SPEC.md 7.2. `{{` and `}}` are literal braces; interpolation nests, matching lexer.rs find_interpolation_end.",
+      "comment": "docs/SPEC.md 7.2. `{{` and `}}` are literal braces; interpolation nests, matching lexer.rs find_interpolation_end.",
       "name": "string.quoted.double.formatted.elx",
       "begin": "\\bf\"",
       "end": "\"|$",
@@ -312,7 +312,7 @@
     },
 
     "quote-interpolation": {
-      "comment": "SPEC.md 12.3: named and computed interpolation inside quote bodies.",
+      "comment": "docs/SPEC.md 12.3: named and computed interpolation inside quote bodies.",
       "patterns": [
         {
           "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)",
@@ -351,7 +351,7 @@
           "match": "&&|\\|\\||!"
         },
         {
-          "comment": "Postfix `?` propagates the enclosing error type (SPEC.md 8).",
+          "comment": "Postfix `?` propagates the enclosing error type (docs/SPEC.md 8).",
           "name": "keyword.operator.question.elx",
           "match": "\\?"
         },

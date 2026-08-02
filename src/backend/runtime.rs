@@ -319,6 +319,7 @@ impl<'a> CEmitter<'a> {
                 "void *el_runtime_alloc(size_t byte_count) {\n\
                  \x20\x20\x20\x20void *result = malloc(byte_count);\n\
                  \x20\x20\x20\x20if (result == NULL) exit(101);\n\
+                 \x20\x20\x20\x20el_cost_allocation(byte_count, true);\n\
                  \x20\x20\x20\x20return result;\n\
                  }\n\
                  void el_out_of_memory(void) { exit(101); }\n\n",
@@ -397,15 +398,19 @@ impl<'a> CEmitter<'a> {
                 ));
                 return;
             }
-            self.output.push_str(
-                "        if (result == NULL) el_out_of_memory();\n\
-                 \x20   }\n\
-                 \x20   return result;\n\
-                 }\n",
+            let scanned = if class == AllocationClass::Scanned {
+                "true"
+            } else {
+                "false"
+            };
+            let _ = writeln!(
+                self.output,
+                "        if (result == NULL) el_out_of_memory();\n    }}\n    \
+                 el_cost_allocation(byte_count, {scanned});\n    return result;\n}}"
             );
         }
         // Every allocation wrapper has already attempted a full collection
-        // and retried before reaching this terminal path (`SPEC.md` 9).
+        // and retried before reaching this terminal path (`docs/SPEC.md` 9).
         self.output.push_str("\nvoid el_out_of_memory(void) {\n");
         self.output.push_str(
             "\x20\x20\x20\x20fputs(\"elamite: out of memory\\n\", stderr);\n\
@@ -480,6 +485,35 @@ impl<'a> CEmitter<'a> {
              typedef struct { char *bytes; size_t length; } el_string;\n\n\
              void el_out_of_memory(void);\n\
              void *el_runtime_alloc(size_t byte_count);\n\n\
+             #ifdef ELAMITE_COST_INSTRUMENTATION\n\
+             static volatile uintptr_t el_cost_allocations = 0U;\n\
+             static volatile uintptr_t el_cost_allocated_bytes = 0U;\n\
+             static volatile uintptr_t el_cost_scanned_allocations = 0U;\n\
+             static volatile uintptr_t el_cost_scanned_bytes = 0U;\n\
+             static volatile uintptr_t el_cost_memcpy_calls = 0U;\n\
+             static volatile uintptr_t el_cost_memcpy_bytes = 0U;\n\
+             static void el_cost_add(volatile uintptr_t *counter, size_t amount) {\n\
+             \x20\x20\x20\x20(void)__sync_fetch_and_add(counter, (uintptr_t)amount);\n\
+             }\n\
+             static void el_cost_allocation(size_t byte_count, bool scanned) {\n\
+             \x20\x20\x20\x20el_cost_add(&el_cost_allocations, 1U);\n\
+             \x20\x20\x20\x20el_cost_add(&el_cost_allocated_bytes, byte_count);\n\
+             \x20\x20\x20\x20if (scanned) { el_cost_add(&el_cost_scanned_allocations, 1U); el_cost_add(&el_cost_scanned_bytes, byte_count); }\n\
+             }\n\
+             static void *el_cost_memcpy(void *destination, const void *source, size_t byte_count) {\n\
+             \x20\x20\x20\x20el_cost_add(&el_cost_memcpy_calls, 1U);\n\
+             \x20\x20\x20\x20el_cost_add(&el_cost_memcpy_bytes, byte_count);\n\
+             \x20\x20\x20\x20return memcpy(destination, source, byte_count);\n\
+             }\n\
+             static void el_cost_report(void) {\n\
+             \x20\x20\x20\x20fprintf(stderr, \"elamite-cost-v1\\tallocations=%\" PRIuPTR \"\\tallocated_bytes=%\" PRIuPTR \"\\tscanned_allocations=%\" PRIuPTR \"\\tscanned_bytes=%\" PRIuPTR \"\\tmemcpy_calls=%\" PRIuPTR \"\\tmemcpy_bytes=%\" PRIuPTR \"\\n\", el_cost_allocations, el_cost_allocated_bytes, el_cost_scanned_allocations, el_cost_scanned_bytes, el_cost_memcpy_calls, el_cost_memcpy_bytes);\n\
+             }\n\
+             static void el_cost_begin(void) { (void)atexit(el_cost_report); }\n\
+             #else\n\
+             #define el_cost_allocation(BYTE_COUNT, SCANNED) ((void)0)\n\
+             #define el_cost_memcpy(DESTINATION, SOURCE, BYTE_COUNT) memcpy((DESTINATION), (SOURCE), (BYTE_COUNT))\n\
+             #define el_cost_begin() ((void)0)\n\
+             #endif\n\n\
              typedef struct { uint32_t type_id; uint64_t code_length; } el_trap_record;\n\
              static int el_expect_read_fd = -1;\n\
              static int el_expect_write_fd = -1;\n\
@@ -547,14 +581,14 @@ impl<'a> CEmitter<'a> {
              el_string el_copy_string(el_string value) {\n\
              \x20\x20\x20\x20el_string copy = {NULL, value.length};\n\
              \x20\x20\x20\x20copy.bytes = (char *)el_runtime_alloc(value.length + 1U);\n\
-             \x20\x20\x20\x20if (value.length != 0U) memcpy(copy.bytes, value.bytes, value.length);\n\
+             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy(copy.bytes, value.bytes, value.length);\n\
              \x20\x20\x20\x20copy.bytes[value.length] = '\\0';\n\
              \x20\x20\x20\x20return copy;\n\
              }\n\
              el_string el_string_from(el_str value) {\n\
              \x20\x20\x20\x20el_string owned = {NULL, value.length};\n\
              \x20\x20\x20\x20owned.bytes = (char *)el_runtime_alloc(value.length + 1U);\n\
-             \x20\x20\x20\x20if (value.length != 0U) memcpy(owned.bytes, value.bytes, value.length);\n\
+             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy(owned.bytes, value.bytes, value.length);\n\
              \x20\x20\x20\x20owned.bytes[value.length] = '\\0';\n\
              \x20\x20\x20\x20return owned;\n\
              }\n\
@@ -563,8 +597,8 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20if (left.length > SIZE_MAX - right.length) el_out_of_memory();\n\
              \x20\x20\x20\x20result.length = left.length + right.length;\n\
              \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc(result.length == 0U ? 1U : result.length);\n\
-             \x20\x20\x20\x20if (left.length != 0U) memcpy((char *)result.bytes, left.bytes, left.length);\n\
-             \x20\x20\x20\x20if (right.length != 0U) memcpy((char *)result.bytes + left.length, right.bytes, right.length);\n\
+             \x20\x20\x20\x20if (left.length != 0U) el_cost_memcpy((char *)result.bytes, left.bytes, left.length);\n\
+             \x20\x20\x20\x20if (right.length != 0U) el_cost_memcpy((char *)result.bytes + left.length, right.bytes, right.length);\n\
              \x20\x20\x20\x20return result;\n\
              }\n\
              el_string el_concat_string(el_string left, el_string right) {\n\
@@ -572,8 +606,8 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20if (left.length >= SIZE_MAX - right.length) el_out_of_memory();\n\
              \x20\x20\x20\x20result.length = left.length + right.length;\n\
              \x20\x20\x20\x20result.bytes = (char *)el_runtime_alloc(result.length + 1U);\n\
-             \x20\x20\x20\x20if (left.length != 0U) memcpy(result.bytes, left.bytes, left.length);\n\
-             \x20\x20\x20\x20if (right.length != 0U) memcpy(result.bytes + left.length, right.bytes, right.length);\n\
+             \x20\x20\x20\x20if (left.length != 0U) el_cost_memcpy(result.bytes, left.bytes, left.length);\n\
+             \x20\x20\x20\x20if (right.length != 0U) el_cost_memcpy(result.bytes + left.length, right.bytes, right.length);\n\
              \x20\x20\x20\x20result.bytes[result.length] = '\\0';\n\
              \x20\x20\x20\x20return result;\n\
              }\n\n\
@@ -614,13 +648,13 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20capacity = formatter->capacity == 0U ? 32U : formatter->capacity;\n\
              \x20\x20\x20\x20while (capacity < needed) capacity *= 2U;\n\
              \x20\x20\x20\x20replacement = (char *)el_runtime_alloc(capacity);\n\
-             \x20\x20\x20\x20if (formatter->length != 0U) memcpy(replacement, formatter->bytes, formatter->length);\n\
+             \x20\x20\x20\x20if (formatter->length != 0U) el_cost_memcpy(replacement, formatter->bytes, formatter->length);\n\
              \x20\x20\x20\x20formatter->bytes = replacement;\n\
              \x20\x20\x20\x20formatter->capacity = capacity;\n\
              }\n\
              void el_fmt_append_n(el_formatter *formatter, const char *text, size_t length) {\n\
              \x20\x20\x20\x20el_fmt_reserve(formatter, length);\n\
-             \x20\x20\x20\x20if (length != 0U) memcpy(formatter->bytes + formatter->length, text, length);\n\
+             \x20\x20\x20\x20if (length != 0U) el_cost_memcpy(formatter->bytes + formatter->length, text, length);\n\
              \x20\x20\x20\x20formatter->length += length;\n\
              \x20\x20\x20\x20formatter->bytes[formatter->length] = '\\0';\n\
              }\n\
@@ -742,7 +776,7 @@ impl<'a> CEmitter<'a> {
     }
 
     /// Defines the standard alternatives to the trapping arithmetic operators
-    /// (`SPEC.md` 4.1) as two macros, instantiated per used integer type.
+    /// (`docs/SPEC.md` 4.1) as two macros, instantiated per used integer type.
     ///
     /// Each operation is expressed as an overflow *predicate* plus a wrapping
     /// result, so `checked_X` is exactly `ovf_X ? None : Some(wrap_X)` and the
@@ -890,7 +924,7 @@ impl<'a> CEmitter<'a> {
         pairs
     }
 
-    /// Emits one standard numeric conversion helper (`SPEC.md` 4.1).
+    /// Emits one standard numeric conversion helper (`docs/SPEC.md` 4.1).
     ///
     /// The checked form's range test uses the same boundaries as the trapping
     /// `as` conversion, so `value as Target` and `Target.try_from(value)`
@@ -986,7 +1020,7 @@ impl<'a> CEmitter<'a> {
         let mut body = String::new();
         if target_primitive.is_float() {
             // Integer-to-float and float-to-float conversions use IEEE
-            // rounding and cannot fail (`SPEC.md` 4.1).
+            // rounding and cannot fail (`docs/SPEC.md` 4.1).
             let _ = writeln!(body, "    return {ok};");
         } else {
             let Some((minimum, maximum)) = primitive_bounds(target_primitive, self.options.target)
@@ -2305,7 +2339,7 @@ impl<'a> CEmitter<'a> {
             let bytes = format!("capacity * sizeof({element_type})");
             self.emit_runtime_allocate("replacement", &bytes, scanned);
             self.output.push_str(
-                "    if (value->length != 0U) memcpy(replacement, value->values, \
+                "    if (value->length != 0U) el_cost_memcpy(replacement, value->values, \
                  value->length * sizeof(*replacement));\n\
                  \x20   value->values = replacement;\n\
                  \x20   value->capacity = capacity;\n}\n\n",
@@ -2455,8 +2489,8 @@ impl<'a> CEmitter<'a> {
         let value_bytes = format!("capacity * sizeof({value_type})");
         self.emit_runtime_allocate("values", &value_bytes, value_class);
         self.output.push_str(
-            "    if (value->length != 0U) {\n        memcpy(keys, value->keys, \
-             value->length * sizeof(*keys));\n        memcpy(values, value->values, \
+            "    if (value->length != 0U) {\n        el_cost_memcpy(keys, value->keys, \
+             value->length * sizeof(*keys));\n        el_cost_memcpy(values, value->values, \
              value->length * sizeof(*values));\n    }\n    value->keys = keys;\n    \
              value->values = values;\n    value->capacity = capacity;\n}\n\n",
         );
@@ -2643,7 +2677,7 @@ impl<'a> CEmitter<'a> {
         let bytes = format!("capacity * sizeof({element_type})");
         self.emit_runtime_allocate("replacement", &bytes, class);
         self.output.push_str(
-            "    if (value->length != 0U) memcpy(replacement, value->values, \
+            "    if (value->length != 0U) el_cost_memcpy(replacement, value->values, \
              value->length * sizeof(*replacement));\n    value->values = replacement;\n    \
              value->capacity = capacity;\n}\n\n",
         );
@@ -2784,7 +2818,7 @@ impl<'a> CEmitter<'a> {
     }
 
     /// Emits the mandatory null/alignment check helper for one pointee type
-    /// (`SPEC.md` 3.3, Milestone 16.8). The alignment comes from the C99
+    /// (`docs/SPEC.md` 3.3, Milestone 16.8). The alignment comes from the C99
     /// `offsetof` probe — a `char` followed by the pointee — because
     /// `_Alignof` is C11-only and the generated C must stay C99.
     pub(super) fn emit_pointer_check_helper(&mut self, pointee: TypeId) {
@@ -2967,7 +3001,7 @@ impl<'a> CEmitter<'a> {
 
     /// Emits `bool el_eq_T(T, T)` for an aggregate, comparing structurally.
     ///
-    /// `SPEC.md` 4.3: derived equality compares components. Reference-like
+    /// `docs/SPEC.md` 4.3: derived equality compares components. Reference-like
     /// components compare by identity, which is what `==` on a pointer already
     /// does.
     pub(super) fn emit_equality_helper(&mut self, ty: TypeId, span: Option<Span>) {
@@ -3738,7 +3772,7 @@ impl<'a> CEmitter<'a> {
                         });
                         self.output.push_str(
                             "        if (result->bytes == NULL) el_out_of_memory();\n\
-                             \x20       memcpy(result->bytes, value->bytes, value->length);\n\
+                             \x20       el_cost_memcpy(result->bytes, value->bytes, value->length);\n\
                              \x20       result->bytes[value->length] = '\\0';\n\
                              \x20   }\n\
                              \x20   return result;\n",

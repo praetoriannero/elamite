@@ -1,4 +1,4 @@
-/// # Errors and deterministic cleanup (`SPEC.md` 8)
+/// # Errors and deterministic cleanup (`docs/SPEC.md` 8)
 
 use std.io
 

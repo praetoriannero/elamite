@@ -1,0 +1,34 @@
+fn main() -> ():
+    let (sender, receiver) = std.sync.channel[Vec[String]](8)
+    let payload = @vec[
+        String.from("one"),
+        String.from("two"),
+        String.from("three"),
+        String.from("four"),
+        String.from("five"),
+        String.from("six"),
+        String.from("seven"),
+        String.from("eight"),
+    ]
+    let produce = fn[sender, payload]() -> ():
+        var index = 0
+        while index < 1000:
+            let _ = sender.send(payload)
+            index += 1
+        sender.close()
+
+    let started = std.thread.spawn(produce)
+    var checksum: usize = 0
+    var open = true
+    while open:
+        match receiver.receive():
+            Option.Some(message):
+                checksum += message.len()
+            Option.None:
+                open = false
+    match started:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+    println(checksum)

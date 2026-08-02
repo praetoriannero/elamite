@@ -1,6 +1,6 @@
 //! Deterministic C99 backend façade and emission orchestration.
 //!
-//! This is the first executable backend (`ROADMAP.md` Milestones 8-9). It consumes
+//! This is the first executable backend (`docs/ROADMAP.md` Milestones 8-9). It consumes
 //! explicit control-flow IR, uses an internal (unstable) calling convention,
 //! emits one strictly sequenced C statement per IR instruction, and routes
 //! every supported value copy through a generated per-type helper.

@@ -1,7 +1,7 @@
 # Compile-time surface stress package
 
 Companion to [`adversarial`](../adversarial), covering the
-compile-time syntax-generation surface from `SPEC.md` §12.
+compile-time syntax-generation surface from `docs/SPEC.md` §12.
 
 This package is **checked, not run** because it is a compile-time surface
 fixture rather than an executable. It exercises the bounded interpreter,

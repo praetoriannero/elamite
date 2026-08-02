@@ -1,18 +1,18 @@
 # Elamite Compiler Roadmap
 
-> Status: Active — completed legacy work is omitted from this forward-looking
-> plan; remaining milestones and work packages use stable descriptive names
+> Status: Active — older completed work is summarized in the ledger; active,
+> candidate, and recently completed milestones use stable descriptive names
 >
-> Next required work package: **Memory cost model documentation** —
-> **Copy and allocation inventory**
+> Next required work package: **Value-copy and allocation optimization** —
+> **Copy-cost instrumentation seam**
 >
 > Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
 
-This document breaks the remaining initial Elamite compiler work and planned
-post-conformance extensions into implementation milestones. Each milestone
-carries its own status note; the header above records how far the sequence has
-advanced. Elamite compiles to C, as required by the specification.
+This document organizes current compiler work, candidate optimizations, and
+recently completed language extensions into implementation milestones. Each
+milestone carries its own status note; the header above records the next
+required package. Elamite compiles to C, as required by the specification.
 
 Detailed plans are removed from this file once every work package in a
 milestone is complete. Normative behavior remains in `SPEC.md`, rule coverage
@@ -22,7 +22,7 @@ remains in tests and version history.
 The plan was originally written without choosing the language in which the
 compiler is written, a parser technology, or a build system. Those are now
 settled: the compiler is an edition-2024 Rust package built with Cargo, and its
-lexer and parser are hand-written. See `AGENTS.md` for the rules those choices
+lexer and parser are hand-written. See [`AGENTS.md`](../AGENTS.md) for the rules those choices
 imply and `LEDGER.md` §18 for the third-party crate decisions behind them.
 
 `SPEC.md` and the authoritative demonstration define the language. This
@@ -150,7 +150,7 @@ A milestone is complete only when:
 
 ### 2.6 Work-package format
 
-Only milestones with outstanding or candidate work remain below. Within an
+Active, candidate, and recently completed milestones remain below. Within an
 active milestone, completed work packages stay marked until the whole milestone
 is complete. Outstanding work is divided into ordered, descriptively named
 packages.
@@ -171,13 +171,13 @@ may proceed in parallel. A work package is not a new language-design authority:
 `SPEC.md` remains normative, and splitting work must not create observable
 intermediate semantics that contradict it.
 
-## 3. Active implementation roadmap
+## 3. Current implementation roadmap
 
 ### Memory cost model documentation
 
-> Status: Planned. This milestone documents the current implementation before
-> optimization and records intended improvements without making premature
-> normative complexity guarantees.
+> Status: Complete. `COST_MODEL.md` inventories the current implementation,
+> the opt-in `elamite-cost-v1` counters measure requested allocations and
+> explicit copied bytes, and fixed release workloads establish the baseline.
 >
 > Blocked by: **None**. Its measured baseline should precede
 > **Value-copy and allocation optimization**.
@@ -195,10 +195,10 @@ costs have been reviewed separately.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Copy and allocation inventory** | Inventory binding, assignment, argument, return, pattern, closure-capture, iteration-snapshot, transfer, concatenation, collection mutation, reference-promotion, and synchronization costs by type family. | Each operation distinguishes semantic copying, physical copying, allocation, retained storage, and implementation freedom; x86 and x86-64 differences are explicit. |
-| **Reproducible memory baseline** | Add release-mode microbenchmarks and allocation/byte-copy instrumentation for representative `String`, `Vec`, `Map`, `Set`, nested aggregate, closure, function-call, loop, and cross-thread workloads. | Results are reproducible enough to compare revisions, record input sizes and toolchain/target identity, and avoid timing or allocation thresholds in ordinary conformance tests. |
-| **Published cost model** | Add a non-normative `COST_MODEL.md` describing current asymptotic behavior, likely allocation sites, GC retention and nondeterminism, conservative promotion, explicit alias and synchronized-handle costs, and the intended optimized model. | A programmer can predict which source operations may allocate or copy proportionally to data size and can tell a guarantee from an implementation note or optimization target. |
-| **Cost-document maintenance contract** | Define the review rule for representation, lowering, runtime, and optimizer changes that alter documented costs, including required before/after measurements and release-note updates. | A cost-changing implementation cannot be marked complete while `COST_MODEL.md` still describes the previous behavior. |
+| **Copy and allocation inventory (done)** | Inventory binding, assignment, argument, return, pattern, closure-capture, iteration-snapshot, transfer, concatenation, collection mutation, reference-promotion, and synchronization costs by type family. | Each operation distinguishes semantic copying, physical copying, allocation, retained storage, and implementation freedom; x86 and x86-64 differences are explicit. |
+| **Reproducible memory baseline (done)** | Add release-mode microbenchmarks and allocation/byte-copy instrumentation for representative `String`, `Vec`, `Map`, `Set`, nested aggregate, closure, function-call, loop, and cross-thread workloads. | Results are reproducible enough to compare revisions, record input sizes and toolchain/target identity, and avoid timing or allocation thresholds in ordinary conformance tests. |
+| **Published cost model (done)** | Add a non-normative `COST_MODEL.md` describing current asymptotic behavior, likely allocation sites, GC retention and nondeterminism, conservative promotion, explicit alias and synchronized-handle costs, and the intended optimized model. | A programmer can predict which source operations may allocate or copy proportionally to data size and can tell a guarantee from an implementation note or optimization target. |
+| **Cost-document maintenance contract (done)** | Define the review rule for representation, lowering, runtime, and optimizer changes that alter documented costs, including required before/after measurements and release-note updates. | A cost-changing implementation cannot be marked complete while `COST_MODEL.md` still describes the previous behavior. |
 
 ### Value-copy and allocation optimization
 
@@ -207,9 +207,8 @@ costs have been reviewed separately.
 > concurrency; it does not adopt Go-style mutable shallow copies or add a
 > source-level move operation.
 >
-> Blocked by: **Memory cost model documentation** for its baseline. The
-> completed concurrency conformance matrix remains the gate for final
-> cross-thread COW validation.
+> Depends on: **Memory cost model documentation** and **Standard-library
+> concurrency** (complete).
 
 **Goal:** Approach the cost of read-only Go-style descriptor passing without
 adopting Go-style implicit mutable aliasing. The compiler may borrow, reuse, or
@@ -263,15 +262,12 @@ deterministic output.
 test and macro programs below. Individual packages, especially source-map
 infrastructure, may be pulled forward when a later milestone needs them.
 
-## 5. Post-conformance compile-time syntax generation
+## 4. Post-conformance compile-time syntax generation
 
-Macro work begins after the completed initial-conformance milestone.
-`SPEC.md` §12 owns the accepted interpreter-backed `macro`, `attr`, and
-`derive` declarations, the versioned `std.ast` interface, `quote:` and `$`
-interpolation, `++` concatenation, hygiene, scheduling, and deterministic
-resource limits. Until implementation reaches each gated package, the existing
-compiler-supported collection macros, FFI attributes, and compact built-in
-derive syntax retain their behavior.
+The compile-time syntax-generation milestone is complete. `SPEC.md` §12 owns
+the stable interpreter-backed `macro`, `attr`, and `derive` declarations, the
+versioned `std.ast` interface, `quote:` and `$` interpolation, `++`
+concatenation, hygiene, scheduling, and deterministic resource limits.
 
 The implementation must preserve these boundaries throughout the transition:
 
@@ -376,11 +372,11 @@ stable without an experimental gate.
 | **Compatibility audit (done)** | Verify macro-free diagnostic, IR, runtime, and generated-C equivalence and built-in behavior on Linux x86 and x86-64. | Enabling the expansion pipeline changes only programs using the new surface. |
 | **Stabilization (done)** | Complete documentation and ledger coverage, freeze the initial `std.ast` ABI, retain compact built-in derives as compatibility syntax alongside attached `@derive(...)`, and remove `--unstable-macros`. | Local and cross-package conformance suites pass with the stable surface. |
 
-## 6. Closures
+## 5. Closures
 
 ### Explicit-capture closures
 
-> Status: Implemented against `SPEC.md` 0.7.0-draft.
+> Status: Complete and conformed against `SPEC.md` 0.9.0-draft.
 >
 > Blocked by: **None**. **Standard-library concurrency** is blocked by this
 > milestone because spawned thread bodies rely on closures.
@@ -469,7 +465,7 @@ callback conversion are outside this milestone. A later proposal must define
 their interaction with logical copying, erasure, cleanup, and concurrency
 before adding any of them.
 
-## 7. Native threads and synchronization
+## 6. Native threads and synchronization
 
 ### Standard-library concurrency
 
@@ -591,7 +587,7 @@ guards exposing protected references, scoped reference transfer, parallel
 iterators, scheduling or fairness guarantees, automatic deadlock detection,
 and foreign-thread attachment are outside this milestone.
 
-## 9. Recommended delivery checkpoints
+## 7. Delivery checkpoints
 
 Delivery checkpoints are:
 
@@ -618,6 +614,9 @@ Delivery checkpoints are:
 - **Standard-library concurrency:** native threads exchange only transfer-safe
   copies or synchronized handles, retain process-wide trap and cleanup rules,
   and pass the race, GC, and target conformance matrices.
+- **Memory cost model:** the current eager-copy, allocation, promotion,
+  retention, and synchronization costs are documented separately from
+  semantics and backed by reproducible release-mode counters and workloads.
 - **Tuple destructuring and positional fields:** local tuple bindings and
   positional fields preserve exact tuple shape, logical-copy, place,
   reference, and evaluation-order semantics on both targets.

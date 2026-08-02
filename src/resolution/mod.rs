@@ -1,6 +1,6 @@
 //! Declaration collection, imports, visibility, and lexical name-resolution façade.
 //!
-//! This is the owned identity database for `ROADMAP.md` Milestone 4. It consumes
+//! This is the owned identity database for `docs/ROADMAP.md` Milestone 4. It consumes
 //! the package graph and Milestone 3 syntax trees, predeclares every module
 //! item, then resolves imports and bodies without depending on source order.
 //!

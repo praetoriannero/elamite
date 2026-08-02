@@ -6,6 +6,7 @@ impl<'a> CEmitter<'a> {
     pub(super) fn emit_entry(&mut self) {
         if let Some(entries) = &self.options.test_entries {
             self.output.push_str("int main(void) {\n");
+            self.output.push_str("    el_cost_begin();\n");
             if self.program.requires_managed_memory {
                 self.emit_managed_operation(ManagedMemoryOperation::Initialize);
                 if self.uses_thread_lifecycle() {
@@ -107,6 +108,7 @@ impl<'a> CEmitter<'a> {
         // package emits no shim, so initialization is the linking
         // executable's responsibility.
         self.output.push_str("int main(void) {\n");
+        self.output.push_str("    el_cost_begin();\n");
         if self.program.requires_managed_memory {
             self.emit_managed_operation(ManagedMemoryOperation::Initialize);
             if self.uses_thread_lifecycle() {

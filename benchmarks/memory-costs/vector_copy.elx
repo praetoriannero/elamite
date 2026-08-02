@@ -1,0 +1,14 @@
+fn main() -> ():
+    var source: Vec[i32] = Vec.new()
+    var index = 0
+    while index < 128:
+        source.append(index)
+        index += 1
+
+    var checksum = 0
+    index = 0
+    while index < 2000:
+        let snapshot = source
+        checksum += snapshot[index % 128]
+        index += 1
+    println(checksum)

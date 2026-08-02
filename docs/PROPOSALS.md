@@ -1,26 +1,17 @@
-# Language Design Proposals
+# Resolved and deferred language design proposals
 
-> Status: Exploratory design discussion. This document is not part of the
-> normative language specification and does not authorize grammar or compiler
-> changes by itself.
->
-> Scope: Foreign declarations, native build configuration, collection literal
-> delimiters, and a possible future user-macro system.
->
-> M17 resolution: foreign declarations now use
-> `@importc("c_name", "header.h")` and `@exportc("c_name")`; there is no
-> `extern` grammar. `*fn` and `*unsafe fn` are general raw function pointers,
-> not C-only types. The alternatives retained below are historical design
-> context rather than open M17 choices.
+> Status: Non-normative design archive. This document does not authorize
+> grammar or compiler changes; `SPEC.md` owns accepted behavior, `ROADMAP.md`
+> owns implementation work, and `ISSUES.md` owns active reviews.
 
-This document combines the motivating ideas for these features with the
-implementation, safety, tooling, and language-design considerations they
-introduce. Accepted decisions should eventually move into `SPEC.md`, their
-implementation work into `ROADMAP.md`, and unresolved decisions into `ISSUES.md`.
+This archive records the rationale behind four earlier proposals. Foreign
+attributes, declarative native configuration, collection delimiters, and the
+interpreter-backed compile-time system have all been settled. Programmable
+`build.elx` remains deferred and is not an active design review.
 
-## 1. Attribute-based foreign declarations
+## 1. Attribute-based foreign declarations (resolved)
 
-### Motivation
+### Historical motivation
 
 The earlier specification grouped declarations inside a module-level
 `extern "C":` block:
@@ -136,14 +127,14 @@ Foreign enums should be designed separately. C enum representation is not
 portable enough for an attribute alone to make an ordinary Elamite enum
 ABI-safe.
 
-### Tentative direction
+### Resolution
 
-Reserve item attributes now and permit a small compiler-defined set for FFI.
-The accepted design uses distinct `@importc` and `@exportc` forms, removes
-`extern` entirely, uses general raw function-pointer types at C boundaries,
-and keeps user-defined attribute macros out of the M17 dependency chain.
+The shipped design uses distinct `@importc` and `@exportc` forms, has no
+`extern` grammar, and uses general raw function-pointer types at C boundaries.
+User-defined attributes now exist independently through the stable compile-time
+system in `SPEC.md` §12.
 
-## 2. Top-level `build.elx`
+## 2. Top-level `build.elx` (deferred)
 
 ### Motivation
 
@@ -178,22 +169,20 @@ stage before package compilation. That requires answers for:
 - generated-file locations and `rerun-if-changed` behavior;
 - how build-script errors become source diagnostics.
 
-The first FFI implementation does not need all of that machinery. Its immediate
-requirements can remain declarative:
+The implemented FFI support does not need that machinery. Its native inputs
+are declared in the package manifest:
 
 ```toml
 [native]
 libraries = ["example"]
 library_paths = ["native/lib"]
 include_paths = ["native/include"]
-headers = ["example.h"]
-defines = ["EXAMPLE_FEATURE=1"]
 link_options = ["-pthread"]
 ```
 
-The precise manifest keys are illustrative. Static native inputs should be
-resolved relative to the package, normalized, ordered deterministically, and
-included in build cache keys.
+The implemented keys are `include_paths`, `library_paths`, `libraries`, and
+`link_options`. Static native inputs are resolved relative to the package and
+passed deterministically to the selected C toolchain.
 
 ### A later programmable build API
 
@@ -212,15 +201,15 @@ This should produce build metadata rather than mutate compiler internals. It
 should write generated artifacts only beneath a designated output directory
 and explicitly report every input that affects rerunning or caching.
 
-### Tentative direction
+### Current status
 
-Design the native build metadata before completing M17 linkage, but implement
-the static manifest form first. Reconsider executable `build.elx` after the
-standard library, host/target model, and reproducible build protocol exist.
+Static manifest configuration is implemented. Executable `build.elx` remains
+deferred until a concrete need justifies its host/target, capability, caching,
+and reproducibility contract.
 
-## 3. `@vec` delimiter consistency
+## 3. `@vec` delimiter consistency (resolved)
 
-### Proposed change
+### Considered change
 
 Change vector construction from:
 
@@ -265,108 +254,45 @@ consistency. It has no significant semantic or implementation consequence, but
 it is a source-breaking grammar change that would touch the specification,
 demonstration, parser snapshots, and collection tests.
 
-### Tentative direction
+### Resolution
 
-The existing `@vec[...]` form has the stronger semantic delimiter convention
-and is the current preference. If uniform `@name{...}` invocation is chosen as
-a foundational rule for the future macro system, change it before the language
-surface stabilizes rather than supporting both spellings.
+The language retains `@vec[...]`, matching the ordered-sequence convention;
+`@map{...}` and `@set{...}` retain braces. User-defined function-like macros
+use `@path(...)`, so there is no uniform `@name{...}` rule requiring a change.
 
-## 4. User-defined macros, derives, and attributes
+## 4. User-defined macros, derives, and attributes (resolved)
 
-### Long-term goal
+The accepted system has three module-level declaration forms with separate
+namespaces: `[pub] macro`, `[pub] attr`, and `[pub] derive`. Their ordinary safe
+Elamite bodies execute in a bounded, capability-free compile-time interpreter
+over immutable `std.ast` 1.0 values.
 
-A future metaprogramming system could support:
+- Function-like macros are invoked as `@path(...)` and may produce expressions,
+  statements, patterns, types, members, items, or their documented lists.
+- Attributes attach as `@attr(path(...))` and may transform, replace, remove,
+  or multiply supported definitions.
+- Derives attach as `@derive(path)` and transform a single target while
+  producing the requested implementation structure.
+- `quote:` constructs typed syntax; `$name` and `$(expression)` interpolate AST
+  values, while `++` concatenates supported strings, sequences, and AST lists.
+- Expansion runs attributes before derives and then uses a deterministic
+  fixed-point scheduler with bounded depth, executions, generated nodes, fuel,
+  and live values.
+- Generated identifiers use definition-site context, interpolated syntax keeps
+  its existing context, and provenance retains physical invocation and
+  definition evidence without fabricating source spans.
 
-- ordinary syntax-generating macros;
-- user-defined derive generators;
-- declaration attributes such as the proposed FFI attributes;
-- attribute macros that inspect or transform functions and type declarations.
+This replaced the earlier matcher/transcriber and native-plugin possibilities.
+The former `--unstable-macros` gate has been retired; user-defined forms are
+stable and covered by the macro example, adversarial package, property tests,
+and the conformance ledger. `SPEC.md` §12 is authoritative.
 
-These facilities could share token-tree parsing and expansion infrastructure,
-similar to the broad architecture used by Rust. They should not be treated as
-one semantic feature merely because their invocation syntax is related.
+## 5. Current disposition
 
-### Three distinct expansion roles
-
-An ordinary macro transforms an invocation into an expression, statement,
-pattern, type, or item. A derive generator inspects a declared type and emits
-one or more implementations. An attribute macro may inspect, replace, remove,
-or multiply the declaration to which it is attached.
-
-Each role has different ordering and semantic requirements:
-
-- ordinary macros generally expand before type checking;
-- derives need the declared type's fields, generics, and requested trait;
-- item attributes may affect which names exist before resolution;
-- generated implementations must still obey coherence and orphan rules.
-
-A user trait is not automatically derivable from its method signatures. The
-trait does not describe how a method should be synthesized from a type's
-fields. A trait whose methods all have defaults already supports an explicit
-empty implementation:
-
-```elx
-impl MyTrait for MyStruct:
-    pass
-```
-
-A genuinely custom derive therefore needs an associated generator or a much
-more restricted structural-trait mechanism.
-
-### Required design decisions
-
-Before user-defined expansion is introduced, the language needs explicit rules
-for:
-
-- macro declaration, import, visibility, and namespace lookup;
-- token trees in an indentation-sensitive grammar;
-- hygienic generated identifiers;
-- expansion order and fixed-point behavior;
-- recursion, time, memory, and output-size limits;
-- source spans and diagnostics through generated syntax;
-- deterministic builds and cache keys;
-- whether macro code is interpreted, compiled for the host, or loaded as a
-  native plugin;
-- dependency trust, filesystem access, process access, and sandboxing;
-- generic bounds and name resolution in generated implementations;
-- language-server behavior for incomplete and expanded source.
-
-Procedural item attributes are especially expensive for editor tooling because
-resolution, completion, navigation, and rename may depend on declarations that
-exist only after expansion.
-
-### Staged approach
-
-1. Reserve item-attribute syntax such as `@name(...)`.
-2. Implement only compiler-defined metadata attributes, including any accepted
-   FFI attributes. These are validated directly and do not execute user code.
-3. Retain the existing compiler-supported derives.
-4. Design hygienic declarative macros as an independent post-conformance
-   feature.
-5. Add custom derive generators after macro expansion has stable syntax,
-   hygiene, spans, and deterministic limits.
-6. Add arbitrary procedural attribute macros only after Elamite has an explicit
-   host-side compile-time execution and security model.
-
-The exact `@macro{...}` definition and invocation syntax remains open. Reserving
-the `@name` namespace leaves room for that work without making the initial FFI
-attributes depend on it.
-
-## 5. Proposed sequencing
-
-These proposals interact, but they do not need to ship as one feature:
-
-1. Review and settle the compiler-defined item-attribute grammar.
-2. M17 chose `@importc`/`@exportc` item attributes and removed `extern`.
-3. Define declarative include paths, headers, library paths, libraries, and
-   link options before implementing native linkage.
-4. Resolve the `@vec` delimiter before committing to a general macro invocation
-   convention.
-5. Complete initial conformance and language-server-friendly semantic
-   boundaries.
-6. Open a separate design effort for hygienic declarative macros, custom
-   derives, procedural attributes, and programmable `build.elx`.
-
-This ordering allows the FFI and build system to progress without prematurely
-committing Elamite to arbitrary compile-time code execution.
+| Proposal | Current state |
+| --- | --- |
+| Foreign declaration attributes | Implemented as `@importc` and `@exportc` |
+| Declarative native configuration | Implemented in `[native]` manifest fields |
+| Programmable `build.elx` | Deferred; no active review or accepted surface |
+| Vector delimiter change | Rejected; `@vec[...]` remains canonical |
+| User macros, attributes, and derives | Implemented and stable under `SPEC.md` §12 |

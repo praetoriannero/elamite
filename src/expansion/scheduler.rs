@@ -29,7 +29,7 @@ macro_rules! identity {
 identity!(ExpansionWorkId);
 identity!(RecoveryNodeId);
 
-/// Normative compile-time resource limits from `SPEC.md` §12.8.
+/// Normative compile-time resource limits from `docs/SPEC.md` §12.8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExpansionLimits {
     pub active_depth: u32,

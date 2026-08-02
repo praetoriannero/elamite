@@ -1,4 +1,4 @@
-/// # Logical value copies (`SPEC.md` 3.1)
+/// # Logical value copies (`docs/SPEC.md` 3.1)
 ///
 /// Every ordinary copy must be recursively and observably independent, while
 /// explicit-alias types keep identity through the same copy.
@@ -105,7 +105,7 @@ fn argument_and_return_copy() -> ():
     println(f"returned label: {returned.label}, counts[0]: {returned.counts[0]}")
 
 /// A `let` aggregate is not a mutable place, but an `&var` stored inside one
-/// still mutates its target (`SPEC.md` 3.1).
+/// still mutates its target (`docs/SPEC.md` 3.1).
 fn let_does_not_disable_stored_aliases() -> ():
     var storage = 100
     let frozen = AliasCarrier { plain: 1, shared: &var storage }

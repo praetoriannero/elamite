@@ -1,4 +1,4 @@
-//! Trait implementation checking (`ROADMAP.md` Milestone 13).
+//! Trait implementation checking (`docs/ROADMAP.md` Milestone 13).
 //!
 //! This pass validates declarations rather than bodies: whether each
 //! `impl Trait for Type` supplies exactly the trait's methods with exact
@@ -1009,8 +1009,8 @@ pub fn trait_name(resolved: &ResolvedProgram, typed: &TypedProgram, trait_type: 
 /// ordered by name.
 ///
 /// Ordering by name rather than declaration order keeps the layout stable
-/// against source reordering, which `ROADMAP.md` 2.2 requires of anything that
-/// reaches generated output. Default methods participate (`SPEC.md` 6).
+/// against source reordering, which `docs/ROADMAP.md` 2.2 requires of anything that
+/// reaches generated output. Default methods participate (`docs/SPEC.md` 6).
 #[must_use]
 pub fn vtable_slots(
     resolved: &ResolvedProgram,
@@ -1084,7 +1084,7 @@ pub fn vtable_entry(
 /// Whether a struct or enum declaration derives `trait_name`.
 ///
 /// Derivations are a fixed, compiler-supported list written in the
-/// declaration's parentheses (`SPEC.md` 4.3); user traits cannot define derive
+/// declaration's parentheses (`docs/SPEC.md` 4.3); user traits cannot define derive
 /// behavior, so this is a syntactic lookup rather than an impl search.
 #[must_use]
 pub fn derives(resolved: &ResolvedProgram, declaration: DeclarationId, trait_name: &str) -> bool {
@@ -1105,7 +1105,7 @@ pub fn derives(resolved: &ResolvedProgram, declaration: DeclarationId, trait_nam
 /// source derive list, because the specification gives that exact standard
 /// declaration the capability directly.
 ///
-/// The only such rule today is `SPEC.md` 4.3: `Option[T]` defaults to
+/// The only such rule today is `docs/SPEC.md` 4.3: `Option[T]` defaults to
 /// `Option.None` *without* requiring `T` to implement `Default`. That is
 /// unconditional, so unlike a derivation it imposes no obligation on the
 /// declaration's field types. A user enum spelled `Option` is unaffected.
@@ -1133,7 +1133,7 @@ pub fn derives_or_intrinsic(
 }
 
 /// The variant an intrinsically `Default` enum defaults to: `Option.None`
-/// (`SPEC.md` 4.3). Ordinary enums derive no default, so this is the complete
+/// (`docs/SPEC.md` 4.3). Ordinary enums derive no default, so this is the complete
 /// list.
 #[must_use]
 pub fn intrinsic_default_variant(
@@ -1453,7 +1453,7 @@ fn nominal_provides(
     visiting: &mut BTreeSet<(TypeId, String)>,
 ) -> bool {
     // An intrinsic capability is unconditional, so it is decided before the
-    // field obligations a derivation would impose (`SPEC.md` 4.3).
+    // field obligations a derivation would impose (`docs/SPEC.md` 4.3).
     if intrinsic_derivation(resolved, declaration, trait_name) {
         return true;
     }
@@ -1597,7 +1597,7 @@ pub fn name_of(resolved: &ResolvedProgram, declaration: DeclarationId) -> String
 
 /// Why a trait cannot form a trait object, or `None` when it can.
 ///
-/// `SPEC.md` 6: every method reachable through the object needs an `&Self` or
+/// `docs/SPEC.md` 6: every method reachable through the object needs an `&Self` or
 /// `&var Self` receiver, no method-level generic parameters, and no other
 /// mention of `Self` in its parameters or return type. A trait failing these
 /// rules stays usable with static dispatch.

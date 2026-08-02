@@ -4,7 +4,7 @@
 
 - `src/lib.rs` is the compiler library root. Add compiler phases as focused
   modules beneath `src/`, following the representation boundaries in
-  `ROADMAP.md`.
+  `docs/ROADMAP.md`.
 - `src/main.rs` is the command-line entry point. Keep language behavior in the
   library so it can be exercised directly by tests and other tools.
 - `src/syntax.rs` owns phase-neutral tokens, syntax trees, and generic traversal.
@@ -54,10 +54,25 @@
   "is this local's address taken", deliberately conservatively; precise escape
   analysis belongs to the **Post-conformance optimization** milestone, not
   here.
-- `examples/` holds Elamite source examples. `SPEC.md` is the language design;
-  `ROADMAP.md` is the compiler roadmap; `LEDGER.md` maps every normative `SPEC.md`
-  rule to an implementation milestone; and `ISSUES.md` records unresolved
-  design work.
+- `docs/COST_MODEL.md` is the versioned, non-normative account of current copy,
+  allocation, retention, promotion, and synchronization costs. Any change to
+  representation, logical-copy lowering, collection growth, formatting,
+  promotion, managed memory, transfer, or synchronized storage that changes a
+  documented cost must update it in the same change. Material cost changes
+  also require comparable before/after runs of
+  `benchmarks/memory-cost-baseline.sh` and a note in `docs/release.md`; never
+  turn benchmark observations into semantic conformance thresholds.
+- `README.md` is the project and documentation index. All other project
+  Markdown except this contributor-facing `AGENTS.md` belongs under `docs/`;
+  keep links and source comments pointed at that directory so the specification
+  and planning documents remain discoverable after future changes.
+- `examples/` holds Elamite source examples. `docs/SPEC.md` is the language
+  design; `docs/ROADMAP.md` is the compiler roadmap; `docs/LEDGER.md` maps every
+  normative `docs/SPEC.md` rule to an implementation milestone; and
+  `docs/ISSUES.md` records unresolved design work.
+- `docs/PROPOSALS.md` and `docs/CRITIQUES.md` are non-normative design history.
+  Keep resolved material there clearly labeled and never treat either as
+  authorization to diverge from `docs/SPEC.md`.
 - `editors/vscode/` is a declarative VS Code extension providing `.elx` syntax
   highlighting: a TextMate grammar and a language configuration, with no
   compiled code. Its grammar necessarily duplicates the keyword, numeric-suffix,
@@ -88,7 +103,7 @@ cargo run -- run path/to/package
 
 All three commands accept `--target=x86` or `--target=x86_64`. `build` and
 `run` also accept `--release`, `--out-dir=PATH`, `--cc=PATH`, and `--keep-c`.
-Expand this interface as later driver milestones in `ROADMAP.md` are implemented.
+Keep this summary and `docs/toolchain.md` synchronized when the driver changes.
 
 ## Coding Style & Naming Conventions
 
@@ -114,12 +129,13 @@ details. Use `.elx` fixtures when source text is clearer than an inline string.
 Cover successful behavior, important diagnostics, and runtime trap boundaries.
 Compile-fail tests should assert stable diagnostic categories and meaningful
 spans without depending on incidental prose. Follow the test layers and
-milestone exit criteria in `ROADMAP.md`.
+milestone exit criteria in `docs/ROADMAP.md`.
 
 ## Design, Commits, and Pull Requests
 
-Treat `SPEC.md` and the authoritative `examples/spec_demo.elx` as design inputs.
-Append new entries to `ISSUES.md`; use `I-X.Y` for a sub-issue related to
+Treat `docs/SPEC.md` and the authoritative `examples/spec_demo.elx` as design
+inputs.
+Append new entries to `docs/ISSUES.md`; use `I-X.Y` for a sub-issue related to
 `I-X`. Do not implement or change surface grammar while its design review is
 active.
 
@@ -131,7 +147,7 @@ requires `unsafe:` and a runtime null check. Exact function references may
 explicitly convert to matching raw function pointers, but function and data
 pointer domains never cast between each other.
 
-`SPEC.md` §5.1 owns explicit-capture safe closures. Keep capture lists
+`docs/SPEC.md` §5.1 owns explicit-capture safe closures. Keep capture lists
 nonempty when present, aliases explicit with `as`, parameter types explicit,
 and each closure expression nominally distinct. There are no implicit
 captures, `move`, generic or variadic closure literals, unsafe closures,
@@ -140,8 +156,8 @@ stateful callbacks may use a closure or `&Trait`; C callbacks continue to carry
 registered state through a separate raw context pointer, and recursion uses
 named functions.
 
-`SPEC.md` §10.4 owns the normative concurrency contract. It adds no concurrency
-syntax: native threads are created through `std.thread`, and channels,
+`docs/SPEC.md` §10.4 owns the normative concurrency contract. It adds no
+concurrency syntax: native threads are created through `std.thread`, and channels,
 copy-based mutexes, and sequentially consistent atomic cells live in
 `std.sync`. Cross-thread ordinary values use structural `Transfer` and an
 independent transfer copy; safe references, raw pointers, slices, and trait
@@ -149,10 +165,10 @@ objects are not transferable. Only reviewed synchronized handles preserve
 shared identity. Retain the registered-thread callback restriction and the
 process-fatal trap contract.
 
-`SPEC.md` §3.1 and §4.1 define local tuple destructuring and positional fields.
-Keep local binding patterns irrefutable and limited to nested tuples,
-identifiers, and `_`; do not generalize parameters, loop headers, assignment,
-or refutable binding forms. Numeric postfix selectors are canonical,
+`docs/SPEC.md` §3.1 and §4.1 define local tuple destructuring and positional
+fields. Keep local binding patterns irrefutable and limited to nested tuples,
+identifiers, and `_`; do not generalize parameters, loop headers, assignment, or
+refutable binding forms. Numeric postfix selectors are canonical,
 unsuffixed, in-range decimal tuple indices and follow ordinary value-copy,
 place, receiver-adaptation, raw-pointer safety, and promotion rules.
 
@@ -181,24 +197,24 @@ discriminant field instead of an anonymous union.
 The initial supported target matrix is **Linux, x86-64 and x86 (32-bit)**.
 Both architectures are in scope from the compiler driver onward — do not
 hardcode a 64-bit pointer width; `isize`/`usize` and any layout-sensitive code
-must work at both widths. See `LEDGER.md` §13 for the full target-assumption
+must work at both widths. See `docs/LEDGER.md` §13 for the full target-assumption
 list.
 
 The lexer and parser are **hand-written**, not generated by a parser-generator
 crate (`pest`, `lalrpop`, `chumsky`) — matching rustc's and rust-analyzer's own
-choice, and needed for the custom error recovery and precise spans `ROADMAP.md`
+choice, and needed for the custom error recovery and precise spans `docs/ROADMAP.md`
 §2.3 requires. Crates are for cross-cutting infrastructure around that
 hand-written core, not the core grammar itself: `codespan-reporting` for
 diagnostic rendering (already wired into `SourceManager`/`Diagnostic`), `insta`
 for token/syntax-tree snapshot tests, `proptest` for property tests, `lasso`
-for symbol interning once resolution needs it, `clap` for the eventual CLI.
+for symbol interning, and `clap` for the implemented CLI.
 `salsa` (incremental compilation) and `rowan` (lossless CST) are deliberately
-deferred past initial conformance, not rejected — see `LEDGER.md` §18 for the
+deferred past initial conformance, not rejected — see `docs/LEDGER.md` §18 for the
 full adopted/deferred/rejected list and reasoning, including why the `cc`
 crate is *not* the right tool for invoking the C backend's compiler.
 
-`SPEC.md` §12 owns the accepted compile-time syntax-generation contract. The
-three documented module-level declaration forms are `[pub] macro`, `[pub]
+`docs/SPEC.md` §12 owns the accepted compile-time syntax-generation contract.
+The three documented module-level declaration forms are `[pub] macro`, `[pub]
 attr`, and `[pub] derive`; their ordinary safe Elamite bodies execute in the
 bounded compile-time interpreter over the versioned, opaque, pre-resolution
 `std.ast` façade. Function-like calls use `@path(...)`, attached transforms use
@@ -222,12 +238,11 @@ dependency staging, generated-output re-entry, active-chain cycle detection,
 recovery nodes, and the shared/per-execution resource meters belong in
 `src/expansion/scheduler.rs`. Resource exhaustion must admit no partial output,
 and a failed interpreter fuel or live-value charge remains sticky even if its
-immediate result is ignored. `src/expansion/gate.rs` owns the
-`CompilerFeatures::unstable_macros` check over physical user declarations,
-imports, attachments, and invocations; every compiling driver entry point must
-default to the stable feature set. Custom fragment grammar remains owned by
-`src/parser.rs`, and
-`src/expansion/fragment.rs` only adapts token trees to those entry points. The
+immediate result is ignored. User-defined compile-time forms are stable and
+must remain available through every compiling driver entry point; do not
+recreate the retired feature gate. Custom fragment grammar remains owned by
+`src/parser.rs`, and `src/expansion/fragment.rs` only adapts token trees to
+those entry points. The
 compile-time interpreter has no ambient capabilities or mutable compiler-table
 access. Never expose compiler-private AST nodes through `std.ast` or project a
 generated origin onto a physical `Span`; keep generated input separate until

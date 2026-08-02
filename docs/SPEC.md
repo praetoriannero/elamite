@@ -4,7 +4,7 @@
 >
 > Version: 0.9.0-draft
 >
-> The current [specification demonstration](examples/spec_demo.elx) is the
+> The current [specification demonstration](../examples/spec_demo.elx) is the
 > authoritative surface-language example. This document describes that design;
 > ambiguities and internal inconsistencies that still need decisions are listed
 > in [ISSUES.md](ISSUES.md).

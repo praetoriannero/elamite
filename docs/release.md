@@ -1,4 +1,4 @@
-# Initial conformance release audit
+# Conformance release audit
 
 This file is the evidence index for `ROADMAP.md` Milestone 19. The initial release
 is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
@@ -13,10 +13,10 @@ is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 | Parser/semantic robustness | `tests/robustness.rs`, the retained parser corpus, and the existing seeded parser property test |
 | Runtime stress | `12_runtime_stress`, repeated in debug and release, plus the callback, trap, and C harness process tests in `tests/backend.rs` |
 | Diagnostics | `malformed_semantic_inputs_stop_at_diagnostics_without_internal_leaks` and the focused compile-fail suites |
-| Performance | `benchmarks/m19-baseline.sh` and `benchmarks/m19-baseline.tsv` |
-| Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib/Boehm prerequisites, unsupported concurrency, and foreign-thread restrictions |
+| Performance | `benchmarks/m19-baseline.sh` and `benchmarks/m19-baseline.tsv`; `COST_MODEL.md` and the allocation/copied-byte workloads in `benchmarks/memory-cost-baseline.sh` |
+| Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib/Boehm prerequisites, native concurrency, and remaining foreign-thread restrictions |
 | Version identity | `elamc --version` reports both the compiler version and `SPEC.md` revision; `command_line_version_reports_the_specification_revision` locks the format |
-| Rights/notices | MIT `LICENSE`, Cargo `license = "MIT"`, the README third-party notice, `Cargo.lock`, and `publish = false` |
+| Rights/notices | MIT `LICENSE`, Cargo `license = "MIT"`, the `README.md` third-party notice, `Cargo.lock`, and `publish = false` |
 
 Run the local release gates with:
 
@@ -34,3 +34,8 @@ cargo run -- conformance tests/fixtures/conformance --all-modes
 The x86 cells require a working 32-bit libc, C compiler, and Boehm development
 library. CI owns that installed environment; a local machine without multilib
 cannot claim those cells from a frontend-only run.
+
+Cost-changing releases must include comparable before/after
+`memory-cost-baseline.sh` results, update `COST_MODEL.md`, and describe which
+measurements changed. Those observations never replace semantic or target
+conformance gates.

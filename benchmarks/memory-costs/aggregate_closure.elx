@@ -1,0 +1,28 @@
+struct Inner:
+    name: String
+    values: Vec[i32]
+
+struct Payload:
+    inner: Inner
+    labels: Vec[String]
+    fixed: [i32; 4]
+
+fn main() -> ():
+    let payload = Payload {
+        inner: Inner {
+            name: String.from("nested aggregate"),
+            values: @vec[1, 2, 3, 4, 5, 6, 7, 8],
+        },
+        labels: @vec[String.from("alpha"), String.from("beta")],
+        fixed: [10, 20, 30, 40],
+    }
+    let read = fn[payload](index: i32) -> i32:
+        return payload.fixed[index % 4]
+
+    var checksum = 0
+    var index = 0
+    while index < 2000:
+        let closure_snapshot = read
+        checksum += closure_snapshot(index)
+        index += 1
+    println(checksum)

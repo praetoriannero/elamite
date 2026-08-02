@@ -1,6 +1,6 @@
 # Elamite toolchain
 
-Elamite's initial toolchain supports Linux on x86-64 and x86 (32-bit). The
+Elamite's current toolchain supports Linux on x86-64 and x86 (32-bit). The
 compiler itself may run on either architecture; `--target=x86` and
 `--target=x86_64` select the generated C and native-artifact architecture.
 Without `--target`, the compiler selects the host architecture.
@@ -33,6 +33,9 @@ elamc init hello_lib --lib
 elamc check path/to/package --target=x86_64
 elamc build path/to/package --release --keep-c
 elamc run path/to/package
+elamc path/to/main.elx -o app
+elamc fmt path/to/package
+elamc fmt --check path/to/package --line-length=100
 elamc dump typed-ir path/to/package
 elamc doc path/to/package
 elamc test path/to/package --filter=qualified-test-name
@@ -57,6 +60,11 @@ without removing the driver's C99 and warning flags. Executable packages
 produce an executable; library packages produce a relocatable object and
 versioned `.elamite-meta` public metadata.
 
+Passing `--c-flag=-DELAMITE_COST_INSTRUMENTATION=1` enables the versioned,
+developer-only allocation and explicit byte-copy report described in
+`COST_MODEL.md`. It changes program stderr and runtime cost and is not a
+semantic conformance mode.
+
 `dump` accepts `tokens`, `syntax`, `expanded`, `resolution`, `types`, `typed-ir`,
 `control-flow`, `monomorphized`, or `generated-c`. Dumps are deterministic for
 identical inputs and start with enough source identity information to interpret
@@ -68,7 +76,7 @@ documentation, signatures, and source links. Extraction does not depend on
 successful body checking or lowering; public documentation remains available
 when an unrelated private body is invalid.
 
-`test` accepts a directory whose immediate children are package fixtures, or
+`conformance` accepts a directory whose immediate children are package fixtures, or
 one fixture package directly. Each fixture contains `expected.stdout`;
 `expected.stderr` and `expected.status` are optional and default to empty
 stderr and status zero. `--filter` selects one or more named fixtures,
@@ -85,8 +93,9 @@ spelling.
 ## Compiler interfaces
 
 The Elamite source language described by `SPEC.md` is the compatibility
-boundary. The following developer interfaces remain unstable before the
-initial conformance release:
+boundary. Initial conformance is complete, but the following developer
+interfaces remain implementation-private and may change between compiler
+revisions:
 
 - generated C names and helper layout;
 - textual intermediate-representation dump formats;
@@ -98,16 +107,19 @@ initial conformance release:
 Do not treat a library package's relocatable object as a stable C ABI. Exported
 C entry points require the explicit FFI forms in `SPEC.md`.
 
-## Deliberate initial limitations
+## Current limitations
 
 - Package dependencies are local paths. There is no registry, Git resolver,
   version solver, or lockfile workflow.
-- Concurrency, tasks, async/await, cross-thread managed values, and callbacks
-  from foreign-created threads are unsupported. A C callback may enter Elamite
-  only on the OS thread that initialized and is executing the runtime; nested
-  and later callbacks on that same thread are supported.
-- The language has named functions and callable function references, but no
-  closures, anonymous function literals, or captures.
+- Cooperative tasks, executors, futures, and async/await are unsupported.
+  Native threads exchange structural `Transfer` copies through `std.thread`
+  and synchronized handles through `std.sync`.
+- Explicit-capture safe closures are supported. Implicit/default captures,
+  generic or variadic closure literals, unsafe closures, anonymous recursion,
+  and closure-to-function-pointer conversion remain unsupported.
+- Synchronous C callback reentry is supported on the initializer thread and
+  an Elamite-created registered thread. Foreign-created-thread attachment and
+  asynchronous callbacks originating on such threads are unsupported.
 - C variadic functions and foreign ABIs other than `C` are unsupported.
 - Wildcard and grouped `use` declarations are unsupported.
 - The C backend does not yet lower 128-bit integer constants, arithmetic, or

@@ -80,7 +80,7 @@ struct OpenBlock {
 }
 
 /// One lexical scope's cleanup plan: the deferred registrations control has
-/// reached, in registration order (`SPEC.md` 8, Milestone 15.6).
+/// reached, in registration order (`docs/SPEC.md` 8, Milestone 15.6).
 ///
 /// Registration is purely static. A block's statement list is straight-line
 /// at the statement level, so at any exit edge the reached registrations are
@@ -189,7 +189,7 @@ impl<'a> FunctionLowerer<'a> {
     /// Emits the deferred registrations of every scope at depth `from` or
     /// deeper, innermost scope first and within one scope in reverse
     /// registration order; a `defer:` body executes forward as one unit
-    /// (`SPEC.md` 8).
+    /// (`docs/SPEC.md` 8).
     ///
     /// The registration lists are snapshotted before lowering because a
     /// deferred body may itself open nested (necessarily registration-free)
@@ -296,7 +296,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedStatementKind::Return(value) => {
                 // The return value is evaluated and independently copied into
                 // its temporary *before* any deferred registration runs
-                // (`SPEC.md` 8, Milestone 15.7); cleanup then cannot change
+                // (`docs/SPEC.md` 8, Milestone 15.7); cleanup then cannot change
                 // the returned value, though a shared handle inside it may
                 // still observe deferred mutation through its alias.
                 let value = value
@@ -936,7 +936,7 @@ impl<'a> FunctionLowerer<'a> {
                 let operand_type = left.ty;
                 let left_value = self.lower_expression(left);
                 let right_value = self.lower_expression(right);
-                // Equality on an aggregate compares components (`SPEC.md`
+                // Equality on an aggregate compares components (`docs/SPEC.md`
                 // 4.3), so it carries its operand type to the backend rather
                 // than becoming a C `==` on a struct.
                 if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
@@ -1380,7 +1380,7 @@ impl<'a> FunctionLowerer<'a> {
         result
     }
 
-    /// Lowers postfix `?` (`SPEC.md` 8, Milestones 15.3 and 15.9).
+    /// Lowers postfix `?` (`docs/SPEC.md` 8, Milestones 15.3 and 15.9).
     ///
     /// The operand is evaluated exactly once into a temporary. Its tag is
     /// branched on explicitly: the `Ok` payload is copied into this

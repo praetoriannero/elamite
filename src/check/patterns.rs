@@ -69,7 +69,7 @@ impl<'a> Checker<'a> {
                 }
             }
             // Guarded arms do not contribute to exhaustiveness or
-            // redundancy tracking (`SPEC.md` section 7): the guard may fail
+            // redundancy tracking (`docs/SPEC.md` section 7): the guard may fail
             // at runtime, so this arm cannot be assumed to consume coverage.
             if !guarded {
                 coverage = coverage.union(arm_coverage);
@@ -132,7 +132,7 @@ impl<'a> Checker<'a> {
     /// when the scrutinee's shape is not one Milestone 7 reasons about
     /// precisely (tuples/structs with a refutable field, and any other
     /// non-`bool`/non-`enum` type): those conservatively require an
-    /// explicit catch-all arm, matching `SPEC.md`'s "infinite domain" rule,
+    /// explicit catch-all arm, matching `docs/SPEC.md`'s "infinite domain" rule,
     /// without this module claiming to enumerate their exact cases.
     pub(super) fn describe_missing_coverage(
         &self,
@@ -190,7 +190,7 @@ impl<'a> Checker<'a> {
 
     /// Type-checks `pattern` against `scrutinee_type`, registers its
     /// bindings (as ordinary immutable, independently copied `let`-like
-    /// bindings per `SPEC.md` section 7) into the same local-type tables
+    /// bindings per `docs/SPEC.md` section 7) into the same local-type tables
     /// `check_expr` reads, and returns what the pattern covers for
     /// exhaustiveness/reachability purposes.
     ///
@@ -201,7 +201,7 @@ impl<'a> Checker<'a> {
     /// when all of their field patterns are irrefutable; everything else
     /// (tuples/structs with a refutable field, literals of an unbounded
     /// domain) conservatively requires an explicit catch-all, matching
-    /// `SPEC.md`'s "infinite domain" rule rather than risking a false
+    /// `docs/SPEC.md`'s "infinite domain" rule rather than risking a false
     /// exhaustiveness claim.
     pub(super) fn check_pattern(
         &mut self,
@@ -580,7 +580,7 @@ impl<'a> Checker<'a> {
     /// Checks a `RecordPattern`'s named fields (struct or record-variant)
     /// and returns whether the pattern is irrefutable: every explicit field
     /// sub-pattern is itself irrefutable, or `..` was used to ignore the
-    /// rest. Enforces "every field must appear, or use `..`" (`SPEC.md`
+    /// rest. Enforces "every field must appear, or use `..`" (`docs/SPEC.md`
     /// section 7).
     pub(super) fn check_record_pattern_fields(
         &mut self,

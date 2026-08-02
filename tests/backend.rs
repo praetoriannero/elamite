@@ -2813,6 +2813,98 @@ fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
 }
 
 #[test]
+fn cost_instrumentation_is_opt_in_thread_safe_and_machine_readable() {
+    let source = r#"
+fn main() -> ():
+    let text = String.from("instrumented")
+    let values = @vec[text]
+    let worker = fn[values]() -> usize:
+        return values.len()
+    match std.thread.spawn(worker):
+        Result.Ok(thread):
+            println(thread.join())
+        Result.Err(_):
+            pass
+"#;
+    let (_, ordinary_stderr, ordinary_status) = build_and_run(source, Optimization::Release);
+    assert_eq!(ordinary_status, 0, "{ordinary_stderr}");
+    assert_eq!(ordinary_stderr, "");
+
+    let tree = TestTree::new("cost-instrumentation");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let artifact = build(
+        &graph,
+        &mut sources,
+        &BuildOptions {
+            target: Target::X86_64,
+            optimization: Optimization::Release,
+            features: Default::default(),
+            output_directory: tree.root.join("out"),
+            keep_generated_c: true,
+            c_compiler: None,
+            c_flags: vec!["-DELAMITE_COST_INSTRUMENTATION=1".into()],
+        },
+    )
+    .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    let output = run(&artifact).expect("run cost-instrumented executable");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 cost report");
+    let fields = stderr.trim().split('\t').collect::<Vec<_>>();
+    assert_eq!(fields.first(), Some(&"elamite-cost-v1"), "{stderr}");
+    assert_eq!(fields.len(), 7, "{stderr}");
+    for field in &fields[1..] {
+        let (name, value) = field.split_once('=').expect("named numeric cost field");
+        assert!(
+            matches!(
+                name,
+                "allocations"
+                    | "allocated_bytes"
+                    | "scanned_allocations"
+                    | "scanned_bytes"
+                    | "memcpy_calls"
+                    | "memcpy_bytes"
+            ),
+            "{stderr}"
+        );
+        assert!(value.parse::<u64>().is_ok(), "{stderr}");
+    }
+}
+
+#[test]
+fn cost_instrumentation_compiles_for_both_target_widths() {
+    let tree = TestTree::new("cost-instrumentation-targets");
+    tree.executable(
+        r#"
+fn main() -> ():
+    let values = @vec[String.from("target width")]
+    println(values.len())
+"#,
+    );
+    for target in [Target::X86, Target::X86_64] {
+        let mut sources = SourceManager::new();
+        let graph = tree.graph(&mut sources);
+        let artifact = build(
+            &graph,
+            &mut sources,
+            &BuildOptions {
+                target,
+                optimization: Optimization::Release,
+                features: Default::default(),
+                output_directory: tree.root.join(format!("out-{}", target.pointer_bits())),
+                keep_generated_c: true,
+                c_compiler: None,
+                c_flags: vec!["-DELAMITE_COST_INSTRUMENTATION=1".into()],
+            },
+        )
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+        assert!(artifact.path.is_file());
+    }
+}
+
+#[test]
 fn references_observe_storage_through_binding_and_path() {
     // SPEC 3.2: a reference names storage. A binding reference sees
     // reassignment, and a reference into an aggregate sees replacement of its
@@ -2947,7 +3039,7 @@ fn main() -> ():
 
 #[test]
 fn sustained_allocation_churn_is_reclaimed() {
-    // ROADMAP.md Milestone 10: collection is best-effort and its *timing* is not a
+    // docs/ROADMAP.md Milestone 10: collection is best-effort and its *timing* is not a
     // conformance requirement, so this asserts only that a program allocating
     // far more than it retains completes normally rather than exhausting
     // memory.
@@ -3012,7 +3104,7 @@ fn main() -> ():
 
 #[test]
 fn dynamic_dispatch_selects_by_concrete_type_through_one_trait() {
-    // ROADMAP.md Milestone 13: vtable dispatch with several concrete types behind one
+    // docs/ROADMAP.md Milestone 13: vtable dispatch with several concrete types behind one
     // trait object. Default methods participate in the vtable and an
     // implementation may override them.
     let source = r#"
@@ -3266,7 +3358,7 @@ fn main() -> ():
 fn option_defaults_to_none_through_an_explicit_discriminant() {
     // The enum discriminant is the variant's identity rather than its ordinal,
     // so a zero-initialized value is not `Option.None` and the default helper
-    // must write the tag explicitly (`SPEC.md` 4.3).
+    // must write the tag explicitly (`docs/SPEC.md` 4.3).
     let source = r#"
 struct Undefaultable:
     value: i32
@@ -3318,7 +3410,7 @@ fn main() -> ():
 
 #[test]
 fn option_of_a_safe_reference_keeps_a_recursive_graph_reachable() {
-    // `Option[&T]` is the nullable safe reference (`SPEC.md` 4.2). Its payload
+    // `Option[&T]` is the nullable safe reference (`docs/SPEC.md` 4.2). Its payload
     // retains identity rather than copying, and the referenced links stay
     // reachable through the collector's interior-pointer scan.
     let source = r#"
@@ -3413,7 +3505,7 @@ fn main() -> ():
 #[test]
 fn checked_numeric_conversion_reports_instead_of_trapping() {
     // Milestone 14.3: `Target.try_from(value)` is the nontrapping counterpart
-    // of `value as Target` (`SPEC.md` 4.1). It reuses the same range
+    // of `value as Target` (`docs/SPEC.md` 4.1). It reuses the same range
     // boundaries, so the two never disagree about representability.
     let source = r#"
 fn tag_i8(value: Result[i8, NumericError]) -> str:
@@ -3592,7 +3684,7 @@ fn main() -> ():
 #[test]
 fn numeric_alternatives_replace_the_trapping_operators_at_the_width_boundary() {
     // Milestone 14.4: the trapping operators stay the default; these are the
-    // explicit opt-outs (`SPEC.md` 4.1). Checked reports `Option.None`,
+    // explicit opt-outs (`docs/SPEC.md` 4.1). Checked reports `Option.None`,
     // wrapping wraps modulo the range, saturating clamps.
     let source = r#"
 fn show(value: Option[i8]) -> ():
@@ -4004,7 +4096,7 @@ fn only_wrapping_division_can_still_trap() {
 fn propagation_branches_evaluate_once_and_copy_payloads() {
     // M15.3: the `?` operand is evaluated exactly once; an `Ok` payload is
     // copied into the expression's value and an `Err` payload is copied into
-    // an early `Result.Err` return (`SPEC.md` 8).
+    // an early `Result.Err` return (`docs/SPEC.md` 8).
     let source = r#"
 struct Counter:
     value: i32
@@ -4107,7 +4199,7 @@ fn main() -> ():
 fn a_returned_shared_handle_observes_its_deferred_close() {
     // M15.7: the return value is copied before cleanup begins, so
     // unconditionally deferring `close()` on a returned shared handle closes
-    // the returned copy too (`SPEC.md` 8): the copy shares the handle's
+    // the returned copy too (`docs/SPEC.md` 8): the copy shares the handle's
     // explicit alias even though the copy itself happened first.
     let source = r#"
 struct Handle:

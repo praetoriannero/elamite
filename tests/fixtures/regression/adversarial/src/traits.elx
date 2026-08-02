@@ -1,4 +1,4 @@
-/// # Traits, objects, and dispatch (`SPEC.md` 6)
+/// # Traits, objects, and dispatch (`docs/SPEC.md` 6)
 
 trait Greet:
     fn greeting(self: &Self) -> str

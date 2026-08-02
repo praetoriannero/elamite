@@ -1,4 +1,4 @@
-/// # Explicit-capture closures (`SPEC.md` 5.1)
+/// # Explicit-capture closures (`docs/SPEC.md` 5.1)
 ///
 /// Captures are constructed exactly once, left to right, when evaluation
 /// reaches the closure expression.

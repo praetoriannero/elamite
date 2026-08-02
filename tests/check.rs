@@ -1699,7 +1699,7 @@ fn invalid[T](left: &T, right: &T) -> bool:
 
 #[test]
 fn checks_standard_option_as_an_ordinary_generic_enum() {
-    // Milestone 14.1: `Option[T]` is the generic enum `SPEC.md` 4.4 declares,
+    // Milestone 14.1: `Option[T]` is the generic enum `docs/SPEC.md` 4.4 declares,
     // so construction, inference, and matching are the ordinary enum rules
     // rather than a parallel builtin path.
     assert_no_diagnostics(
@@ -1765,7 +1765,7 @@ fn main() -> ():
 
 #[test]
 fn checks_standard_result_as_an_ordinary_generic_enum() {
-    // Milestone 14.2: `Result[T, E]` is the generic enum `SPEC.md` 4.4
+    // Milestone 14.2: `Result[T, E]` is the generic enum `docs/SPEC.md` 4.4
     // declares. Its propagation role stays with Milestone 15.
     assert_no_diagnostics(
         r#"
@@ -1805,7 +1805,7 @@ fn main() -> ():
 #[test]
 fn checks_checked_numeric_conversion_selection() {
     // Milestone 14.3: `Target.try_from(value)` is an associated function on a
-    // concrete numeric type (`SPEC.md` 4.1).
+    // concrete numeric type (`docs/SPEC.md` 4.1).
     assert_no_diagnostics(
         r#"
 fn main() -> ():
@@ -1858,7 +1858,7 @@ fn main() -> ():
 #[test]
 fn checks_numeric_alternative_selection() {
     // Milestone 14.4: the standard alternatives take the receiver's exact
-    // operand type and are integer-only (`SPEC.md` 4.1).
+    // operand type and are integer-only (`docs/SPEC.md` 4.1).
     assert_no_diagnostics(
         r#"
 fn main() -> ():
@@ -1979,7 +1979,7 @@ fn main() -> ():
 #[test]
 fn postfix_propagation_requires_matching_standard_result_types() {
     // M15.2: `?` accepts only the standard `Result[T, E]` inside a function
-    // returning `Result[U, E]` with exactly the same `E` (`SPEC.md` 8).
+    // returning `Result[U, E]` with exactly the same `E` (`docs/SPEC.md` 8).
     assert_no_diagnostics(
         r#"
 fn source(flag: bool) -> Result[i32, str]:

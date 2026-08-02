@@ -1,0 +1,17 @@
+fn main() -> ():
+    var source_map: Map[i32, i32] = Map.new()
+    var source_set: Set[i32] = Set.new()
+    var index = 0
+    while index < 64:
+        let _ = source_map.insert(index, index * 2)
+        let _ = source_set.insert(index)
+        index += 1
+
+    var checksum: usize = 0
+    index = 0
+    while index < 1000:
+        let map_snapshot = source_map
+        let set_snapshot = source_set
+        checksum += map_snapshot.len() + set_snapshot.len()
+        index += 1
+    println(checksum)

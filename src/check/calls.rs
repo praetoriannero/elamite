@@ -1778,7 +1778,7 @@ impl<'a> Checker<'a> {
 
         // `Type.Trait.method(...)` selects that implementation's member
         // unconditionally, bypassing fields, inherent methods, and bound trait
-        // lookup (`SPEC.md` 6). Like any unbound selection, a receiver-bearing
+        // lookup (`docs/SPEC.md` 6). Like any unbound selection, a receiver-bearing
         // method takes its receiver as the first explicit argument.
         if let Some(method) = self.qualified_trait_method(base, &member_name) {
             return Some(
@@ -2022,7 +2022,7 @@ impl<'a> Checker<'a> {
         }
 
         // `Type.try_from(value)` is a standard associated function on a
-        // concrete numeric type (`SPEC.md` 4.1). A primitive has no
+        // concrete numeric type (`docs/SPEC.md` 4.1). A primitive has no
         // declaration to select a member from, so it is recognized here, and
         // an unrecognized member on a primitive is reported here too rather
         // than falling through to nominal selection, which cannot see it.
@@ -2068,7 +2068,7 @@ impl<'a> Checker<'a> {
         // expects its receiver as the first explicit argument.
         if let Some((owner, owner_arguments)) = self.nominal_selection(base) {
             // `Type.default()` comes from a derivation, so there is no member
-            // declaration to select (`SPEC.md` 4.3).
+            // declaration to select (`docs/SPEC.md` 4.3).
             if member_name == "default"
                 && self.find_member(owner, &member_name).is_none()
                 && crate::traits::derives_or_intrinsic(self.resolved, owner, "Default")
@@ -2214,7 +2214,7 @@ impl<'a> Checker<'a> {
             return Some((result, PlaceKind::Value));
         }
         // A call on a trait object dispatches through its vtable rather than
-        // selecting a concrete implementation (`SPEC.md` 6).
+        // selecting a concrete implementation (`docs/SPEC.md` 6).
         if let Some(trait_declaration) =
             crate::traits::object_trait(self.resolved, self.typed, base_type)
         {
@@ -2240,7 +2240,7 @@ impl<'a> Checker<'a> {
             ));
         }
         // `value.checked_add(other)` and friends are standard methods on the
-        // integer types (`SPEC.md` 4.1). An integer has no declaration, so
+        // integer types (`docs/SPEC.md` 4.1). An integer has no declaration, so
         // they are recognized here rather than through member lookup.
         if let Some(operation) = self
             .integer_receiver(base_type)
@@ -2382,7 +2382,7 @@ impl<'a> Checker<'a> {
         let self_type = receiver.map_or(base_type, |(_, self_type)| self_type);
         // Fields and inherent methods are found first; a trait method is
         // selected only when the type itself provides no member of that name
-        // (`SPEC.md` 6).
+        // (`docs/SPEC.md` 6).
         let member = match receiver.and_then(|(owner, _)| self.find_member(owner, &member_name)) {
             Some(member) => Some(member),
             None => match self.select_trait_method(self_type, &member_name, member_token.span) {
@@ -3572,7 +3572,7 @@ impl<'a> Checker<'a> {
 
     /// The primitive `node` names as a type, if any.
     ///
-    /// `SPEC.md` 4.1 puts `try_from` (and, from Milestone 14.4, the wrapping
+    /// `docs/SPEC.md` 4.1 puts `try_from` (and, from Milestone 14.4, the wrapping
     /// and saturating conversions) on the numeric types themselves. Those have
     /// no declaration, so they are not reachable through
     /// [`Self::nominal_selection`].
@@ -3594,7 +3594,7 @@ impl<'a> Checker<'a> {
             .filter(|primitive| primitive.is_integer())
     }
 
-    /// Checks one standard arithmetic alternative (`SPEC.md` 4.1).
+    /// Checks one standard arithmetic alternative (`docs/SPEC.md` 4.1).
     ///
     /// These share the trapping operators' operand rules — the same operand
     /// type for a binary operation, an integer shift amount for a shift — so
@@ -3674,7 +3674,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Checks `Target.try_from(value)`: a nontrapping numeric conversion whose
-    /// result is `Result[Target, NumericError]` (`SPEC.md` 4.1). The source
+    /// result is `Result[Target, NumericError]` (`docs/SPEC.md` 4.1). The source
     /// must already be a concrete numeric type — `try_from` is a conversion,
     /// not a way to avoid literal materialization — so the argument is checked
     /// against no expected type and then required to be numeric.
@@ -3726,7 +3726,7 @@ impl<'a> Checker<'a> {
             return (result_type, PlaceKind::Value);
         }
         // Wrapping and saturating conversions are defined by the target's
-        // integer range, so both ends must be integers (`SPEC.md` 4.1 offers
+        // integer range, so both ends must be integers (`docs/SPEC.md` 4.1 offers
         // them only "where those behaviors are meaningful"). A checked
         // conversion has an answer for every numeric pair.
         if outcome != NumericOutcome::Checked

@@ -2,7 +2,7 @@
 
 A single executable package that pushes the implemented parts of Elamite to
 their specified boundaries, plus a directory of minimal reproductions for the
-divergences the original audit found between `SPEC.md` and the compiler.
+divergences the original audit found between `docs/SPEC.md` and the compiler.
 
 Every divergence this package found has since been resolved, so nothing here
 fails. It is kept as a behavioral lock, not a bug list.
@@ -10,7 +10,7 @@ fails. It is kept as a behavioral lock, not a bug list.
 Two halves:
 
 - **`src/`** — a package that builds, runs, and passes its own tests. Every
-  observation it prints is a rule from `SPEC.md`. If a change to the compiler
+  observation it prints is a rule from `docs/SPEC.md`. If a change to the compiler
   alters any line of its output, a specified behavior moved.
 - **`regressions/`** — the original standalone reproductions. Resolved cases
   remain as regression fixtures; intentional rejections and known
@@ -30,7 +30,7 @@ cargo run -- run tests/fixtures/regression/adversarial --target=x86
 ```
 
 One line of output is target-dependent by design: `usize bit width` reports 64
-on x86-64 and 32 on x86 (`SPEC.md` 4.1), so the expectation is stored twice, as
+on x86-64 and 32 on x86 (`docs/SPEC.md` 4.1), so the expectation is stored twice, as
 `expected.stdout` and `expected.x86.stdout`, differing on exactly that line.
 Map and set iteration order is unspecified, so nothing observes it — only
 order-independent aggregates.
@@ -43,7 +43,7 @@ cargo run -- build tests/fixtures/regression/adversarial/regressions/variant_lit
 
 ## What `src/` covers
 
-| Module | `SPEC.md` | Boundary pushed |
+| Module | `docs/SPEC.md` | Boundary pushed |
 | --- | --- | --- |
 | `layout.elx`, `layout/` | 2.3 | inline vs file-backed modules, a directory namespace with no owning file, `super` paths, `use self.…`, re-export aliasing, circular imports within one package, package-private access across modules |
 | `copies.elx` | 3.1 | recursive copy independence through five nesting levels, explicit aliases surviving a copy of their container, snapshot ordering, argument/return copies, `&var` stored in a `let` aggregate |
@@ -88,7 +88,7 @@ lowering remains unavailable.
 
 ## Compile-time surface
 
-`SPEC.md` §12 and the compile-time half of `++` live in the sibling
+`docs/SPEC.md` §12 and the compile-time half of `++` live in the sibling
 [`adversarial_macros`](../adversarial_macros) package. The surface and
 bounded interpreter are stable; the package is checked rather than run because
 it is a compile-time fixture. Its resolved findings remain listed there as
@@ -113,7 +113,7 @@ break and did not:
 - iteration is a snapshot: growing the source vector inside its own `for` loop
   does not extend that loop;
 - every arithmetic, index, key, conversion, and null-pointer trap raises the
-  exact `BuiltinTrap` identity `SPEC.md` 8.1 assigns it, and a user-defined
+  exact `BuiltinTrap` identity `docs/SPEC.md` 8.1 assigns it, and a user-defined
   `RuntimeTrap` keeps its own nominal identity;
 - a duplicate literal map key replaces, a duplicate set element collapses, and
   both report the displaced value or membership transition;

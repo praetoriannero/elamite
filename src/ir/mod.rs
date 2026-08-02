@@ -1,4 +1,4 @@
-//! Typed high-level IR and explicit control-flow IR façade (`ROADMAP.md` Milestones
+//! Typed high-level IR and explicit control-flow IR façade (`docs/ROADMAP.md` Milestones
 //! 8-11).
 //!
 //! The high-level form owns selected declaration and type identities while

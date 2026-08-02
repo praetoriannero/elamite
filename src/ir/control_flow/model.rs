@@ -189,7 +189,7 @@ pub enum Instruction {
         span: Span,
     },
     /// The mandatory null and alignment check before an executed raw
-    /// dereference or raw-to-reference conversion (`SPEC.md` 3.3, Milestone
+    /// dereference or raw-to-reference conversion (`docs/SPEC.md` 3.3, Milestone
     /// 16.8). Traps `E-RUN-NULL` or `E-RUN-ALIGN` with this source location.
     CheckPointer {
         pointer: TemporaryId,
