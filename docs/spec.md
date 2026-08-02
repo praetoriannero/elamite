@@ -7,7 +7,7 @@
 > The current [specification demonstration](../examples/spec_demo.elx) is the
 > authoritative surface-language example. This document describes that design;
 > ambiguities and internal inconsistencies that still need decisions are listed
-> in [ISSUES.md](ISSUES.md).
+> in [issues.md](issues.md).
 
 ## 1. Overview
 

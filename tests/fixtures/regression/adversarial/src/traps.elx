@@ -1,4 +1,4 @@
-/// # Typed runtime traps and package tests (`docs/SPEC.md` 8.1)
+/// # Typed runtime traps and package tests (`docs/spec.md` 8.1)
 ///
 /// Every case below is the trapping partner of a defined-behavior case in
 /// another module. Run them with `elamc test tests/fixtures/regression/adversarial`.
@@ -7,7 +7,7 @@ use std.testing
 use std.testing.BuiltinTrap
 use std.testing.assert
 // The trait itself must be in lexical scope for `self.code()` below to
-// resolve through ordinary bound-method lookup (`docs/SPEC.md` 6).
+// resolve through ordinary bound-method lookup (`docs/spec.md` 6).
 use std.testing.RuntimeTrap
 
 struct Cell:

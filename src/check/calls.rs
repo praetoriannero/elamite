@@ -647,7 +647,11 @@ impl<'a> Checker<'a> {
                 argument,
                 expected_argument.map_or(ExpectedType::None, ExpectedType::Exact),
             );
-            self.program.copies.insert(argument.span);
+            self.record_copy(
+                argument.span,
+                LogicalCopyKind::Argument,
+                LogicalCopyLifetime::Callee,
+            );
             if let Some(parameter) = parameter
                 && !self.infer_against(parameter.ty, actual, &variables)
             {
@@ -1309,7 +1313,11 @@ impl<'a> Checker<'a> {
                     }
                     for argument in arguments {
                         let (ty, _) = self.check_expr(argument, ExpectedType::None);
-                        self.program.copies.insert(argument.span);
+                        self.record_copy(
+                            argument.span,
+                            LogicalCopyKind::Argument,
+                            LogicalCopyLifetime::Callee,
+                        );
                         if ty != self.typed.types.error()
                             && !crate::traits::provides(self.resolved, self.typed, ty, "Display")
                         {
@@ -1457,7 +1465,11 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         let (callable, _) = self.check_expr(body, ExpectedType::None);
-        self.program.copies.insert(body.span);
+        self.record_transfer_copy(
+            body.span,
+            LogicalCopyKind::Argument,
+            LogicalCopyLifetime::Thread,
+        );
         for extra in arguments.iter().skip(1) {
             self.check_expr(extra, ExpectedType::None);
         }
@@ -1778,7 +1790,7 @@ impl<'a> Checker<'a> {
 
         // `Type.Trait.method(...)` selects that implementation's member
         // unconditionally, bypassing fields, inherent methods, and bound trait
-        // lookup (`docs/SPEC.md` 6). Like any unbound selection, a receiver-bearing
+        // lookup (`docs/spec.md` 6). Like any unbound selection, a receiver-bearing
         // method takes its receiver as the first explicit argument.
         if let Some(method) = self.qualified_trait_method(base, &member_name) {
             return Some(
@@ -1947,6 +1959,7 @@ impl<'a> Checker<'a> {
             };
             if let Some((operation, value_type)) = selected {
                 self.check_standard_arguments(call_span, &member_name, arguments, &[value_type]);
+                self.record_standard_transfer_arguments(operation, arguments);
                 self.program
                     .calls
                     .insert(call_span, CheckedCall::Standard(operation));
@@ -2022,7 +2035,7 @@ impl<'a> Checker<'a> {
         }
 
         // `Type.try_from(value)` is a standard associated function on a
-        // concrete numeric type (`docs/SPEC.md` 4.1). A primitive has no
+        // concrete numeric type (`docs/spec.md` 4.1). A primitive has no
         // declaration to select a member from, so it is recognized here, and
         // an unrecognized member on a primitive is reported here too rather
         // than falling through to nominal selection, which cannot see it.
@@ -2068,7 +2081,7 @@ impl<'a> Checker<'a> {
         // expects its receiver as the first explicit argument.
         if let Some((owner, owner_arguments)) = self.nominal_selection(base) {
             // `Type.default()` comes from a derivation, so there is no member
-            // declaration to select (`docs/SPEC.md` 4.3).
+            // declaration to select (`docs/spec.md` 4.3).
             if member_name == "default"
                 && self.find_member(owner, &member_name).is_none()
                 && crate::traits::derives_or_intrinsic(self.resolved, owner, "Default")
@@ -2208,13 +2221,14 @@ impl<'a> Checker<'a> {
                 );
             }
             self.check_standard_arguments(call_span, &member_name, arguments, &parameters);
+            self.record_standard_transfer_arguments(operation, arguments);
             self.program
                 .calls
                 .insert(call_span, CheckedCall::Standard(operation));
             return Some((result, PlaceKind::Value));
         }
         // A call on a trait object dispatches through its vtable rather than
-        // selecting a concrete implementation (`docs/SPEC.md` 6).
+        // selecting a concrete implementation (`docs/spec.md` 6).
         if let Some(trait_declaration) =
             crate::traits::object_trait(self.resolved, self.typed, base_type)
         {
@@ -2240,7 +2254,7 @@ impl<'a> Checker<'a> {
             ));
         }
         // `value.checked_add(other)` and friends are standard methods on the
-        // integer types (`docs/SPEC.md` 4.1). An integer has no declaration, so
+        // integer types (`docs/spec.md` 4.1). An integer has no declaration, so
         // they are recognized here rather than through member lookup.
         if let Some(operation) = self
             .integer_receiver(base_type)
@@ -2382,7 +2396,7 @@ impl<'a> Checker<'a> {
         let self_type = receiver.map_or(base_type, |(_, self_type)| self_type);
         // Fields and inherent methods are found first; a trait method is
         // selected only when the type itself provides no member of that name
-        // (`docs/SPEC.md` 6).
+        // (`docs/spec.md` 6).
         let member = match receiver.and_then(|(owner, _)| self.find_member(owner, &member_name)) {
             Some(member) => Some(member),
             None => match self.select_trait_method(self_type, &member_name, member_token.span) {
@@ -2492,7 +2506,11 @@ impl<'a> Checker<'a> {
                         argument,
                         expected_argument.map_or(ExpectedType::None, ExpectedType::Exact),
                     );
-                    self.program.copies.insert(argument.span);
+                    self.record_copy(
+                        argument.span,
+                        LogicalCopyKind::Argument,
+                        LogicalCopyLifetime::Callee,
+                    );
                     if let Some(parameter) = parameter
                         && !self.infer_against(parameter.ty, actual, &variables)
                     {
@@ -2540,7 +2558,11 @@ impl<'a> Checker<'a> {
                     adjustment,
                     ReceiverAdjustment::CopyValue | ReceiverAdjustment::DereferenceAndCopy
                 ) {
-                    self.program.copies.insert(base.span);
+                    self.record_copy(
+                        base.span,
+                        LogicalCopyKind::Receiver,
+                        LogicalCopyLifetime::Callee,
+                    );
                 }
                 self.program.calls.insert(
                     call_span,
@@ -2584,7 +2606,11 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         let (callable, _) = self.check_expr(body, ExpectedType::None);
-        self.program.copies.insert(body.span);
+        self.record_copy(
+            body.span,
+            LogicalCopyKind::Argument,
+            LogicalCopyLifetime::Callee,
+        );
         for extra in arguments.iter().skip(1) {
             self.check_expr(extra, ExpectedType::None);
         }
@@ -2659,7 +2685,11 @@ impl<'a> Checker<'a> {
                 .copied()
                 .map_or(ExpectedType::None, ExpectedType::Exact);
             self.check_expr(argument, expected);
-            self.program.copies.insert(argument.span);
+            self.record_copy(
+                argument.span,
+                LogicalCopyKind::Argument,
+                LogicalCopyLifetime::Callee,
+            );
         }
         if arguments.len() != parameters.len() {
             self.diagnostics.push(
@@ -2674,6 +2704,28 @@ impl<'a> Checker<'a> {
                 )
                 .with_primary(call_span),
             );
+        }
+    }
+
+    fn record_standard_transfer_arguments(
+        &mut self,
+        operation: StandardCall,
+        arguments: &[&SyntaxNode],
+    ) {
+        let destination = match operation {
+            StandardCall::ChannelSend { .. } => LogicalCopyLifetime::Thread,
+            StandardCall::MutexNew { .. }
+            | StandardCall::MutexReplace { .. }
+            | StandardCall::AtomicNew { .. }
+            | StandardCall::AtomicStore { .. }
+            | StandardCall::AtomicExchange { .. }
+            | StandardCall::AtomicCompareExchange { .. } => {
+                LogicalCopyLifetime::SynchronizedStorage
+            }
+            _ => return,
+        };
+        for argument in arguments {
+            self.record_transfer_copy(argument.span, LogicalCopyKind::Argument, destination);
         }
     }
 
@@ -3366,7 +3418,11 @@ impl<'a> Checker<'a> {
             };
             let expected = parameter_type.map_or(ExpectedType::None, ExpectedType::Exact);
             let (argument_type, _) = self.check_expr(argument, expected);
-            self.program.copies.insert(argument.span);
+            self.record_copy(
+                argument.span,
+                LogicalCopyKind::Argument,
+                LogicalCopyLifetime::Callee,
+            );
             if let Some(parameter_type) = parameter_type
                 && !self.types_compatible(argument_type, parameter_type)
             {
@@ -3572,7 +3628,7 @@ impl<'a> Checker<'a> {
 
     /// The primitive `node` names as a type, if any.
     ///
-    /// `docs/SPEC.md` 4.1 puts `try_from` (and, from Milestone 14.4, the wrapping
+    /// `docs/spec.md` 4.1 puts `try_from` (and, from Milestone 14.4, the wrapping
     /// and saturating conversions) on the numeric types themselves. Those have
     /// no declaration, so they are not reachable through
     /// [`Self::nominal_selection`].
@@ -3594,7 +3650,7 @@ impl<'a> Checker<'a> {
             .filter(|primitive| primitive.is_integer())
     }
 
-    /// Checks one standard arithmetic alternative (`docs/SPEC.md` 4.1).
+    /// Checks one standard arithmetic alternative (`docs/spec.md` 4.1).
     ///
     /// These share the trapping operators' operand rules — the same operand
     /// type for a binary operation, an integer shift amount for a shift — so
@@ -3618,7 +3674,11 @@ impl<'a> Checker<'a> {
         // type — the same rule the trapping operator applies.
         for argument in arguments {
             let (ty, _) = self.check_expr(argument, ExpectedType::Exact(receiver));
-            self.program.copies.insert(argument.span);
+            self.record_copy(
+                argument.span,
+                LogicalCopyKind::Argument,
+                LogicalCopyLifetime::Callee,
+            );
             if ty != self.typed.types.error() && !self.typed.types.exactly_equal(ty, receiver) {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -3674,7 +3734,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Checks `Target.try_from(value)`: a nontrapping numeric conversion whose
-    /// result is `Result[Target, NumericError]` (`docs/SPEC.md` 4.1). The source
+    /// result is `Result[Target, NumericError]` (`docs/spec.md` 4.1). The source
     /// must already be a concrete numeric type — `try_from` is a conversion,
     /// not a way to avoid literal materialization — so the argument is checked
     /// against no expected type and then required to be numeric.
@@ -3694,7 +3754,11 @@ impl<'a> Checker<'a> {
         let mut source_type = self.typed.types.error();
         for (index, argument) in arguments.iter().enumerate() {
             let (ty, _) = self.check_expr(argument, ExpectedType::None);
-            self.program.copies.insert(argument.span);
+            self.record_copy(
+                argument.span,
+                LogicalCopyKind::Argument,
+                LogicalCopyLifetime::Callee,
+            );
             if index == 0 {
                 source_type = ty;
             }
@@ -3726,7 +3790,7 @@ impl<'a> Checker<'a> {
             return (result_type, PlaceKind::Value);
         }
         // Wrapping and saturating conversions are defined by the target's
-        // integer range, so both ends must be integers (`docs/SPEC.md` 4.1 offers
+        // integer range, so both ends must be integers (`docs/spec.md` 4.1 offers
         // them only "where those behaviors are meaningful"). A checked
         // conversion has an answer for every numeric pair.
         if outcome != NumericOutcome::Checked

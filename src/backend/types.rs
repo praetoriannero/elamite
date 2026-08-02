@@ -477,7 +477,7 @@ impl<'a> CEmitter<'a> {
         }
     }
 
-    /// The structural default of `ty` (`docs/SPEC.md` 4.3): zero for numerics,
+    /// The structural default of `ty` (`docs/spec.md` 4.3): zero for numerics,
     /// `false` for `bool`, U+0000 for `char`, empty text for `str`/`String`,
     /// `null` for raw pointers, and fieldwise defaults for aggregates.
     pub(super) fn default_expression(&mut self, ty: TypeId, span: Span) -> Option<String> {
@@ -578,7 +578,7 @@ impl<'a> CEmitter<'a> {
                 function_type_name(*target)
             }
             // A trait object is a fat reference: target plus vtable
-            // (`docs/SPEC.md` 6). It is the one reference whose C type is not `T *`.
+            // (`docs/spec.md` 6). It is the one reference whose C type is not `T *`.
             TypeKind::Reference { target, .. }
                 if matches!(
                     self.typed.types.kind(self.resolve_alias(*target)),

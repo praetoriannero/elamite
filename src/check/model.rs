@@ -13,10 +13,10 @@ pub struct CheckedProgram {
     /// trait-object references. Lowering consumes these facts to construct the
     /// target-plus-vtable fat reference at the contextual conversion point.
     pub trait_object_coercions: BTreeMap<Span, TraitObjectCoercion>,
-    /// Spans of expressions that produce an explicit logical-value copy:
-    /// binding initializers, assignment sources, return values, call
-    /// arguments, and aggregate-literal field/element values.
-    pub copies: BTreeSet<Span>,
+    /// Expressions that produce an explicit logical-value copy, including
+    /// the source-level purpose and lifetime boundary selected by checking.
+    /// Typed lowering adds allocation behavior from the concrete value type.
+    pub copies: BTreeMap<Span, LogicalCopyContext>,
     /// Match-pattern and local tuple-destructuring bindings receive
     /// independent logical-value copies. Lowering consumes these stable
     /// identities when it materializes component extraction.
@@ -91,7 +91,7 @@ pub enum CheckedCall {
         ty: TypeId,
     },
     /// `Target.try_from(value)`, `Target.wrapping_from(value)`, or
-    /// `Target.saturating_from(value)` (`docs/SPEC.md` 4.1). A primitive has no
+    /// `Target.saturating_from(value)` (`docs/spec.md` 4.1). A primitive has no
     /// declaration, so this records the selection instead. `result` is
     /// `Result[Target, NumericError]` for the checked form and `Target`
     /// otherwise.
@@ -102,7 +102,7 @@ pub enum CheckedCall {
         result: TypeId,
     },
     /// `value.checked_add(other)` and the other standard alternatives to the
-    /// trapping arithmetic operators (`docs/SPEC.md` 4.1).
+    /// trapping arithmetic operators (`docs/spec.md` 4.1).
     NumericAlternative {
         operation: NumericAlternative,
         operand_type: TypeId,

@@ -44,7 +44,7 @@ elamc conformance path/to/suite --filter=case-name
 
 The installed executable is named `elamc`; `elamite` remains the language and
 manifest name. `elamc --version` reports both the compiler version and the
-targeted `SPEC.md` revision.
+targeted `spec.md` revision.
 
 `test` discovers language-native declarations in one selected package,
 compiles a test-only native artifact, and executes each selected test in a
@@ -62,7 +62,7 @@ versioned `.elamite-meta` public metadata.
 
 Passing `--c-flag=-DELAMITE_COST_INSTRUMENTATION=1` enables the versioned,
 developer-only allocation and explicit byte-copy report described in
-`COST_MODEL.md`. It changes program stderr and runtime cost and is not a
+`cost_model.md`. It changes program stderr and runtime cost and is not a
 semantic conformance mode.
 
 `dump` accepts `tokens`, `syntax`, `expanded`, `resolution`, `types`, `typed-ir`,
@@ -92,7 +92,7 @@ spelling.
 
 ## Compiler interfaces
 
-The Elamite source language described by `SPEC.md` is the compatibility
+The Elamite source language described by `spec.md` is the compatibility
 boundary. Initial conformance is complete, but the following developer
 interfaces remain implementation-private and may change between compiler
 revisions:
@@ -105,7 +105,7 @@ revisions:
 - the Rust compiler-library API.
 
 Do not treat a library package's relocatable object as a stable C ABI. Exported
-C entry points require the explicit FFI forms in `SPEC.md`.
+C entry points require the explicit FFI forms in `spec.md`.
 
 ## Current limitations
 
@@ -129,5 +129,5 @@ C entry points require the explicit FFI forms in `SPEC.md`.
 - Foreign exceptions, `longjmp`, and Elamite traps must not unwind through the
   language boundary. Recoverable errors require explicit wrapper translation.
 
-See `ISSUES.md` for unresolved design work and `LEDGER.md` for the exact
+See `issues.md` for unresolved design work and `ledger.md` for the exact
 implementation and test status of normative rules.

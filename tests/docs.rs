@@ -26,14 +26,34 @@ fn project_markdown_is_indexed_under_docs() {
 
     let agents = fs::read_to_string("AGENTS.md").expect("read contributor instructions");
     let index = fs::read_to_string("README.md").expect("read documentation index");
+    let mut directories = vec![PathBuf::from("docs")];
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(&directory).expect("read documentation directory") {
+            let path = entry.expect("read documentation entry").path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("documentation filenames are UTF-8");
+                assert_eq!(
+                    name,
+                    name.to_lowercase(),
+                    "{} is not lowercase",
+                    path.display()
+                );
+            }
+        }
+    }
     for name in [
-        "SPEC.md",
-        "ROADMAP.md",
-        "LEDGER.md",
-        "ISSUES.md",
-        "PROPOSALS.md",
-        "CRITIQUES.md",
-        "COST_MODEL.md",
+        "spec.md",
+        "roadmap.md",
+        "ledger.md",
+        "issues.md",
+        "proposals.md",
+        "critiques.md",
+        "cost_model.md",
     ] {
         let path = format!("docs/{name}");
         assert!(fs::metadata(&path).is_ok(), "missing {path}");

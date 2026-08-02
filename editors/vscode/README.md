@@ -39,7 +39,7 @@ To produce a `.vsix`, run `npx @vscode/vsce package` from this directory.
 
 - `//` line comments and `///` documentation comments
 - Every keyword in `keyword` (`src/lexer.rs`)
-- Primitive types from `docs/SPEC.md` 4.1, plus the resolver's builtin types,
+- Primitive types from `docs/spec.md` 4.1, plus the resolver's builtin types,
   derivable traits, and `print`/`println`
 - Integer, float, hexadecimal, octal, and binary literals with `_` separators
   and every suffix in `parse_numeric_suffix`

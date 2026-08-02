@@ -1,4 +1,4 @@
-/// # Safe references (`docs/SPEC.md` 3.2)
+/// # Safe references (`docs/spec.md` 3.2)
 ///
 /// A reference names storage. Every assignment that overwrites that storage is
 /// observable through the reference, and a reference into an aggregate keeps

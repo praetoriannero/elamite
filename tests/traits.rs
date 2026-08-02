@@ -775,7 +775,7 @@ fn main() -> ():
 
 #[test]
 fn option_defaults_to_none_without_a_payload_default() {
-    // `docs/SPEC.md` 4.3: `Option[T]` defaults to `Option.None` without requiring
+    // `docs/spec.md` 4.3: `Option[T]` defaults to `Option.None` without requiring
     // `T` to implement `Default`, so neither a safe reference nor an
     // underivable struct blocks the enclosing derivation.
     assert_clean(

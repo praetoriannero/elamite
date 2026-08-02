@@ -1,14 +1,14 @@
-//! Storage-promotion analysis (`docs/ROADMAP.md` Milestone 10).
+//! Storage-promotion analysis (`docs/roadmap.md` Milestone 10).
 //!
 //! A safe reference names storage, so any local whose address is taken must
 //! live in managed storage rather than on the C stack: the reference may
 //! outlive the frame, and the collector must be able to reach the target.
 //!
 //! This pass answers one question per function — which locals have their
-//! address taken — and is deliberately conservative, per `docs/ROADMAP.md` Milestone
+//! address taken — and is deliberately conservative, per `docs/roadmap.md` Milestone
 //! 10: every such local is promoted, with precise escape analysis left to
 //! **Post-conformance optimization**. Because references point into their container's storage
-//! rather than at a boxed subvalue (`docs/SPEC.md` §3.2), taking a reference through
+//! rather than at a boxed subvalue (`docs/spec.md` §3.2), taking a reference through
 //! a path promotes the *root* local of that path and nothing else; no
 //! whole-program field analysis is involved.
 
@@ -21,7 +21,7 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 /// order.
 ///
 /// The result is a `BTreeSet` because promotion decides storage layout, and
-/// `docs/ROADMAP.md` §2.2 requires identical source to produce identical output.
+/// `docs/roadmap.md` §2.2 requires identical source to produce identical output.
 #[must_use]
 pub fn address_taken_locals(
     resolved: &ResolvedProgram,
@@ -103,7 +103,7 @@ fn reference_operand(node: &SyntaxNode) -> Option<&SyntaxNode> {
 /// - a referenced composite literal (`&Point { .. }`) allocates its own cell;
 /// - a dereference (`&*handle`) names the referent's storage, not a local;
 /// - a call or computed expression is not addressable and is rejected by
-///   `docs/SPEC.md` 3.2 before this analysis matters.
+///   `docs/spec.md` 3.2 before this analysis matters.
 fn root_local(resolved: &ResolvedProgram, node: &SyntaxNode) -> Option<LocalBindingId> {
     match node.kind {
         SyntaxKind::NameExpression => {

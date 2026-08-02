@@ -19,6 +19,12 @@ impl<'a> CEmitter<'a> {
 
     pub(super) fn emit_function(&mut self, function: &ControlFlowFunction) {
         self.promoted = function.promoted_locals.clone();
+        self.borrowed_parameters = function
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.passing == ValuePassingMode::ReadOnlyBorrowed)
+            .map(|parameter| parameter.binding)
+            .collect();
         let capture_bindings = function
             .closure
             .as_ref()
@@ -148,6 +154,7 @@ impl<'a> CEmitter<'a> {
         }
         self.output.push_str("}\n\n");
         self.promoted.clear();
+        self.borrowed_parameters.clear();
     }
 
     pub(super) fn parameter_list(&mut self, function: &ControlFlowFunction) -> String {
@@ -158,8 +165,13 @@ impl<'a> CEmitter<'a> {
             parameters.push(format!("{ty} el_env"));
         }
         parameters.extend(function.parameters.iter().filter_map(|parameter| {
-            self.c_type(parameter.ty, Some(parameter.span))
-                .map(|ty| format!("{ty} {}", local_name(parameter.binding)))
+            self.c_type(parameter.ty, Some(parameter.span)).map(|ty| {
+                if parameter.passing == ValuePassingMode::ReadOnlyBorrowed {
+                    format!("const {ty} *{}", local_name(parameter.binding))
+                } else {
+                    format!("{ty} {}", local_name(parameter.binding))
+                }
+            })
         }));
         if parameters.is_empty() {
             "void".to_string()
@@ -211,6 +223,7 @@ impl<'a> CEmitter<'a> {
                         && let Rvalue::Call {
                             instance,
                             arguments,
+                            ..
                         } = value
                         && self.resolved.declarations[instance.declaration.index()].kind
                             == crate::resolution::DeclarationKind::ForeignFunction
@@ -459,29 +472,17 @@ impl<'a> CEmitter<'a> {
                 let collection_name = temporary_name(*collection);
                 let index_name = temporary_name(*index);
                 match kind {
-                    IterationKind::Slice { element, .. } => format!(
-                        "{}({collection_name}.values[{index_name}])",
-                        copy_helper_name(self.resolve_alias(*element))
-                    ),
-                    IterationKind::Array { element, .. } => format!(
-                        "{}({collection_name}.values[{index_name}])",
-                        copy_helper_name(self.resolve_alias(*element))
-                    ),
-                    IterationKind::Vec { element, .. } | IterationKind::Set { element, .. } => {
-                        format!(
-                            "{}({collection_name}->values[{index_name}])",
-                            copy_helper_name(self.resolve_alias(*element))
-                        )
+                    IterationKind::Slice { .. } | IterationKind::Array { .. } => {
+                        format!("{collection_name}.values[{index_name}]")
                     }
-                    IterationKind::Map {
-                        key, value, pair, ..
-                    } => {
+                    IterationKind::Vec { .. } | IterationKind::Set { .. } => {
+                        format!("{collection_name}->values[{index_name}]")
+                    }
+                    IterationKind::Map { pair, .. } => {
                         let pair_type = self.c_type(*pair, Some(span))?;
                         format!(
-                            "({pair_type}){{ .v0 = {}({collection_name}->keys[{index_name}]), \
-                             .v1 = {}({collection_name}->values[{index_name}]) }}",
-                            copy_helper_name(self.resolve_alias(*key)),
-                            copy_helper_name(self.resolve_alias(*value))
+                            "({pair_type}){{ .v0 = {collection_name}->keys[{index_name}], \
+                             .v1 = {collection_name}->values[{index_name}] }}"
                         )
                     }
                 }
@@ -608,7 +609,7 @@ impl<'a> CEmitter<'a> {
                 );
                 destination_name
             }
-            Rvalue::Copy(source) => format!(
+            Rvalue::Copy { source, .. } => format!(
                 "{}({})",
                 copy_helper_name(self.resolve_alias(destination_type)),
                 temporary_name(*source)
@@ -659,13 +660,22 @@ impl<'a> CEmitter<'a> {
             Rvalue::Call {
                 instance,
                 arguments,
+                argument_modes,
             } => {
                 let call = format!(
                     "{}({})",
                     self.function_symbol(instance),
                     arguments
                         .iter()
-                        .map(|argument| temporary_name(*argument))
+                        .zip(argument_modes)
+                        .map(|(argument, mode)| {
+                            let argument = temporary_name(*argument);
+                            if *mode == ValuePassingMode::ReadOnlyBorrowed {
+                                format!("&{argument}")
+                            } else {
+                                argument
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
@@ -1272,6 +1282,8 @@ impl<'a> CEmitter<'a> {
             ControlFlowPlace::Local(binding) => {
                 if self.promoted.contains(binding) {
                     format!("(*{})", cell_name(*binding))
+                } else if self.borrowed_parameters.contains(binding) {
+                    format!("(*{})", local_name(*binding))
                 } else {
                     local_name(*binding)
                 }
@@ -1569,12 +1581,21 @@ impl<'a> CEmitter<'a> {
                     NeverCall::Direct {
                         instance,
                         arguments,
+                        argument_modes,
                     } => format!(
                         "{}({})",
                         self.function_symbol(instance),
                         arguments
                             .iter()
-                            .map(|argument| temporary_name(*argument))
+                            .zip(argument_modes)
+                            .map(|(argument, mode)| {
+                                let argument = temporary_name(*argument);
+                                if *mode == ValuePassingMode::ReadOnlyBorrowed {
+                                    format!("&{argument}")
+                                } else {
+                                    argument
+                                }
+                            })
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),

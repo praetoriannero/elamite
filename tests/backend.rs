@@ -5,9 +5,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use elamite::backend::{COptions, Target, emit_c};
+use elamite::backend::{COptions, Target, emit_c, mangle_function_instance};
 use elamite::diagnostics::{Category, Diagnostic};
 use elamite::driver::{BuildOptions, DumpStage, Optimization, build, compile, dump, run};
+use elamite::ir::{TypedExpressionKind, TypedStatementKind};
+use elamite::operations::{
+    LogicalCopyAllocation, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyPurpose,
+    ValuePassingMode,
+};
 use elamite::package::PackageGraph;
 use elamite::source::SourceManager;
 
@@ -2154,6 +2159,210 @@ fn main() -> ():
 }
 
 #[test]
+fn logical_copy_facts_survive_both_ir_levels_and_are_accounted_once() {
+    let tree = TestTree::new("logical-copy-facts");
+    tree.executable(
+        r#"
+fn worker() -> i32:
+    return 7
+
+fn main() -> ():
+    let text = String.from("hello")
+    let copied = text
+    let started = std.thread.spawn(worker)
+    let values = @vec[String.from("world")]
+    for value in values:
+        println(value)
+    println(copied)
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+
+    let main = compilation
+        .high_level_ir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main is lowered");
+    let copied_binding = main
+        .body
+        .iter()
+        .filter_map(|statement| match &statement.kind {
+            TypedStatementKind::Let { value, .. } => Some(value),
+            _ => None,
+        })
+        .find(|value| {
+            matches!(value.kind, TypedExpressionKind::Local(_))
+                && value.copy.is_some_and(|copy| {
+                    copy.context.kind == LogicalCopyKind::Binding
+                        && copy.allocation == LogicalCopyAllocation::OwnedBuffer
+                })
+        })
+        .expect("the String binding carries its owned-buffer copy facts");
+    let binding_context = copied_binding.copy.expect("binding has copy facts").context;
+    assert_eq!(
+        (
+            binding_context.source_lifetime,
+            binding_context.destination_lifetime,
+        ),
+        (
+            LogicalCopyLifetime::LexicalScope,
+            LogicalCopyLifetime::LexicalScope,
+        )
+    );
+
+    let spawn_argument = main
+        .body
+        .iter()
+        .filter_map(|statement| match &statement.kind {
+            TypedStatementKind::Let {
+                value:
+                    elamite::ir::TypedExpression {
+                        kind: TypedExpressionKind::StandardCall { arguments, .. },
+                        ..
+                    },
+                ..
+            } => arguments.first(),
+            _ => None,
+        })
+        .find(|argument| {
+            argument.copy.is_some_and(|copy| {
+                copy.context.purpose == LogicalCopyPurpose::Transfer
+                    && copy.context.destination_lifetime == LogicalCopyLifetime::Thread
+            })
+        })
+        .expect("thread spawn carries a transfer-copy argument");
+    assert_eq!(
+        spawn_argument
+            .copy
+            .expect("spawn argument has copy facts")
+            .allocation,
+        LogicalCopyAllocation::PreserveIdentity
+    );
+
+    for function in &compilation.control_flow_ir.functions {
+        let inventory = function.logical_copy_inventory();
+        let mut ids = inventory
+            .iter()
+            .map(|record| record.id.index())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..inventory.len()).collect::<Vec<_>>());
+    }
+    let emitted = compilation
+        .control_flow_ir
+        .functions
+        .iter()
+        .flat_map(|function| function.logical_copy_inventory())
+        .collect::<Vec<_>>();
+    assert!(emitted.iter().any(|copy| {
+        copy.facts.context.kind == LogicalCopyKind::Binding
+            && copy.facts.allocation == LogicalCopyAllocation::OwnedBuffer
+    }));
+    assert!(emitted.iter().any(|copy| {
+        copy.facts.context.purpose == LogicalCopyPurpose::Transfer
+            && copy.facts.context.destination_lifetime == LogicalCopyLifetime::Thread
+    }));
+    assert!(emitted.iter().any(|copy| {
+        copy.facts.context.kind == LogicalCopyKind::IterationElement
+            && copy.facts.allocation == LogicalCopyAllocation::OwnedBuffer
+    }));
+}
+
+#[test]
+fn proven_read_only_direct_calls_borrow_without_changing_value_semantics() {
+    let source = r#"
+fn read_len(values: Vec[i32]) -> usize:
+    return values.len()
+
+fn recursive_len(values: Vec[i32], remaining: i32) -> usize:
+    if remaining == 0:
+        return values.len()
+    return recursive_len(values, remaining - 1)
+
+fn identity[T](value: T) -> T:
+    return value
+
+fn exposed(value: Vec[i32]) -> &Vec[i32]:
+    return &value
+
+fn indirect_len(values: Vec[i32]) -> usize:
+    return values.len()
+
+fn main() -> ():
+    var values = @vec[1, 2, 3]
+    let copied = identity(values)
+    values.append(4)
+    let direct = read_len(values)
+    let recursive = recursive_len(values, 2)
+    let callback: &fn(Vec[i32]) -> usize = indirect_len
+    let indirect = callback(values)
+    println(f"{direct}:{recursive}:{indirect}:{copied.len()}")
+"#;
+    let tree = TestTree::new("read-only-borrowing");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+
+    let function = |name: &str| {
+        compilation
+            .high_level_ir
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("{name} is lowered"))
+    };
+    for name in ["read_len", "recursive_len", "identity"] {
+        assert_eq!(
+            function(name).parameters[0].passing,
+            ValuePassingMode::ReadOnlyBorrowed,
+            "{name}'s costly read-only parameter should use hidden borrowing"
+        );
+    }
+    for name in ["exposed", "indirect_len"] {
+        assert_eq!(
+            function(name).parameters[0].passing,
+            ValuePassingMode::Owned,
+            "{name}'s escaping or callable ABI must retain eager copying"
+        );
+    }
+
+    let read_len = function("read_len");
+    let symbol = mangle_function_instance(&compilation.resolved, &read_len.instance);
+    let prototype = compilation
+        .generated_c
+        .lines()
+        .find(|line| line.contains(&symbol) && line.ends_with(';'))
+        .expect("read_len has a prototype");
+    assert!(prototype.contains("const ") && prototype.contains(" *l"));
+    assert!(
+        compilation
+            .control_flow_ir
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                elamite::ir::Instruction::Assign {
+                    value: elamite::ir::Rvalue::Call { argument_modes, .. },
+                    ..
+                } if argument_modes.contains(&ValuePassingMode::ReadOnlyBorrowed)
+            ))
+    );
+
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
+    assert_eq!(stdout, "4:4:4:3\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
 fn every_intermediate_dump_is_deterministic_and_source_identified() {
     let tree = TestTree::new("dumps");
     tree.executable("fn main() -> ():\n    println(42)\n");
@@ -3039,7 +3248,7 @@ fn main() -> ():
 
 #[test]
 fn sustained_allocation_churn_is_reclaimed() {
-    // docs/ROADMAP.md Milestone 10: collection is best-effort and its *timing* is not a
+    // docs/roadmap.md Milestone 10: collection is best-effort and its *timing* is not a
     // conformance requirement, so this asserts only that a program allocating
     // far more than it retains completes normally rather than exhausting
     // memory.
@@ -3104,7 +3313,7 @@ fn main() -> ():
 
 #[test]
 fn dynamic_dispatch_selects_by_concrete_type_through_one_trait() {
-    // docs/ROADMAP.md Milestone 13: vtable dispatch with several concrete types behind one
+    // docs/roadmap.md Milestone 13: vtable dispatch with several concrete types behind one
     // trait object. Default methods participate in the vtable and an
     // implementation may override them.
     let source = r#"
@@ -3358,7 +3567,7 @@ fn main() -> ():
 fn option_defaults_to_none_through_an_explicit_discriminant() {
     // The enum discriminant is the variant's identity rather than its ordinal,
     // so a zero-initialized value is not `Option.None` and the default helper
-    // must write the tag explicitly (`docs/SPEC.md` 4.3).
+    // must write the tag explicitly (`docs/spec.md` 4.3).
     let source = r#"
 struct Undefaultable:
     value: i32
@@ -3410,7 +3619,7 @@ fn main() -> ():
 
 #[test]
 fn option_of_a_safe_reference_keeps_a_recursive_graph_reachable() {
-    // `Option[&T]` is the nullable safe reference (`docs/SPEC.md` 4.2). Its payload
+    // `Option[&T]` is the nullable safe reference (`docs/spec.md` 4.2). Its payload
     // retains identity rather than copying, and the referenced links stay
     // reachable through the collector's interior-pointer scan.
     let source = r#"
@@ -3505,7 +3714,7 @@ fn main() -> ():
 #[test]
 fn checked_numeric_conversion_reports_instead_of_trapping() {
     // Milestone 14.3: `Target.try_from(value)` is the nontrapping counterpart
-    // of `value as Target` (`docs/SPEC.md` 4.1). It reuses the same range
+    // of `value as Target` (`docs/spec.md` 4.1). It reuses the same range
     // boundaries, so the two never disagree about representability.
     let source = r#"
 fn tag_i8(value: Result[i8, NumericError]) -> str:
@@ -3684,7 +3893,7 @@ fn main() -> ():
 #[test]
 fn numeric_alternatives_replace_the_trapping_operators_at_the_width_boundary() {
     // Milestone 14.4: the trapping operators stay the default; these are the
-    // explicit opt-outs (`docs/SPEC.md` 4.1). Checked reports `Option.None`,
+    // explicit opt-outs (`docs/spec.md` 4.1). Checked reports `Option.None`,
     // wrapping wraps modulo the range, saturating clamps.
     let source = r#"
 fn show(value: Option[i8]) -> ():
@@ -4096,7 +4305,7 @@ fn only_wrapping_division_can_still_trap() {
 fn propagation_branches_evaluate_once_and_copy_payloads() {
     // M15.3: the `?` operand is evaluated exactly once; an `Ok` payload is
     // copied into the expression's value and an `Err` payload is copied into
-    // an early `Result.Err` return (`docs/SPEC.md` 8).
+    // an early `Result.Err` return (`docs/spec.md` 8).
     let source = r#"
 struct Counter:
     value: i32
@@ -4199,7 +4408,7 @@ fn main() -> ():
 fn a_returned_shared_handle_observes_its_deferred_close() {
     // M15.7: the return value is copied before cleanup begins, so
     // unconditionally deferring `close()` on a returned shared handle closes
-    // the returned copy too (`docs/SPEC.md` 8): the copy shares the handle's
+    // the returned copy too (`docs/spec.md` 8): the copy shares the handle's
     // explicit alias even though the copy itself happened first.
     let source = r#"
 struct Handle:

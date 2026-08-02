@@ -1,4 +1,4 @@
-/// # Quotation and interpolation (`docs/SPEC.md` 12.2, 12.3)
+/// # Quotation and interpolation (`docs/spec.md` 12.2, 12.3)
 ///
 /// `quote:` introduces an indentation-delimited template whose expected
 /// `std.ast` role comes from a binding annotation or a return position.
@@ -100,7 +100,7 @@ attr adds_members(
     target: std.ast.StructDefinition,
 ) -> std.ast.StructDefinition:
     // A member list carries fields and methods together, and `++` joins it to
-    // the target's existing members (`docs/SPEC.md` 7 and 12.3).
+    // the target's existing members (`docs/spec.md` 7 and 12.3).
     let additions: std.ast.MemberList = quote:
         id: u64
 

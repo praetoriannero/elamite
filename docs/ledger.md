@@ -2,11 +2,11 @@
 
 > Status: Active — Milestone 0 deliverable, maintained as milestones complete
 >
-> Basis: `SPEC.md` version 0.9.0-draft and `examples/spec_demo.elx`
+> Basis: `spec.md` version 0.9.0-draft and `examples/spec_demo.elx`
 >
 > Purpose: turn the specification into an implementable checklist, per the
-> completed [`ROADMAP.md`](ROADMAP.md) Milestone 0. This document assigns no new
-> semantics. When it conflicts with `SPEC.md`, the specification wins and this
+> completed [`roadmap.md`](roadmap.md) Milestone 0. This document assigns no new
+> semantics. When it conflicts with `spec.md`, the specification wins and this
 > ledger must be corrected.
 
 ## 0. How to read this ledger
@@ -14,12 +14,12 @@
 Each row maps one normative rule (or a small cluster of tightly related rules)
 to:
 
-- **Pass** — the `ROADMAP.md` milestone(s) expected to implement it. Completed
+- **Pass** — the `roadmap.md` milestone(s) expected to implement it. Completed
   historical work retains the legacy short tags below; planned work uses its
   descriptive milestone name.
 - **Runtime** — what the generated program depends on at run time, if
   anything (`—` means purely a compile-time rule with no runtime footprint).
-- **Tests** — which `ROADMAP.md` §2.4 test layer(s) should cover it: *parse*,
+- **Tests** — which `roadmap.md` §2.4 test layer(s) should cover it: *parse*,
   *compile-pass*, *compile-fail*, *run-pass*, or *integration*.
 
 | Legacy tag | Completed milestone |
@@ -50,7 +50,7 @@ to:
 This ledger maps ownership of work rather than serving as the sole completion
 tracker. The legacy tags cover completed milestones 0 through 20 and 22
 (implemented together in one frontend pass where applicable; see
-`ROADMAP.md`). All remaining work is tracked by stable names rather than new
+`roadmap.md`). All remaining work is tracked by stable names rather than new
 numbers. The initial-conformance closure evidence is indexed by
 `docs/release.md` and the section-owned fixture map in
 `tests/fixtures/conformance/README.md`; the compiler-architecture ownership map
@@ -58,19 +58,19 @@ and behavior-neutral baseline are recorded in `docs/architecture.md`.
 
 ## 0.1 Legacy artifact inventory
 
-`ROADMAP.md` Milestone 0 calls for inventorying legacy grammar, compiler
+`roadmap.md` Milestone 0 calls for inventorying legacy grammar, compiler
 components, examples, and fixtures, preserving useful test cases. As of this
 ledger, **there is nothing to inventory**: the prior Python implementation
 (`src/elamite/*.py`), both Lark grammars (`elamite.lark`, `elx.lark`), and
 `examples/spec_alt_demo.elx` were fully removed in the same commit that
-introduced the Rust skeleton and `ROADMAP.md`. No legacy test fixtures, parser
+introduced the Rust skeleton and `roadmap.md`. No legacy test fixtures, parser
 output, or grammar files survive to migrate or reconcile. This closes that
 part of Milestone 0's exit criteria by observation rather than by migration
 work.
 
 A `notes.txt` at the repository root predated the current specification (it
 used brace-delimited bodies, `mut`, printf-style calls, and `case`/`abstract`
-keywords that contradict `SPEC.md`'s indentation-delimited, `var`-based
+keywords that contradict `spec.md`'s indentation-delimited, `var`-based
 design). It was never an implementation input to this ledger and has been
 removed.
 
@@ -431,7 +431,7 @@ any compiler awareness at all.
 
 ## 13. Target assumptions
 
-Per `ROADMAP.md` Milestone 0, the initial supported-target assumptions:
+Per `roadmap.md` Milestone 0, the initial supported-target assumptions:
 
 | Assumption | Value | Status |
 | --- | --- | --- |
@@ -444,7 +444,7 @@ Per `ROADMAP.md` Milestone 0, the initial supported-target assumptions:
 
 ## 14. Command-level outcomes
 
-Per `ROADMAP.md` Milestone 0, exact command spelling is a tooling decision; these
+Per `roadmap.md` Milestone 0, exact command spelling is a tooling decision; these
 are the outcomes the initial driver must support, independent of spelling:
 
 | Outcome | Description | Pass |
@@ -452,7 +452,7 @@ are the outcomes the initial driver must support, independent of spelling:
 | Check a package or standalone source file | Run resolution + type checking without generating C or linking; report diagnostics. A standalone `.elx` file is an implicit executable package containing only that root file | M4–M7, driver extension (done) |
 | Build a package or standalone source file | Full pipeline through C generation, C-compiler invocation, and linking; produce an executable or library artifact. Direct `elamc FILE.elx` compilation and the explicit `build` workflow share the package pipeline | M8 (initial), M17–M18 (complete), driver extension (done) |
 | Initialize a package | Create a non-destructive hello-world executable skeleton by default (`src/main.elx`) or a library skeleton with `--lib` (`src/lib.elx`) | M18.6 (done) |
-| Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `ROADMAP.md`) | M4 onward |
+| Print diagnostics | Stable diagnostic category, primary span, plain-language explanation, related spans (§2.3 of `roadmap.md`) | M4 onward |
 | Select a target | Choose the target architecture/OS the generated C is compiled for | M1 (manifest), M8 (backend) — depends on the open target-matrix decision in §13 above |
 | Select an output directory | Choose where build artifacts (generated C, object files, linked binary) land | M8, M18 (done) |
 | Select an exact output file | Write the final executable or relocatable object to the `-o` path independently of the intermediate/metadata directory | driver extension (done) |
@@ -462,7 +462,7 @@ are the outcomes the initial driver must support, independent of spelling:
 | Run conformance fixtures | Select fixtures and target/optimization matrices, compare stable output/status expectations, isolate builds, and retain failure artifacts | M18 (done) |
 | Run package tests | Discover selected-package `test` declarations, check and compile test-only bodies, run each in isolation with deterministic filtering/reporting, and distinguish test failure from command failure | **Package tests, typed traps, and runner** (done) |
 
-## 15. Native concurrency (`SPEC.md` §10.4)
+## 15. Native concurrency (`spec.md` §10.4)
 
 The concurrency contract is normative. It reserves no task or async grammar;
 ordinary declarations in `std.thread` and `std.sync` expose the complete
@@ -505,7 +505,7 @@ without a ledger entry.
 
 ## 17. Milestone 0 exit criteria
 
-Per `ROADMAP.md`:
+Per `roadmap.md`:
 
 - [x] **Every construct in the authoritative demonstration has a ledger
   entry.** See §16 above.
@@ -517,11 +517,11 @@ Per `ROADMAP.md`:
 - [x] **The specification can be mapped without claiming the compiler is
   implemented.** When these criteria were met no row claimed anything was
   built—every row's status was "planned." Rows now reach "complete" only as
-  their owning milestone's status changes in `ROADMAP.md`; see §0.
+  their owning milestone's status changes in `roadmap.md`; see §0.
 
 Both tooling gaps surfaced by this exercise are now decided (§13): the C
 compiler requirement is **C99**, and the supported OS/architecture matrix is
-**Linux, x86-64 and x86**. Neither was a pre-existing `ISSUES.md` design
+**Linux, x86-64 and x86**. Neither was a pre-existing `issues.md` design
 question — both were implementation/tooling decisions recorded here so
 Milestone 1 didn't have to silently invent an answer.
 
@@ -871,20 +871,20 @@ ledger follows the same split.
 | Concern | Crate | Reasoning | Milestone |
 | --- | --- | --- | --- |
 | Manifest parsing | `toml` + `serde` | Already adopted at M1; TOML parsing is infrastructure, not language-compiler work | M1 (done) |
-| Diagnostic rendering | `codespan-reporting` | Our `Diagnostic`/`Category`/`Span` shape (§0 legend; `ROADMAP.md` §2.3) already matches its `Diagnostic`/`Label`/`Files` model directly. Retrofitted into M1 immediately (`SourceManager` implements `Files`, `manifest.rs` captures real spans via `toml::Spanned` and `toml::de::Error::span()`, `main.rs` renders with `term::emit_to_write_style`) rather than left as a future intention — this is real span-based rustc-style output today, not just a plan | M1 (retrofitted), all later milestones |
-| Snapshot testing | `insta` | `ROADMAP.md` explicitly asks for "golden token streams," "a syntax-tree dump... stable enough to serve as a debugging tool," and snapshot-compared parse tests (§2.4) — exactly insta's purpose, and the standard choice in this niche (rust-analyzer, ruff, and biome all use it for the same purpose) | M2 onward |
-| Property testing | `proptest` | `ROADMAP.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
+| Diagnostic rendering | `codespan-reporting` | Our `Diagnostic`/`Category`/`Span` shape (§0 legend; `roadmap.md` §2.3) already matches its `Diagnostic`/`Label`/`Files` model directly. Retrofitted into M1 immediately (`SourceManager` implements `Files`, `manifest.rs` captures real spans via `toml::Spanned` and `toml::de::Error::span()`, `main.rs` renders with `term::emit_to_write_style`) rather than left as a future intention — this is real span-based rustc-style output today, not just a plan | M1 (retrofitted), all later milestones |
+| Snapshot testing | `insta` | `roadmap.md` explicitly asks for "golden token streams," "a syntax-tree dump... stable enough to serve as a debugging tool," and snapshot-compared parse tests (§2.4) — exactly insta's purpose, and the standard choice in this niche (rust-analyzer, ruff, and biome all use it for the same purpose) | M2 onward |
+| Property testing | `proptest` | `roadmap.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
 | Retained parser fuzz corpus | `proptest` plus checked-in malformed inputs | M19 combines the existing arbitrary-Unicode parser property test with seeded indentation, delimiter, escape, formatted-string, and recovery inputs; this keeps failures reproducible without making libFuzzer a normal build dependency | M19 (done; `tests/robustness.rs`) |
-| Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`ROADMAP.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
-| CLI surface | `clap` (derive) | `ROADMAP.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
+| Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`roadmap.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
+| CLI surface | `clap` (derive) | `roadmap.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
 
 ### 18.2 Deferred, not rejected
 
 | Concern | Crate | Why not yet | Reconsider at |
 | --- | --- | --- | --- |
-| Incremental/query-based compilation | `salsa` | `ROADMAP.md` §1 and **Post-conformance optimization** both explicitly defer incremental compilation until after conformance tests and the M20 phase-boundary refactor exist; adopting it earlier would be premature. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) remains salsa-shaped, so later adoption should wrap explicit phase inputs in query/tracked-struct machinery rather than replace the identity system | **Post-conformance optimization** |
-| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). M20 gives the hand-written parser a phase-neutral syntax boundary but deliberately does not adopt a new tree library; `ROADMAP.md`'s **Source maps and editor diagnostics** candidate is the first reason to reconsider that representation | **Post-conformance optimization**, only if editor or language-server work requires it |
-| Semantic-version-aware manifest validation | `semver` | `Manifest` currently only checks the `version` field is non-empty (`SPEC.md` §2.3 doesn't mandate a version grammar); version comparison matters only if a future resolver adds version selection beyond the normative initial local-path model | when such a resolver is designed |
+| Incremental/query-based compilation | `salsa` | `roadmap.md` §1 and **Post-conformance optimization** both explicitly defer incremental compilation until after conformance tests and the M20 phase-boundary refactor exist; adopting it earlier would be premature. The existing "stable IDs and owned tables instead of long-lived references" rule (§2.1) remains salsa-shaped, so later adoption should wrap explicit phase inputs in query/tracked-struct machinery rather than replace the identity system | **Post-conformance optimization** |
+| Lossless CST / IDE-grade syntax trees | `rowan` | Built for exactly the use case rust-analyzer needs it for (incremental reparsing, trivia-preserving trees for refactoring). M20 gives the hand-written parser a phase-neutral syntax boundary but deliberately does not adopt a new tree library; `roadmap.md`'s **Source maps and editor diagnostics** candidate is the first reason to reconsider that representation | **Post-conformance optimization**, only if editor or language-server work requires it |
+| Semantic-version-aware manifest validation | `semver` | `Manifest` currently only checks the `version` field is non-empty (`spec.md` §2.3 doesn't mandate a version grammar); version comparison matters only if a future resolver adds version selection beyond the normative initial local-path model | when such a resolver is designed |
 
 ### 18.3 Explicitly not adopted for the core grammar
 
@@ -892,17 +892,17 @@ ledger follows the same split.
   useful for matching the "flat" token shapes (identifiers, keywords,
   punctuation, operators, numeric/string literal bodies) inside one logical
   line, but the indentation stack, four-space statement-continuation rule, and
-  logical newline/indent/dedent events (`SPEC.md` §2.2) are inherently
+  logical newline/indent/dedent events (`spec.md` §2.2) are inherently
   stateful in a way no lexer-generator expresses — that layer stays
   hand-written regardless of whether `logos` handles token shapes underneath
   it. Spike both before committing to either.
 - **Parser generators** (`pest`, `lalrpop`, `chumsky`) — rejected for the core
-  grammar. Every diagnostic-quality requirement in `ROADMAP.md` §2.3
+  grammar. Every diagnostic-quality requirement in `roadmap.md` §2.3
   ("Compile-fail tests should assert stable diagnostic categories and
   meaningful spans") and Milestone 3's parser-recovery validation list is
   easier to hit with a hand-written recursive-descent/Pratt parser that
   controls its own error recovery — matching rustc's and rust-analyzer's own
-  choice (confirmed above) and `SPEC.md` §7's explicit 14-level precedence
+  choice (confirmed above) and `spec.md` §7's explicit 14-level precedence
   table, which maps directly onto precedence climbing.
 - **`cc` crate for invoking the C backend's compiler** — a likely-looking but
   wrong fit. `cc::Build` is designed for `build.rs`-time compilation of C
@@ -920,7 +920,7 @@ ledger follows the same split.
   `&'arena T` lifetime parameters threading through every IR type, directly
   contradicting the already-established cross-cutting rule "Represent compiler
   relationships with stable IDs and owned tables instead of long-lived
-  references between phase data" (`ROADMAP.md` §2.1, `AGENTS.md`). A plain
+  references between phase data" (`roadmap.md` §2.1, `AGENTS.md`). A plain
   `Vec`-backed store with a newtype index (`NodeId(u32)`) needs no dependency
   at all and matches that rule directly; `slotmap` or `id-arena` remain
   available if generational-key safety is ever worth the dependency, but
@@ -928,7 +928,7 @@ ledger follows the same split.
 
 ## 19. Reference storage model (M10)
 
-An implementation decision on the same footing as §13/§14/§18. `SPEC.md` §3.2
+An implementation decision on the same footing as §13/§14/§18. `spec.md` §3.2
 fixes the observable behavior; this section records how the backend achieves
 it and why an earlier, more elaborate model was abandoned.
 
@@ -986,18 +986,18 @@ adding a guarantee.
 
 Allocation failure calls `el_out_of_memory`, which requests a full collection
 through the strategy and then terminates, without running deferred cleanup
-(`SPEC.md` §9).
+(`spec.md` §9).
 
 ### 19.4 Rejected: subvalue targeting with field boxing
 
-`SPEC.md` §3.2 originally stated that a reference into a nested aggregate
+`spec.md` §3.2 originally stated that a reference into a nested aggregate
 targeted the selected subvalue and was *not* rebased by a later replacement of
 its container, with a worked example printing the former value. Satisfying that
 alongside "a binding reference observes reassignment" is impossible for a
 single contiguous cell, and the only resolution preserving one C representation
 for `&T` was to box every address-taken field into its own managed cell.
 
-That rule was rejected in favor of the storage model specified by `SPEC.md`
+That rule was rejected in favor of the storage model specified by `spec.md`
 §3.2. Boxing would have made a nominal type's C layout depend on a
 whole-program analysis, and would have required M9's copy helpers to deep-copy
 through each box to preserve independence—a silent-aliasing failure mode,
@@ -1012,9 +1012,9 @@ at the binding slot) split `&T` into two incompatible C representations
 broke `&var`'s caller-visible mutation, since writes would land in a private
 copy the container never sees.
 
-## 20. Post-conformance compile-time syntax generation (`SPEC.md` §12)
+## 20. Post-conformance compile-time syntax generation (`spec.md` §12)
 
-`SPEC.md` 0.9.0-draft replaces the earlier matcher/transcriber proposal with
+`spec.md` 0.9.0-draft replaces the earlier matcher/transcriber proposal with
 one interpreter-backed model for derives, attributes, and function-like macros.
 The already-completed token-tree, provenance, and complete-fragment parser work
 remains the behavior-neutral input boundary; no matcher engine is planned.

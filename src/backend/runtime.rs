@@ -410,7 +410,7 @@ impl<'a> CEmitter<'a> {
             );
         }
         // Every allocation wrapper has already attempted a full collection
-        // and retried before reaching this terminal path (`docs/SPEC.md` 9).
+        // and retried before reaching this terminal path (`docs/spec.md` 9).
         self.output.push_str("\nvoid el_out_of_memory(void) {\n");
         self.output.push_str(
             "\x20\x20\x20\x20fputs(\"elamite: out of memory\\n\", stderr);\n\
@@ -776,7 +776,7 @@ impl<'a> CEmitter<'a> {
     }
 
     /// Defines the standard alternatives to the trapping arithmetic operators
-    /// (`docs/SPEC.md` 4.1) as two macros, instantiated per used integer type.
+    /// (`docs/spec.md` 4.1) as two macros, instantiated per used integer type.
     ///
     /// Each operation is expressed as an overflow *predicate* plus a wrapping
     /// result, so `checked_X` is exactly `ovf_X ? None : Some(wrap_X)` and the
@@ -924,7 +924,7 @@ impl<'a> CEmitter<'a> {
         pairs
     }
 
-    /// Emits one standard numeric conversion helper (`docs/SPEC.md` 4.1).
+    /// Emits one standard numeric conversion helper (`docs/spec.md` 4.1).
     ///
     /// The checked form's range test uses the same boundaries as the trapping
     /// `as` conversion, so `value as Target` and `Target.try_from(value)`
@@ -1020,7 +1020,7 @@ impl<'a> CEmitter<'a> {
         let mut body = String::new();
         if target_primitive.is_float() {
             // Integer-to-float and float-to-float conversions use IEEE
-            // rounding and cannot fail (`docs/SPEC.md` 4.1).
+            // rounding and cannot fail (`docs/spec.md` 4.1).
             let _ = writeln!(body, "    return {ok};");
         } else {
             let Some((minimum, maximum)) = primitive_bounds(target_primitive, self.options.target)
@@ -2818,7 +2818,7 @@ impl<'a> CEmitter<'a> {
     }
 
     /// Emits the mandatory null/alignment check helper for one pointee type
-    /// (`docs/SPEC.md` 3.3, Milestone 16.8). The alignment comes from the C99
+    /// (`docs/spec.md` 3.3, Milestone 16.8). The alignment comes from the C99
     /// `offsetof` probe — a `char` followed by the pointee — because
     /// `_Alignof` is C11-only and the generated C must stay C99.
     pub(super) fn emit_pointer_check_helper(&mut self, pointee: TypeId) {
@@ -3001,7 +3001,7 @@ impl<'a> CEmitter<'a> {
 
     /// Emits `bool el_eq_T(T, T)` for an aggregate, comparing structurally.
     ///
-    /// `docs/SPEC.md` 4.3: derived equality compares components. Reference-like
+    /// `docs/spec.md` 4.3: derived equality compares components. Reference-like
     /// components compare by identity, which is what `==` on a pointer already
     /// does.
     pub(super) fn emit_equality_helper(&mut self, ty: TypeId, span: Option<Span>) {

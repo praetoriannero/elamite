@@ -103,6 +103,11 @@ impl<'a> TypedLowerer<'a> {
         }
         self.collect_concrete_nominals(&mut program);
         program.vtables = std::mem::take(&mut self.vtables);
+        super::super::borrowing::apply_read_only_call_borrowing(
+            &mut program,
+            self.resolved,
+            &self.typed.types,
+        );
         TypedIrOutput {
             program,
             diagnostics: self.diagnostics,
@@ -118,6 +123,32 @@ impl<'a> TypedLowerer<'a> {
             Some(self_type) => self.typed.types.substitute_self(ty, self_type),
             None => ty,
         }
+    }
+
+    fn copy_facts(&self, ty: TypeId, context: LogicalCopyContext) -> LogicalCopyFacts {
+        let allocation = match logical_copy_strategy(&self.typed.types, ty) {
+            LogicalCopyStrategy::Trivial => LogicalCopyAllocation::None,
+            LogicalCopyStrategy::PreserveIdentity => LogicalCopyAllocation::PreserveIdentity,
+            LogicalCopyStrategy::Recursive => LogicalCopyAllocation::Recursive,
+            LogicalCopyStrategy::OwnedString => LogicalCopyAllocation::OwnedBuffer,
+            LogicalCopyStrategy::RuntimeManaged => LogicalCopyAllocation::RuntimeManaged,
+        };
+        LogicalCopyFacts {
+            context,
+            allocation,
+        }
+    }
+
+    fn checked_copy(&self, span: Span, ty: TypeId, place: PlaceKind) -> Option<LogicalCopyFacts> {
+        self.checked.copies.get(&span).copied().map(|mut context| {
+            context.source_lifetime = match place {
+                PlaceKind::Value => LogicalCopyLifetime::Temporary,
+                PlaceKind::Addressable | PlaceKind::Mutable => LogicalCopyLifetime::LexicalScope,
+                PlaceKind::CollectionInterior => LogicalCopyLifetime::Aggregate,
+                PlaceKind::RawPointerTarget => LogicalCopyLifetime::Unknown,
+            };
+            self.copy_facts(ty, context)
+        })
     }
 
     fn concrete_instance(&mut self, instance: &FunctionInstance) -> FunctionInstance {
@@ -570,6 +601,7 @@ impl<'a> TypedLowerer<'a> {
                     binding,
                     ty: parameter_type,
                     span: token.span,
+                    passing: ValuePassingMode::Owned,
                 });
                 local_types.insert(binding, parameter_type);
             }
@@ -1319,7 +1351,7 @@ impl<'a> TypedLowerer<'a> {
                                 kind: TypedExpressionKind::AddressOfTemporary(Box::new(value)),
                                 ty,
                                 place,
-                                copy: false,
+                                copy: None,
                                 span: node.span,
                             },
                         );
@@ -1334,7 +1366,7 @@ impl<'a> TypedLowerer<'a> {
                             kind: TypedExpressionKind::AddressOf(Box::new(target)),
                             ty,
                             place,
-                            copy: false,
+                            copy: None,
                             span: node.span,
                         },
                     );
@@ -1347,7 +1379,7 @@ impl<'a> TypedLowerer<'a> {
                             kind: TypedExpressionKind::Dereference(Box::new(operand)),
                             ty,
                             place,
-                            copy: self.checked.copies.contains(&node.span),
+                            copy: self.checked_copy(node.span, ty, place),
                             span: node.span,
                         },
                     );
@@ -1531,7 +1563,7 @@ impl<'a> TypedLowerer<'a> {
             TypedExpression {
                 ty,
                 place,
-                copy: self.checked.copies.contains(&node.span),
+                copy: self.checked_copy(node.span, ty, place),
                 span: node.span,
                 kind,
             },
@@ -1566,8 +1598,8 @@ impl<'a> TypedLowerer<'a> {
         };
         let trait_type = *trait_type;
         self.register_vtable(trait_declaration, trait_type, concrete, node.span);
-        let copy = self.checked.copies.contains(&node.span);
-        expression.copy = false;
+        let copy = self.checked_copy(node.span, target, expression.place);
+        expression.copy = None;
         Some(TypedExpression {
             ty: target,
             place: PlaceKind::Value,
@@ -1724,7 +1756,7 @@ impl<'a> TypedLowerer<'a> {
                             TypedExpression {
                                 ty: self.typed.types.primitive(PrimitiveType::Unit),
                                 place: PlaceKind::Value,
-                                copy: false,
+                                copy: None,
                                 span: node.span,
                                 kind: TypedExpressionKind::Constant(crate::ir::Constant::Unit),
                             }
@@ -1734,7 +1766,7 @@ impl<'a> TypedLowerer<'a> {
                                     parameters.iter().map(|parameter| parameter.ty).collect(),
                                 )),
                                 place: PlaceKind::Value,
-                                copy: false,
+                                copy: None,
                                 span: node.span,
                                 kind: TypedExpressionKind::Tuple(lowered),
                             }
@@ -1747,7 +1779,7 @@ impl<'a> TypedLowerer<'a> {
                         let receiver = TypedExpression {
                             ty: receiver_type,
                             place: PlaceKind::Value,
-                            copy: false,
+                            copy: None,
                             span: callee_node.span,
                             kind: TypedExpressionKind::AddressOf(Box::new(
                                 self.lower_place(callee_node)?,
@@ -1756,6 +1788,7 @@ impl<'a> TypedLowerer<'a> {
                         return Some(TypedExpressionKind::Call {
                             callee: TypedCallee::Function(instance),
                             arguments: vec![receiver, tuple],
+                            argument_modes: vec![ValuePassingMode::Owned; 2],
                         });
                     }
                     _ => return None,
@@ -1779,7 +1812,7 @@ impl<'a> TypedLowerer<'a> {
                     TypedExpression {
                         ty: self.typed.types.primitive(PrimitiveType::Unit),
                         place: PlaceKind::Value,
-                        copy: false,
+                        copy: None,
                         span: node.span,
                         kind: TypedExpressionKind::Constant(crate::ir::Constant::Unit),
                     }
@@ -1789,7 +1822,7 @@ impl<'a> TypedLowerer<'a> {
                             parameters.iter().map(|parameter| parameter.ty).collect(),
                         )),
                         place: PlaceKind::Value,
-                        copy: false,
+                        copy: None,
                         span: node.span,
                         kind: TypedExpressionKind::Tuple(lowered),
                     }
@@ -1801,6 +1834,7 @@ impl<'a> TypedLowerer<'a> {
                         slot,
                     },
                     arguments: vec![receiver, tuple],
+                    argument_modes: vec![ValuePassingMode::Owned; 2],
                 });
             }
             CheckedCall::DerivedDefault { ty } => {
@@ -1988,7 +2022,12 @@ impl<'a> TypedLowerer<'a> {
         if let Some(receiver) = receiver {
             arguments.insert(0, receiver);
         }
-        Some(TypedExpressionKind::Call { callee, arguments })
+        let argument_modes = vec![ValuePassingMode::Owned; arguments.len()];
+        Some(TypedExpressionKind::Call {
+            callee,
+            arguments,
+            argument_modes,
+        })
     }
 
     fn function_parameters(&self, ty: TypeId) -> Option<Vec<crate::types::FunctionParameter>> {
@@ -2035,7 +2074,7 @@ impl<'a> TypedLowerer<'a> {
         lowered.push(TypedExpression {
             ty,
             place: PlaceKind::Value,
-            copy: false,
+            copy: None,
             span: arguments
                 .get(fixed)
                 .map_or(call_span, |argument| argument.span),
@@ -2054,7 +2093,18 @@ impl<'a> TypedLowerer<'a> {
             ReceiverAdjustment::Pass => self.lower_expression(base),
             ReceiverAdjustment::CopyValue => {
                 let mut receiver = self.lower_expression(base)?;
-                receiver.copy = true;
+                receiver.copy = self
+                    .checked_copy(base.span, receiver.ty, receiver.place)
+                    .or_else(|| {
+                        Some(self.copy_facts(
+                            receiver.ty,
+                            LogicalCopyContext::ordinary(
+                                LogicalCopyKind::Receiver,
+                                LogicalCopyLifetime::Temporary,
+                                LogicalCopyLifetime::Callee,
+                            ),
+                        ))
+                    });
                 Some(receiver)
             }
             ReceiverAdjustment::DereferenceAndCopy => {
@@ -2062,7 +2112,14 @@ impl<'a> TypedLowerer<'a> {
                 Some(TypedExpression {
                     ty: receiver_type,
                     place: PlaceKind::Value,
-                    copy: true,
+                    copy: Some(self.copy_facts(
+                        receiver_type,
+                        LogicalCopyContext::ordinary(
+                            LogicalCopyKind::Receiver,
+                            LogicalCopyLifetime::Temporary,
+                            LogicalCopyLifetime::Callee,
+                        ),
+                    )),
                     span: base.span,
                     kind: TypedExpressionKind::Dereference(Box::new(operand)),
                 })
@@ -2071,7 +2128,7 @@ impl<'a> TypedLowerer<'a> {
                 Some(TypedExpression {
                     ty: receiver_type,
                     place: PlaceKind::Value,
-                    copy: false,
+                    copy: None,
                     span: base.span,
                     kind: TypedExpressionKind::AddressOf(Box::new(self.lower_place(base)?)),
                 })
@@ -2143,7 +2200,18 @@ impl<'a> TypedLowerer<'a> {
                 TypedExpression {
                     ty,
                     place: PlaceKind::Addressable,
-                    copy: true,
+                    copy: self
+                        .checked_copy(name_token.span, ty, PlaceKind::Addressable)
+                        .or_else(|| {
+                            Some(self.copy_facts(
+                                ty,
+                                LogicalCopyContext::ordinary(
+                                    LogicalCopyKind::AggregateElement,
+                                    LogicalCopyLifetime::LexicalScope,
+                                    LogicalCopyLifetime::Aggregate,
+                                ),
+                            ))
+                        }),
                     span: name_token.span,
                     kind: TypedExpressionKind::Local(binding),
                 }
@@ -2338,7 +2406,7 @@ impl<'a> TypedLowerer<'a> {
         Some(TypedExpression {
             ty: target,
             place: PlaceKind::Mutable,
-            copy: false,
+            copy: None,
             span: base.span,
             kind: TypedExpressionKind::Dereference(Box::new(value)),
         })
@@ -2369,7 +2437,7 @@ impl<'a> TypedLowerer<'a> {
         Some(TypedExpression {
             ty: target,
             place: PlaceKind::Mutable,
-            copy: false,
+            copy: None,
             span: base.span,
             kind: TypedExpressionKind::Dereference(Box::new(value)),
         })
@@ -2532,7 +2600,17 @@ impl<'a> TypedLowerer<'a> {
                 ClosureCaptureKind::Value
                     | ClosureCaptureKind::SharedRawPointer
                     | ClosureCaptureKind::MutableRawPointer
-            ),
+            )
+            .then(|| {
+                self.copy_facts(
+                    source_ty,
+                    LogicalCopyContext::ordinary(
+                        LogicalCopyKind::ClosureCapture,
+                        LogicalCopyLifetime::LexicalScope,
+                        LogicalCopyLifetime::Closure,
+                    ),
+                )
+            }),
             span: capture.span,
         };
         match capture.kind {
@@ -2547,7 +2625,7 @@ impl<'a> TypedLowerer<'a> {
                         },
                         ty: target_ty,
                         place: PlaceKind::Value,
-                        copy: false,
+                        copy: None,
                         span: capture.span,
                     })
                 }
@@ -2561,7 +2639,7 @@ impl<'a> TypedLowerer<'a> {
                     })),
                     ty: target_ty,
                     place: PlaceKind::Value,
-                    copy: false,
+                    copy: None,
                     span: capture.span,
                 })
             }

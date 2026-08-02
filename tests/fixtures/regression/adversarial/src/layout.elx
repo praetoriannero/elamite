@@ -1,4 +1,4 @@
-/// # Modules, imports, and visibility (`docs/SPEC.md` 2.3)
+/// # Modules, imports, and visibility (`docs/spec.md` 2.3)
 ///
 /// This file defines `root.layout`; files beneath `layout/` define its
 /// children, and `layout/deep/` is a directory namespace with no owning file.

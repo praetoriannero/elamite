@@ -84,7 +84,7 @@ impl ManagedMemoryStrategy for BoehmGarbageCollector {
             ManagedMemoryOperation::Initialize => {
                 // Interior pointers must be traced: a safe reference into an
                 // aggregate points inside a managed allocation rather than at
-                // its base (`docs/LEDGER.md` 19). This is Boehm's default in most
+                // its base (`docs/ledger.md` 19). This is Boehm's default in most
                 // builds, but the language requires it, so it is requested
                 // explicitly and before `GC_INIT`.
                 output.write_str(

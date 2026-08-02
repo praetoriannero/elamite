@@ -382,13 +382,13 @@ impl ResolvedProgram {
     /// Finds the standard-library declaration with this exact spelling.
     ///
     /// Standard types that the specification writes as ordinary declarations
-    /// (`enum Option[T]`, `docs/SPEC.md` 4.4) are collected from compiler-supplied
+    /// (`enum Option[T]`, `docs/spec.md` 4.4) are collected from compiler-supplied
     /// source into the `std` root module, so they carry real declaration,
     /// variant, field, and generic-parameter identities and travel the same
     /// generic-enum path as user code. A pass needs this lookup only where the
     /// specification gives that exact type extra behavior, such as `Option[T]`
     /// defaulting to `Option.None` without a `T: Default` obligation
-    /// (`docs/SPEC.md` 4.3).
+    /// (`docs/spec.md` 4.3).
     #[must_use]
     pub fn standard_declaration(&self, name: &str) -> Option<DeclarationId> {
         self.standard_declarations

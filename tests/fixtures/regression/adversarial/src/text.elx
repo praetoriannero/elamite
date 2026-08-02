@@ -1,4 +1,4 @@
-/// # Text, `Display`, and formatted strings (`docs/SPEC.md` 4.1, 7.2)
+/// # Text, `Display`, and formatted strings (`docs/spec.md` 4.1, 7.2)
 
 struct Temperature:
     degrees: i32

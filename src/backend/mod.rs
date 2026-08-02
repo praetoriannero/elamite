@@ -1,6 +1,6 @@
 //! Deterministic C99 backend façade and emission orchestration.
 //!
-//! This is the first executable backend (`docs/ROADMAP.md` Milestones 8-9). It consumes
+//! This is the first executable backend (`docs/roadmap.md` Milestones 8-9). It consumes
 //! explicit control-flow IR, uses an internal (unstable) calling convention,
 //! emits one strictly sequenced C statement per IR instruction, and routes
 //! every supported value copy through a generated per-type helper.
@@ -25,7 +25,9 @@ use crate::ir::{
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
 };
-use crate::operations::{NumericAlternative, NumericOperator, NumericOutcome, StandardCall};
+use crate::operations::{
+    NumericAlternative, NumericOperator, NumericOutcome, StandardCall, ValuePassingMode,
+};
 use crate::resolution::{DeclarationId, FieldId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};
 use crate::types::{FunctionInstance, PrimitiveType, TypeContext, TypeId, TypeKind, TypedProgram};
@@ -134,6 +136,9 @@ struct CEmitter<'a> {
     /// local lives in a managed cell, so every place naming it dereferences
     /// that cell.
     promoted: BTreeSet<crate::resolution::LocalBindingId>,
+    /// Parameters using the compiler-only read-only borrowing ABI in the
+    /// function currently being emitted.
+    borrowed_parameters: BTreeSet<crate::resolution::LocalBindingId>,
 }
 
 impl<'a> CEmitter<'a> {
@@ -176,6 +181,7 @@ impl<'a> CEmitter<'a> {
             emitting_default_helpers: BTreeSet::new(),
             strategy: default_managed_memory_strategy(),
             promoted: BTreeSet::new(),
+            borrowed_parameters: BTreeSet::new(),
         }
     }
 

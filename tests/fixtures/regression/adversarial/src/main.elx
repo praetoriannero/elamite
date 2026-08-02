@@ -1,7 +1,7 @@
 // Adversarial conformance package: see README.md.
 //
 // A file-backed submodule is already bound in its parent module's item
-// namespace (`docs/SPEC.md` 2.3), so `root` reaches each region directly. Writing
+// namespace (`docs/spec.md` 2.3), so `root` reaches each region directly. Writing
 // `use root.copies` here would be a duplicate-definition error, not an import.
 
 pub fn main() -> ():

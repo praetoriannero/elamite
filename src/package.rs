@@ -1,5 +1,5 @@
 //! Package identity, file-backed module-path derivation, and the resolved
-//! package dependency graph, per `docs/ROADMAP.md` Milestone 1 and `docs/SPEC.md` §2.3.
+//! package dependency graph, per `docs/roadmap.md` Milestone 1 and `docs/spec.md` §2.3.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ impl ModulePath {
         &self.0
     }
 
-    /// The `root.a.b` display form used in `docs/SPEC.md` §2.3's own examples.
+    /// The `root.a.b` display form used in `docs/spec.md` §2.3's own examples.
     #[must_use]
     pub fn display(&self) -> String {
         if self.0.is_empty() {
@@ -33,7 +33,7 @@ impl ModulePath {
 /// A package's opaque identity. Distinct even for two dependency instances
 /// that display the same manifest `name`.
 ///
-/// Under the initial local-path resolver specified by `docs/SPEC.md` §2.3, the
+/// Under the initial local-path resolver specified by `docs/spec.md` §2.3, the
 /// canonicalized manifest-directory path is the instance discriminator.
 /// An implicit single-file package instead uses the canonicalized source path.
 /// Future resolvers may construct a different opaque key without changing how
@@ -60,7 +60,7 @@ pub struct Package {
     pub manifest: Manifest,
     /// Directory containing the manifest.
     pub manifest_dir: PathBuf,
-    /// Directory containing the root source file (`docs/SPEC.md` §2.3: "the
+    /// Directory containing the root source file (`docs/spec.md` §2.3: "the
     /// directory containing the selected root file is the package's source
     /// directory").
     pub source_dir: PathBuf,
@@ -178,11 +178,11 @@ fn collect_elx_files(dir: &Path, out: &mut Vec<PathBuf>, diagnostics: &mut Vec<D
 
 /// Discovers every `.elx` file beneath `source_dir` other than `root_file`
 /// and derives its module path. `root_file` is excluded because it defines
-/// the package's `root` module, not a file-backed module (`docs/SPEC.md` §2.3:
+/// the package's `root` module, not a file-backed module (`docs/spec.md` §2.3:
 /// "Every *other* `.elx` file beneath the source directory...").
 ///
 /// Discovery order is deterministic: entries are sorted before they can
-/// affect output, per `docs/ROADMAP.md` §2.2.
+/// affect output, per `docs/roadmap.md` §2.2.
 pub fn discover_modules(
     source_dir: &Path,
     root_file: &Path,
@@ -228,11 +228,11 @@ pub fn discover_modules(
 /// A resolved graph of packages: the root package under compilation plus
 /// every (transitive) dependency, keyed by [`PackageId`].
 ///
-/// `docs/ROADMAP.md` Milestone 1: "Separate dependency resolution from compilation.
+/// `docs/roadmap.md` Milestone 1: "Separate dependency resolution from compilation.
 /// The compiler pipeline should consume a resolved package graph so that a
 /// future resolver can be replaced without changing semantic analysis." This
 /// graph is that consumed artifact; [`PackageGraph::resolve`] implements the
-/// initial local-path resolver defined by `docs/SPEC.md` §2.3.
+/// initial local-path resolver defined by `docs/spec.md` §2.3.
 #[derive(Debug)]
 pub struct PackageGraph {
     pub root: PackageId,
@@ -336,7 +336,7 @@ impl PackageGraph {
 
     /// Resolves the package at `manifest_path` and every dependency it
     /// declares, transitively, detecting cycles in the dependency graph.
-    /// `docs/SPEC.md` §2.3: "The package dependency graph must be acyclic" — this
+    /// `docs/spec.md` §2.3: "The package dependency graph must be acyclic" — this
     /// is a stronger requirement than the import-cycle rule within one
     /// package, which is explicitly permitted and is not this function's
     /// concern.

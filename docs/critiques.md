@@ -3,11 +3,11 @@
 > This document records outside critical review of the language design. It is
 > opinion, not specification: nothing here is normative, and nothing here
 > obligates an implementation. Unresolved design *questions* belong in
-> `ISSUES.md`; settled decisions belong in `SPEC.md`; implementation rationale
-> belongs in `LEDGER.md`. A critique that becomes an accepted design change
-> should move to `ISSUES.md` and then out of this file.
+> `issues.md`; settled decisions belong in `spec.md`; implementation rationale
+> belongs in `ledger.md`. A critique that becomes an accepted design change
+> should move to `issues.md` and then out of this file.
 >
-> Review basis: `SPEC.md`, `ROADMAP.md`, `LEDGER.md`, and the adversarial
+> Review basis: `spec.md`, `roadmap.md`, `ledger.md`, and the adversarial
 > regression packages under `tests/fixtures/regression`. The reviewer has read
 > the specification closely but has not written substantial programs in the
 > language, so these notes address design coherence rather than ergonomics in
@@ -21,18 +21,18 @@ only the critiques will misjudge the balance.
 **The central thesis is coherent and uncommon.** Deep value semantics, with
 aliasing confined to explicitly-typed carriers, and garbage collection handling
 lifetime, is a real point in the design space rather than a compromise between
-existing ones. `SPEC.md` 3.1 commits to it without hedging: "Copying is a core
+existing ones. `spec.md` 3.1 commits to it without hedging: "Copying is a core
 property of every value and is not controlled by a trait." The sharp edge —
 that explicit aliases survive a copy while ordinary fields do not — is
 specified precisely where most languages become vague.
 
 **Specification discipline exceeds what most languages have at 1.0.**
-`LEDGER.md` maps every normative rule to an implementation milestone, runtime
+`ledger.md` maps every normative rule to an implementation milestone, runtime
 dependency, and test layer. The adversarial audit found fifteen runtime
 defects and four compile-time ones and closed all of them. Claims about the
 implementation are backed by evidence rather than assertion.
 
-**`SPEC.md` 10.4 is the strongest chapter.** `Transfer` as a compiler-recognized
+**`spec.md` 10.4 is the strongest chapter.** `Transfer` as a compiler-recognized
 structural capability rather than a user-implemented marker; a `Mutex[T]` that
 exposes no `&T`, no `&var T`, and no guard, making reference escape from
 protected storage categorically impossible; process-fatal traps that render
@@ -42,15 +42,15 @@ particular is a decision most languages get wrong and can never reverse.
 
 ## 2. Principal critique: copy costs have no normative guarantee
 
-> Current response: partially addressed. `COST_MODEL.md` now publishes the
+> Current response: partially addressed. `cost_model.md` now publishes the
 > measured eager-copy implementation model and its maintenance contract, while
-> `ROADMAP.md` keeps **Value-copy and allocation optimization** as the next
+> `roadmap.md` keeps **Value-copy and allocation optimization** as the next
 > milestone. The remaining critique is about implementation cost and normative
 > asymptotic guarantees, not an absence of implementation documentation.
 
 ### 2.1 The gap
 
-`SPEC.md` 3.1 permits copy-on-write storage:
+`spec.md` 3.1 permits copy-on-write storage:
 
 > An implementation may share immutable or copy-on-write backing storage, but
 > such sharing cannot be observed through language operations.
@@ -58,20 +58,20 @@ particular is a decision most languages get wrong and can never reverse.
 This is a license to optimize. It is not a guarantee a programmer can build on.
 Three facts together make that the language's most significant open risk:
 
-1. **The specification contains no normative cost model.** `COST_MODEL.md`
-   documents current costs and measurements, but `SPEC.md` deliberately makes
+1. **The specification contains no normative cost model.** `cost_model.md`
+   documents current costs and measurements, but `spec.md` deliberately makes
    no asymptotic promise. Every semantic property is pinned down — a reader can
    predict exactly which `BuiltinTrap` identity a bad index raises — while the
    future cost of the language's most common operation remains unguaranteed.
 
-2. **Copy-on-write is not implemented yet.** `ROADMAP.md` now commits planned
+2. **Copy-on-write is not implemented yet.** `roadmap.md` now commits planned
    value-copy and allocation work, including COW text and collections, but the
-   shipped representation remains eager. `ROADMAP.md` 1 still correctly states
+   shipped representation remains eager. `roadmap.md` 1 still correctly states
    that "deep copying and conservative heap promotion are acceptable first
    implementations."
 
 3. **Copying is the default calling convention.** Assignment, ordinary argument
-   passing, and ordinary returns all copy (`SPEC.md` 3.1). The fast path — `&T`
+   passing, and ordinary returns all copy (`spec.md` 3.1). The fast path — `&T`
    — is opt-in.
 
 The honest current statement of the implementation cost is therefore: *every
@@ -103,10 +103,10 @@ An objection to normative copy-on-write in this language would be interior
 references: if `&var v[0]` can be outstanding when a sibling copy forces a
 detach, the reference is left naming stale storage. Rust avoids this only
 because borrow checking guarantees no outstanding references at
-`Rc::make_mut`, and Elamite performs no borrow or alias checking (`SPEC.md`
+`Rc::make_mut`, and Elamite performs no borrow or alias checking (`spec.md`
 3.2).
 
-Elamite closes the hole a different way. `SPEC.md` 3.2:
+Elamite closes the hole a different way. `spec.md` 3.2:
 
 > Collection interiors are never addressable for safe-reference formation.
 > Neither shared nor mutable references may be formed to array or `Vec`
@@ -122,7 +122,7 @@ not written down.
 
 ### 2.4 Proposed direction
 
-A normative section — for example `SPEC.md` 3.4, "Cost of copying" — stating
+A normative section — for example `spec.md` 3.4, "Cost of copying" — stating
 obligations rather than permissions:
 
 - Copying a `String`, `Vec[T]`, `Map[K, V]`, or `Set[T]` shall be O(1) in time
@@ -142,7 +142,7 @@ the promise the language does not currently make.
 The amortization should be stated directly as well: N read-only copies of one
 value cost O(1) each, so a read-only workload never pays for copies it does not
 mutate. This is the property that decides whether spawning N threads over one
-shared table is O(n) or O(N·n), and `SPEC.md` 10.4 currently leaves it to
+shared table is O(n) or O(N·n), and `spec.md` 10.4 currently leaves it to
 implementation choice.
 
 ### 2.5 What this commits an implementation to
@@ -150,11 +150,11 @@ implementation choice.
 Stated honestly, because the cost is real:
 
 - **A representation change.** Every copy-on-write type carries a reference
-  count. This should be checked against the C ABI type rules in `SPEC.md` 10.1
+  count. This should be checked against the C ABI type rules in `spec.md` 10.1
   before being committed to.
 - **A detach check on every mutation.** `values[index] = x` and `text.push(c)`
   become a predictable branch, permanently, in the hot path.
-- **Atomic reference-count traffic once threads exist.** `SPEC.md` 10.4 already
+- **Atomic reference-count traffic once threads exist.** `spec.md` 10.4 already
   requires that copy-on-write reference counts, reads, and detach-on-write
   operations be thread-safe for storage to remain shared across a transfer.
   Naively this is an atomic read-modify-write on every copy and destruction,
@@ -178,10 +178,10 @@ sequence:
 
 1. **Completed:** publish a non-normative cost document stating current costs,
    intended improvements, instrumentation limits, and reproducible baselines.
-2. Promote each bound to normative only as its `ROADMAP.md` package lands, one
+2. Promote each bound to normative only as its `roadmap.md` package lands, one
    collection at a time, gated by the before-and-after measurement rule that
    section already requires.
-3. Independently, strengthen the `SPEC.md` 10.4 sentence "Copy-on-write storage
+3. Independently, strengthen the `spec.md` 10.4 sentence "Copy-on-write storage
    may remain physically shared" into a requirement for the committed types.
    The asymptotic difference is largest there and most surprising to users.
 
@@ -193,7 +193,7 @@ will shape what people believe the language is for.
 
 ### 3.1 Process-fatal traps admit no in-process recovery
 
-`SPEC.md` 8.1 makes runtime traps terminate the process, and `SPEC.md` 10.4
+`spec.md` 8.1 makes runtime traps terminate the process, and `spec.md` 10.4
 relies on this to justify omitting mutex poisoning. The design is internally
 consistent and buys real simplification.
 
@@ -202,14 +202,14 @@ path — stricter than Go, which provides `recover`. For server-shaped workloads
 where one malformed request should not end the process, this is a significant
 constraint. It is also difficult to loosen later: adding recovery after the
 fact would invalidate the reasoning that makes poisoning unnecessary, and would
-interact with the cleanup guarantees in `SPEC.md` 8.
+interact with the cleanup guarantees in `spec.md` 8.
 
 Worth an explicit decision recorded as such, rather than an implication of the
 trap design.
 
 ### 3.2 The compile-time surface may be over-built for the language's age
 
-`SPEC.md` 12 specifies twelve quote roles, three separate namespaces, a bounded
+`spec.md` 12 specifies twelve quote roles, three separate namespaces, a bounded
 interpreter with fuel accounting, hygiene and provenance tracking, and a
 fixed-point expansion scheduler. It is well executed — the adversarial audit of
 this surface found only four issues, all resolved.
@@ -224,13 +224,13 @@ could not otherwise be written, or built because it was tractable?
 
 ### 3.3 Heap promotion is a second unpredictable cost
 
-Garbage collection makes an escaping `&local` safe, and `SPEC.md` 9 notes that
-escape promotion may allocate implicitly. `ROADMAP.md` lists precise escape
+Garbage collection makes an escaping `&local` safe, and `spec.md` 9 notes that
+escape promotion may allocate implicitly. `roadmap.md` lists precise escape
 analysis as candidate work with conservative promotion as the fallback.
 
 This means locals are silently heap-promoted under rules the programmer cannot
 see, in a language that otherwise works hard to make costs explicit.
-`COST_MODEL.md` now documents the conservative address-taken rule; precise
+`cost_model.md` now documents the conservative address-taken rule; precise
 escape analysis remains planned optimization work.
 
 ## 4. Summary

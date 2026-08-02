@@ -124,7 +124,11 @@ pub enum Rvalue {
         value: TemporaryId,
         value_type: TypeId,
     },
-    Copy(TemporaryId),
+    Copy {
+        source: TemporaryId,
+        id: LogicalCopyId,
+        facts: LogicalCopyFacts,
+    },
     Discriminant(TemporaryId),
     CompareEqual {
         left: TemporaryId,
@@ -159,6 +163,7 @@ pub enum Rvalue {
     Call {
         instance: FunctionInstance,
         arguments: Vec<TemporaryId>,
+        argument_modes: Vec<ValuePassingMode>,
     },
     IndirectCall {
         callee: TemporaryId,
@@ -189,7 +194,7 @@ pub enum Instruction {
         span: Span,
     },
     /// The mandatory null and alignment check before an executed raw
-    /// dereference or raw-to-reference conversion (`docs/SPEC.md` 3.3, Milestone
+    /// dereference or raw-to-reference conversion (`docs/spec.md` 3.3, Milestone
     /// 16.8). Traps `E-RUN-NULL` or `E-RUN-ALIGN` with this source location.
     CheckPointer {
         pointer: TemporaryId,
@@ -243,6 +248,7 @@ pub enum NeverCall {
     Direct {
         instance: FunctionInstance,
         arguments: Vec<TemporaryId>,
+        argument_modes: Vec<ValuePassingMode>,
     },
     Dynamic {
         receiver: TemporaryId,
@@ -307,6 +313,37 @@ pub struct ControlFlowFunction {
     pub temporary_types: Vec<TypeId>,
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogicalCopyRecord {
+    pub id: LogicalCopyId,
+    pub facts: LogicalCopyFacts,
+    pub span: Span,
+}
+
+impl ControlFlowFunction {
+    /// Every logical copy emitted for this concrete function instance. IDs are
+    /// stable within the function and assigned in lowering order.
+    #[must_use]
+    pub fn logical_copy_inventory(&self) -> Vec<LogicalCopyRecord> {
+        self.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value: Rvalue::Copy { id, facts, .. },
+                    span,
+                    ..
+                } => Some(LogicalCopyRecord {
+                    id: *id,
+                    facts: *facts,
+                    span: *span,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]

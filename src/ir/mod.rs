@@ -1,4 +1,4 @@
-//! Typed high-level IR and explicit control-flow IR façade (`docs/ROADMAP.md` Milestones
+//! Typed high-level IR and explicit control-flow IR façade (`docs/roadmap.md` Milestones
 //! 8-11).
 //!
 //! The high-level form owns selected declaration and type identities while
@@ -8,6 +8,7 @@
 //! trapping operations explicit before any C is emitted. Milestone 9 adds the
 //! canonical logical-copy contract and source-ordered pattern-match lowering.
 
+mod borrowing;
 pub mod control_flow;
 mod copy;
 mod syntax_helpers;
@@ -21,7 +22,11 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::check::{CheckedCall, CheckedProgram, TraitObjectCoercion};
 use crate::diagnostics::{Category, Diagnostic};
-use crate::operations::{NumericAlternative, NumericOutcome, ReceiverAdjustment, StandardCall};
+use crate::operations::{
+    LogicalCopyAllocation, LogicalCopyContext, LogicalCopyFacts, LogicalCopyKind,
+    LogicalCopyLifetime, LogicalCopyPurpose, NumericAlternative, NumericOutcome,
+    ReceiverAdjustment, StandardCall, ValuePassingMode,
+};
 use crate::resolution::{
     DeclarationId, DeclarationKind, FieldId, ItemId, LocalBindingId, LocalBindingKind, MemberId,
     NameTarget, ResolvedProgram, VariantId,
@@ -55,6 +60,7 @@ macro_rules! id_type {
 
 id_type!(BlockId);
 id_type!(TemporaryId);
+id_type!(LogicalCopyId);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {

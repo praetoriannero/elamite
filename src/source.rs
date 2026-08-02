@@ -1,7 +1,7 @@
 //! Owns decoded source text, assigns stable file IDs, and converts byte
-//! offsets to line/column positions, per `docs/ROADMAP.md` §2.1 and Milestone 1.
+//! offsets to line/column positions, per `docs/roadmap.md` §2.1 and Milestone 1.
 //!
-//! Source files are assumed to be UTF-8 text; `docs/SPEC.md` does not state this
+//! Source files are assumed to be UTF-8 text; `docs/spec.md` does not state this
 //! explicitly, but every text-level construct it defines (`str`, `String`,
 //! identifiers, string literals) is specified in terms of Unicode text, so
 //! this is the natural reading rather than a new decision.
@@ -150,7 +150,7 @@ impl SourceManager {
 }
 
 /// Lets `codespan_reporting::term::emit` render a [`Diagnostic`](crate::diagnostics::Diagnostic)
-/// directly against this manager's file table — see `docs/LEDGER.md` §18.
+/// directly against this manager's file table — see `docs/ledger.md` §18.
 impl<'a> codespan_reporting::files::Files<'a> for SourceManager {
     type FileId = FileId;
     type Name = String;

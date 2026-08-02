@@ -1,8 +1,8 @@
 # Resolved and deferred language design proposals
 
 > Status: Non-normative design archive. This document does not authorize
-> grammar or compiler changes; `SPEC.md` owns accepted behavior, `ROADMAP.md`
-> owns implementation work, and `ISSUES.md` owns active reviews.
+> grammar or compiler changes; `spec.md` owns accepted behavior, `roadmap.md`
+> owns implementation work, and `issues.md` owns active reviews.
 
 This archive records the rationale behind four earlier proposals. Foreign
 attributes, declarative native configuration, collection delimiters, and the
@@ -132,7 +132,7 @@ ABI-safe.
 The shipped design uses distinct `@importc` and `@exportc` forms, has no
 `extern` grammar, and uses general raw function-pointer types at C boundaries.
 User-defined attributes now exist independently through the stable compile-time
-system in `SPEC.md` §12.
+system in `spec.md` §12.
 
 ## 2. Top-level `build.elx` (deferred)
 
@@ -285,7 +285,7 @@ over immutable `std.ast` 1.0 values.
 This replaced the earlier matcher/transcriber and native-plugin possibilities.
 The former `--unstable-macros` gate has been retired; user-defined forms are
 stable and covered by the macro example, adversarial package, property tests,
-and the conformance ledger. `SPEC.md` §12 is authoritative.
+and the conformance ledger. `spec.md` §12 is authoritative.
 
 ## 5. Current disposition
 
@@ -295,4 +295,4 @@ and the conformance ledger. `SPEC.md` §12 is authoritative.
 | Declarative native configuration | Implemented in `[native]` manifest fields |
 | Programmable `build.elx` | Deferred; no active review or accepted surface |
 | Vector delimiter change | Rejected; `@vec[...]` remains canonical |
-| User macros, attributes, and derives | Implemented and stable under `SPEC.md` §12 |
+| User macros, attributes, and derives | Implemented and stable under `spec.md` §12 |

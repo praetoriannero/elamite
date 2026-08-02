@@ -80,7 +80,7 @@ struct OpenBlock {
 }
 
 /// One lexical scope's cleanup plan: the deferred registrations control has
-/// reached, in registration order (`docs/SPEC.md` 8, Milestone 15.6).
+/// reached, in registration order (`docs/spec.md` 8, Milestone 15.6).
 ///
 /// Registration is purely static. A block's statement list is straight-line
 /// at the statement level, so at any exit edge the reached registrations are
@@ -98,6 +98,7 @@ struct FunctionLowerer<'a> {
     blocks: Vec<OpenBlock>,
     current: BlockId,
     temporary_types: Vec<TypeId>,
+    next_logical_copy: u32,
     /// Break target, continue target, and the cleanup-scope depth of the
     /// loop's body: `break`/`continue` run cleanup for every scope deeper
     /// than that base and no other (Milestone 15.8).
@@ -117,6 +118,7 @@ impl<'a> FunctionLowerer<'a> {
             }],
             current: BlockId(0),
             temporary_types: Vec::new(),
+            next_logical_copy: 0,
             loops: Vec::new(),
             scopes: Vec::new(),
         }
@@ -138,6 +140,8 @@ impl<'a> FunctionLowerer<'a> {
                 self.terminate(Terminator::Return(None));
             }
         }
+        #[cfg(debug_assertions)]
+        let expected_logical_copies = self.next_logical_copy;
         let blocks = self
             .blocks
             .into_iter()
@@ -147,7 +151,9 @@ impl<'a> FunctionLowerer<'a> {
                 instructions: block.instructions,
                 terminator: block.terminator.unwrap_or(Terminator::Unreachable),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        #[cfg(debug_assertions)]
+        assert_logical_copy_accounting(&blocks, expected_logical_copies);
         ControlFlowFunction {
             declaration: self.function.declaration,
             instance: self.function.instance.clone(),
@@ -189,7 +195,7 @@ impl<'a> FunctionLowerer<'a> {
     /// Emits the deferred registrations of every scope at depth `from` or
     /// deeper, innermost scope first and within one scope in reverse
     /// registration order; a `defer:` body executes forward as one unit
-    /// (`docs/SPEC.md` 8).
+    /// (`docs/spec.md` 8).
     ///
     /// The registration lists are snapshotted before lowering because a
     /// deferred body may itself open nested (necessarily registration-free)
@@ -235,12 +241,16 @@ impl<'a> FunctionLowerer<'a> {
                         value: Rvalue::Load(place),
                         span: statement.span,
                     });
-                    let copied = self.temp(binding.ty);
-                    self.emit(Instruction::Assign {
-                        destination: copied,
-                        value: Rvalue::Copy(loaded),
-                        span: statement.span,
-                    });
+                    let copied = self.emit_logical_copy(
+                        loaded,
+                        binding.ty,
+                        LogicalCopyContext::ordinary(
+                            LogicalCopyKind::PatternBinding,
+                            LogicalCopyLifetime::Aggregate,
+                            LogicalCopyLifetime::LexicalScope,
+                        ),
+                        statement.span,
+                    );
                     self.emit(Instruction::Store {
                         place: ControlFlowPlace::Local(binding.binding),
                         value: copied,
@@ -296,7 +306,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedStatementKind::Return(value) => {
                 // The return value is evaluated and independently copied into
                 // its temporary *before* any deferred registration runs
-                // (`docs/SPEC.md` 8, Milestone 15.7); cleanup then cannot change
+                // (`docs/spec.md` 8, Milestone 15.7); cleanup then cannot change
                 // the returned value, though a shared handle inside it may
                 // still observe deferred mutation through its alias.
                 let value = value
@@ -499,9 +509,9 @@ impl<'a> FunctionLowerer<'a> {
             .get(&binding)
             .copied()
             .unwrap_or_else(|| self.types.types.error());
-        let element = self.temp(element_type);
+        let raw_element = self.temp(element_type);
         self.emit(Instruction::Assign {
-            destination: element,
+            destination: raw_element,
             value: Rvalue::IterationElement {
                 collection,
                 index,
@@ -509,6 +519,16 @@ impl<'a> FunctionLowerer<'a> {
             },
             span,
         });
+        let element = self.emit_logical_copy(
+            raw_element,
+            element_type,
+            LogicalCopyContext::ordinary(
+                LogicalCopyKind::IterationElement,
+                LogicalCopyLifetime::Loop,
+                LogicalCopyLifetime::LexicalScope,
+            ),
+            span,
+        );
         self.emit(Instruction::Store {
             place: ControlFlowPlace::Local(binding),
             value: element,
@@ -589,12 +609,16 @@ impl<'a> FunctionLowerer<'a> {
         match &pattern.kind {
             TypedPatternKind::Wildcard => self.terminate(Terminator::Goto(success)),
             TypedPatternKind::Binding(binding) => {
-                let copied = self.temp(pattern.ty);
-                self.emit(Instruction::Assign {
-                    destination: copied,
-                    value: Rvalue::Copy(value),
-                    span: pattern.span,
-                });
+                let copied = self.emit_logical_copy(
+                    value,
+                    pattern.ty,
+                    LogicalCopyContext::ordinary(
+                        LogicalCopyKind::PatternBinding,
+                        LogicalCopyLifetime::Aggregate,
+                        LogicalCopyLifetime::LexicalScope,
+                    ),
+                    pattern.span,
+                );
                 self.emit(Instruction::Store {
                     place: ControlFlowPlace::Local(*binding),
                     value: copied,
@@ -936,7 +960,7 @@ impl<'a> FunctionLowerer<'a> {
                 let operand_type = left.ty;
                 let left_value = self.lower_expression(left);
                 let right_value = self.lower_expression(right);
-                // Equality on an aggregate compares components (`docs/SPEC.md`
+                // Equality on an aggregate compares components (`docs/spec.md`
                 // 4.3), so it carries its operand type to the backend rather
                 // than becoming a C `==` on a struct.
                 if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
@@ -1007,6 +1031,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Function(instance),
                 arguments,
+                argument_modes,
             } => {
                 let arguments = arguments
                     .iter()
@@ -1015,6 +1040,7 @@ impl<'a> FunctionLowerer<'a> {
                 Rvalue::Call {
                     instance: instance.clone(),
                     arguments,
+                    argument_modes: argument_modes.clone(),
                 }
             }
             TypedExpressionKind::Call {
@@ -1024,6 +1050,7 @@ impl<'a> FunctionLowerer<'a> {
                         slot,
                     },
                 arguments,
+                ..
             } => {
                 // The receiver was lowered as the first argument by typed-IR
                 // call lowering; the vtable supplies the function pointer.
@@ -1042,6 +1069,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Indirect(callee),
                 arguments,
+                ..
             } => {
                 let raw = matches!(
                     expanded_kind(&self.types.types, callee.ty),
@@ -1067,6 +1095,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Closure { instance, value },
                 arguments,
+                ..
             } => {
                 let closure = self.lower_expression(value);
                 let arguments = arguments
@@ -1082,6 +1111,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Print { newline },
                 arguments,
+                ..
             } => {
                 let values = arguments
                     .iter()
@@ -1216,17 +1246,9 @@ impl<'a> FunctionLowerer<'a> {
             value,
             span: expression.span,
         });
-        if expression.copy {
-            let copied = self.temp(expression.ty);
-            self.emit(Instruction::Assign {
-                destination: copied,
-                value: Rvalue::Copy(raw),
-                span: expression.span,
-            });
-            copied
-        } else {
-            raw
-        }
+        expression.copy.map_or(raw, |facts| {
+            self.emit_logical_copy_with_facts(raw, expression.ty, facts, expression.span)
+        })
     }
 
     fn lower_never_call(&mut self, expression: &TypedExpression) -> Option<NeverCall> {
@@ -1269,12 +1291,14 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Function(instance),
                 arguments,
+                argument_modes,
             } => Some(NeverCall::Direct {
                 instance: instance.clone(),
                 arguments: arguments
                     .iter()
                     .map(|argument| self.lower_expression(argument))
                     .collect(),
+                argument_modes: argument_modes.clone(),
             }),
             TypedExpressionKind::Call {
                 callee:
@@ -1283,6 +1307,7 @@ impl<'a> FunctionLowerer<'a> {
                         slot,
                     },
                 arguments,
+                ..
             } => {
                 let mut arguments = arguments
                     .iter()
@@ -1300,6 +1325,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Indirect(callee),
                 arguments,
+                ..
             } => {
                 let raw = matches!(
                     expanded_kind(&self.types.types, callee.ty),
@@ -1327,6 +1353,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::Call {
                 callee: TypedCallee::Closure { instance, value },
                 arguments,
+                ..
             } => Some(NeverCall::Closure {
                 instance: instance.clone(),
                 closure: self.lower_expression(value),
@@ -1370,9 +1397,22 @@ impl<'a> FunctionLowerer<'a> {
         self.terminate(Terminator::Goto(join_block));
         self.current = rhs_block;
         let right = self.lower_expression(right);
+        let facts = self.logical_copy_facts(
+            expression.ty,
+            LogicalCopyContext::ordinary(
+                LogicalCopyKind::ControlFlowMerge,
+                LogicalCopyLifetime::Temporary,
+                LogicalCopyLifetime::Temporary,
+            ),
+        );
+        let id = self.take_logical_copy_id();
         self.emit(Instruction::Assign {
             destination: result,
-            value: Rvalue::Copy(right),
+            value: Rvalue::Copy {
+                source: right,
+                id,
+                facts,
+            },
             span: expression.span,
         });
         self.terminate(Terminator::Goto(join_block));
@@ -1380,7 +1420,7 @@ impl<'a> FunctionLowerer<'a> {
         result
     }
 
-    /// Lowers postfix `?` (`docs/SPEC.md` 8, Milestones 15.3 and 15.9).
+    /// Lowers postfix `?` (`docs/spec.md` 8, Milestones 15.3 and 15.9).
     ///
     /// The operand is evaluated exactly once into a temporary. Its tag is
     /// branched on explicitly: the `Ok` payload is copied into this
@@ -1449,12 +1489,16 @@ impl<'a> FunctionLowerer<'a> {
             }),
             span,
         });
-        let error = self.temp(error_type);
-        self.emit(Instruction::Assign {
-            destination: error,
-            value: Rvalue::Copy(error_raw),
+        let error = self.emit_logical_copy(
+            error_raw,
+            error_type,
+            LogicalCopyContext::ordinary(
+                LogicalCopyKind::Propagation,
+                LogicalCopyLifetime::Aggregate,
+                LogicalCopyLifetime::Caller,
+            ),
             span,
-        });
+        );
         let propagated = self.temp(self.function.return_type);
         self.emit(Instruction::Assign {
             destination: propagated,
@@ -1479,13 +1523,16 @@ impl<'a> FunctionLowerer<'a> {
             }),
             span,
         });
-        let payload = self.temp(expression.ty);
-        self.emit(Instruction::Assign {
-            destination: payload,
-            value: Rvalue::Copy(payload_raw),
+        self.emit_logical_copy(
+            payload_raw,
+            expression.ty,
+            LogicalCopyContext::ordinary(
+                LogicalCopyKind::Propagation,
+                LogicalCopyLifetime::Aggregate,
+                LogicalCopyLifetime::Temporary,
+            ),
             span,
-        });
-        payload
+        )
     }
 
     fn lower_place(&mut self, place: &TypedPlace) -> ControlFlowPlace {
@@ -1608,6 +1655,57 @@ impl<'a> FunctionLowerer<'a> {
         id
     }
 
+    fn logical_copy_facts(&self, ty: TypeId, context: LogicalCopyContext) -> LogicalCopyFacts {
+        let allocation = match logical_copy_strategy(&self.types.types, ty) {
+            LogicalCopyStrategy::Trivial => LogicalCopyAllocation::None,
+            LogicalCopyStrategy::PreserveIdentity => LogicalCopyAllocation::PreserveIdentity,
+            LogicalCopyStrategy::Recursive => LogicalCopyAllocation::Recursive,
+            LogicalCopyStrategy::OwnedString => LogicalCopyAllocation::OwnedBuffer,
+            LogicalCopyStrategy::RuntimeManaged => LogicalCopyAllocation::RuntimeManaged,
+        };
+        LogicalCopyFacts {
+            context,
+            allocation,
+        }
+    }
+
+    fn take_logical_copy_id(&mut self) -> LogicalCopyId {
+        let id = LogicalCopyId(self.next_logical_copy);
+        self.next_logical_copy = self
+            .next_logical_copy
+            .checked_add(1)
+            .expect("too many logical copies in one function");
+        id
+    }
+
+    fn emit_logical_copy(
+        &mut self,
+        source: TemporaryId,
+        ty: TypeId,
+        context: LogicalCopyContext,
+        span: Span,
+    ) -> TemporaryId {
+        let facts = self.logical_copy_facts(ty, context);
+        self.emit_logical_copy_with_facts(source, ty, facts, span)
+    }
+
+    fn emit_logical_copy_with_facts(
+        &mut self,
+        source: TemporaryId,
+        ty: TypeId,
+        facts: LogicalCopyFacts,
+        span: Span,
+    ) -> TemporaryId {
+        let destination = self.temp(ty);
+        let id = self.take_logical_copy_id();
+        self.emit(Instruction::Assign {
+            destination,
+            value: Rvalue::Copy { source, id, facts },
+            span,
+        });
+        destination
+    }
+
     fn new_block(&mut self) -> BlockId {
         let id = BlockId(u32::try_from(self.blocks.len()).expect("too many basic blocks"));
         self.blocks.push(OpenBlock {
@@ -1630,6 +1728,36 @@ impl<'a> FunctionLowerer<'a> {
     fn is_open(&self, block: BlockId) -> bool {
         self.blocks[block.index()].terminator.is_none()
     }
+}
+
+#[cfg(debug_assertions)]
+fn assert_logical_copy_accounting(blocks: &[BasicBlock], expected: u32) {
+    let ids = blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Copy { id, .. },
+                ..
+            } => Some(*id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let unique = ids.iter().copied().collect::<BTreeSet<_>>();
+    debug_assert_eq!(
+        ids.len(),
+        usize::try_from(expected).expect("logical-copy count fits usize"),
+        "every emitted logical copy must be accounted for exactly once"
+    );
+    debug_assert_eq!(
+        unique.len(),
+        ids.len(),
+        "logical-copy identities must not be reused"
+    );
+    debug_assert!(
+        (0..expected).all(|index| unique.contains(&LogicalCopyId(index))),
+        "logical-copy identities must form a complete per-function sequence"
+    );
 }
 
 fn unary_trap(operator: UnaryOperator, ty: TypeId, types: &TypedProgram) -> Option<TrapKind> {

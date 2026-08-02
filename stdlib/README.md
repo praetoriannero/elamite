@@ -10,7 +10,7 @@ Keep the manifest and source tree valid as an ordinary `lib` package. Moving an
 entity out of the intrinsic catalog requires source declarations plus
 behavioral and diagnostic compatibility tests.
 
-Native concurrency follows `docs/SPEC.md` Section 10.4. Public declarations live in
+Native concurrency follows `docs/spec.md` Section 10.4. Public declarations live in
 `std.thread` and `std.sync`; only native representation, transfer-copy, thread,
 queue, mutex, atomic, and collector-registration hooks remain intrinsic.
 Ordinary values cross threads as independent `Transfer` copies, while reviewed

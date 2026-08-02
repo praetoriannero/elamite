@@ -1,6 +1,6 @@
 //! Hand-written, token-preserving surface parser.
 //!
-//! The parser implements `docs/ROADMAP.md` Milestone 3. It constructs a structural
+//! The parser implements `docs/roadmap.md` Milestone 3. It constructs a structural
 //! syntax tree and deliberately performs no name resolution, type inference,
 //! visibility checking, receiver validation, or safety checking. Complete
 //! fragment entry points reuse the same grammar and recovery machinery for

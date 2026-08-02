@@ -8,20 +8,20 @@ optimization.
 
 ## Documentation map
 
-- [`docs/SPEC.md`](docs/SPEC.md) is the normative language design.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) contains active and completed implementation work.
-- [`docs/LEDGER.md`](docs/LEDGER.md) maps every normative rule to its implementation,
+- [`docs/spec.md`](docs/spec.md) is the normative language design.
+- [`docs/roadmap.md`](docs/roadmap.md) contains active and completed implementation work.
+- [`docs/ledger.md`](docs/ledger.md) maps every normative rule to its implementation,
   runtime dependency, and test evidence.
-- [`docs/COST_MODEL.md`](docs/COST_MODEL.md) documents current non-normative copying,
+- [`docs/cost_model.md`](docs/cost_model.md) documents current non-normative copying,
   allocation, retention, promotion, and synchronization costs.
 - [`docs/architecture.md`](docs/architecture.md) records compiler phase ownership and
   expansion boundaries.
 - [`docs/toolchain.md`](docs/toolchain.md) documents installation, commands, supported
   targets, and current limitations.
 - [`docs/release.md`](docs/release.md) indexes conformance and release evidence.
-- [`docs/ISSUES.md`](docs/ISSUES.md) contains active design questions; it is currently
+- [`docs/issues.md`](docs/issues.md) contains active design questions; it is currently
   empty of unresolved reviews.
-- [`docs/PROPOSALS.md`](docs/PROPOSALS.md) and [`docs/CRITIQUES.md`](docs/CRITIQUES.md) preserve
+- [`docs/proposals.md`](docs/proposals.md) and [`docs/critiques.md`](docs/critiques.md) preserve
   non-normative design history and review.
 
 The authoritative surface example is
@@ -142,7 +142,7 @@ while future non-moving, cycle-reclaiming strategies can implement the same
 contract without changing language lowering. A program that needs no managed
 storage links no collector at all. Building one that does requires a Boehm
 development package (`libgc-dev` on Debian- and Ubuntu-family systems).
-The non-normative [memory cost model](COST_MODEL.md) documents current copy,
+The non-normative [memory cost model](docs/cost_model.md) documents current copy,
 allocation, retention, promotion, and synchronization costs and links the
 reproducible release-mode baseline.
 

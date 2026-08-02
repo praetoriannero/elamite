@@ -6,6 +6,121 @@
 use crate::resolution::DeclarationId;
 use crate::types::TypeId;
 
+/// Why the compiler materializes one independent logical value.
+///
+/// This vocabulary is deliberately phase-neutral: checking records the
+/// source-level reason, typed IR adds the allocation class, and control-flow
+/// IR assigns an emitted-copy identity. Optimization passes can therefore
+/// select copies without reconstructing intent from backend shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogicalCopyKind {
+    Binding,
+    Assignment,
+    Return,
+    Argument,
+    AggregateElement,
+    PatternBinding,
+    Receiver,
+    ClosureCapture,
+    IterationSnapshot,
+    IterationElement,
+    Formatting,
+    CollectionLookup,
+    ControlFlowMerge,
+    Propagation,
+}
+
+/// Coarse lifetime regions relevant to logical-copy selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogicalCopyLifetime {
+    Unknown,
+    Temporary,
+    LexicalScope,
+    Aggregate,
+    Callee,
+    Caller,
+    Closure,
+    Loop,
+    Thread,
+    SynchronizedStorage,
+}
+
+/// Whether a copy is ordinary language value semantics or a cross-thread
+/// transfer boundary. The generated helpers remain shared until the roadmap's
+/// later ordinary/transfer separation work package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogicalCopyPurpose {
+    Ordinary,
+    Transfer,
+}
+
+/// Facts known while checking, before the concrete value type is available to
+/// classify the copy's allocation behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LogicalCopyContext {
+    pub kind: LogicalCopyKind,
+    pub source_lifetime: LogicalCopyLifetime,
+    pub destination_lifetime: LogicalCopyLifetime,
+    pub purpose: LogicalCopyPurpose,
+}
+
+impl LogicalCopyContext {
+    #[must_use]
+    pub const fn ordinary(
+        kind: LogicalCopyKind,
+        source_lifetime: LogicalCopyLifetime,
+        destination_lifetime: LogicalCopyLifetime,
+    ) -> Self {
+        Self {
+            kind,
+            source_lifetime,
+            destination_lifetime,
+            purpose: LogicalCopyPurpose::Ordinary,
+        }
+    }
+
+    #[must_use]
+    pub const fn transfer(
+        kind: LogicalCopyKind,
+        source_lifetime: LogicalCopyLifetime,
+        destination_lifetime: LogicalCopyLifetime,
+    ) -> Self {
+        Self {
+            kind,
+            source_lifetime,
+            destination_lifetime,
+            purpose: LogicalCopyPurpose::Transfer,
+        }
+    }
+}
+
+/// The broad allocation behavior selected from a copied value's canonical
+/// type. This is a planning fact, not a promise that an allocation survives a
+/// later optimization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogicalCopyAllocation {
+    None,
+    PreserveIdentity,
+    Recursive,
+    OwnedBuffer,
+    RuntimeManaged,
+}
+
+/// Complete typed-IR copy facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LogicalCopyFacts {
+    pub context: LogicalCopyContext,
+    pub allocation: LogicalCopyAllocation,
+}
+
+/// How one source-level value parameter crosses an internal call boundary.
+/// Borrowing is a compiler-only ABI choice and never changes the source type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ValuePassingMode {
+    Owned,
+    ReadOnlyBorrowed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StandardCall {
     Panic,

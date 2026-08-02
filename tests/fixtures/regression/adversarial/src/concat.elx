@@ -1,11 +1,11 @@
-/// # The concatenation operator (`docs/SPEC.md` 7)
+/// # The concatenation operator (`docs/spec.md` 7)
 ///
 /// `++` concatenates two values of the same concatenable type, creates a new
 /// logical value, evaluates its left operand before its right, sits at
 /// additive precedence, and is distinct from numeric `+`. It is not an
 /// increment operator.
 ///
-/// The compile-time AST list types that `docs/SPEC.md` 7 also admits are exercised
+/// The compile-time AST list types that `docs/spec.md` 7 also admits are exercised
 /// in the sibling `adversarial_macros` package, because they exist
 /// only inside a compile-time declaration body.
 

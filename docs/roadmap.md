@@ -4,9 +4,9 @@
 > candidate, and recently completed milestones use stable descriptive names
 >
 > Next required work package: **Value-copy and allocation optimization** —
-> **Copy-cost instrumentation seam**
+> **Temporary and return copy elision**
 >
-> Basis: `SPEC.md` version 0.9.0-draft and
+> Basis: `spec.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
 
 ## Milestone summary
@@ -16,7 +16,7 @@ Keep this table synchronized with the detailed status blocks below.
 | Milestone | Status | Current state or next action |
 | --- | --- | --- |
 | [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
-| [Value-copy and allocation optimization](#value-copy-and-allocation-optimization) | Planned — next | Begin with **Copy-cost instrumentation seam**, then proceed through borrowing, copy elision, COW collections, transfer separation, and escape analysis in order. |
+| [Value-copy and allocation optimization](#value-copy-and-allocation-optimization) | In progress — next | Read-only call borrowing is complete; proceed with **Temporary and return copy elision**, then COW collections, transfer separation, and escape analysis in order. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | Optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
 | [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The `std.ast` 1.0 façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete. |
@@ -24,24 +24,42 @@ Keep this table synchronized with the detailed status blocks below.
 | [Compile-time diagnostics, tooling, and stabilization](#compile-time-diagnostics-tooling-and-stabilization) | Complete | Expansion diagnostics, recovery, inspection, reproducibility, robustness, compatibility, and stabilization are complete. |
 | [Explicit-capture closures](#explicit-capture-closures) | Complete | Closure syntax, typing, capture semantics, IR/backend lowering, cross-feature behavior, and conformance are complete. |
 | [Standard-library concurrency](#standard-library-concurrency) | Complete | Threads, structural transfer, channels, copy-based mutexes, atomics, GC integration, callbacks, and target conformance are complete. |
+| [User-defined iteration](#user-defined-iteration) | Planned | Decide and record the iteration contract before any lowering work; it gates iterable standard-library APIs. |
+| [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
+| [Standard-library expansion](#standard-library-expansion) | Planned | Add filesystem, process and environment, time, ordering, text, and randomness modules as independently reviewed packages. |
+| [Source-level debugging](#source-level-debugging) | Planned | Map generated C back to `.elx` locations and preserve source-level names so native debuggers are usable. |
+| [Language server](#language-server) | Candidate | Requires a scope decision and the **Incremental queries** package before implementation. |
+| [API documentation generation](#api-documentation-generation) | Planned | The `doc` command exists but does not yet render API content, cross-links, or a distributable format. |
+| [Additional platform targets](#additional-platform-targets) | Candidate | Begin with C-toolchain portability, then 64-bit ARM, then a non-ELF platform. |
+| [Package distribution](#package-distribution) | Candidate | Requires an accepted distribution model before a resolver or lockfile is implemented. |
+| [Distribution and installation](#distribution-and-installation) | Planned | Produce release artifacts, a tested installation path, and a maintained changelog. |
+| [Learning material](#learning-material) | Planned | Write an introductory guide and tested worked examples separate from the specification. |
+| [Project governance and contribution](#project-governance-and-contribution) | Planned | Add contribution, conduct, and security infrastructure, a design-change process, and a stability policy. |
 
-This document organizes current compiler work, candidate optimizations, and
-recently completed language extensions into implementation milestones. Each
-milestone carries its own status note; the header above records the next
-required package. Elamite compiles to C, as required by the specification.
+This document organizes current compiler work, candidate optimizations,
+recently completed language extensions, and the remaining language-surface,
+standard-library, toolchain, and distribution work into implementation
+milestones. Each milestone carries its own status note; the header above
+records the next required package. Elamite compiles to C, as required by the
+specification.
+
+Sections 7 through 10 record work that is planned or candidate rather than
+started. They exist so that no known gap is tracked only informally; their
+ordering within a section is significant, but the sections themselves are not
+ordered against each other and do not define a release gate.
 
 Detailed plans are removed from this file once every work package in a
-milestone is complete. Normative behavior remains in `SPEC.md`, rule coverage
-and implementation status remain in `LEDGER.md`, and implementation evidence
+milestone is complete. Normative behavior remains in `spec.md`, rule coverage
+and implementation status remain in `ledger.md`, and implementation evidence
 remains in tests and version history.
 
 The plan was originally written without choosing the language in which the
 compiler is written, a parser technology, or a build system. Those are now
 settled: the compiler is an edition-2024 Rust package built with Cargo, and its
 lexer and parser are hand-written. See [`AGENTS.md`](../AGENTS.md) for the rules those choices
-imply and `LEDGER.md` §18 for the third-party crate decisions behind them.
+imply and `ledger.md` §18 for the third-party crate decisions behind them.
 
-`SPEC.md` and the authoritative demonstration define the language. This
+`spec.md` and the authoritative demonstration define the language. This
 document defines an implementation order, not new language semantics. When it
 conflicts with the specification, the specification wins and this plan must be
 updated.
@@ -58,7 +76,7 @@ The compiler should be built as a sequence of complete, testable layers:
 manifest and source files
     -> tokens
     -> parsed package syntax
-    -> expanded package syntax (lossless token trees; rewriting still disabled)
+    -> expanded package syntax (macro-expanded and origin-aware)
     -> resolved declarations
     -> typed high-level IR
     -> explicit control-flow IR
@@ -72,8 +90,8 @@ Each representation should have one clear responsibility:
 - Tokens preserve source spans and indentation events.
 - Parsed package syntax owns the token-preserving trees for every user and
   shipped standard-library module without performing semantic checks.
-- Expanded package syntax owns the lossless token-tree view and forwards the
-  parsed syntax unchanged until macro rewriting begins; it remains the sole
+- Expanded package syntax owns lossless token trees, generated syntax, stable
+  origin chains, and the completed fixed-point result consumed as the sole
   input to ordinary name resolution.
 - Resolution assigns stable identities to packages, modules, declarations,
   fields, variants, traits, and lexical bindings.
@@ -178,20 +196,20 @@ Each work package should normally fit in one focused change and must:
   that package, without partially enabling later syntax;
 - include focused positive and negative tests, plus a runtime test when it can
   trap or has observable ordering;
-- update `LEDGER.md` when completing it changes the recorded implementation or
+- update `ledger.md` when completing it changes the recorded implementation or
   test status of a normative rule; and
 - record any deliberately temporary boundary in the milestone status note.
 
 Task order within a milestone is significant unless a task explicitly says it
 may proceed in parallel. A work package is not a new language-design authority:
-`SPEC.md` remains normative, and splitting work must not create observable
+`spec.md` remains normative, and splitting work must not create observable
 intermediate semantics that contradict it.
 
 ## 3. Current implementation roadmap
 
 ### Memory cost model documentation
 
-> Status: Complete. `COST_MODEL.md` inventories the current implementation,
+> Status: Complete. `cost_model.md` inventories the current implementation,
 > the opt-in `elamite-cost-v1` counters measure requested allocations and
 > explicit copied bytes, and fixed release workloads establish the baseline.
 >
@@ -203,9 +221,9 @@ allocates, promotes storage, retains memory, and synchronizes, while keeping
 semantic guarantees distinct from current implementation costs and future
 targets.
 
-The initial cost model is non-normative. `SPEC.md` continues to own observable
+The initial cost model is non-normative. `spec.md` continues to own observable
 value behavior; the cost document describes the shipped compiler and clearly
-labels intended bounds that are not yet achieved. A bound moves into `SPEC.md`
+labels intended bounds that are not yet achieved. A bound moves into `spec.md`
 only after its implementation, measurements, target coverage, and compatibility
 costs have been reviewed separately.
 
@@ -213,15 +231,16 @@ costs have been reviewed separately.
 | --- | --- | --- |
 | **Copy and allocation inventory (done)** | Inventory binding, assignment, argument, return, pattern, closure-capture, iteration-snapshot, transfer, concatenation, collection mutation, reference-promotion, and synchronization costs by type family. | Each operation distinguishes semantic copying, physical copying, allocation, retained storage, and implementation freedom; x86 and x86-64 differences are explicit. |
 | **Reproducible memory baseline (done)** | Add release-mode microbenchmarks and allocation/byte-copy instrumentation for representative `String`, `Vec`, `Map`, `Set`, nested aggregate, closure, function-call, loop, and cross-thread workloads. | Results are reproducible enough to compare revisions, record input sizes and toolchain/target identity, and avoid timing or allocation thresholds in ordinary conformance tests. |
-| **Published cost model (done)** | Add a non-normative `COST_MODEL.md` describing current asymptotic behavior, likely allocation sites, GC retention and nondeterminism, conservative promotion, explicit alias and synchronized-handle costs, and the intended optimized model. | A programmer can predict which source operations may allocate or copy proportionally to data size and can tell a guarantee from an implementation note or optimization target. |
-| **Cost-document maintenance contract (done)** | Define the review rule for representation, lowering, runtime, and optimizer changes that alter documented costs, including required before/after measurements and release-note updates. | A cost-changing implementation cannot be marked complete while `COST_MODEL.md` still describes the previous behavior. |
+| **Published cost model (done)** | Add a non-normative `cost_model.md` describing current asymptotic behavior, likely allocation sites, GC retention and nondeterminism, conservative promotion, explicit alias and synchronized-handle costs, and the intended optimized model. | A programmer can predict which source operations may allocate or copy proportionally to data size and can tell a guarantee from an implementation note or optimization target. |
+| **Cost-document maintenance contract (done)** | Define the review rule for representation, lowering, runtime, and optimizer changes that alter documented costs, including required before/after measurements and release-note updates. | A cost-changing implementation cannot be marked complete while `cost_model.md` still describes the previous behavior. |
 
 ### Value-copy and allocation optimization
 
-> Status: Planned. The accepted direction preserves independent logical value
-> semantics, explicit `&T`/`&var T` aliasing, and data-race-free safe
-> concurrency; it does not adopt Go-style mutable shallow copies or add a
-> source-level move operation.
+> Status: In progress. Read-only call borrowing is complete; the next package
+> is **Temporary and return copy elision**. The accepted direction
+> preserves independent logical value semantics, explicit `&T`/`&var T`
+> aliasing, and data-race-free safe concurrency; it does not adopt Go-style
+> mutable shallow copies or add a source-level move operation.
 >
 > Depends on: **Memory cost model documentation** and **Standard-library
 > concurrency** (complete).
@@ -236,15 +255,15 @@ when its proof or representation preconditions are not met.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Copy-cost instrumentation seam** | Carry logical-copy kind, source/destination lifetime, allocation class, and transfer-versus-ordinary purpose far enough through typed and control-flow IR to measure and select optimizations without backend guesswork. | Debug instrumentation accounts for every emitted logical copy exactly once and has no release-build semantic effect. |
-| **Read-only call borrowing** | Pass large ordinary arguments through hidden read-only storage when local or interprocedural analysis proves the callee cannot mutate, retain, return, or expose that storage; materialize an ordinary copy before any unproven escape. This is an implementation choice, not an implicit source `T` to `&T` conversion. | Direct, generic, trait, closure, recursive, FFI-adjacent, deferred, and escaping calls preserve value behavior, evaluation order, source lifetime, and the explicit reference type system. |
+| **Copy-cost instrumentation seam (done)** | Carry logical-copy kind, source/destination lifetime, allocation class, and transfer-versus-ordinary purpose far enough through typed and control-flow IR to measure and select optimizations without backend guesswork. | Debug instrumentation accounts for every emitted logical copy exactly once and has no release-build semantic effect. |
+| **Read-only call borrowing (done)** | Pass large ordinary arguments through hidden read-only storage when local or interprocedural analysis proves the callee cannot mutate, retain, return, or expose that storage; materialize an ordinary copy before any unproven escape. This is an implementation choice, not an implicit source `T` to `&T` conversion. | Direct, generic, trait, closure, recursive, FFI-adjacent, deferred, and escaping calls preserve value behavior, evaluation order, source lifetime, and the explicit reference type system. |
 | **Temporary and return copy elision** | Reuse fresh temporary, argument, aggregate-construction, closure-environment, and return storage when the source is dead and independence cannot become observable. Record the decision as an explicit internal move/reuse operation with no source syntax. | Branches, traps, postfix `?`, `defer`, patterns, repeated use, and nested aggregates never consume a source that remains observably usable. |
 | **Copy-on-write `String`** | Replace eager owned-text copies with constant-size logical handles and shared immutable backing, detaching before every mutation and preserving exact text, formatting, comparison, and concatenation behavior. | Read-only copies cease copying bytes; first mutation detaches once; aliases to the value's place, transfer boundaries, and OOM behavior remain correct. |
 | **Copy-on-write `Vec`** | Give each logical vector value an independently redirectable descriptor over potentially shared backing; lower mutable receiver operations against the owning place so detach changes only that value. | Element and nested-place mutation, growth, removal, clear, concatenation, indexing, closure capture, and loop snapshots remain independent under adversarial copy/mutate sequences. |
 | **Copy-on-write `Map` and `Set`** | Add independently redirectable COW backing for maps and sets after the vector representation is proven, retaining key stability, value copying, hashes, and unspecified iteration order. | Insert, replace, remove, clear, nested values, iteration snapshots, and collision-heavy workloads preserve semantics and detach only when required. |
 | **Ordinary/transfer copy separation** | Make ordinary logical-copy and cross-thread transfer-copy operations distinct in IR and generated helpers. Initially detach or deep-copy ordinary backing at transfer; permit physical cross-thread COW sharing only after its shared-state protocol is race-free on x86 and x86-64. | Spawn environments/results, channel messages, mutex values, and repeated joins remain independent; synchronized identity handles remain shared; sanitizer and contention suites detect no unsynchronized backing access. |
 | **Precise escape analysis** | Keep proven nonescaping address-taken locals and referenced temporaries on the stack while retaining conservative managed promotion for returned, stored, captured, trait-object, deferred, foreign, or otherwise uncertain references. | Root lifetime and identity match the current conservative implementation, including interior and aggregate references, while measured nonescaping cases allocate no managed cell. |
-| **Optimization and cost-model conformance** | Run the full semantic suite plus before/after time, allocation, copied-byte, retained-memory, and cross-thread stress comparisons; update `COST_MODEL.md` with achieved behavior and separately review any proposed normative bound. | Read-heavy copies and calls improve materially on the recorded workloads, mutation-heavy regressions are reported rather than hidden, and no cost claim exceeds the tested target matrix. |
+| **Optimization and cost-model conformance** | Run the full semantic suite plus before/after time, allocation, copied-byte, retained-memory, and cross-thread stress comparisons; update `cost_model.md` with achieved behavior and separately review any proposed normative bound. | Read-heavy copies and calls improve materially on the recorded workloads, mutation-heavy regressions are reported rather than hidden, and no cost claim exceeds the tested target matrix. |
 
 ### Post-conformance optimization
 
@@ -280,7 +299,7 @@ infrastructure, may be pulled forward when a later milestone needs them.
 
 ## 4. Post-conformance compile-time syntax generation
 
-The compile-time syntax-generation milestone is complete. `SPEC.md` §12 owns
+The compile-time syntax-generation milestone is complete. `spec.md` §12 owns
 the stable interpreter-backed `macro`, `attr`, and `derive` declarations, the
 versioned `std.ast` interface, `quote:` and `$` interpolation, `++`
 concatenation, hygiene, scheduling, and deterministic resource limits.
@@ -301,7 +320,7 @@ The implementation must preserve these boundaries throughout the transition:
 
 ### Macro expansion foundations
 
-> Status: Complete against the revised compile-time design in `SPEC.md`
+> Status: Complete against the revised compile-time design in `spec.md`
 > 0.9.0-draft.
 >
 > Blocked by: **None**. It is independent of **Package tests, typed traps, and
@@ -313,7 +332,7 @@ destabilizing the existing compiler.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Language-contract revision (done)** | Replace token matcher/transcriber rules with interpreter-backed `derive`, `attr`, and `macro` declarations over `std.ast`; settle `@` invocation and attachment forms, `quote:`, `$` interpolation, `++`, namespaces, execution order, hygiene, capabilities, and deterministic limits in `SPEC.md`. | Every implemented compile-time behavior is owned by a normative rule rather than this roadmap. |
+| **Language-contract revision (done)** | Replace token matcher/transcriber rules with interpreter-backed `derive`, `attr`, and `macro` declarations over `std.ast`; settle `@` invocation and attachment forms, `quote:`, `$` interpolation, `++`, namespaces, execution order, hygiene, capabilities, and deterministic limits in `spec.md`. | Every implemented compile-time behavior is owned by a normative rule rather than this roadmap. |
 | **Token-tree representation (done)** | Represent nested delimiters, indentation tokens, source text, and spans without prematurely parsing tokens as Elamite syntax. | Existing lexing behavior remains unchanged for macro-free source. |
 | **Expansion identities and provenance (done)** | Introduce stable expansion identities and origin chains that distinguish physical source, invocation, definition, and generated spans without inventing physical file offsets. | Nested generated nodes can be traced deterministically to their invocation and definition. |
 | **Fragment parser entry points (done)** | Parse complete expression, statement, pattern, type, and item fragments from token trees with full-consumption checks and ordinary parser recovery. | Each fragment role has positive, trailing-token, and malformed-input tests. |
@@ -392,7 +411,7 @@ stable without an experimental gate.
 
 ### Explicit-capture closures
 
-> Status: Complete and conformed against `SPEC.md` 0.9.0-draft.
+> Status: Complete and conformed against `spec.md` 0.9.0-draft.
 >
 > Blocked by: **None**. **Standard-library concurrency** is blocked by this
 > milestone because spawned thread bodies rely on closures.
@@ -461,7 +480,7 @@ The accepted surface has these boundaries:
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Normative closure contract (done)** | Record closure syntax, capture forms and aliases, evaluation order, name visibility, inferred returns, callable behavior, copying, safety, escape, control-flow, and exclusion rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected closure form has one normative outcome before anonymous `fn` expressions are enabled. |
+| **Normative closure contract (done)** | Record closure syntax, capture forms and aliases, evaluation order, name visibility, inferred returns, callable behavior, copying, safety, escape, control-flow, and exclusion rules in `spec.md`; update `ledger.md`, `AGENTS.md`, and the authoritative example. | Every accepted and rejected closure form has one normative outcome before anonymous `fn` expressions are enabled. |
 | **Syntax and editor support (done)** | Parse safe closure expressions with optional nonempty capture lists, typed parameters, optional return annotations, and ordinary indented bodies; update traversal and editor inventories without admitting generic, unsafe, variadic, or declaration-position forms. | Snapshots preserve capture-kind and body spans, and malformed lists, modifiers, parameters, aliases, and body indentation receive focused diagnostics. |
 | **Capture resolution (done)** | Assign stable identities to closure expressions and environment bindings, resolve every outer-local use through one explicit capture, and distinguish declarations that require no capture. | Missing, duplicate, self-initializing, shadowing, alias-collision, and inaccessible captures are deterministic errors with related spans. |
 | **Capture typing and construction (done)** | Type-check value, shared-reference, mutable-reference, const-pointer, and mutable-pointer captures; require addressability and mutability where appropriate; record exact-once left-to-right construction and any `*var T` to `*T` downgrade. | Capture types and evaluation order are explicit in typed facts, direct raw-pointer captures cannot bypass `*`/`*var`, and no capture operation itself enters an unsafe context. |
@@ -471,7 +490,7 @@ The accepted surface has these boundaries:
 | **Typed and control-flow IR lowering (done)** | Represent closure construction, environment access, static callable invocation, erased callable dispatch, return flow, traps, and deferred cleanup without embedding syntax or name-resolution facts in later IR. | Construction and argument evaluation order are explicit, closure-local exits cannot target an outer body, and existing named-function lowering is unchanged. |
 | **C99 environment and call emission (done)** | Emit deterministic private environment layouts and static body functions, pass an environment pointer on direct calls, and reuse ordinary trait-object vtables for erased calls while retaining GC-visible roots. | Capturing and captureless closures work on x86 and x86-64, generated C remains C99, symbols are deterministic, and no closure is emitted as a plain C function pointer. |
 | **Cross-feature integration (done)** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Closure support does not weaken coherence, copy independence, visibility, safety, cleanup, trap behavior, or production/test reachability. |
-| **Conformance and tooling closure (done)** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `LEDGER.md`. |
+| **Conformance and tooling closure (done)** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `ledger.md`. |
 
 Private evolving captured state, implicit or default capture, arbitrary
 initialized captures, generic closure literals, unsafe closures, variadic
@@ -584,7 +603,7 @@ trampoline and concurrency contract.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Normative concurrency contract (done)** | Record the thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules in `SPEC.md`; update `LEDGER.md`, `AGENTS.md`, the standard-library documentation, and close the prior umbrella design issue. | Every concurrency operation and exclusion has one normative result before any standard declaration or runtime hook is enabled. |
+| **Normative concurrency contract (done)** | Record the thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules in `spec.md`; update `ledger.md`, `AGENTS.md`, the standard-library documentation, and close the prior umbrella design issue. | Every concurrency operation and exclusion has one normative result before any standard declaration or runtime hook is enabled. |
 | **Structural transfer capability (done)** | Add canonical `Transfer` facts and generic bounds, structural derivation for ordinary values, conditional derivation for closures and standard handles, explicit exclusions for reference/pointer/trait-object aliases, and the accepted unsafe FFI opt-in. | Spawn inputs and results cannot hide an unapproved alias; diagnostics identify the exact nontransferable capture, field, element, or generic obligation. |
 | **Standard concurrency declarations (done)** | Add the accepted `std.thread` and `std.sync` modules and source declarations for thread handles, spawn errors, channels and endpoint outcomes, mutexes, and atomic cells, keeping only representation and lowering hooks intrinsic. | All APIs resolve and type-check through ordinary module, generic, trait, visibility, and standard-library paths. |
 | **Transfer-copy lowering (done)** | Lower cross-thread arguments, results, channel messages, and synchronized cell values through an explicit transfer-copy operation that recursively detaches ordinary backing storage while preserving approved synchronized handles. | Mutation on either side cannot observe shared ordinary storage, explicit synchronized identity remains shared, and evaluation occurs exactly once. |
@@ -595,7 +614,7 @@ trampoline and concurrency contract.
 | **Sequentially consistent atomics (done)** | Implement shared `AtomicBool`, `AtomicI32`, and target-width `AtomicUsize` cells with the accepted load, store, exchange, compare-exchange, and integer read-modify-write operations without emitting C11 `_Atomic` into the C99 backend. | Operations are sequentially consistent on both targets, copies retain cell identity, runtime/compiler hooks preserve C99 output, and target-width behavior never assumes 64-bit atomics on x86. |
 | **Collector and root integration (done)** | Register and unregister runtime-created threads, scan their stacks, queues, environments, synchronized handles, and unpublished/published results, and make shutdown cooperate with collection. | Stress collection cannot reclaim reachable cross-thread state, raw pointers acquire no rooting behavior, and completed thread state is reclaimable after all roots disappear. |
 | **C callback boundary (done)** | Permit synchronous same-registered-thread reentry from C on the initializer or an Elamite-created thread while retaining the prohibition on foreign-created-thread and asynchronous foreign entry. | Nested registered callbacks preserve roots and traps never unwind through C; unsupported foreign-thread entry remains explicitly documented and tested where a harness can detect it. |
-| **Concurrency conformance (done)** | Add compile-pass/fail transfer cases, runtime lifecycle and synchronization tests, trap-process tests, high-contention and repeated stress suites, sanitizer-capable native harnesses, debug/release coverage, and the Linux x86/x86-64 matrix. | The complete pre-concurrency suite remains green, safe suites show no races or hangs under their bounded contracts, and every normative concurrency rule is mapped in `LEDGER.md`. |
+| **Concurrency conformance (done)** | Add compile-pass/fail transfer cases, runtime lifecycle and synchronization tests, trap-process tests, high-contention and repeated stress suites, sanitizer-capable native harnesses, debug/release coverage, and the Linux x86/x86-64 matrix. | The complete pre-concurrency suite remains green, safe suites show no races or hangs under their bounded contracts, and every normative concurrency rule is mapped in `ledger.md`. |
 
 Cooperative tasks, executors, `async`/`await`, futures, detached execution,
 cancellation, interruption, timeouts, thread-local storage, relaxed atomics,
@@ -603,7 +622,222 @@ guards exposing protected references, scoped reference transfer, parallel
 iterators, scheduling or fairness guarantees, automatic deadlock detection,
 and foreign-thread attachment are outside this milestone.
 
-## 7. Delivery checkpoints
+## 7. Language surface completion
+
+### User-defined iteration
+
+> Status: Planned. `spec.md` 7.1 currently states that there is no
+> user-defined iteration protocol or source-level iterator, and `for` is
+> restricted to slices, arrays, `Vec`, `Map`, and `Set` by compiler
+> privilege.
+>
+> Blocked by: **None**. Should precede **Standard-library expansion**,
+> because every collection API added before it is either compiler-privileged
+> or unusable with `for`.
+
+**Goal:** Let an ordinary user type participate in `for` through a normal
+trait, without weakening the iteration-snapshot rule, the copy semantics of
+yielded elements, or the existing collection behavior.
+
+The design decision precedes the implementation: the protocol interacts with
+copy independence, the iteration snapshot, escape promotion, and `Transfer`,
+and it determines whether the privileged collections keep their special
+lowering or become ordinary implementations. Record the accepted contract in
+`issues.md` before any package below begins.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Accepted iteration contract** | Decide and record the protocol shape, the snapshot obligation, element copy behavior, whether iteration borrows or consumes its source, and the interaction with `Transfer` and closures. | One normative result exists in `spec.md` before any lowering changes; the existing unspecified `Map`/`Set` order and snapshot guarantees are preserved or explicitly revised. |
+| **Protocol declaration and checking** | Add the standard trait, its bounds, and the checking rules that admit a user type in loop-header position. | A conforming user type is accepted, a nonconforming one is diagnosed at the loop header, and the diagnostic names the missing obligation. |
+| **Loop lowering through the protocol** | Lower `for` over a user type through the protocol while retaining the specified snapshot behavior and evaluation order. | Source mutation during iteration cannot affect the active loop, the iterable evaluates exactly once, and cleanup and `break`/`continue` edges are unchanged. |
+| **Privileged collection reconciliation** | Decide whether `Vec`, `Map`, `Set`, arrays, and slices retain special lowering or are expressed through the protocol, and implement the accepted result. | Existing collection iteration output, ordering guarantees, and performance characteristics are unchanged or their change is recorded in `cost_model.md`. |
+
+### Deferred specified surface
+
+> Status: Candidate work; each item is independently schedulable.
+>
+> Blocked by: **None**.
+
+**Goal:** Close or permanently document the gaps where `spec.md` specifies a
+construct that the implementation does not provide, so that no normative rule
+remains silently unimplemented.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **128-bit integer lowering** | Implement `i128`/`u128` constants, arithmetic, conversion, and display in the C backend, or move the exclusion into `spec.md` as a permanent restriction. | `docs/toolchain.md` and the `int128_support.elx` regression fixture agree with the implementation, and the fixture's pinned phase behavior is updated with it. |
+| **Wildcard and grouped imports** | Implement the unsupported `use` forms, or record their absence as a deliberate permanent restriction. | Accepted forms follow the ordinary Section 2.3 visibility, reachability, and duplicate-binding rules; rejected forms keep a diagnostic naming the restriction. |
+| **Foreign ABI surface** | Decide whether C variadic functions and non-`C` foreign ABIs enter the language, and implement or permanently document the result. | The ABI-type rules in `spec.md` 10.1 and the foreign declaration checking agree with the shipped surface. |
+
+## 8. Standard library
+
+### Standard-library expansion
+
+> Status: Planned. The shipped standard library is small: `std.io` currently
+> defines an error category with no input/output behind it, and there is no
+> filesystem, environment, process, time, sorting, or randomness surface.
+>
+> Blocked by: **User-defined iteration** for any API that should be iterable.
+> Interacts with **Value-copy and allocation optimization**, because every
+> collection-shaped signature added here inherits the current eager-copy cost.
+
+**Goal:** Provide the ordinary capabilities a program needs to be useful,
+without adding compiler privilege, and while treating every public signature
+as a long-lived compatibility commitment.
+
+Each module is a separate work package so that its API can be reviewed
+independently. Prefer a small, complete surface over a broad, provisional one:
+a missing function can be added later, while a published one cannot easily
+change. Every module records its allocation and copying behavior in
+`cost_model.md` as it lands.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Filesystem and path** | Add reading, writing, metadata, directory traversal, and path manipulation behind `IoError`, with explicit resource handles and idempotent cleanup. | Handles follow the Section 8 cleanup contract, no operation exposes a reference into managed storage, and failure categories are exhaustive and portable. |
+| **Process and environment** | Add environment variable access, command-line arguments, exit status, and process invocation. | Values copy under ordinary semantics, the surface is target-portable, and no operation introduces implicit global mutable state visible across threads. |
+| **Time and duration** | Add monotonic and wall-clock reading and a duration type with checked arithmetic. | Monotonic and wall-clock sources are distinct types, arithmetic follows the ordinary overflow contract, and no operation is specified as a synchronization edge. |
+| **Ordering and search utilities** | Add sorting, binary search, and comparison helpers over slices and `Vec`. | Sorting is deterministic for equal keys or documented as unstable, comparison uses the Section 4.5 ordering rules, and no helper introduces a hidden allocation not recorded in `cost_model.md`. |
+| **Text algorithms** | Add the string search, split, trim, case, and parsing operations not already provided as intrinsics. | `str` and `String` results follow the specified materialization and independence rules, and Unicode behavior matches the Section 4.1 contract. |
+| **Randomness** | Add a seedable generator with an explicitly documented distribution and reproducibility contract. | Determinism under a fixed seed is guaranteed and tested; no operation silently seeds from the environment. |
+
+## 9. Toolchain and developer experience
+
+### Source-level debugging
+
+> Status: Planned. Because the compiler emits C, a native debugger currently
+> shows generated identifiers and temporaries rather than Elamite source.
+>
+> Blocked by: **None**. Shares its span infrastructure with
+> **Language server**.
+
+**Goal:** Let a programmer debug an Elamite program in Elamite terms, using
+ordinary native tooling.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Generated-source mapping** | Emit `#line` directives or an equivalent mapping so C-compiler diagnostics and debugger line tables refer to `.elx` locations. | A C-compiler warning and a debugger breakpoint both resolve to the originating Elamite line on both targets. |
+| **Debuggable names and locals** | Preserve source-level function and binding names in the generated C so that stack frames and locals are recognizable. | A stack trace names Elamite functions, and deterministic-symbol and ABI-exclusion rules are unchanged. |
+| **Debugging documentation** | Document the supported debugger workflow, including what remains visible as generated C. | A programmer can set a breakpoint, inspect a local, and step through a function following documented steps alone. |
+
+### Language server
+
+> Status: Candidate work; scope and protocol coverage require a decision
+> before implementation. The shipped editor support is a TextMate grammar,
+> which cannot resolve names.
+>
+> Blocked by: **Incremental queries** in **Post-conformance optimization**,
+> which owns the stable query boundaries a responsive server needs.
+
+**Goal:** Provide name resolution, diagnostics, and navigation over the real
+compiler rather than a heuristic grammar, without a language-server dependency
+entering the semantic layers.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Query-backed analysis surface** | Expose resolution, type, and diagnostic queries over an unsaved buffer through a stable library interface. | The interface is reusable by the CLI and the server, and no semantic layer gains an editor dependency. |
+| **Core protocol support** | Implement diagnostics, hover, go-to-definition, and document symbols. | Results match ordinary `check` behavior for the same source, including compile-time expansion and macro provenance. |
+| **Editing support** | Implement completion, find-references, rename, and formatter integration. | Rename respects the module, compile-time, and shadowing namespace rules; formatting reuses the existing formatter. |
+| **Editor integration** | Ship the server with the existing extension and replace grammar-based classification where the server is available. | The extension degrades to grammar highlighting when the server is unavailable, and `tests/editor_grammar.rs` remains valid for that fallback. |
+
+### API documentation generation
+
+> Status: Planned. The `doc` command exists but currently emits a heading
+> without rendered API content.
+>
+> Blocked by: **None**.
+
+**Goal:** Generate readable, navigable reference documentation from
+documentation comments and public signatures.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Rendered API model** | Render modules, types, traits, implementations, functions, and compile-time declarations with signatures, visibility, and documentation comments. | Output covers every public item a package exposes, and package-private items are excluded. |
+| **Cross-linking and navigation** | Resolve documentation references to other items and emit a navigable module tree. | A reference to an item in the same package or a dependency resolves to its rendered location, and unresolved references are diagnosed rather than silently dropped. |
+| **Output formats** | Emit at least one distributable format suitable for publishing, in addition to the existing text output. | Generated output is deterministic for identical input, target, and compiler revision. |
+| **Documentation examples** | Decide whether examples in documentation comments are compiled or checked, and implement the accepted result. | Either examples are verified by the ordinary test layers, or their unverified status is documented explicitly. |
+
+### Additional platform targets
+
+> Status: Candidate work; target selection requires a decision. Supported
+> targets are currently Linux x86 and x86-64.
+>
+> Blocked by: **None**. The C-toolchain portability tasks may proceed in
+> parallel with target selection.
+
+**Goal:** Widen the set of hosts and targets the compiler supports, without
+weakening the deterministic-output or target-width guarantees.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **C-toolchain portability** | Run the full suite under a second C compiler, and review the driver's fixed flag set — including `-Werror` on generated code — for portability across compilers and versions. | The suite passes under both compilers, and any flag whose failure mode depends on the C compiler's version is documented or removed from shipped builds. |
+| **64-bit ARM target** | Add an `aarch64` target with its pointer width, C flag selection, and layout behavior, and extend the conformance matrix to it. | The full matrix passes on 64-bit ARM, including the concurrency stress suites, whose weaker hardware memory model exercises the sequential-consistency contract that x86 cannot. |
+| **Non-ELF platform support** | Decide the next operating-system target and implement its object format, linking, collector discovery, and prerequisite documentation. | Library and executable packages link on the new platform, and `docs/toolchain.md` records its prerequisites. |
+
+## 10. Distribution and project infrastructure
+
+### Package distribution
+
+> Status: Candidate work; requires a design decision before implementation.
+> Package dependencies are currently local paths only.
+>
+> Blocked by: **None**.
+
+**Goal:** Let packages depend on packages they do not vendor, with
+reproducible resolution.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Accepted distribution model** | Decide between a registry, a source resolver, or vendored-only distribution, including naming, versioning, and trust. | The decision records its compatibility, reproducibility, and security implications before any resolver is implemented. |
+| **Version resolution and lockfile** | Implement the accepted resolver and a lockfile that pins an exact dependency graph. | A locked build is byte-reproducible for the same compiler revision and target, and resolution failure is diagnosed rather than silently resolved. |
+| **Compile-time metadata compatibility** | Define how versioned compile-time metadata and the `std.ast` interface version interact with dependency resolution. | A dependency built against an incompatible interface version is rejected with a diagnostic naming both versions. |
+
+### Distribution and installation
+
+> Status: Planned. Cargo publishing is disabled and the only supported
+> installation path is building the compiler from source.
+>
+> Blocked by: **Additional platform targets** for any platform it ships.
+
+**Goal:** Let a programmer install and run the toolchain without building it.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Release artifacts** | Produce versioned toolchain archives per supported platform from a reproducible release process. | Artifacts report a compiler version and `spec.md` revision matching their source revision. |
+| **Installation path** | Document and test installation, including the C-toolchain and collector prerequisites. | A programmer can install and compile a package following documented steps on a clean supported system. |
+| **Release notes and changelog** | Add a maintained changelog covering language, library, and toolchain changes per release. | Every release records its behavior changes, and a cost-affecting change references its `cost_model.md` update. |
+
+### Learning material
+
+> Status: Planned. `spec.md` is a reference and is not a tutorial.
+>
+> Blocked by: **None**, though examples should follow **Standard-library
+> expansion** to avoid teaching around missing capability.
+
+**Goal:** Give a newcomer a path from installation to a working program that
+does not require reading the specification.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Introductory guide** | Write a task-ordered guide covering installation, packages, values and references, errors and cleanup, generics and traits, and concurrency. | A programmer unfamiliar with the language can build a nontrivial program using the guide alone. |
+| **Worked examples** | Maintain example programs that are compiled and run by the ordinary test layers. | Every example in published material is covered by an automated test, so documentation cannot drift from behavior. |
+| **Migration and comparison notes** | Explain the copy, alias, and `Transfer` model to readers arriving from Go, Rust, or C. | The notes state where intuition from each language transfers and where it does not, particularly for copy cost and the absence of borrow checking. |
+
+### Project governance and contribution
+
+> Status: Planned. The repository has no contribution, conduct, security, or
+> issue-template infrastructure.
+>
+> Blocked by: **None**. Should precede any public invitation to contribute.
+
+**Goal:** Give outside participants a defined way to report, propose, and
+contribute, and give maintainers a defined way to decide.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Contribution infrastructure** | Add contribution guidance, a code of conduct, a security reporting policy, and issue and pull-request templates. | A first-time contributor can find the build, test, and review expectations without reading the compiler sources. |
+| **Design change process** | Document how a language change is proposed, reviewed, accepted, and recorded across `issues.md`, `proposals.md`, `spec.md`, and `ledger.md`. | An outside proposal has a defined entry point and a defined outcome, and the existing document ownership rules are preserved. |
+| **Stability and versioning policy** | Define what a released language version guarantees, how a breaking change is introduced, and whether an edition or epoch mechanism is adopted. | The policy states its compatibility promise explicitly, and the specification revision reported by `elamc --version` is tied to it. |
+
+## 11. Delivery checkpoints
 
 Delivery checkpoints are:
 

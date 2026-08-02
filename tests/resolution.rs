@@ -833,7 +833,7 @@ fn option_is_a_standard_declaration_that_a_user_type_can_shadow() {
         .filter(|variant| variant.parent == option)
         .map(|variant| output.program.symbol_text(variant.name))
         .collect::<Vec<_>>();
-    // `docs/SPEC.md` 4.4 declares `Some` before `None`; the order is observable
+    // `docs/spec.md` 4.4 declares `Some` before `None`; the order is observable
     // through derived comparison, so it is part of the declaration.
     assert_eq!(variants, vec!["Some", "None"]);
     assert!(output.program.standard_variant("Option", "None").is_some());

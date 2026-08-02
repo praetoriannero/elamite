@@ -19,8 +19,9 @@ language behavior or the public compiler commands.
 | Checked output and pure checker analyses | `src/check/model.rs`, `coverage.rs`, `containment.rs` |
 | Body-checking orchestration | `src/check/mod.rs` |
 | Typed IR and lowering | `src/ir/typed/model.rs`, `lower.rs` |
+| Internal read-only call analysis and ABI selection | `src/ir/borrowing.rs` |
 | Control-flow IR and lowering | `src/ir/control_flow/model.rs`, `lower.rs` |
-| Shared selected operations and traps | `src/operations.rs`, `src/ir/traps.rs` |
+| Shared selected operations, logical-copy facts, and traps | `src/operations.rs`, `src/ir/traps.rs` |
 | Target and optimization policy | `src/config.rs` |
 | C naming, types, runtime, functions, entry | matching modules in `src/backend/` |
 
@@ -29,6 +30,21 @@ their established public paths. Compatibility re-exports for `Target` from
 `backend` and `Optimization` from `driver` are retained because integration
 users already import them there; new compiler code should use `config`
 directly.
+
+Logical-copy intent is selected before backend lowering. Checking records the
+copy kind, source and destination lifetime classes, and ordinary-versus-transfer
+purpose; typed IR adds the type-selected allocation class; control-flow IR
+assigns a stable per-function copy identity. Debug builds audit that inventory
+for exact-once emission, while the C backend consumes the explicit copy rvalue
+without reconstructing optimization intent from generated representation
+details.
+
+After concrete typed functions and vtables exist, `src/ir/borrowing.rs`
+conservatively identifies costly internal direct-call parameters whose storage
+cannot be mutated or address-exposed. It records an explicit passing mode on
+parameters and arguments before control-flow lowering. The backend implements
+that mode with a hidden `const` pointer ABI; indirect, closure, vtable, and
+foreign-visible callables retain the ordinary owned ABI.
 
 The expansion pass owns a lossless nested token-tree view containing exact
 source spellings, layout tokens, and stable origin identities. Parsed units are

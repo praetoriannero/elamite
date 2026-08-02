@@ -1,6 +1,6 @@
 //! Drives the two adversarial regression packages under `tests/fixtures/regression`.
 //!
-//! Both packages were built by auditing `docs/SPEC.md` against the implementation.
+//! Both packages were built by auditing `docs/spec.md` against the implementation.
 //! Every observation the runtime package prints is a specified rule, so a
 //! change to any line of `expected.stdout` means a specified behavior moved.
 //! The `regressions/` directory beside each package holds the minimal
@@ -28,7 +28,7 @@ fn stderr_of(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-/// The golden file matching this host's pointer width. `docs/SPEC.md` 4.1 makes
+/// The golden file matching this host's pointer width. `docs/spec.md` 4.1 makes
 /// `usize` target-dependent, so the suite keeps one expectation per width and
 /// the two files differ on exactly that line.
 fn expected_stdout() -> String {
