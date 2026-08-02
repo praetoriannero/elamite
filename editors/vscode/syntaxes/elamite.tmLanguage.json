@@ -59,7 +59,7 @@
     },
 
     "attributes": {
-      "comment": "Compiler attributes. `@importc` and `@exportc` are the only names resolution.rs accepts; anything else is a hard error there, so it is scoped invalid here.",
+      "comment": "Compiler FFI attributes and the stable attached-transform introducers. Arbitrary `@path(...)` forms are handled as function-like macros by the expression grammar.",
       "patterns": [
         {
           "match": "(@)(importc|exportc)\\b",
@@ -69,22 +69,30 @@
           }
         },
         {
-          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "match": "(@)(attr|derive)\\b",
           "captures": {
             "1": { "name": "punctuation.definition.attribute.elx" },
-            "2": { "name": "invalid.illegal.unknown-attribute.elx" }
+            "2": { "name": "keyword.control.declaration.elx" }
           }
         }
       ]
     },
 
     "macros": {
-      "comment": "Collection macros. parser.rs accepts exactly `@vec`, `@map`, and `@set`.",
-      "match": "(@)(vec|map|set)\\b",
-      "captures": {
-        "1": { "name": "punctuation.definition.macro.elx" },
-        "2": { "name": "keyword.other.macro.elx" }
-      }
+      "comment": "Built-in collection macros and user-defined `@path(...)` invocations. Macro names use the ordinary function-call scope so themes color both alike.",
+      "patterns": [
+        {
+          "match": "(@)(vec|map|set)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.macro.elx" },
+            "2": { "name": "entity.name.function.call.elx" }
+          }
+        },
+        {
+          "name": "punctuation.definition.macro.elx",
+          "match": "@(?=[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*\\()"
+        }
+      ]
     },
 
     "declarations": {

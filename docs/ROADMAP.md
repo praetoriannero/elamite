@@ -9,6 +9,22 @@
 > Basis: `SPEC.md` version 0.9.0-draft and
 > `examples/spec_demo.elx`
 
+## Milestone summary
+
+Keep this table synchronized with the detailed status blocks below.
+
+| Milestone | Status | Current state or next action |
+| --- | --- | --- |
+| [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
+| [Value-copy and allocation optimization](#value-copy-and-allocation-optimization) | Planned — next | Begin with **Copy-cost instrumentation seam**, then proceed through borrowing, copy elision, COW collections, transfer separation, and escape analysis in order. |
+| [Post-conformance optimization](#post-conformance-optimization) | Candidate | Optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
+| [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
+| [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The `std.ast` 1.0 façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete. |
+| [Interpreter-backed macros, attributes, and derives](#interpreter-backed-macros-attributes-and-derives) | Complete | All three stable compile-time declaration forms expand through the ordinary semantic pipeline. |
+| [Compile-time diagnostics, tooling, and stabilization](#compile-time-diagnostics-tooling-and-stabilization) | Complete | Expansion diagnostics, recovery, inspection, reproducibility, robustness, compatibility, and stabilization are complete. |
+| [Explicit-capture closures](#explicit-capture-closures) | Complete | Closure syntax, typing, capture semantics, IR/backend lowering, cross-feature behavior, and conformance are complete. |
+| [Standard-library concurrency](#standard-library-concurrency) | Complete | Threads, structural transfer, channels, copy-based mutexes, atomics, GC integration, callbacks, and target conformance are complete. |
+
 This document organizes current compiler work, candidate optimizations, and
 recently completed language extensions into implementation milestones. Each
 milestone carries its own status note; the header above records the next

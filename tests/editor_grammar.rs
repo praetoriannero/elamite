@@ -296,6 +296,18 @@ fn grammar_accepts_exactly_the_parser_macros() {
 }
 
 #[test]
+fn grammar_scopes_macro_names_like_function_calls() {
+    let grammar = read(GRAMMAR);
+    let macros = slice_between(&grammar, "\"macros\"", "\n    },");
+    assert!(macros.contains("entity.name.function.call.elx"));
+    assert!(!macros.contains("keyword.other.macro.elx"));
+    assert!(
+        macros.contains("(?:\\\\.[A-Za-z_][A-Za-z0-9_]*)*\\\\s*\\\\()"),
+        "user-defined macro paths must remain available to the ordinary function-call rule"
+    );
+}
+
+#[test]
 fn grammar_scopes_variables_the_same_inside_formatted_strings() {
     let grammar = read(GRAMMAR);
     let expression = slice_between(&grammar, "\"expression\": {", "\n    \"comments\":");
