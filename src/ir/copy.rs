@@ -1,6 +1,6 @@
 //! Logical value-copy contract shared by lowering and the backend.
 
-use crate::operations::{LogicalCopyAllocation, LogicalCopyPurpose};
+use crate::operations::LogicalCopyAllocation;
 use crate::types::{PrimitiveType, TypeContext, TypeId, TypeKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,26 +48,8 @@ pub fn logical_copy_strategy(types: &TypeContext, mut ty: TypeId) -> LogicalCopy
 /// Classify the physical work required by one recorded copy.
 ///
 /// Ordinary 0.10 copies never recursively duplicate reachable backing.
-/// Transfer copies retain the implemented 0.9 materialization contract until
-/// the concurrency migration removes that separate purpose.
 #[must_use]
-pub fn logical_copy_allocation(
-    types: &TypeContext,
-    mut ty: TypeId,
-    purpose: LogicalCopyPurpose,
-) -> LogicalCopyAllocation {
-    if purpose == LogicalCopyPurpose::Transfer {
-        return match logical_copy_strategy(types, ty) {
-            LogicalCopyStrategy::Trivial => LogicalCopyAllocation::None,
-            LogicalCopyStrategy::PreserveIdentity => LogicalCopyAllocation::PreserveIdentity,
-            LogicalCopyStrategy::Recursive => LogicalCopyAllocation::Recursive,
-            // Until cross-thread publication migrates, the transfer helper
-            // duplicates mutable String bytes to preserve the 0.9 boundary.
-            LogicalCopyStrategy::MutableString => LogicalCopyAllocation::Recursive,
-            LogicalCopyStrategy::RuntimeManaged => LogicalCopyAllocation::RuntimeManaged,
-        };
-    }
-
+pub fn logical_copy_allocation(types: &TypeContext, mut ty: TypeId) -> LogicalCopyAllocation {
     loop {
         return match types.kind(ty) {
             TypeKind::Alias { target, .. } => {

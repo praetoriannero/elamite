@@ -10,8 +10,7 @@ use elamite::diagnostics::{Category, Diagnostic};
 use elamite::driver::{BuildOptions, DumpStage, Optimization, build, compile, dump, run};
 use elamite::ir::{TypedExpressionKind, TypedStatementKind};
 use elamite::operations::{
-    LogicalCopyAllocation, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyMode,
-    LogicalCopyPurpose, ValuePassingMode,
+    LogicalCopyAllocation, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyMode, ValuePassingMode,
 };
 use elamite::package::PackageGraph;
 use elamite::source::SourceManager;
@@ -273,25 +272,85 @@ fn main() -> ():
 }
 
 #[test]
-fn native_threads_transfer_closures_join_once_and_copy_results() {
+fn native_threads_shallow_copy_closures_and_join_results() {
     let source = r#"
 fn main() -> ():
-    let message = String.from("worker result")
-    let worker = fn[message]() -> String:
-        return message
+    var values = @vec[1]
+    let worker_values = values
+    let worker = fn[worker_values]() -> Vec[i32]:
+        return worker_values
     let started = std.thread.spawn(worker)
+    values[0] = 7
     match started:
         Result.Ok(thread):
             let copy = thread
-            println(thread.join())
-            println(copy.join())
+            var first = thread.join()
+            println(first[0])
+            first[0] = 9
+            let second = copy.join()
+            println(second[0])
             println(copy.is_finished())
         Result.Err(_):
             println("spawn failed")
 "#;
     let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
     assert_eq!(status, 0, "{stderr}");
-    assert_eq!(stdout, "worker result\nworker result\ntrue\n");
+    assert_eq!(stdout, "7\n9\ntrue\n");
+}
+
+#[test]
+fn threads_and_channels_publish_reference_pointer_and_trait_object_aliases() {
+    let source = r#"
+trait Read:
+    fn read(self: &Self) -> i32
+
+struct Value:
+    number: i32
+
+impl Read for Value:
+    fn read(self: &Self) -> i32:
+        return self.number
+
+fn launch_slice(values: ...i32) -> Result[std.thread.Thread[i32], std.thread.SpawnError]:
+    let worker = fn[values]() -> i32:
+        return values[1]
+    return std.thread.spawn(worker)
+
+fn main() -> ():
+    let number = 7
+    let borrowed = &number
+    let pointer = borrowed as *i32
+    let concrete = Value { number: 11 }
+    let erased: &Read = &concrete
+    let (sender, receiver) = std.sync.channel[&i32](1)
+    let _ = sender.send(borrowed)
+
+    let worker = fn[receiver, *pointer as raw, erased]() -> i32:
+        match receiver.receive():
+            Option.Some(shared):
+                unsafe:
+                    return *shared + *raw + erased.read()
+            Option.None:
+                return 0
+
+    match std.thread.spawn(worker):
+        Result.Ok(thread):
+            println(thread.join())
+        Result.Err(_):
+            println("spawn failed")
+
+    match launch_slice(3, 4):
+        Result.Ok(thread):
+            println(thread.join())
+        Result.Err(_):
+            println("spawn failed")
+"#;
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "25\n4\n");
+    }
 }
 
 #[test]
@@ -478,7 +537,7 @@ fn main() -> ():
 }
 
 #[test]
-fn channels_mutexes_and_atomics_share_only_synchronized_identity() {
+fn channels_mutexes_and_atomics_preserve_synchronized_handle_identity() {
     let source = r#"
 use std.sync.TrySendError
 
@@ -578,17 +637,19 @@ fn main() -> ():
 }
 
 #[test]
-fn synchronization_without_spawn_links_and_transfer_copies_messages() {
+fn synchronization_without_spawn_shallow_copies_messages() {
     let source = r#"
 fn main() -> ():
     let (sender, receiver) = std.sync.unbounded_channel[Vec[i32]]()
     var original = @vec[1]
     let _ = sender.send(original)
+    original[0] = 7
     original.append(2)
     sender.close()
     match receiver.receive():
         Option.Some(message):
             println(message.len())
+            println(message[0])
             println(original.len())
         Option.None:
             println("unexpected close")
@@ -610,7 +671,7 @@ fn main() -> ():
 "#;
     let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
     assert_eq!(status, 0, "{stderr}");
-    assert_eq!(stdout, "1\n2\n3\ntrue\n5\n9\ntrue\ntrue\n3\n");
+    assert_eq!(stdout, "1\n7\n2\n3\ntrue\n5\n9\ntrue\ntrue\n3\n");
 }
 
 #[test]
@@ -624,6 +685,11 @@ fn worker() -> usize:
     return value.load()
 
 fn main() -> ():
+    let mutex = std.sync.Mutex[i32].new(7)
+    let _ = mutex.read()
+    let (sender, receiver) = std.sync.channel[i32](1)
+    let _ = sender.send(9)
+    let _ = receiver.receive()
     match std.thread.spawn(worker):
         Result.Ok(thread):
             println(thread.join())
@@ -639,6 +705,10 @@ fn main() -> ():
         assert!(compilation.generated_c.contains("uintptr_t value;"));
         assert!(compilation.generated_c.contains("pthread_mutex_t lock;"));
         assert!(compilation.generated_c.contains("pthread_create("));
+        assert!(compilation.generated_c.contains("pthread_join("));
+        assert!(compilation.generated_c.contains("pthread_mutex_lock("));
+        assert!(compilation.generated_c.contains("pthread_mutex_unlock("));
+        assert!(compilation.generated_c.contains("pthread_cond_wait("));
         assert!(!compilation.generated_c.contains("_Atomic"));
         assert!(!compilation.generated_c.contains("_Static_assert"));
     }
@@ -1770,7 +1840,6 @@ fn main() -> ():
         assert!(
             copies.iter().any(|copy| {
                 copy.facts.context.kind == kind
-                    && copy.facts.context.purpose == LogicalCopyPurpose::Ordinary
                     && copy.facts.allocation == LogicalCopyAllocation::Shallow
             }),
             "{kind:?} has an explicit shallow aggregate copy"
@@ -1778,7 +1847,6 @@ fn main() -> ():
     }
     assert!(copies.iter().any(|copy| {
         copy.facts.context.kind == LogicalCopyKind::Binding
-            && copy.facts.context.purpose == LogicalCopyPurpose::Ordinary
             && copy.facts.allocation == LogicalCopyAllocation::PreserveIdentity
     }));
 
@@ -1791,50 +1859,89 @@ fn main() -> ():
 }
 
 #[test]
-fn recursive_transfer_helpers_copy_mutable_string_backing() {
+fn mutex_values_are_shallow_and_external_aliases_remain_visible() {
     let source = r#"
-struct Label:
-    text: String
-
-fn echo(value: Label) -> Label:
-    return value
+fn bump(values: Vec[i32]) -> Vec[i32]:
+    var result = values
+    result[0] += 1
+    return result
 
 fn main() -> ():
-    let original = Label { text: "copied" }
-    let result = echo(original)
-    println(result.text)
+    var original = @vec[1]
+    let mutex = std.sync.Mutex[Vec[i32]].new(original)
+    original[0] = 7
+    var read = mutex.read()
+    println(read[0])
+    read[0] = 8
+    println(mutex.read()[0])
+    read.append(2)
+    println(f"{read.len()}:{mutex.read().len()}")
+
+    let updated = mutex.update(bump)
+    println(f"{updated[0]}:{original[0]}")
+
+    var replacement = @vec[3]
+    var previous = mutex.replace(replacement)
+    replacement[0] = 4
+    println(mutex.read()[0])
+    previous[0] = 10
+    println(original[0])
 "#;
-    let tree = TestTree::new("string-copy");
+    let tree = TestTree::new("mutex-shallow-values");
     tree.executable(source);
     let mut sources = SourceManager::new();
     let graph = tree.graph(&mut sources);
     let compilation = compile(&graph, &mut sources, Target::X86_64)
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(!compilation.generated_c.contains("el_copy_string"));
+    assert!(!compilation.generated_c.contains("el_copy_t"));
+    assert!(compilation.generated_c.contains("state->value = value;"));
+    assert!(compilation.generated_c.contains("value = state->value;"));
     assert!(
         compilation
             .generated_c
-            .contains("return el_copy_string(value);")
+            .contains("previous = state->value; state->value = replacement;")
     );
-    assert!(compilation.generated_c.contains(
-        "if (value.length != 0U) el_cost_memcpy((char *)copy.bytes, value.bytes, value.length);"
-    ));
-    assert!(!compilation.generated_c.contains("el_string_backing"));
-    // The struct's copy helper copies its field through that field type's own
-    // helper. The field's C name carries its `FieldId`, which is not a stable
-    // part of the contract, so match the shape rather than one index.
-    assert!(compilation.generated_c.lines().any(|line| {
-        let line = line.trim_start();
-        line.starts_with("result.f") && line.contains("= el_copy_t")
-    }));
 
-    let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
-    assert_eq!(stdout, "copied\n");
-    assert_eq!(stderr, "");
-    assert_eq!(status, 0);
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "7\n8\n2:1\n9:9\n4\n10\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
 }
 
 #[test]
-fn string_shares_mutable_backing_while_legacy_transfer_copies_bytes() {
+fn mutex_does_not_claim_external_backing_aliases_are_synchronized() {
+    let source = r#"
+fn bump(values: Vec[i32]) -> Vec[i32]:
+    var result = values
+    result[0] += 1
+    return result
+
+fn main() -> ():
+    var outside = @vec[0]
+    let mutex = std.sync.Mutex[Vec[i32]].new(outside)
+    let worker = fn[mutex]() -> ():
+        let _ = mutex.update(bump)
+    let started = std.thread.spawn(worker)
+    outside[0] = 2
+    match started:
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+"#;
+    let tree = TestTree::new("mutex-external-race-compiles");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+}
+
+#[test]
+fn strings_remain_shallow_across_thread_and_channel_publication() {
     let source = r#"
 fn identity(value: String) -> String:
     return value
@@ -1889,19 +1996,25 @@ fn main() -> ():
         .find(|function| function.name == "identity")
         .expect("identity is lowered");
     assert_eq!(identity.parameters[0].passing, ValuePassingMode::Owned);
-    assert!(
-        compilation
-            .control_flow_ir
-            .functions
-            .iter()
-            .flat_map(|function| function.logical_copy_inventory())
-            .any(|copy| {
-                copy.facts.context.purpose == LogicalCopyPurpose::Transfer
-                    && copy.facts.allocation == LogicalCopyAllocation::Recursive
-                    && copy.facts.mode == LogicalCopyMode::Materialize
-            }),
-        "legacy String transfer retains an independent byte copy"
-    );
+    let publication_copies = compilation
+        .control_flow_ir
+        .functions
+        .iter()
+        .flat_map(|function| function.logical_copy_inventory())
+        .filter(|copy| copy.facts.context.destination_lifetime == LogicalCopyLifetime::Thread)
+        .collect::<Vec<_>>();
+    assert!(!publication_copies.is_empty());
+    assert!(publication_copies.iter().all(|copy| {
+        matches!(
+            copy.facts.allocation,
+            LogicalCopyAllocation::PreserveIdentity
+                | LogicalCopyAllocation::SharedBacking
+                | LogicalCopyAllocation::Shallow
+        )
+    }));
+    assert!(compilation.generated_c.contains("context->body = body;"));
+    assert!(compilation.generated_c.contains("message->value = value;"));
+    assert!(compilation.generated_c.contains("return state->result;"));
 
     let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
     assert_eq!(stdout, "alpha:alpha:alpha:alpha:gamma:alpha!\n");
@@ -1949,7 +2062,6 @@ fn string_mutation_aliases_ordinary_descriptors_without_detaching() {
          int main(void) {\n\
          \x20\x20\x20\x20el_string original;\n\
          \x20\x20\x20\x20el_string snapshot;\n\
-         \x20\x20\x20\x20el_string transfer;\n\
          \x20\x20\x20\x20const char *shared;\n\
          \x20\x20\x20\x20char *first;\n\
          \x20\x20\x20\x20char *second;\n\
@@ -1962,13 +2074,11 @@ fn string_mutation_aliases_ordinary_descriptors_without_detaching() {
          \x20\x20\x20\x20if (first != shared) return 1;\n\
          \x20\x20\x20\x20first[0] = 'A';\n\
          \x20\x20\x20\x20if (memcmp(snapshot.bytes, \"Alpha\", 5U) != 0) return 2;\n\
-         \x20\x20\x20\x20transfer = el_copy_string(original);\n\
          \x20\x20\x20\x20second = el_string_make_mut(&original);\n\
          \x20\x20\x20\x20if (second != first) return 3;\n\
          \x20\x20\x20\x20second[1] = 'L';\n\
          \x20\x20\x20\x20if (memcmp(original.bytes, \"ALpha\", 5U) != 0) return 4;\n\
          \x20\x20\x20\x20if (memcmp(snapshot.bytes, \"ALpha\", 5U) != 0) return 5;\n\
-         \x20\x20\x20\x20if (memcmp(transfer.bytes, \"Alpha\", 5U) != 0) return 6;\n\
          \x20\x20\x20\x20return 0;\n\
          }\n",
     )
@@ -2507,11 +2617,10 @@ fn main() -> ():
         })
         .find(|argument| {
             argument.copy.is_some_and(|copy| {
-                copy.context.purpose == LogicalCopyPurpose::Transfer
-                    && copy.context.destination_lifetime == LogicalCopyLifetime::Thread
+                copy.context.destination_lifetime == LogicalCopyLifetime::Thread
             })
         })
-        .expect("thread spawn carries a transfer-copy argument");
+        .expect("thread spawn carries an ordinary shallow-copy argument");
     assert_eq!(
         spawn_argument
             .copy
@@ -2524,8 +2633,8 @@ fn main() -> ():
             .copy
             .expect("spawn argument has copy facts")
             .mode,
-        LogicalCopyMode::Materialize,
-        "cross-thread transfer copies cannot reuse caller storage"
+        LogicalCopyMode::ReuseSource,
+        "shallow publication reuses the immediate callable representation"
     );
 
     for function in &compilation.control_flow_ir.functions {
@@ -2547,10 +2656,11 @@ fn main() -> ():
         copy.facts.context.kind == LogicalCopyKind::Binding
             && copy.facts.allocation == LogicalCopyAllocation::SharedBacking
     }));
-    assert!(emitted.iter().any(|copy| {
-        copy.facts.context.purpose == LogicalCopyPurpose::Transfer
-            && copy.facts.context.destination_lifetime == LogicalCopyLifetime::Thread
-    }));
+    assert!(
+        emitted
+            .iter()
+            .any(|copy| { copy.facts.context.destination_lifetime == LogicalCopyLifetime::Thread })
+    );
     assert!(emitted.iter().any(|copy| {
         copy.facts.context.kind == LogicalCopyKind::IterationElement
             && copy.facts.allocation == LogicalCopyAllocation::SharedBacking
@@ -2753,8 +2863,8 @@ fn main() -> ():
         "repeated local aggregate inputs retain two shallow-copy records"
     );
     assert!(
-        compilation.generated_c.contains(" = el_copy_"),
-        "conservative fallbacks still call generated copy helpers"
+        !compilation.generated_c.contains(" = el_copy_"),
+        "ordinary materialization remains a shallow C assignment"
     );
 
     let (stdout, stderr, status) = build_and_run(source, Optimization::Release);
@@ -4464,6 +4574,101 @@ fn main() -> ():
 }
 
 #[test]
+fn iteration_snapshots_once_and_observes_nonstructural_alias_mutation() {
+    let source = r#"
+fn make_values() -> Vec[i32]:
+    println("iterable evaluated")
+    return @vec[1, 2, 3]
+
+fn main() -> ():
+    var values = make_values()
+    var total = 0
+    for value in values:
+        if value == 1:
+            values[1] = 20
+        total += value
+    println(total)
+
+    var scores = @map{ "a": 1, "b": 2 }
+    var map_total = 0
+    for entry in scores:
+        scores["a"] = 10
+        scores["b"] = 10
+        match entry:
+            (_, value):
+                map_total += value
+    println(map_total == 11 || map_total == 12)
+"#;
+
+    let tree = TestTree::new("iteration-snapshot");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    let main = compilation
+        .control_flow_ir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main is lowered");
+    assert!(
+        main.logical_copy_inventory()
+            .iter()
+            .any(|copy| { copy.facts.context.kind == LogicalCopyKind::IterationSnapshot })
+    );
+    assert_eq!(
+        main.blocks[0]
+            .instructions
+            .iter()
+            .filter(|instruction| matches!(
+                instruction,
+                elamite::ir::Instruction::Assign {
+                    value: elamite::ir::Rvalue::CollectionLength { .. },
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the first loop's hidden length is captured before its condition block"
+    );
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "iterable evaluated\n24\ntrue\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
+fn structural_collection_mutation_during_iteration_compiles_as_documented_ub() {
+    let source = r#"
+fn main() -> ():
+    var values = @vec[1]
+    for value in values:
+        values.append(value)
+
+    var scores = @map{ "a": 1 }
+    for entry in scores:
+        let _ = scores.insert("b", entry.1)
+
+    var tags = @set{1}
+    for tag in tags:
+        let _ = tags.remove(tag)
+"#;
+    let tree = TestTree::new("iteration-structural-mutation-ub");
+    tree.executable(source);
+    let mut sources = SourceManager::new();
+    let graph = tree.graph(&mut sources);
+    let compilation = compile(&graph, &mut sources, Target::X86_64)
+        .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+    assert!(compilation.generated_c.contains("el_vec_append"));
+    assert!(compilation.generated_c.contains("el_map_insert"));
+    assert!(compilation.generated_c.contains("el_set_remove"));
+}
+
+#[test]
 fn collection_comparison_and_copying_follow_shallow_value_semantics() {
     let source = r#"
 fn copy_map(values: Map[str, i32]) -> Map[str, i32]:
@@ -5235,6 +5440,151 @@ fn main() -> ():
     unsafe:
         let wide: *var u16 = trail as *var u16
         println(*wide)
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.contains("E-RUN-ALIGN"), "{stderr}");
+}
+
+#[test]
+fn raw_pointer_arithmetic_indexing_and_distance_lower_to_c99() {
+    let source = r#"
+fn select(pointer: *var i32, calls: &var i32) -> *var i32:
+    *calls += 1
+    return pointer
+
+fn select_index(calls: &var i32) -> isize:
+    *calls += 1
+    return 1
+
+fn main() -> ():
+    var values = [10, 20, 30, 40]
+    var pointer_calls = 0
+    var index_calls = 0
+    let whole: *var [i32; 4] = (&var values) as *var [i32; 4]
+    unsafe:
+        let first: *var i32 = whole as *var i32
+        select(first, &var pointer_calls)[select_index(&var index_calls)] = 25
+        println(f"{values[1]}:{pointer_calls}:{index_calls}")
+
+        let third = first + 2
+        println(*third)
+        let one_past = first + 4
+        println(one_past - first)
+
+        var cursor = first
+        cursor += 3
+        cursor -= 1
+        println(cursor[0])
+        println(cursor[-1])
+
+        let shared_one_past: *i32 = one_past as *i32
+        println(shared_one_past - first)
+"#;
+
+    let tree = TestTree::new("raw-pointer-arithmetic");
+    tree.executable(source);
+    for target in [Target::X86, Target::X86_64] {
+        let mut sources = SourceManager::new();
+        let graph = tree.graph(&mut sources);
+        let compilation = compile(&graph, &mut sources, target)
+            .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+        assert!(compilation.generated_c.contains("intptr_t"));
+        assert!(compilation.generated_c.contains("el_check_ptr_t"));
+        assert!(compilation.generated_c.contains(" - "));
+    }
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(stdout, "25:1:1\n30\n4\n30\n25\n4\n");
+        assert_eq!(stderr, "");
+    }
+}
+
+#[test]
+fn raw_pointer_relational_ordering_handles_null_without_ordering_it_in_c() {
+    let source = r#"
+fn main() -> ():
+    var values = [1, 2, 3, 4]
+    let whole: *var [i32; 4] = (&var values) as *var [i32; 4]
+    unsafe:
+        let first: *var i32 = whole as *var i32
+        let end = first + 4
+        var cursor = first
+        var sum = 0
+        while cursor < end:
+            sum += *cursor
+            cursor += 1
+        println(sum)
+
+        let middle = first + 2
+        let shared_middle: *i32 = middle as *i32
+        println(f"{first < middle}:{first <= middle}:{middle > first}:{middle >= shared_middle}")
+
+        let none: *i32 = null
+        println(f"{none < first}:{none <= first}:{first > none}:{first >= none}")
+        println(f"{none < null}:{none <= null}:{none > null}:{none >= null}")
+        println(f"{first < none}:{first <= none}:{none > first}:{none >= first}")
+"#;
+
+    let tree = TestTree::new("raw-pointer-ordering");
+    tree.executable(source);
+    for target in [Target::X86, Target::X86_64] {
+        let mut sources = SourceManager::new();
+        let graph = tree.graph(&mut sources);
+        let compilation = compile(&graph, &mut sources, target)
+            .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+        assert!(compilation.generated_c.contains("const unsigned char *"));
+        assert!(compilation.generated_c.contains("== NULL"));
+        assert!(compilation.generated_c.contains("!= NULL"));
+        for invalid in [" < NULL", " <= NULL", " > NULL", " >= NULL"] {
+            assert!(!compilation.generated_c.contains(invalid), "{invalid}");
+        }
+    }
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(status, 0, "{stderr}");
+        assert_eq!(
+            stdout,
+            "10\ntrue:true:true:true\ntrue:true:true:true\nfalse:true:false:true\nfalse:false:false:false\n"
+        );
+        assert_eq!(stderr, "");
+    }
+}
+
+#[test]
+fn raw_pointer_indexing_uses_existing_null_and_alignment_traps() {
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn conceal(pointer: *i32) -> *i32:
+    return pointer
+
+fn main() -> ():
+    println("before")
+    let hidden = conceal(null)
+    unsafe:
+        println(hidden[0])
+"#,
+        Optimization::Debug,
+    );
+    assert_eq!(status, 101);
+    assert_eq!(stdout, "before\n");
+    assert!(stderr.contains("E-RUN-NULL"), "{stderr}");
+
+    let (stdout, stderr, status) = build_and_run(
+        r#"
+fn main() -> ():
+    println("before")
+    var bytes = [1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8]
+    let whole: *var [u8; 8] = (&var bytes) as *var [u8; 8]
+    unsafe:
+        let first: *var u8 = whole as *var u8
+        let misaligned: *u32 = (first + 1) as *u32
+        println(misaligned[0])
 "#,
         Optimization::Debug,
     );

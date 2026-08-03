@@ -3,11 +3,10 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next required work package: **Shallow-copy and systems-concurrency
-> migration** — **Iteration and mutation invalidation**
+> Next planned milestone: **User-defined iteration**
 >
-> Basis: `spec.md` version 0.10.0-draft; `examples/spec_demo.elx` remains the
-> 0.9 implementation demonstration until migration completes
+> Basis: implemented `spec.md` version 0.10.0-draft and the authoritative
+> `examples/spec_demo.elx` demonstration
 
 ## Milestone summary
 
@@ -16,14 +15,14 @@ Keep this table synchronized with the detailed status blocks below.
 | Milestone | Status | Current state or next action |
 | --- | --- | --- |
 | [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
-| [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | In progress — next | Shallow ordinary copies and collection representations are complete; reconcile iteration invalidation next, then migrate concurrency, mutexes, pointer operations, and memory-model conformance in order. |
+| [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | Complete | Shallow values, systems concurrency, unsafe pointer traversal, final cost evidence, release identity, and the authoritative 0.10 demonstration are complete. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | Optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
 | [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The `std.ast` 1.0 façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete. |
 | [Interpreter-backed macros, attributes, and derives](#interpreter-backed-macros-attributes-and-derives) | Complete | All three stable compile-time declaration forms expand through the ordinary semantic pipeline. |
 | [Compile-time diagnostics, tooling, and stabilization](#compile-time-diagnostics-tooling-and-stabilization) | Complete | Expansion diagnostics, recovery, inspection, reproducibility, robustness, compatibility, and stabilization are complete. |
 | [Explicit-capture closures](#explicit-capture-closures) | Complete | Closure syntax, typing, capture semantics, IR/backend lowering, cross-feature behavior, and conformance are complete. |
-| [Standard-library concurrency](#standard-library-concurrency) | Revision planned | The 0.9 structural-transfer runtime is implemented; 0.10 removes `Transfer`, makes thread and channel copies shallow, and assigns race prevention to programmers and synchronization APIs. |
+| [Standard-library concurrency](#standard-library-concurrency) | Complete | The 0.10 shallow shared-memory contract, ordering edges, runtime lifecycle, and sanitizer-backed conformance matrix are implemented. |
 | [User-defined iteration](#user-defined-iteration) | Planned | Decide and record the iteration contract before any lowering work; it gates iterable standard-library APIs. |
 | [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
 | [Standard-library expansion](#standard-library-expansion) | Planned | Add filesystem, process and environment, time, ordering, text, and randomness modules as independently reviewed packages. |
@@ -66,8 +65,8 @@ updated.
 
 Concurrency is a post-closure extension to the initial implementation plan.
 The **Standard-library concurrency** milestone records the implemented 0.9
-runtime baseline; the active migration milestone owns the normative 0.10
-shallow shared-memory revision.
+runtime baseline; the completed migration milestone records its replacement by
+the normative 0.10 shallow shared-memory revision.
 
 ## 1. Implementation strategy
 
@@ -107,9 +106,9 @@ Each representation should have one clear responsibility:
 The 0.9 implementation favored correctness and inspectability through deep
 copying and conservative promotion. Specification 0.10 deliberately changes
 ordinary copying to shallow representation copying and adopts programmer-managed
-shared-memory concurrency. The migration must preserve explicit IR facts until
-every ordinary, thread, channel, mutex, closure, pattern, and collection copy
-site follows the revised contract; precise escape analysis, incremental
+shared-memory concurrency. The completed migration preserves explicit IR facts
+while every ordinary, thread, channel, mutex, closure, pattern, and collection
+copy site follows the revised contract; precise escape analysis, incremental
 compilation, and aggressive C output optimization remain later work.
 
 ## 2. Cross-cutting engineering rules
@@ -239,23 +238,27 @@ costs have been reviewed separately.
 
 ### Shallow-copy and systems-concurrency migration
 
-> Status: In progress. The normative 0.10 documentation revision is complete;
+> Status: Complete. The normative 0.10 documentation revision is complete;
 > ordinary assignment, calls, returns, captures, patterns, indexing, and
 > propagation now copy shallowly, and standard collections use their accepted
-> shallow representations. The compiler still retains the 0.9 structural
-> `Transfer` boundary. The next package is **Iteration and mutation
-> invalidation**.
+> shallow representations, hidden iteration state snapshots its bound once,
+> threads/channels publish ordinary shallow values without `Transfer`, and
+> mutex operations shallow-copy stored and returned values. Raw data pointers
+> support typed arithmetic, subtraction, compound offsets, indexing, and
+> null-low relational ordering. The synchronization-edge audit, final measured
+> cost baseline, release identity, and authoritative demonstration are complete.
 >
-> Depends on: **Memory cost model documentation** and the implemented 0.9
-> **Standard-library concurrency** runtime.
+> Depends on: **Memory cost model documentation** and **Standard-library
+> concurrency** (both complete).
 
 **Goal:** Implement Go-like shallow ordinary values and C-like shared-memory
 concurrency without weakening existing type, bounds, managed-lifetime, raw
 pointer, trap, evaluation-order, or C99 guarantees beyond the explicitly
 revised copy and data-race contracts.
 
-Work packages are ordered. The compiler must not advertise conformance to
-0.10 until every old deep-copy and `Transfer` boundary has migrated.
+Every old deep-copy and isolation boundary has migrated, and the compiler,
+cost model, release evidence, and demonstration now identify the implemented
+0.10.0-draft revision consistently.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
@@ -263,13 +266,13 @@ Work packages are ordered. The compiler must not advertise conformance to
 | **Retain the measurement seam (done)** | Keep the existing logical-copy inventory, read-only call analysis, temporary reuse facts, and pre-revision benchmark as migration evidence rather than deleting phase boundaries prematurely. | Tests can distinguish old materialized copies from new shallow copies and benchmark observations remain comparable without becoming semantic thresholds. |
 | **Shallow ordinary-copy lowering (done)** | Change assignment, arguments, returns, tuple destructuring, pattern binding, closure capture/copy, indexing results, postfix `?`, and aggregate operations to copy only immediate representations; retain explicit IR inventory while ordinary C lowering bypasses recursive transfer helpers. | Scalars and inline slots remain independent, while descriptor-bearing nested fields and copied closure environments observably preserve identity through calls, returns, captures, patterns, and repeated copies; the focused alias matrix passes in debug and release. |
 | **Shallow standard collection representations (done)** | Replace String COW detachment and eager ordinary collection duplication with the specified mutable `String` and Go-like `Vec` descriptors plus identity-preserving `Map` and `Set` tables. | String byte mutation aliases; vector element writes alias while length/capacity stay descriptor-local and growth may diverge; map/set structural mutation is visible through every copy. |
-| **Iteration and mutation invalidation** | Lower hidden loop state as a shallow copy and enforce or document the specified invalidation boundary for length-changing vector and structural map/set mutation during iteration. | Element/value replacement visibility, vector growth divergence, invalid mutation cases, and left-to-right evaluation match Section 7.1 without dangling generated-C storage. |
-| **C-like thread and channel publication** | Remove structural `Transfer` checking and recursive transfer helpers; shallow-copy spawn environments, cached join results, repeated joins, and channel messages while retaining native publication and GC rooting. | References, pointers, slices, trait objects, and collection backing can cross threads; pre-publication writes are observed; unsynchronized conflicting access is treated as UB rather than rejected or detached. |
-| **Programmer-managed mutex contract** | Update `Mutex[T]` operations to shallow values and verify that locking serializes callers without claiming that external aliases are isolated or compiler-associated with the mutex. | Tests demonstrate correct synchronized sharing and deliberately racy fixtures remain sanitizer-only negative evidence rather than ordinary executions. |
-| **Unsafe pointer arithmetic and indexing** | Add `*T`/`*var T` element-scaled `+`, `-`, `+=`, `-=`, same-extent subtraction to `isize`, and `pointer[index]` places for complete nonzero-sized data pointees. | Precedence, inference, mixed mutability, one-past construction, assignment, single evaluation, null/alignment traps, incomplete types, both pointer widths, and generated C99 are covered. |
-| **Unsafe pointer relational ordering** | Add `<`, `<=`, `>`, and `>=` as primitive unsafe raw-data-pointer operations without `PartialOrd`/`Ord`; define null below all non-null pointers and require common live extent for two non-null operands. | Null cases lower without invalid C null ordering, same-extent loops work, statically evident invalid forms diagnose, and unrelated non-null ordering remains documented UB. |
-| **Concurrent memory-model conformance** | Test thread-start, mutex, channel, join, and sequentially consistent atomic ordering; document that ordinary shared access needs no `unsafe` and that conflicting unordered C99 accesses are UB. | Correctly synchronized stress remains TSan-clean, race-producing samples are never run as conformance programs, and no documentation claims safe code is data-race-free. |
-| **Cost-model and release migration** | Run comparable before/after memory baselines once lowering changes, replace the current 0.9 cost tables with achieved shallow-copy costs, and record the semantic break in release documentation and version output. | `elamc --version`, README, demo, cost model, fixtures, x86/x86-64 matrices, and release evidence all identify one implemented specification revision. |
+| **Iteration and mutation invalidation (done)** | Lower hidden loop state as a shallow copy and enforce or document the specified invalidation boundary for length-changing vector and structural map/set mutation during iteration. | Element/value replacement visibility, vector growth divergence, invalid mutation cases, and left-to-right evaluation match Section 7.1 without dangling generated-C storage. |
+| **C-like thread and channel publication (done)** | Remove structural `Transfer` checking and recursive transfer helpers; shallow-copy spawn environments, cached join results, repeated joins, and channel messages while retaining native publication and GC rooting. | References, pointers, slices, trait objects, and collection backing can cross threads; pre-publication writes are observed; unsynchronized conflicting access is treated as UB rather than rejected or detached. |
+| **Programmer-managed mutex contract (done)** | Update `Mutex[T]` operations to shallow values and verify that locking serializes callers without claiming that external aliases are isolated or compiler-associated with the mutex. | Tests demonstrate correct synchronized sharing and deliberately racy fixtures remain compile-only negative evidence rather than ordinary executions. |
+| **Unsafe pointer arithmetic and indexing (done)** | Add `*T`/`*var T` element-scaled `+`, `-`, `+=`, `-=`, same-extent subtraction to `isize`, and `pointer[index]` places for complete nonzero-sized data pointees. | Precedence, inference, mixed mutability, one-past construction, assignment, single evaluation, null/alignment traps, incomplete types, both pointer widths, and generated C99 are covered. |
+| **Unsafe pointer relational ordering (done)** | Add `<`, `<=`, `>`, and `>=` as primitive unsafe raw-data-pointer operations without `PartialOrd`/`Ord`; define null below all non-null pointers and require common live extent for two non-null operands. | Null cases lower without invalid C null ordering, same-extent loops work, statically evident invalid forms diagnose, and unrelated non-null ordering remains documented UB. |
+| **Concurrent memory-model conformance (done)** | Test thread-start, mutex, channel, join, and sequentially consistent atomic ordering; document that ordinary shared access needs no `unsafe` and that conflicting unordered C99 accesses are UB. | Correctly synchronized stress remains TSan-clean, race-producing samples are never run as conformance programs, and no documentation claims safe code is data-race-free. |
+| **Cost-model and release migration (done)** | Run comparable before/after memory baselines once lowering changes, replace the current 0.9 cost tables with achieved shallow-copy costs, and record the semantic break in release documentation and version output. | `elamc --version`, README, demo, cost model, fixtures, x86/x86-64 matrices, and release evidence all identify one implemented specification revision. |
 
 ### Post-conformance optimization
 
@@ -419,8 +422,8 @@ stable without an experimental gate.
 ### Explicit-capture closures
 
 > Status: Complete; 0.10 shallow capture construction and closure-copy identity
-> are implemented. Cross-thread closure publication remains in the concurrency
-> packages of **Shallow-copy and systems-concurrency migration**.
+> are implemented, including cross-thread closure publication through the
+> completed **Shallow-copy and systems-concurrency migration**.
 >
 > Blocked by: **None**. **Standard-library concurrency** is blocked by this
 > milestone because spawned thread bodies rely on closures.
@@ -499,7 +502,7 @@ The accepted surface has these boundaries:
 | **Copy, alias, and escape semantics (done, including 0.10 revision)** | Retain logical-copy recording and promotion analysis for anonymous environments, shallow-copy plain captures into one new environment, and preserve that environment identity when the resulting callable is copied. | Inline environment slots remain distinct, descriptor backing aliases, copied callables share their environment, explicit references/pointers preserve identity, and a raw pointer alone never roots its pointee. |
 | **Typed and control-flow IR lowering (done)** | Represent closure construction, environment access, static callable invocation, erased callable dispatch, return flow, traps, and deferred cleanup without embedding syntax or name-resolution facts in later IR. | Construction and argument evaluation order are explicit, closure-local exits cannot target an outer body, and existing named-function lowering is unchanged. |
 | **C99 environment and call emission (done)** | Emit deterministic private environment layouts and static body functions, pass an environment pointer on direct calls, and reuse ordinary trait-object vtables for erased calls while retaining GC-visible roots. | Capturing and captureless closures work on x86 and x86-64, generated C remains C99, symbols are deterministic, and no closure is emitted as a plain C function pointer. |
-| **Cross-feature integration (0.10 ordinary-copy revision done; concurrency revision planned)** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Shared-backing capture/copy cases pass; the concurrency migration adds unrestricted cross-thread captures without weakening coherence, visibility, cleanup, trap behavior, or production/test reachability. |
+| **Cross-feature integration (0.10 shallow captures and thread publication done)** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Shared-backing capture/copy and unrestricted cross-thread capture cases pass without weakening coherence, visibility, cleanup, trap behavior, or production/test reachability. |
 | **Conformance and tooling closure (done)** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `ledger.md`. |
 
 Private evolving captured state, implicit or default capture, arbitrary
@@ -514,9 +517,10 @@ before adding any of them.
 
 ### Standard-library concurrency
 
-> Status: The 0.9 structural-transfer runtime and conformance matrix are
-> complete. Specification 0.10 supersedes that semantic contract; implementation
-> migration is owned by **Shallow-copy and systems-concurrency migration**.
+> Status: Complete. The 0.9 structural-transfer baseline and its replacement by
+> the 0.10 shallow shared-memory contract are both implemented and recorded.
+> The historical bullets below explain the superseded baseline; current
+> authority remains `spec.md` Section 10.4 and the migration table above.
 >
 > Depends on: **Explicit-capture closures** (complete).
 >
@@ -689,9 +693,8 @@ remains silently unimplemented.
 > filesystem, environment, process, time, sorting, or randomness surface.
 >
 > Blocked by: **User-defined iteration** for any API that should be iterable.
-> Interacts with **Shallow-copy and systems-concurrency migration**, because
-> every collection-shaped signature added here inherits the revised alias and
-> invalidation behavior.
+> Every collection-shaped signature added here inherits the implemented 0.10
+> alias and invalidation behavior.
 
 **Goal:** Provide the ordinary capabilities a program needs to be useful,
 without adding compiler privilege, and while treating every public signature
@@ -874,10 +877,10 @@ Delivery checkpoints are:
 - **Explicit-capture closures:** safe anonymous callables preserve explicit
   capture, logical-copy, alias, raw-pointer, escape, and function boundary
   rules across both supported targets.
-- **Standard-library concurrency:** native threads exchange only transfer-safe
-  copies or synchronized handles, retain process-wide trap and cleanup rules,
-  and pass the race, GC, and target conformance matrices.
-- **Memory cost model:** the current eager-copy, allocation, promotion,
+- **Standard-library concurrency:** native threads and channels publish ordinary
+  shallow values, retain process-wide trap and cleanup rules, and pass the GC,
+  lifecycle, contention, and target conformance matrices.
+- **Memory cost model:** the current shallow-copy, allocation, promotion,
   retention, and synchronization costs are documented separately from
   semantics and backed by reproducible release-mode counters and workloads.
 - **Tuple destructuring and positional fields:** local tuple bindings and

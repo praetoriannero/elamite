@@ -48,8 +48,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostics::{Category, Diagnostic};
 pub use crate::operations::{
-    LogicalCopyContext, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyPurpose,
-    NumericAlternative, NumericOperator, NumericOutcome, ReceiverAdjustment, StandardCall,
+    LogicalCopyContext, LogicalCopyKind, LogicalCopyLifetime, NumericAlternative, NumericOperator,
+    NumericOutcome, ReceiverAdjustment, StandardCall,
 };
 use crate::resolution::{
     ClosureCaptureKind, DeclarationId, DeclarationKind, FieldId, GenericParameterId,
@@ -96,6 +96,27 @@ fn expression_locally_null(node: &SyntaxNode) -> bool {
         SyntaxKind::ParenthesizedExpression | SyntaxKind::CastExpression => child_nodes(node)
             .first()
             .is_some_and(|inner| expression_locally_null(inner)),
+        SyntaxKind::BinaryExpression => {
+            let nodes = child_nodes(node);
+            let zero_offset = nodes
+                .get(1)
+                .and_then(|right| static_integer_expression(right))
+                .is_some_and(|value| value.magnitude == 0);
+            let offset_operator = node.children.iter().any(|child| {
+                matches!(
+                    child,
+                    SyntaxElement::Token(Token {
+                        kind: TokenKind::Plus | TokenKind::Minus,
+                        ..
+                    })
+                )
+            });
+            offset_operator
+                && zero_offset
+                && nodes
+                    .first()
+                    .is_some_and(|left| expression_locally_null(left))
+        }
         _ => false,
     }
 }
@@ -245,22 +266,6 @@ impl<'a> Checker<'a> {
         self.program.copies.insert(
             span,
             LogicalCopyContext::ordinary(
-                kind,
-                LogicalCopyLifetime::Temporary,
-                destination_lifetime,
-            ),
-        );
-    }
-
-    fn record_transfer_copy(
-        &mut self,
-        span: Span,
-        kind: LogicalCopyKind,
-        destination_lifetime: LogicalCopyLifetime,
-    ) {
-        self.program.copies.insert(
-            span,
-            LogicalCopyContext::transfer(
                 kind,
                 LogicalCopyLifetime::Temporary,
                 destination_lifetime,
@@ -862,7 +867,8 @@ impl<'a> Checker<'a> {
                 Diagnostic::new(
                     Category::Place,
                     "cannot assign through a non-mutable place; only a `var` binding, a \
-                     mutable reference target, or a mutable collection element is assignable",
+                     mutable reference/raw-pointer target, or a mutable collection element is \
+                     assignable",
                 )
                 .with_primary(place_node.span),
             );
@@ -870,10 +876,28 @@ impl<'a> Checker<'a> {
         let shift_assignment = operator.is_some_and(|operator| {
             matches!(operator.kind, TokenKind::ShlAssign | TokenKind::ShrAssign)
         });
+        let pointer_offset_assignment = operator.is_some_and(|operator| {
+            matches!(
+                operator.kind,
+                TokenKind::PlusAssign | TokenKind::MinusAssign
+            ) && matches!(
+                self.typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(place_type)),
+                TypeKind::RawPointer { .. }
+            )
+        });
+        if pointer_offset_assignment {
+            self.require_unsafe_context(node.span, "performing raw-pointer arithmetic");
+            self.validate_pointer_arithmetic_type(place_type, node.span);
+        }
+        let isize_type = self.typed.types.primitive(PrimitiveType::Isize);
         let (value_type, _) = self.check_expr(
             value_node,
             if shift_assignment {
                 ExpectedType::None
+            } else if pointer_offset_assignment {
+                ExpectedType::Exact(isize_type)
             } else {
                 ExpectedType::Exact(place_type)
             },
@@ -895,6 +919,16 @@ impl<'a> Checker<'a> {
                     Diagnostic::new(
                         Category::ExpressionType,
                         "a shift count must have an unsigned integer type",
+                    )
+                    .with_primary(value_node.span),
+                );
+            }
+        } else if pointer_offset_assignment {
+            if !self.types_compatible(value_type, isize_type) {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a raw-pointer offset must have type `isize`",
                     )
                     .with_primary(value_node.span),
                 );
@@ -925,6 +959,16 @@ impl<'a> Checker<'a> {
 
     fn compound_assignment_operand_ok(&self, operator: &TokenKind, ty: TypeId) -> bool {
         match operator {
+            TokenKind::PlusAssign | TokenKind::MinusAssign
+                if matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(ty)),
+                    TypeKind::RawPointer { .. }
+                ) =>
+            {
+                true
+            }
             TokenKind::PlusAssign
             | TokenKind::MinusAssign
             | TokenKind::StarAssign
@@ -1491,6 +1535,26 @@ impl<'a> Checker<'a> {
             return (bool_type, PlaceKind::Value);
         }
         let (left_type, _) = self.check_expr(left, ExpectedType::None);
+        if matches!(
+            self.typed
+                .types
+                .kind(self.typed.types.resolve_inference(left_type)),
+            TypeKind::RawPointer { .. }
+        ) && matches!(operator, TokenKind::Plus | TokenKind::Minus)
+        {
+            return self.check_pointer_binary(node, operator, left, right, left_type);
+        }
+        if matches!(
+            self.typed
+                .types
+                .kind(self.typed.types.resolve_inference(left_type)),
+            TypeKind::RawPointer { .. }
+        ) && matches!(
+            operator,
+            TokenKind::Less | TokenKind::LessEq | TokenKind::Greater | TokenKind::GreaterEq
+        ) {
+            return self.check_pointer_ordering(node, right, left_type);
+        }
         if matches!(operator, TokenKind::Shl | TokenKind::Shr) {
             let (right_type, _) = self.check_expr(right, ExpectedType::None);
             let left_valid =
@@ -1672,6 +1736,177 @@ impl<'a> Checker<'a> {
             }
             _ => (self.typed.types.error(), PlaceKind::Value),
         }
+    }
+
+    fn check_pointer_binary(
+        &mut self,
+        node: &SyntaxNode,
+        operator: &TokenKind,
+        left: &SyntaxNode,
+        right: &SyntaxNode,
+        left_type: TypeId,
+    ) -> (TypeId, PlaceKind) {
+        self.require_unsafe_context(node.span, "performing raw-pointer arithmetic");
+        let left_valid = self.validate_pointer_arithmetic_type(left_type, left.span);
+        let isize_type = self.typed.types.primitive(PrimitiveType::Isize);
+
+        if matches!(operator, TokenKind::Minus) {
+            let right_expected = if self.expression_locally_null(right) {
+                ExpectedType::Exact(left_type)
+            } else {
+                ExpectedType::Exact(isize_type)
+            };
+            let (right_type, _) = self.check_expr(right, right_expected);
+            let right_resolved = self.typed.types.resolve_inference(right_type);
+            if let TypeKind::RawPointer {
+                target: right_target,
+                ..
+            } = self.typed.types.kind(right_resolved).clone()
+            {
+                let right_valid = self.validate_pointer_arithmetic_type(right_type, right.span);
+                let TypeKind::RawPointer {
+                    target: left_target,
+                    ..
+                } = self
+                    .typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(left_type))
+                    .clone()
+                else {
+                    return (self.typed.types.error(), PlaceKind::Value);
+                };
+                if !self.typed.types.exactly_equal(left_target, right_target) {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "raw-pointer subtraction requires the same resolved pointee type",
+                        )
+                        .with_primary(node.span),
+                    );
+                    return (self.typed.types.error(), PlaceKind::Value);
+                }
+                return (
+                    if left_valid && right_valid {
+                        isize_type
+                    } else {
+                        self.typed.types.error()
+                    },
+                    PlaceKind::Value,
+                );
+            }
+            if right_type != self.typed.types.error()
+                && !self.typed.types.exactly_equal(right_type, isize_type)
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a raw-pointer offset must have type `isize`",
+                    )
+                    .with_primary(right.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+            return (
+                if left_valid {
+                    left_type
+                } else {
+                    self.typed.types.error()
+                },
+                PlaceKind::Value,
+            );
+        }
+
+        let (right_type, _) = self.check_expr(right, ExpectedType::Exact(isize_type));
+        if right_type != self.typed.types.error()
+            && !self.typed.types.exactly_equal(right_type, isize_type)
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "a raw-pointer offset must have type `isize`",
+                )
+                .with_primary(right.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
+        (
+            if left_valid {
+                left_type
+            } else {
+                self.typed.types.error()
+            },
+            PlaceKind::Value,
+        )
+    }
+
+    fn check_pointer_ordering(
+        &mut self,
+        node: &SyntaxNode,
+        right: &SyntaxNode,
+        left_type: TypeId,
+    ) -> (TypeId, PlaceKind) {
+        self.require_unsafe_context(node.span, "ordering raw pointers");
+        let right_expected = if self.expression_locally_null(right) {
+            ExpectedType::Exact(left_type)
+        } else {
+            ExpectedType::None
+        };
+        let (right_type, _) = self.check_expr(right, right_expected);
+        let left_resolved = self.typed.types.resolve_inference(left_type);
+        let right_resolved = self.typed.types.resolve_inference(right_type);
+        let (
+            TypeKind::RawPointer {
+                target: left_target,
+                ..
+            },
+            TypeKind::RawPointer {
+                target: right_target,
+                ..
+            },
+        ) = (
+            self.typed.types.kind(left_resolved).clone(),
+            self.typed.types.kind(right_resolved).clone(),
+        )
+        else {
+            if right_type != self.typed.types.error() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "raw-pointer ordering requires two raw data pointers",
+                    )
+                    .with_primary(node.span),
+                );
+            }
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        if self.typed.types.unify(left_target, right_target).is_err() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "raw-pointer ordering requires the same resolved pointee type",
+                )
+                .with_primary(node.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
+        let target = self.resolve_aliases(left_target);
+        if matches!(
+            self.typed.types.kind(target),
+            TypeKind::Function { .. } | TypeKind::InferenceVariable(_) | TypeKind::Error
+        ) {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "relational ordering is available only for raw data pointers with a resolved pointee type",
+                )
+                .with_primary(node.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
+        (
+            self.typed.types.primitive(PrimitiveType::Bool),
+            PlaceKind::Value,
+        )
     }
 
     fn reject_statically_invalid_arithmetic(
@@ -2045,7 +2280,7 @@ impl<'a> Checker<'a> {
                     Diagnostic::new(
                         Category::ExpressionType,
                         "raw pointers do not convert to or from any non-pointer type; \
-                         there is no pointer arithmetic or pointer/integer conversion",
+                         there is no pointer/integer conversion",
                     )
                     .with_primary(node.span),
                 );
@@ -2157,6 +2392,95 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn validate_pointer_arithmetic_type(&mut self, pointer: TypeId, span: Span) -> bool {
+        let pointer = self.typed.types.resolve_inference(pointer);
+        let TypeKind::RawPointer { target, .. } = self.typed.types.kind(pointer).clone() else {
+            return false;
+        };
+        let target = self.typed.types.resolve_inference(target);
+        if target == self.typed.types.error() {
+            return false;
+        }
+        let complete = self.typed.layout_available(target, self.pointer_bits)
+            && !matches!(
+                self.typed.types.kind(target),
+                TypeKind::Function { .. }
+                    | TypeKind::Foreign {
+                        complete: false,
+                        ..
+                    }
+            );
+        let nonzero = complete && self.type_has_nonzero_size(target, &mut BTreeSet::new());
+        if !complete || !nonzero {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "raw-pointer arithmetic and indexing require a complete, nonzero-sized data pointee",
+                )
+                .with_primary(span),
+            );
+            return false;
+        }
+        true
+    }
+
+    fn type_has_nonzero_size(&mut self, ty: TypeId, visiting: &mut BTreeSet<TypeId>) -> bool {
+        let ty = self.typed.types.resolve_inference(ty);
+        if !visiting.insert(ty) {
+            return false;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        let nonzero = match kind {
+            TypeKind::Primitive(PrimitiveType::Unit) | TypeKind::Never => false,
+            TypeKind::Primitive(_) => true,
+            TypeKind::Tuple(elements) => elements
+                .into_iter()
+                .any(|element| self.type_has_nonzero_size(element, visiting)),
+            TypeKind::Array { element, length } => {
+                length != 0 && self.type_has_nonzero_size(element, visiting)
+            }
+            TypeKind::Slice(_)
+            | TypeKind::Reference { .. }
+            | TypeKind::RawPointer { .. }
+            | TypeKind::Function { .. }
+            | TypeKind::Closure { .. } => true,
+            TypeKind::Nominal {
+                identity,
+                arguments,
+            } => {
+                let declaration = &self.resolved.declarations[identity.declaration.index()];
+                if declaration.kind == DeclarationKind::Enum {
+                    true
+                } else {
+                    let fields = self
+                        .resolved
+                        .fields
+                        .iter()
+                        .filter(|field| field.parent_declaration == identity.declaration)
+                        .map(|field| field.id)
+                        .collect::<Vec<_>>();
+                    fields.into_iter().any(|field| {
+                        self.typed
+                            .instantiate_field_type(self.resolved, field, &arguments)
+                            .is_some_and(|field_type| {
+                                self.type_has_nonzero_size(field_type, visiting)
+                            })
+                    })
+                }
+            }
+            TypeKind::Builtin { builtin, .. } => self.resolved.builtin_name(builtin) != "CVoid",
+            TypeKind::Foreign { complete, .. } => complete,
+            TypeKind::Alias { target, .. } => self.type_has_nonzero_size(target, visiting),
+            TypeKind::TraitObject { .. }
+            | TypeKind::GenericParameter(_)
+            | TypeKind::SelfType(_)
+            | TypeKind::InferenceVariable(_)
+            | TypeKind::Error => false,
+        };
+        visiting.remove(&ty);
+        nonzero
+    }
+
     /// The mandatory expression-local validity determination (`docs/spec.md` 3.3):
     /// a raw dereference or raw-to-reference conversion is a compile-time
     /// error only when its pointer operand is an expression-local constant
@@ -2165,11 +2489,10 @@ impl<'a> Checker<'a> {
     /// The determination may evaluate literals, casts, and operators within
     /// the operand expression, and nothing else: facts never propagate
     /// through bindings, assignments, branch conditions, reachability, or
-    /// calls. The initial language has no integer-to-pointer conversion or
-    /// pointer arithmetic, so no expression can construct a non-null constant
-    /// address; `null` is therefore the only constant this evaluator can
-    /// prove invalid, and the misalignment half of the rule is vacuously
-    /// satisfied until such an expression exists.
+    /// calls. Pointer arithmetic over a locally null expression remains known
+    /// null only for a statically zero offset; without integer-to-pointer
+    /// conversion no expression can construct another constant address, so
+    /// the misalignment half remains vacuously satisfied.
     fn reject_locally_invalid_pointer(&mut self, operand: &SyntaxNode) {
         if self.expression_locally_null(operand) {
             self.diagnostics.push(
@@ -2936,6 +3259,37 @@ impl<'a> Checker<'a> {
         let resolved_base = self.typed.types.resolve_inference(base_type);
         let usize_type = self.typed.types.primitive(PrimitiveType::Usize);
         let result = match self.typed.types.kind(resolved_base).clone() {
+            TypeKind::RawPointer { mutability, target } => {
+                self.require_unsafe_context(node.span, "indexing a raw pointer");
+                let isize_type = self.typed.types.primitive(PrimitiveType::Isize);
+                let (index_type, _) = self.check_expr(index, ExpectedType::Exact(isize_type));
+                if index_type != self.typed.types.error()
+                    && !self.typed.types.exactly_equal(index_type, isize_type)
+                {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::ExpressionType,
+                            "a raw-pointer index must have type `isize`",
+                        )
+                        .with_primary(index.span),
+                    );
+                    None
+                } else if self.expression_locally_null(base) {
+                    self.reject_locally_invalid_pointer(base);
+                    None
+                } else if self.validate_pointer_arithmetic_type(base_type, base.span) {
+                    return (
+                        target,
+                        if mutability == Mutability::Mutable {
+                            PlaceKind::RawPointerTarget
+                        } else {
+                            PlaceKind::Value
+                        },
+                    );
+                } else {
+                    None
+                }
+            }
             TypeKind::Array { element, length } => {
                 self.check_expr(index, ExpectedType::Exact(usize_type));
                 if let Some(token) = index.children.iter().find_map(|child| match child {

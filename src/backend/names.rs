@@ -229,10 +229,6 @@ pub(super) fn field_name(field: FieldId) -> String {
     format!("f{}", field.index())
 }
 
-pub(super) fn copy_helper_name(ty: TypeId) -> String {
-    format!("el_copy_t{}", ty.index())
-}
-
 pub(super) fn local_name(binding: LocalBindingId) -> String {
     format!("l{}", binding.index())
 }

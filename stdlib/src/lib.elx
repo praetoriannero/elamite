@@ -17,10 +17,6 @@ pub enum NumericError:
 pub trait Callable[Arguments, Return]:
     fn call(self: &Self, arguments: Arguments) -> Return
 
-/// Marker capability for values that can be independently copied to another thread.
-pub trait Transfer:
-    pass
-
 /// Terminates the process with an unrecoverable diagnostic.
 pub fn panic(message: str) -> !:
     pass

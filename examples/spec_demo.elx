@@ -41,7 +41,7 @@ struct Point(Default, PartialEq):
 
     // Inside a struct, `Self` refers to the enclosing struct type.
     fn translated(self: Self, dx: f64) -> Self:
-        return Point{x: self.x + dx, y: self.y}
+        return Point { x: self.x + dx, y: self.y }
 
 // A struct with a direct `&T` field cannot derive `Default`.
 // This derivation is illegal:
@@ -61,14 +61,14 @@ struct Session:
     name: String
 
     pub fn new(name: String) -> Self:
-        return Self{active: true, name: name}
+        return Self { active: true, name: name }
 
     // Illegal location of struct field.
     // Fields must be defined before methods for clarity.
     // other: i32
 
     // The return type is not needed here, but completely allowed / legal.
-    // `&var` is used to denote a mutable reference. 
+    // `&var` is used to denote a mutable reference.
     fn stop(self: &var Self) -> ():
         self.active = false
 
@@ -76,7 +76,7 @@ struct Session:
     pub fn get_const_self_ptr(self: &Self) -> *Self:
         return self as *Self
 
-    // `*var T` types can be create from `&var T` types safely, as well.
+    // `*var T` types can be created from `&var T` types safely, as well.
     pub fn get_mut_self_ptr(self: &var Self) -> *var Self:
         return self as *var Self
 
@@ -216,12 +216,12 @@ fn is_odd(value: i32) -> bool:
     return is_even(value - 1)
 
 fn make_demo_resource() -> DemoResource:
-    var state = DemoResourceState{closed: false}
-    return DemoResource{state: &var state}
+    var state = DemoResourceState { closed: false }
+    return DemoResource { state: &var state }
 
 fn use_demo_resource(resource: DemoResource):
     defer resource.close()
-    println(f"resource closed: {resource.is_closed()}") // false
+    println(f"resource closed: {resource.is_closed()}")  // false
 
 fn use_demo_resource_block(resource: DemoResource):
     // `defer:` defers several statements as one registration. A deferred block
@@ -232,7 +232,7 @@ fn use_demo_resource_block(resource: DemoResource):
         let closing = "closing demo resource"
         println(closing)
         resource.close()
-    println(f"resource closed: {resource.is_closed()}") // false
+    println(f"resource closed: {resource.is_closed()}")  // false
 
 fn propagate_io(result: Result[i32, io.IoError]) -> Result[i32, io.IoError]:
     // `?` propagates only the exact enclosing error type.
@@ -244,54 +244,54 @@ pub fn main() -> Result[(), io.IoError]:
 
     let resource = make_demo_resource()
     use_demo_resource(resource)
-    println(f"resource closed: {resource.is_closed()}") // true through shared state
+    println(f"resource closed: {resource.is_closed()}")  // true through shared state
 
     let byte_mask: u8 = 0xffu8
     let widened_mask: i32 = byte_mask as i32
     println(f"mask: {widened_mask}")
 
     let precedence_demo = 1 + 2 * 3
-    println(f"precedence: {precedence_demo}") // 7
+    println(f"precedence: {precedence_demo}")  // 7
 
-    let origin = Point{x: 0.0, y: 0.0}
+    let origin = Point { x: 0.0, y: 0.0 }
     // A `self: Self` bound call copies its receiver; `origin` remains valid.
     let moved_right = origin.translated(10.0)
     println(f"{moved_right.x}, {moved_right.y}")
 
-    // Ordinary copies are recursively independent logical values.
+    // Shallow copies still give inline scalar fields distinct storage.
     var origin_copy = origin
     origin_copy.x = 5.0
     println(f"original x: {origin.x}, copied x: {origin_copy.x}")
 
     let origin_ref = &origin
     let copy_ref = &origin_copy
-    println(f"same target: {origin_ref == copy_ref}") // false
-    println(f"equal contents: {equivalent(origin_ref, copy_ref)}") // false
+    println(f"same target: {origin_ref == copy_ref}")  // false
+    println(f"equal contents: {equivalent(origin_ref, copy_ref)}")  // false
 
     // A reference names storage. A reference into an aggregate points at that
     // subvalue within its container, so replacing the container is observable
     // through the reference, exactly as in C and Go.
-    var account = Account{
+    var account = Account {
         name: "Ari",
-        address: Address{city: "Aster"},
+        address: Address { city: "Aster" },
     }
     let city = &account.address.city
-    println(f"city: {city}") // "Aster"
+    println(f"city: {city}")  // "Aster"
 
-    account = Account{
+    account = Account {
         name: "Bea",
-        address: Address{city: "Beacon"},
+        address: Address { city: "Beacon" },
     }
-    println(f"city after replacement: {city}") // "Beacon"
+    println(f"city after replacement: {city}")  // "Beacon"
 
     // Mutation through such a reference is visible in the container, because
     // both name the same storage.
     let relocate = &var account.address.city
     *relocate = "Cove"
-    println(f"city after mutation: {account.address.city}") // "Cove"
+    println(f"city after mutation: {account.address.city}")  // "Cove"
 
     let coordinate_sum = moved_right.x
-        + moved_right.y
+        +moved_right.y
     println(f"coordinate sum: {coordinate_sum}")
 
     let ptr: *i32 = null
@@ -303,11 +303,30 @@ pub fn main() -> Result[(), io.IoError]:
         unsafe:
             println(f"{*ptr}")
 
-    let leaf = Chain{value: 1, next: Option.None}
-    let chain_root = Chain{value: 2, next: Option.Some(&leaf)}
+    // Raw data-pointer traversal is explicit and unsafe. Offsets and indexing
+    // are element-scaled, `end` is the permitted one-past position, and
+    // relational ordering is defined because both non-null pointers remain in
+    // one live array extent.
+    var pointer_values = [3, 4, 5]
+    let whole: *var [i32; 3] = (&var pointer_values) as *var [i32; 3]
+    unsafe:
+        let first: *var i32 = whole as *var i32
+        let end = first + 3
+        var cursor = first
+        var pointer_sum = 0
+        while cursor < end:
+            pointer_sum += *cursor
+            cursor += 1
+        first[1] = 6
+        let none: *i32 = null
+        println(f"pointer traversal: {pointer_sum}, indexed: {first[1]}")
+        println(f"null orders first: {none < first}")
+
+    let leaf = Chain { value: 1, next: Option.None }
+    let chain_root = Chain { value: 2, next: Option.Some(&leaf) }
     println(f"chain length: {chain_length(&chain_root)}")
 
-    var packet = Packet{id: 7, body: "first"}
+    var packet = Packet { id: 7, body: "first" }
     let body = packet.body
     // Replacing a field is distinct from mutating the immutable `str` contents.
     packet.body = "replacement"
@@ -354,27 +373,28 @@ pub fn main() -> Result[(), io.IoError]:
         f"{inherent_status} / {trait_status} / {toggle_category} / {dynamic_status}"
     )
 
-    // Naming a function produces an `&fn` value; there are no anonymous
-    // function literals.
+    // Naming a function produces an `&fn` value. An anonymous closure instead
+    // has its own nominal callable type and an explicit capture list.
     let add_one: &fn(i32) -> i32 = increment
-    println(f"function reference result: {add_one(41)}") // 42
+    println(f"function reference result: {add_one(41)}")  // 42
+    println(f"closure result: {closure_demo(40)}")  // 42
 
-    let transform = IntTransform{apply: add_one}
+    let transform = IntTransform { apply: add_one }
     // Field selection composes with ordinary call syntax.
-    println(f"stored function reference result: {transform.apply(41)}") // 42
+    println(f"stored function reference result: {transform.apply(41)}")  // 42
 
     // Two references naming the same function compare equal by identity.
     let also_increment: &fn(i32) -> i32 = increment
-    println(f"same function: {add_one == also_increment}") // true
+    println(f"same function: {add_one == also_increment}")  // true
 
-    // A callback that must carry data uses a trait object instead of a function
-    // reference, since a function reference has no captured environment.
-    let adder = AddOffset{offset: 1}
+    // A callback that carries data may use a trait object instead of a closure;
+    // a function reference itself has no captured environment.
+    let adder = AddOffset { offset: 1 }
     let adder_ref = &adder
-    println(f"transform result: {apply_transform(adder_ref, 41)}") // 42
+    println(f"transform result: {apply_transform(adder_ref, 41)}")  // 42
 
     // Direct and mutual recursion use named functions.
-    println(f"is_even(4): {is_even(4)}") // true
+    println(f"is_even(4): {is_even(4)}")  // true
 
     let array = [1, 2, 3]
     println(f"fixed array first element: {array[0]}")
@@ -383,20 +403,45 @@ pub fn main() -> Result[(), io.IoError]:
     // Reads copy an element; direct indexed assignment updates the collection.
     var element = vec[1]
     element += 1
-    println(f"copied element: {element}, vector element: {vec[1]}") // 3, 2
+    println(f"copied element: {element}, vector element: {vec[1]}")  // 3, 2
     vec[1] = element
     vec.append(4)
 
+    // A Vec copy has descriptor-local length/capacity and shared backing.
+    // Element replacement aliases while appending changes only this copied
+    // descriptor (and may move it to new backing if growth is needed).
+    var vec_copy = vec
+    vec_copy[0] = 9
+    vec_copy.append(5)
+    println(f"shallow vector: {vec[0]} / {vec.len()} / {vec_copy.len()}")
+
+    // Thread publication is the same shallow copy. Joining orders the worker's
+    // backing mutation before the read in this thread; no `unsafe` is needed.
+    var shared_values = @vec[0]
+    let publish = fn[shared_values as captured_values]() -> ():
+        var worker_values = captured_values
+        worker_values[0] = 21
+    match std.thread.spawn(publish):
+        Result.Ok(thread):
+            thread.join()
+            println(f"joined shared value: {shared_values[0]}")
+        Result.Err(_):
+            println("spawn unavailable")
+
     // A function reference is passed to a higher-order function by naming it.
-    println(f"apply_offset result: {apply_offset(increment, 41)}") // 42
+    println(f"apply_offset result: {apply_offset(increment, 41)}")  // 42
 
     var retries = 0
     while retries < 2:
         println(f"retry {retries}")
         retries = retries + 1
 
-    let names = @map{"first": "Ada", "second": "Grace"}
-    let tags = @set{"compiler", "managed"}
+    var names = @map{ "first": "Ada", "second": "Grace" }
+    var names_copy = names
+    let _ = names_copy.insert("third", "Lin")
+    var tags = @set{ "compiler", "managed" }
+    var tags_copy = tags
+    let _ = tags_copy.insert("shallow")
     println(f"map entries: {names.len()}, set entries: {tags.len()}")
 
     // Iteration yields independent values and never interior references.
@@ -411,5 +456,5 @@ pub fn main() -> Result[(), io.IoError]:
 
 test standard_testing_region:
     std.testing.assert(increment(41) == 42)
-    expect(std.testing.BuiltinTrap.Panic):
+    expect (std.testing.BuiltinTrap.Panic):
         panic("expected by the package test")

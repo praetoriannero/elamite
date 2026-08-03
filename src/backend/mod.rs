@@ -3,8 +3,8 @@
 //! This is the first executable backend (`docs/roadmap.md` Milestones 8-9). It consumes
 //! explicit control-flow IR, uses an internal (unstable) calling convention,
 //! emits one strictly sequenced C statement per IR instruction, and routes
-//! ordinary copies through direct shallow C representations, and the legacy
-//! transfer boundary through generated per-type helpers.
+//! ordinary copies through direct shallow C representations. Synchronized
+//! runtime helpers own only the storage and publication mechanics they need.
 
 mod entry;
 mod functions;
@@ -19,16 +19,14 @@ pub use crate::config::Target;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{
     AggregateValue, BinaryOperator, BlockId, CollectionLiteralKind, ControlFlowFunction,
-    ControlFlowPlace, ControlFlowProgram, IndexKind, Instruction, IterationKind,
-    LogicalCopyStrategy, NeverCall, RuntimeFormattedPart, Rvalue, TemporaryId, Terminator,
-    TypedEnum, UnaryOperator, VtableMethod, logical_copy_strategy,
+    ControlFlowPlace, ControlFlowProgram, IndexKind, Instruction, IterationKind, NeverCall,
+    RuntimeFormattedPart, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator, VtableMethod,
 };
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
 };
 use crate::operations::{
-    LogicalCopyMode, LogicalCopyPurpose, NumericAlternative, NumericOperator, NumericOutcome,
-    StandardCall, ValuePassingMode,
+    NumericAlternative, NumericOperator, NumericOutcome, StandardCall, ValuePassingMode,
 };
 use crate::resolution::{DeclarationId, FieldId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};
@@ -123,8 +121,6 @@ struct CEmitter<'a> {
     emitting_types: BTreeSet<TypeId>,
     structs: BTreeMap<TypeId, &'a crate::ir::TypedStruct>,
     enums: BTreeMap<TypeId, &'a TypedEnum>,
-    emitted_copy_helpers: BTreeSet<TypeId>,
-    emitting_copy_helpers: BTreeSet<TypeId>,
     emitted_equality_helpers: BTreeSet<TypeId>,
     emitting_equality_helpers: BTreeSet<TypeId>,
     emitted_ordering_helpers: BTreeSet<TypeId>,
@@ -171,8 +167,6 @@ impl<'a> CEmitter<'a> {
                 .iter()
                 .map(|enumeration| (enumeration.ty, enumeration))
                 .collect(),
-            emitted_copy_helpers: BTreeSet::new(),
-            emitting_copy_helpers: BTreeSet::new(),
             emitted_equality_helpers: BTreeSet::new(),
             emitting_equality_helpers: BTreeSet::new(),
             emitted_ordering_helpers: BTreeSet::new(),
@@ -200,9 +194,6 @@ impl<'a> CEmitter<'a> {
         self.emit_foreign_root_runtime(&used_types);
         for ty in &used_types {
             self.emit_type_definition(*ty, None);
-        }
-        for ty in &used_types {
-            self.emit_copy_helper(*ty, None);
         }
         // Only types the program actually compares get a helper; emitting one
         // per aggregate would leave unused static functions behind.
@@ -504,9 +495,11 @@ fn checked_binary_name(operator: BinaryOperator) -> Option<&'static str> {
 
 fn c_binary_operator(operator: BinaryOperator) -> Option<&'static str> {
     Some(match operator {
-        BinaryOperator::Add => "+",
+        BinaryOperator::Add | BinaryOperator::PointerOffsetAdd => "+",
         BinaryOperator::Concatenate => return None,
-        BinaryOperator::Subtract => "-",
+        BinaryOperator::Subtract
+        | BinaryOperator::PointerOffsetSubtract
+        | BinaryOperator::PointerDistance => "-",
         BinaryOperator::Multiply => "*",
         BinaryOperator::Divide => "/",
         BinaryOperator::Remainder => "%",
@@ -521,6 +514,10 @@ fn c_binary_operator(operator: BinaryOperator) -> Option<&'static str> {
         BinaryOperator::LessEqual => "<=",
         BinaryOperator::Greater => ">",
         BinaryOperator::GreaterEqual => ">=",
+        BinaryOperator::PointerLess
+        | BinaryOperator::PointerLessEqual
+        | BinaryOperator::PointerGreater
+        | BinaryOperator::PointerGreaterEqual => return None,
         BinaryOperator::LogicalAnd => "&&",
         BinaryOperator::LogicalOr => "||",
     })

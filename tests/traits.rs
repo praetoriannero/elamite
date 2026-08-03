@@ -827,29 +827,32 @@ fn main() -> ():
 }
 
 #[test]
-fn transfer_is_structural_and_excludes_aliasing_types() {
+fn transfer_is_not_a_compiler_capability() {
     assert_clean(
         r#"
-struct Packet[T]:
-    value: T
-    labels: Vec[String]
+trait Transfer:
+    pass
+
+struct Packet:
+    value: i32
+
+impl Transfer for Packet:
+    pass
 
 fn cross[T: Transfer](value: T) -> ():
     pass
 
-fn callback() -> ():
-    pass
-
 fn main() -> ():
-    let packet = Packet[i32] { value: 7, labels: @vec["ok"] }
+    let packet = Packet { value: 7 }
     cross(packet)
-    let function: &fn() -> () = callback
-    cross(function)
 "#,
     );
 
     assert_reports(
         r#"
+trait Transfer:
+    pass
+
 fn cross[T: Transfer](value: T) -> ():
     pass
 
@@ -862,37 +865,21 @@ fn main() -> ():
 }
 
 #[test]
-fn manual_transfer_opt_in_requires_unsafe_impl() {
-    assert_clean(
-        r#"
-struct SharedForeign:
-    pointer: *var i32
-
-unsafe impl Transfer for SharedForeign:
-    pass
-
-fn cross[T: Transfer](value: T) -> ():
-    pass
-
-fn accept(value: SharedForeign) -> ():
-    cross(value)
-
-fn main() -> ():
-    pass
-"#,
-    );
-
+fn unsafe_impl_has_no_reserved_capability() {
     assert_reports(
         r#"
+trait Marker:
+    pass
+
 struct SharedForeign:
     pointer: *var i32
 
-impl Transfer for SharedForeign:
+unsafe impl Marker for SharedForeign:
     pass
 
 fn main() -> ():
     pass
 "#,
-        "must be declared `unsafe impl`",
+        "`unsafe impl` is not part of the language",
     );
 }

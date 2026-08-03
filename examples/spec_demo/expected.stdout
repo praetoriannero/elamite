@@ -12,23 +12,28 @@ city after replacement: Beacon
 city after mutation: Cove
 coordinate sum: 10
 ptr was null
+pointer traversal: 12, indexed: 6
+null orders first: true
 chain length: 2
 tuple summary: true / build
 recovered bound status: inherent inactive
 recovered unbound status: inherent inactive
 inherent inactive / trait inactive / toggle / trait inactive
 function reference result: 42
+closure result: 42
 stored function reference result: 42
 same function: true
 transform result: 42
 is_even(4): true
 fixed array first element: 1
 copied element: 3, vector element: 2
+shallow vector: 9 / 4 / 5
+joined shared value: 21
 apply_offset result: 42
 retry 0
 retry 1
-map entries: 2, set entries: 2
-value 1
+map entries: 3, set entries: 3
+value 9
 value 3
 value 3
 value 4

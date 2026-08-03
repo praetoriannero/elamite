@@ -28,7 +28,6 @@ pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.panic",
     "std.trap",
     "std.Result",
-    "std.Transfer",
     "std.io.IoError",
     "std.testing.RuntimeTrap",
     "std.testing.BuiltinTrap",
@@ -192,7 +191,7 @@ pub const INTRINSICS: &[Intrinsic] = &[
     },
     Intrinsic {
         path: "std.thread.spawn",
-        reason: "native thread creation and callable transfer lowering",
+        reason: "native thread creation and shallow callable publication",
     },
     Intrinsic {
         path: "std.sync.Sender",

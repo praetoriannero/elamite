@@ -591,12 +591,6 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc_atomic(length + 1U);\n\
              \x20\x20\x20\x20return result;\n\
              }\n\
-             el_string el_copy_string(el_string value) {\n\
-             \x20\x20\x20\x20el_string copy = el_string_allocate(value.length);\n\
-             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy((char *)copy.bytes, value.bytes, value.length);\n\
-             \x20\x20\x20\x20((char *)copy.bytes)[copy.length] = '\\0';\n\
-             \x20\x20\x20\x20return copy;\n\
-             }\n\
              char *el_string_make_mut(el_string *value) {\n\
              \x20\x20\x20\x20if (value->bytes == NULL) { *value = el_string_allocate(0U); ((char *)value->bytes)[0] = '\\0'; }\n\
              \x20\x20\x20\x20return (char *)value->bytes;\n\
@@ -1421,6 +1415,10 @@ impl<'a> CEmitter<'a> {
     }
 
     fn emit_thread_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        // POSIX thread creation and join are the concrete release/acquire
+        // boundaries for the source-level start and completion edges in
+        // `docs/spec.md` 10.4. Keep result publication before entry return and
+        // result consumption after `pthread_join`.
         let thread_calls = calls
             .iter()
             .filter(|(operation, _)| {
@@ -1545,7 +1543,6 @@ impl<'a> CEmitter<'a> {
             return_c
         };
         let state_name = format!("{}_data", collection_type_name(thread));
-        let copy_result = (!never).then(|| copy_helper_name(self.resolve_alias(return_type)));
         let join_name = standard_call_name(StandardCall::ThreadJoin {
             thread,
             return_type,
@@ -1557,10 +1554,10 @@ impl<'a> CEmitter<'a> {
              static void {join_name}_shutdown(void *raw) {{\n    {thread_c} state = ({thread_c})raw;\n    (void)pthread_mutex_lock(&state->join_lock);\n    if (!state->joined) {{ (void)pthread_join(state->thread, NULL); state->joined = true; }}\n    (void)pthread_mutex_unlock(&state->join_lock);\n    el_thread_unregister(state);\n}}\n"
         );
         if needs_join {
-            if let Some(copy_result) = copy_result {
+            if !never {
                 let _ = writeln!(
                     self.output,
-                    "static {return_c} {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state);\n    return {copy_result}(state->result);\n}}\n"
+                    "static {return_c} {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state);\n    return state->result;\n}}\n"
                 );
             } else {
                 let _ = writeln!(
@@ -1648,7 +1645,6 @@ impl<'a> CEmitter<'a> {
             thread,
             return_type,
         });
-        let copy_callable = copy_helper_name(self.resolve_alias(callable));
         let _ = writeln!(
             self.output,
             "typedef struct {context_name} {{ {thread_c} state; {callable_c} body; }} {context_name};\n\
@@ -1659,7 +1655,7 @@ impl<'a> CEmitter<'a> {
         self.emit_runtime_allocate("context", "sizeof(*context)", AllocationClass::Scanned);
         let _ = writeln!(
             self.output,
-            "    state->joined = false; state->finished = false; context->state = state; context->body = {copy_callable}(body); state->startup = context;\n    (void)pthread_mutex_init(&state->join_lock, NULL); (void)pthread_mutex_init(&state->status_lock, NULL);\n    status = pthread_create(&state->thread, NULL, {spawn_name}_entry, context);\n    if (status != 0) {{\n        state->startup = NULL; (void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock);\n        outcome.tag = UINT32_C({});\n        outcome.payload.{}.{} = ({error_c}){{ .tag = UINT32_C({}) }};\n        return outcome;\n    }}\n    el_thread_register(state, {join_name}_shutdown);\n    outcome.tag = UINT32_C({});\n    outcome.payload.{}.{} = state;\n    return outcome;\n}}\n",
+            "    state->joined = false; state->finished = false; context->state = state; context->body = body; state->startup = context;\n    (void)pthread_mutex_init(&state->join_lock, NULL); (void)pthread_mutex_init(&state->status_lock, NULL);\n    status = pthread_create(&state->thread, NULL, {spawn_name}_entry, context);\n    if (status != 0) {{\n        state->startup = NULL; (void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock);\n        outcome.tag = UINT32_C({});\n        outcome.payload.{}.{} = ({error_c}){{ .tag = UINT32_C({}) }};\n        return outcome;\n    }}\n    el_thread_register(state, {join_name}_shutdown);\n    outcome.tag = UINT32_C({});\n    outcome.payload.{}.{} = state;\n    return outcome;\n}}\n",
             err_variant.index(),
             variant_member_name(err_variant),
             field_name(*err_field),
@@ -1682,6 +1678,9 @@ impl<'a> CEmitter<'a> {
     }
 
     fn emit_channel_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        // The queue mutex publishes writes sequenced before a successful send
+        // to the matching receiver. Condition variables provide blocking and
+        // wakeup only; the mutex unlock/lock pair owns the ordering edge.
         let mut elements = BTreeSet::new();
         for operation in calls.keys() {
             match operation {
@@ -1761,7 +1760,6 @@ impl<'a> CEmitter<'a> {
         let receiver_c = receiver.and_then(|receiver| self.c_type(receiver, None));
         let state = format!("el_channel_t{}_data", element.index());
         let node = format!("el_channel_t{}_node", element.index());
-        let copy = copy_helper_name(element);
         let _ = writeln!(
             self.output,
             "typedef struct {node} {{ {element_c} value; struct {node} *next; }} {node};\n\
@@ -1885,7 +1883,7 @@ impl<'a> CEmitter<'a> {
             let _ = writeln!(
                 self.output,
                 "    message = ({node} *)el_runtime_alloc(sizeof(*message));\n    \
-                 if (message == NULL) el_out_of_memory();\n    message->value = {copy}(value); \
+                 if (message == NULL) el_out_of_memory();\n    message->value = value; \
                  message->next = NULL;\n    if (channel->tail == NULL) channel->head = message; \
                  else channel->tail->next = message;\n    channel->tail = message; \
                  ++channel->count;\n    (void)pthread_cond_signal(&channel->readable);"
@@ -2022,6 +2020,8 @@ impl<'a> CEmitter<'a> {
     }
 
     fn emit_mutex_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        // These critical sections also serve as programmer-visible ordering
+        // tokens for ordinary shared storage outside `state->value`.
         let mut mutexes = BTreeMap::new();
         for operation in calls.keys() {
             match operation {
@@ -2043,7 +2043,6 @@ impl<'a> CEmitter<'a> {
                 continue;
             };
             let state = format!("{}_data", collection_type_name(mutex));
-            let copy = copy_helper_name(self.resolve_alias(value_type));
             let _ = writeln!(
                 self.output,
                 "struct {state} {{ pthread_mutex_t lock; {value_c} value; }};\n"
@@ -2059,7 +2058,7 @@ impl<'a> CEmitter<'a> {
                 let _ = writeln!(
                     self.output,
                     "    (void)pthread_mutex_init(&state->lock, NULL); state->value = \
-                     {copy}(value); return state;\n}}\n"
+                     value; return state;\n}}\n"
                 );
             }
             let operation = StandardCall::MutexRead { mutex, value_type };
@@ -2067,7 +2066,7 @@ impl<'a> CEmitter<'a> {
                 let _ = writeln!(
                     self.output,
                     "static {value_c} {}({mutex_c} state) {{\n    {value_c} value; \
-                     (void)pthread_mutex_lock(&state->lock); value = {copy}(state->value); \
+                     (void)pthread_mutex_lock(&state->lock); value = state->value; \
                      (void)pthread_mutex_unlock(&state->lock); return value;\n}}\n",
                     standard_call_name(operation)
                 );
@@ -2078,7 +2077,7 @@ impl<'a> CEmitter<'a> {
                     self.output,
                     "static {value_c} {}({mutex_c} state, {value_c} replacement) {{\n    \
                      {value_c} previous; (void)pthread_mutex_lock(&state->lock); \
-                     previous = {copy}(state->value); state->value = {copy}(replacement); \
+                     previous = state->value; state->value = replacement; \
                      (void)pthread_mutex_unlock(&state->lock); return previous;\n}}\n",
                     standard_call_name(operation)
                 );
@@ -2106,16 +2105,16 @@ impl<'a> CEmitter<'a> {
                     self_type: None,
                 });
                 let invocation = if *closure_entry {
-                    format!("{symbol}(body, {copy}(state->value))")
+                    format!("{symbol}(body, state->value)")
                 } else {
-                    format!("{symbol}({copy}(state->value))")
+                    format!("{symbol}(state->value)")
                 };
                 let _ = writeln!(
                     self.output,
                     "static {value_c} {}({mutex_c} state, {callable_c} body) {{\n    \
                      {value_c} replacement; (void)body; \
                      (void)pthread_mutex_lock(&state->lock); replacement = {invocation}; \
-                     state->value = {copy}(replacement); replacement = {copy}(state->value); \
+                     state->value = replacement; replacement = state->value; \
                      (void)pthread_mutex_unlock(&state->lock); return replacement;\n}}\n",
                     standard_call_name(*operation)
                 );
@@ -2124,6 +2123,9 @@ impl<'a> CEmitter<'a> {
     }
 
     fn emit_atomic_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        // Every operation is a synchronous mutex-protected linearization
+        // point. This deliberately implements the source SC contract without
+        // requiring C11 `_Atomic` or exposing weaker orderings.
         let mut atomics = BTreeMap::new();
         for operation in calls.keys() {
             match operation {
@@ -3511,358 +3513,6 @@ impl<'a> CEmitter<'a> {
         );
         self.emitting_hash_helpers.remove(&ty);
         self.emitted_hash_helpers.insert(ty);
-    }
-
-    pub(super) fn emit_copy_helper(&mut self, ty: TypeId, span: Option<Span>) {
-        let ty = self.resolve_alias(ty);
-        if self.emitted_copy_helpers.contains(&ty) || !self.emitting_copy_helpers.insert(ty) {
-            return;
-        }
-        let kind = self.typed.types.kind(ty).clone();
-        let strategy = logical_copy_strategy(&self.typed.types, ty);
-        match &kind {
-            TypeKind::Tuple(elements) => {
-                for element in elements {
-                    self.emit_copy_helper(*element, span);
-                }
-            }
-            TypeKind::Array { element, .. } => self.emit_copy_helper(*element, span),
-            TypeKind::Nominal { .. } => {
-                if let Some(structure) = self.structs.get(&ty).copied() {
-                    for (_, _, field_type) in &structure.fields {
-                        self.emit_copy_helper(*field_type, span);
-                    }
-                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
-                    for variant in &enumeration.variants {
-                        for (_, _, field_type) in &variant.fields {
-                            self.emit_copy_helper(*field_type, span);
-                        }
-                    }
-                }
-            }
-            TypeKind::Builtin { builtin, arguments } => {
-                if !matches!(
-                    self.resolved.builtin_name(*builtin),
-                    "Identity"
-                        | "ForeignRoot"
-                        | "ForeignRootMut"
-                        | "Thread"
-                        | "Sender"
-                        | "Receiver"
-                        | "Mutex"
-                        | "AtomicBool"
-                        | "AtomicI32"
-                        | "AtomicUsize"
-                ) {
-                    for argument in arguments {
-                        self.emit_copy_helper(*argument, span);
-                    }
-                }
-            }
-            TypeKind::Closure { captures, .. } => {
-                for capture in captures {
-                    self.emit_copy_helper(*capture, span);
-                }
-            }
-            _ => {}
-        }
-        let Some(c_type) = self.c_type(ty, span) else {
-            self.emitting_copy_helpers.remove(&ty);
-            return;
-        };
-        let name = copy_helper_name(ty);
-        let _ = writeln!(self.output, "{c_type} {name}({c_type} value) {{");
-        match kind {
-            TypeKind::Primitive(PrimitiveType::String) => {
-                self.output.push_str("    return el_copy_string(value);\n");
-            }
-            TypeKind::Tuple(elements) => {
-                let _ = writeln!(self.output, "    {c_type} result = {{0}};");
-                if elements.is_empty() {
-                    self.output.push_str("    (void)value;\n");
-                }
-                for (index, element) in elements.iter().enumerate() {
-                    let helper = copy_helper_name(self.resolve_alias(*element));
-                    let _ = writeln!(
-                        self.output,
-                        "    result.v{index} = {helper}(value.v{index});"
-                    );
-                }
-                self.output.push_str("    return result;\n");
-            }
-            TypeKind::Array { element, length } => {
-                if length == 0 {
-                    let _ = writeln!(self.output, "    (void)value;\n    return ({c_type}){{0}};");
-                } else {
-                    let helper = copy_helper_name(self.resolve_alias(element));
-                    let _ = writeln!(
-                        self.output,
-                        "    {c_type} result = {{0}};\n    size_t index;"
-                    );
-                    let _ = writeln!(
-                        self.output,
-                        "    for (index = 0U; index < {length}U; ++index) {{"
-                    );
-                    let _ = writeln!(
-                        self.output,
-                        "        result.values[index] = {helper}(value.values[index]);"
-                    );
-                    self.output.push_str("    }\n    return result;\n");
-                }
-            }
-            TypeKind::Nominal { .. } => {
-                if let Some(structure) = self.structs.get(&ty).copied() {
-                    let _ = writeln!(self.output, "    {c_type} result = {{0}};");
-                    if structure.fields.is_empty() {
-                        self.output.push_str("    (void)value;\n");
-                    }
-                    for (field, _, field_type) in &structure.fields {
-                        let helper = copy_helper_name(self.resolve_alias(*field_type));
-                        let field = field_name(*field);
-                        let _ =
-                            writeln!(self.output, "    result.{field} = {helper}(value.{field});");
-                    }
-                    self.output.push_str("    return result;\n");
-                } else if let Some(enumeration) = self.enums.get(&ty).copied() {
-                    let _ = writeln!(
-                        self.output,
-                        "    {c_type} result = {{0}};\n    result.tag = value.tag;\n    switch (value.tag) {{"
-                    );
-                    for variant in &enumeration.variants {
-                        let _ = writeln!(self.output, "    case UINT32_C({}):", variant.id.index());
-                        for (field, _, field_type) in &variant.fields {
-                            let helper = copy_helper_name(self.resolve_alias(*field_type));
-                            let member = variant_member_name(variant.id);
-                            let field = field_name(*field);
-                            let _ = writeln!(
-                                self.output,
-                                "        result.payload.{member}.{field} = \
-                                 {helper}(value.payload.{member}.{field});"
-                            );
-                        }
-                        self.output.push_str("        break;\n");
-                    }
-                    self.output
-                        .push_str("    default: abort();\n    }\n    return result;\n");
-                } else {
-                    self.output.push_str("    return value;\n");
-                }
-            }
-            TypeKind::Builtin { builtin, arguments } => {
-                match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
-                    ("Vec", [element]) => {
-                        let element_type = self
-                            .c_type(*element, span)
-                            .unwrap_or_else(|| "uint8_t".to_string());
-                        let helper = copy_helper_name(self.resolve_alias(*element));
-                        self.output.push_str(&format!(
-                            "    {c_type} result = {{0}};\n\
-                                 \x20   result.length = value.length;\n\
-                                 \x20   result.capacity = value.length;\n\
-                                 \x20   if (value.length != 0U) {{\n"
-                        ));
-                        let bytes = format!("value.length * sizeof({element_type})");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result.values",
-                            byte_count: &bytes,
-                            class: if self.scanned_allocation(*element) {
-                                AllocationClass::Scanned
-                            } else {
-                                AllocationClass::PointerFree
-                            },
-                        });
-                        let _ = writeln!(
-                            self.output,
-                            "        if (result.values == NULL) el_out_of_memory();\n\
-                             \x20       for (uintptr_t index = 0U; index < value.length; ++index) \
-                             result.values[index] = {helper}(value.values[index]);\n\
-                             \x20   }}\n    return result;"
-                        );
-                    }
-                    ("Set", [element]) => {
-                        let element_type = self
-                            .c_type(*element, span)
-                            .unwrap_or_else(|| "uint8_t".to_string());
-                        let helper = copy_helper_name(self.resolve_alias(*element));
-                        let _ = writeln!(self.output, "    {c_type} result;");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result",
-                            byte_count: "sizeof(*result)",
-                            class: AllocationClass::Scanned,
-                        });
-                        self.output.push_str(
-                            "    if (result == NULL) el_out_of_memory();\n\
-                             \x20   result->length = value->length;\n\
-                             \x20   result->capacity = value->length;\n\
-                             \x20   result->values = NULL;\n\
-                             \x20   if (value->length != 0U) {\n",
-                        );
-                        let bytes = format!("value->length * sizeof({element_type})");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result->values",
-                            byte_count: &bytes,
-                            class: if self.scanned_allocation(*element) {
-                                AllocationClass::Scanned
-                            } else {
-                                AllocationClass::PointerFree
-                            },
-                        });
-                        let _ = writeln!(
-                            self.output,
-                            "        if (result->values == NULL) el_out_of_memory();\n\
-                             \x20       for (uintptr_t index = 0U; index < value->length; ++index) \
-                             result->values[index] = {helper}(value->values[index]);\n\
-                             \x20   }}\n    return result;"
-                        );
-                    }
-                    ("Map", [key, value_type]) => {
-                        let key_c_type = self
-                            .c_type(*key, span)
-                            .unwrap_or_else(|| "uint8_t".to_string());
-                        let value_c_type = self
-                            .c_type(*value_type, span)
-                            .unwrap_or_else(|| "uint8_t".to_string());
-                        let key_helper = copy_helper_name(self.resolve_alias(*key));
-                        let value_helper = copy_helper_name(self.resolve_alias(*value_type));
-                        let _ = writeln!(self.output, "    {c_type} result;");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result",
-                            byte_count: "sizeof(*result)",
-                            class: AllocationClass::Scanned,
-                        });
-                        self.output.push_str(
-                            "    if (result == NULL) el_out_of_memory();\n\
-                             \x20   result->length = value->length;\n\
-                             \x20   result->capacity = value->length;\n\
-                             \x20   result->keys = NULL;\n\
-                             \x20   result->values = NULL;\n\
-                             \x20   if (value->length != 0U) {\n",
-                        );
-                        let key_bytes = format!("value->length * sizeof({key_c_type})");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result->keys",
-                            byte_count: &key_bytes,
-                            class: if self.scanned_allocation(*key) {
-                                AllocationClass::Scanned
-                            } else {
-                                AllocationClass::PointerFree
-                            },
-                        });
-                        let value_bytes = format!("value->length * sizeof({value_c_type})");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result->values",
-                            byte_count: &value_bytes,
-                            class: if self.scanned_allocation(*value_type) {
-                                AllocationClass::Scanned
-                            } else {
-                                AllocationClass::PointerFree
-                            },
-                        });
-                        let _ = writeln!(
-                            self.output,
-                            "        if (result->keys == NULL || result->values == NULL) \
-                             el_out_of_memory();\n\
-                             \x20       for (uintptr_t index = 0U; index < value->length; ++index) \
-                             {{\n\
-                             \x20           result->keys[index] = \
-                             {key_helper}(value->keys[index]);\n\
-                             \x20           result->values[index] = \
-                             {value_helper}(value->values[index]);\n\
-                             \x20       }}\n\
-                             \x20   }}\n    return result;"
-                        );
-                    }
-                    (
-                        "Identity" | "ForeignRoot" | "ForeignRootMut" | "Thread" | "Sender"
-                        | "Receiver" | "Mutex",
-                        [_],
-                    ) => self.output.push_str("    return value;\n"),
-                    ("AtomicBool" | "AtomicI32" | "AtomicUsize", []) => {
-                        self.output.push_str("    return value;\n")
-                    }
-                    ("Formatter", []) => {
-                        let _ = writeln!(self.output, "    {c_type} result;");
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result",
-                            byte_count: "sizeof(*result)",
-                            class: AllocationClass::Scanned,
-                        });
-                        self.output.push_str(
-                            "    if (result == NULL) el_out_of_memory();\n\
-                             \x20   result->length = value->length;\n\
-                             \x20   result->capacity = value->length;\n\
-                             \x20   result->bytes = NULL;\n\
-                             \x20   if (value->length != 0U) {\n",
-                        );
-                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                            destination: "result->bytes",
-                            byte_count: "value->length + 1U",
-                            class: AllocationClass::PointerFree,
-                        });
-                        self.output.push_str(
-                            "        if (result->bytes == NULL) el_out_of_memory();\n\
-                             \x20       el_cost_memcpy(result->bytes, value->bytes, value->length);\n\
-                             \x20       result->bytes[value->length] = '\\0';\n\
-                             \x20   }\n\
-                             \x20   return result;\n",
-                        );
-                    }
-                    _ => {
-                        self.type_error(
-                            ty,
-                            span,
-                            "this builtin runtime type has no logical-copy operation",
-                        );
-                        self.output.push_str("    abort();\n");
-                    }
-                }
-            }
-            TypeKind::Closure { captures, .. } => {
-                self.output
-                    .push_str("    if (value == NULL) return NULL;\n");
-                let _ = writeln!(self.output, "    {c_type} result;");
-                self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                    destination: "result",
-                    byte_count: "sizeof(*result)",
-                    class: if captures
-                        .iter()
-                        .any(|capture| self.scanned_allocation(*capture))
-                    {
-                        AllocationClass::Scanned
-                    } else {
-                        AllocationClass::PointerFree
-                    },
-                });
-                self.output
-                    .push_str("    if (result == NULL) el_out_of_memory();\n");
-                for (index, capture) in captures.iter().enumerate() {
-                    let helper = copy_helper_name(self.resolve_alias(*capture));
-                    let _ = writeln!(
-                        self.output,
-                        "    result->v{index} = {helper}(value->v{index});"
-                    );
-                }
-                self.output.push_str("    return result;\n");
-            }
-            _ if matches!(
-                strategy,
-                LogicalCopyStrategy::Trivial | LogicalCopyStrategy::PreserveIdentity
-            ) =>
-            {
-                self.output.push_str("    return value;\n")
-            }
-            _ => {
-                self.type_error(
-                    ty,
-                    span,
-                    "this runtime representation has no logical-copy operation",
-                );
-                self.output.push_str("    abort();\n");
-            }
-        }
-        self.output.push_str("}\n\n");
-        self.emitting_copy_helpers.remove(&ty);
-        self.emitted_copy_helpers.insert(ty);
     }
 }
 

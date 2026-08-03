@@ -1,5 +1,5 @@
 43
-transfer=1:1:2:true
+shallow=1:1:2:7:true
 ordinary result
 true
 empty

@@ -4,13 +4,10 @@
 >
 > Version: 0.10.0-draft
 >
-> This document is the normative 0.10 design. The compiler has implemented
-> shallow ordinary-copy lowering but retains transitional 0.9 collection,
-> concurrency, and pointer behavior until the ordered migration in
-> [roadmap.md](roadmap.md) completes. Its version identity and current
-> [specification demonstration](../examples/spec_demo.elx) remain 0.9 rather
-> than claiming partial conformance. Ambiguities and internal inconsistencies
-> that still need decisions are listed in [issues.md](issues.md).
+> This document is the normative 0.10 design targeted by the compiler and the
+> authoritative [specification demonstration](../examples/spec_demo.elx).
+> Ambiguities and internal inconsistencies that still need decisions are listed
+> in [issues.md](issues.md).
 
 ## 1. Overview
 

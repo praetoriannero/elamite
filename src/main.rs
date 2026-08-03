@@ -27,7 +27,7 @@ use elamite::source::SourceManager;
 #[derive(Debug, Parser)]
 #[command(
     name = "elamc",
-    version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.9.0-draft)"),
+    version = concat!(env!("CARGO_PKG_VERSION"), " (SPEC 0.10.0-draft)"),
     about = "The Elamite programming language compiler",
     arg_required_else_help = true,
     args_conflicts_with_subcommands = true,

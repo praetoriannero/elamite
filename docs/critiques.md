@@ -48,12 +48,12 @@ particular is a decision most languages get wrong and can never reverse.
 
 ## 2. Principal critique: copy costs have no normative guarantee
 
-> Current response: resolved by the 0.10 design and partially implemented.
-> Ordinary copies are normatively shallow; `Vec` copies its fixed-size
-> descriptor, and `Map`/`Set` preserve table identity. Shallow ordinary-copy
-> lowering has landed; the vector descriptor and remaining concurrency
-> migrations are tracked in `roadmap.md`, while `cost_model.md` records the
-> transitional implementation honestly.
+> Current response: resolved and implemented by the 0.10 design. Ordinary
+> copies are normatively shallow; `Vec` copies its fixed-size descriptor,
+> `Map`/`Set` preserve table identity, and thread/channel/mutex publication uses
+> the same shallow rule. `cost_model.md` records the achieved implementation
+> and final comparable measurements. The critique below is retained as the
+> historical analysis that motivated the revision.
 
 ### 2.1 The gap
 

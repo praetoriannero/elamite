@@ -950,7 +950,6 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
             "Set",
             "StableHash",
             "String",
-            "Transfer",
             "Vec",
             "bool",
             "char",

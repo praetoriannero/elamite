@@ -281,7 +281,7 @@ impl<'a> FunctionLowerer<'a> {
                         span: source_span,
                     });
                     let right = self.lower_expression(value);
-                    let operator = assignment_binary(*operator);
+                    let operator = assignment_binary(*operator, place_type, self.types);
                     let result = self.temp(place_type);
                     self.emit(Instruction::Assign {
                         destination: result,
@@ -472,6 +472,16 @@ impl<'a> FunctionLowerer<'a> {
             }),
             span,
         });
+        // The hidden loop state snapshots both the shallow iterable value and
+        // its iteration length exactly once. For Vec this is the copied
+        // descriptor's local length. Map/Set structural mutation remains UB,
+        // so no defined program can change this bound while the loop is live.
+        let length = self.temp(usize_type);
+        self.emit(Instruction::Assign {
+            destination: length,
+            value: Rvalue::CollectionLength { collection, kind },
+            span,
+        });
         let condition_block = self.new_block();
         let body_block = self.new_block();
         let increment_block = self.new_block();
@@ -479,12 +489,6 @@ impl<'a> FunctionLowerer<'a> {
         self.terminate(Terminator::Goto(condition_block));
 
         self.current = condition_block;
-        let length = self.temp(usize_type);
-        self.emit(Instruction::Assign {
-            destination: length,
-            value: Rvalue::CollectionLength { collection, kind },
-            span,
-        });
         let condition = self.temp(bool_type);
         self.emit(Instruction::Assign {
             destination: condition,
@@ -1669,7 +1673,7 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn logical_copy_facts(&self, ty: TypeId, context: LogicalCopyContext) -> LogicalCopyFacts {
-        let allocation = logical_copy_allocation(&self.types.types, ty, context.purpose);
+        let allocation = logical_copy_allocation(&self.types.types, ty);
         LogicalCopyFacts {
             context,
             allocation,
@@ -1846,8 +1850,18 @@ fn base_expression_type(kind: &TypedExpressionKind) -> TypeId {
     }
 }
 
-fn assignment_binary(operator: AssignmentOperator) -> BinaryOperator {
+fn assignment_binary(
+    operator: AssignmentOperator,
+    place_type: TypeId,
+    types: &TypedProgram,
+) -> BinaryOperator {
+    let pointer = matches!(
+        expanded_kind(&types.types, place_type),
+        TypeKind::RawPointer { .. }
+    );
     match operator {
+        AssignmentOperator::Add if pointer => BinaryOperator::PointerOffsetAdd,
+        AssignmentOperator::Subtract if pointer => BinaryOperator::PointerOffsetSubtract,
         AssignmentOperator::Add => BinaryOperator::Add,
         AssignmentOperator::Subtract => BinaryOperator::Subtract,
         AssignmentOperator::Multiply => BinaryOperator::Multiply,
@@ -1875,11 +1889,11 @@ fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{LogicalCopyStrategy, logical_copy_allocation, logical_copy_strategy};
-    use crate::operations::{LogicalCopyAllocation, LogicalCopyPurpose};
+    use crate::operations::LogicalCopyAllocation;
     use crate::types::{Mutability, PrimitiveType, TypeContext, TypeKind};
 
     #[test]
-    fn ordinary_copies_are_shallow_while_transfer_strategy_remains_recursive() {
+    fn every_logical_copy_uses_the_shallow_value_contract() {
         let mut types = TypeContext::new();
         let integer = types.primitive(PrimitiveType::I32);
         let string = types.primitive(PrimitiveType::String);
@@ -1915,24 +1929,16 @@ mod tests {
         );
 
         assert_eq!(
-            logical_copy_allocation(&types, tuple, LogicalCopyPurpose::Ordinary),
+            logical_copy_allocation(&types, tuple),
             LogicalCopyAllocation::Shallow
         );
         assert_eq!(
-            logical_copy_allocation(&types, tuple, LogicalCopyPurpose::Transfer),
-            LogicalCopyAllocation::Recursive
-        );
-        assert_eq!(
-            logical_copy_allocation(&types, reference, LogicalCopyPurpose::Ordinary),
+            logical_copy_allocation(&types, reference),
             LogicalCopyAllocation::PreserveIdentity
         );
         assert_eq!(
-            logical_copy_allocation(&types, string, LogicalCopyPurpose::Ordinary),
+            logical_copy_allocation(&types, string),
             LogicalCopyAllocation::SharedBacking
-        );
-        assert_eq!(
-            logical_copy_allocation(&types, string, LogicalCopyPurpose::Transfer),
-            LogicalCopyAllocation::Recursive
         );
     }
 }

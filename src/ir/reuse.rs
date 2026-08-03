@@ -208,9 +208,6 @@ fn optimize_expression(
     let Some(facts) = &mut expression.copy else {
         return;
     };
-    if facts.context.purpose != LogicalCopyPurpose::Ordinary {
-        return;
-    }
     let fresh_temporary = facts.context.source_lifetime == LogicalCopyLifetime::Temporary;
     let dead_return_local = allow_local_return
         && facts.context.kind == LogicalCopyKind::Return

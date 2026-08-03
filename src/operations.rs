@@ -45,15 +45,6 @@ pub enum LogicalCopyLifetime {
     SynchronizedStorage,
 }
 
-/// Whether a copy is ordinary language value semantics or a cross-thread
-/// transfer boundary. The generated helpers remain shared until the roadmap's
-/// later ordinary/transfer separation work package.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LogicalCopyPurpose {
-    Ordinary,
-    Transfer,
-}
-
 /// Facts known while checking, before the concrete value type is available to
 /// classify the copy's allocation behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -61,7 +52,6 @@ pub struct LogicalCopyContext {
     pub kind: LogicalCopyKind,
     pub source_lifetime: LogicalCopyLifetime,
     pub destination_lifetime: LogicalCopyLifetime,
-    pub purpose: LogicalCopyPurpose,
 }
 
 impl LogicalCopyContext {
@@ -75,21 +65,6 @@ impl LogicalCopyContext {
             kind,
             source_lifetime,
             destination_lifetime,
-            purpose: LogicalCopyPurpose::Ordinary,
-        }
-    }
-
-    #[must_use]
-    pub const fn transfer(
-        kind: LogicalCopyKind,
-        source_lifetime: LogicalCopyLifetime,
-        destination_lifetime: LogicalCopyLifetime,
-    ) -> Self {
-        Self {
-            kind,
-            source_lifetime,
-            destination_lifetime,
-            purpose: LogicalCopyPurpose::Transfer,
         }
     }
 }
@@ -104,7 +79,6 @@ pub enum LogicalCopyAllocation {
     /// Copies one complete inline C representation without recursively
     /// duplicating managed backing reached through its fields.
     Shallow,
-    Recursive,
     SharedBacking,
     RuntimeManaged,
 }

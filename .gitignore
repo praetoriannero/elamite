@@ -3,3 +3,6 @@
 
 # Generated example artifacts
 /examples/*/build/
+
+# Generated experiment artifacts
+/experiments/*/build/

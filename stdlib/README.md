@@ -10,11 +10,12 @@ Keep the manifest and source tree valid as an ordinary `lib` package. Moving an
 entity out of the intrinsic catalog requires source declarations plus
 behavioral and diagnostic compatibility tests.
 
-Native concurrency follows `docs/spec.md` Section 10.4. Public declarations live in
-`std.thread` and `std.sync`; only native representation, transfer-copy, thread,
+Native concurrency follows `docs/spec.md` Section 10.4. Public declarations live
+in `std.thread` and `std.sync`; only native representation, publication, thread,
 queue, mutex, atomic, and collector-registration hooks remain intrinsic.
-Ordinary values cross threads as independent `Transfer` copies, while reviewed
-synchronization handles explicitly preserve shared identity.
+Thread environments, join results, and channel messages use ordinary shallow
+copies. Synchronization safely publishes those immediate representations but
+does not detach mutable backing or prevent later data races.
 
 The intrinsic method surface is:
 

@@ -1,12 +1,12 @@
 # Elamite documentation
 
 Elamite is a statically typed, garbage-collected language that compiles to C99.
-The normative design is 0.10.0-draft. The compiler is in an ordered migration:
-ordinary copies use the 0.10 shallow contract, and collection representations
-implement the accepted mutable-sharing contract. Iteration
-invalidation, concurrency, and raw-pointer traversal still retain their 0.9
-implementation. The release/version identity and authoritative demonstration
-therefore remain 0.9 rather than claiming partial 0.10 conformance.
+The compiler targets and implements the normative 0.10.0-draft design. Ordinary
+values copy shallowly, collections use the accepted mutable-sharing contract,
+and iteration snapshots the shallow descriptor and bound once. Threads,
+channels, and mutexes publish those same shallow values under programmer-managed
+synchronization. Raw data pointers support the accepted unsafe arithmetic,
+indexing, subtraction, and null-low relational ordering surface.
 
 ## Documentation map
 
@@ -26,9 +26,8 @@ therefore remain 0.9 rather than claiming partial 0.10 conformance.
 - [`docs/proposals.md`](docs/proposals.md) and [`docs/critiques.md`](docs/critiques.md) preserve
   non-normative design history and review.
 
-The currently implemented 0.9 surface example is
-[`examples/spec_demo.elx`](examples/spec_demo.elx); it becomes authoritative
-for 0.10 only after the migration milestone completes. Focused packages cover
+The authoritative 0.10 behavior example is
+[`examples/spec_demo.elx`](examples/spec_demo.elx). Focused packages cover
 [`closures`](examples/closures), [`macros`](examples/macros),
 [`concurrency`](examples/concurrency), [C FFI](examples/c_ffi),
 [`raylib`](examples/raylib), [`SDL2`](examples/sdl), and the

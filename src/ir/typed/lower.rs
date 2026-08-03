@@ -127,7 +127,7 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn copy_facts(&self, ty: TypeId, context: LogicalCopyContext) -> LogicalCopyFacts {
-        let allocation = logical_copy_allocation(&self.typed.types, ty, context.purpose);
+        let allocation = logical_copy_allocation(&self.typed.types, ty);
         LogicalCopyFacts {
             context,
             allocation,
@@ -1401,14 +1401,38 @@ impl<'a> TypedLowerer<'a> {
             }
             SyntaxKind::BinaryExpression => {
                 let nodes = child_nodes(node);
-                let operator = node.children.iter().find_map(|child| match child {
+                let syntax_operator = node.children.iter().find_map(|child| match child {
                     SyntaxElement::Token(token) => binary_operator(&token.kind),
                     SyntaxElement::Node(_) => None,
                 })?;
+                let left = self.lower_expression(*nodes.first()?)?;
+                let right = self.lower_expression(*nodes.get(1)?)?;
+                let operator = if matches!(self.expanded_kind(left.ty), TypeKind::RawPointer { .. })
+                {
+                    match syntax_operator {
+                        BinaryOperator::Add => BinaryOperator::PointerOffsetAdd,
+                        BinaryOperator::Subtract
+                            if matches!(
+                                self.expanded_kind(right.ty),
+                                TypeKind::RawPointer { .. }
+                            ) =>
+                        {
+                            BinaryOperator::PointerDistance
+                        }
+                        BinaryOperator::Subtract => BinaryOperator::PointerOffsetSubtract,
+                        BinaryOperator::Less => BinaryOperator::PointerLess,
+                        BinaryOperator::LessEqual => BinaryOperator::PointerLessEqual,
+                        BinaryOperator::Greater => BinaryOperator::PointerGreater,
+                        BinaryOperator::GreaterEqual => BinaryOperator::PointerGreaterEqual,
+                        _ => syntax_operator,
+                    }
+                } else {
+                    syntax_operator
+                };
                 TypedExpressionKind::Binary {
                     operator,
-                    left: Box::new(self.lower_expression(*nodes.first()?)?),
-                    right: Box::new(self.lower_expression(*nodes.get(1)?)?),
+                    left: Box::new(left),
+                    right: Box::new(right),
                 }
             }
             SyntaxKind::CastExpression => {
@@ -1485,9 +1509,26 @@ impl<'a> TypedLowerer<'a> {
                     TypedExpressionKind::FunctionReference(instance)
                 } else {
                     let nodes = child_nodes(node);
-                    TypedExpressionKind::Index {
-                        base: Box::new(self.lower_expression(*nodes.first()?)?),
-                        index: Box::new(self.lower_expression(*nodes.get(1)?)?),
+                    let base = self.lower_expression(*nodes.first()?)?;
+                    let index = self.lower_expression(*nodes.get(1)?)?;
+                    if matches!(self.expanded_kind(base.ty), TypeKind::RawPointer { .. }) {
+                        let pointer_type = base.ty;
+                        TypedExpressionKind::Dereference(Box::new(TypedExpression {
+                            ty: pointer_type,
+                            place: PlaceKind::Value,
+                            copy: None,
+                            span: node.span,
+                            kind: TypedExpressionKind::Binary {
+                                operator: BinaryOperator::PointerOffsetAdd,
+                                left: Box::new(base),
+                                right: Box::new(index),
+                            },
+                        }))
+                    } else {
+                        TypedExpressionKind::Index {
+                            base: Box::new(base),
+                            index: Box::new(index),
+                        }
                     }
                 }
             }
@@ -2335,12 +2376,32 @@ impl<'a> TypedLowerer<'a> {
             SyntaxKind::BracketExpression => {
                 let nodes = child_nodes(node);
                 let base_node = *nodes.first()?;
-                let index = self.lower_expression(*nodes.get(1)?)?;
                 let base_type = self
                     .checked
                     .expression_types
                     .get(&base_node.span)
                     .copied()?;
+                if matches!(self.expanded_kind(base_type), TypeKind::RawPointer { .. }) {
+                    let base = self.lower_expression(base_node)?;
+                    let pointer_type = base.ty;
+                    let index = self.lower_expression(*nodes.get(1)?)?;
+                    return Some(TypedPlace::Dereference {
+                        base: Box::new(TypedExpression {
+                            ty: pointer_type,
+                            place: PlaceKind::Value,
+                            copy: None,
+                            span: node.span,
+                            kind: TypedExpressionKind::Binary {
+                                operator: BinaryOperator::PointerOffsetAdd,
+                                left: Box::new(base),
+                                right: Box::new(index),
+                            },
+                        }),
+                        ty,
+                        span: node.span,
+                    });
+                }
+                let index = self.lower_expression(*nodes.get(1)?)?;
                 let kind = match self.expanded_kind(base_type) {
                     TypeKind::Array { length, .. } => IndexKind::Array { length: *length },
                     TypeKind::Slice(_) => IndexKind::Slice,

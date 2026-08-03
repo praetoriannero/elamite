@@ -617,19 +617,7 @@ impl<'a> CEmitter<'a> {
                 );
                 destination_name
             }
-            Rvalue::Copy { source, facts, .. } => {
-                if facts.context.purpose == LogicalCopyPurpose::Ordinary
-                    || facts.mode == LogicalCopyMode::ReuseSource
-                {
-                    temporary_name(*source)
-                } else {
-                    format!(
-                        "{}({})",
-                        copy_helper_name(self.resolve_alias(destination_type)),
-                        temporary_name(*source)
-                    )
-                }
-            }
+            Rvalue::Copy { source, .. } => temporary_name(*source),
             Rvalue::Discriminant(source) => format!("{}.tag", temporary_name(*source)),
             Rvalue::CompareEqual {
                 left,
@@ -841,6 +829,38 @@ impl<'a> CEmitter<'a> {
     ) -> Option<String> {
         let left = temporary_name(left);
         let right = temporary_name(right);
+        if operator == BinaryOperator::PointerDistance {
+            return Some(format!("((intptr_t)({left} - {right}))"));
+        }
+        if matches!(
+            operator,
+            BinaryOperator::PointerLess
+                | BinaryOperator::PointerLessEqual
+                | BinaryOperator::PointerGreater
+                | BinaryOperator::PointerGreaterEqual
+        ) {
+            let left_bytes = format!("((const unsigned char *){left})");
+            let right_bytes = format!("((const unsigned char *){right})");
+            return Some(match operator {
+                BinaryOperator::PointerLess => format!(
+                    "(({left} == NULL) ? ({right} != NULL) : \
+                     (({right} != NULL) && ({left_bytes} < {right_bytes})))"
+                ),
+                BinaryOperator::PointerLessEqual => format!(
+                    "(({left} == NULL) ? true : \
+                     (({right} != NULL) && ({left_bytes} <= {right_bytes})))"
+                ),
+                BinaryOperator::PointerGreater => format!(
+                    "(({right} == NULL) ? ({left} != NULL) : \
+                     (({left} != NULL) && ({left_bytes} > {right_bytes})))"
+                ),
+                BinaryOperator::PointerGreaterEqual => format!(
+                    "(({right} == NULL) ? true : \
+                     (({left} != NULL) && ({left_bytes} >= {right_bytes})))"
+                ),
+                _ => unreachable!("caller selected a pointer ordering operator"),
+            });
+        }
         if operator == BinaryOperator::Concatenate {
             if let Some(primitive) = self.typed.types.expanded_primitive(ty) {
                 return match primitive {

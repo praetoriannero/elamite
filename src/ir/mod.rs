@@ -25,8 +25,7 @@ use crate::check::{CheckedCall, CheckedProgram, TraitObjectCoercion};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::operations::{
     LogicalCopyContext, LogicalCopyFacts, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyMode,
-    LogicalCopyPurpose, NumericAlternative, NumericOutcome, ReceiverAdjustment, StandardCall,
-    ValuePassingMode,
+    NumericAlternative, NumericOutcome, ReceiverAdjustment, StandardCall, ValuePassingMode,
 };
 use crate::resolution::{
     DeclarationId, DeclarationKind, FieldId, ItemId, LocalBindingId, LocalBindingKind, MemberId,
@@ -85,8 +84,11 @@ pub enum UnaryOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOperator {
     Add,
+    PointerOffsetAdd,
     Concatenate,
     Subtract,
+    PointerOffsetSubtract,
+    PointerDistance,
     Multiply,
     Divide,
     Remainder,
@@ -101,6 +103,10 @@ pub enum BinaryOperator {
     LessEqual,
     Greater,
     GreaterEqual,
+    PointerLess,
+    PointerLessEqual,
+    PointerGreater,
+    PointerGreaterEqual,
     LogicalAnd,
     LogicalOr,
 }

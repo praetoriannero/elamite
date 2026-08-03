@@ -166,8 +166,24 @@ fn generated_c_is_clean_under_address_and_undefined_behavior_sanitizers() {
     let suite = Suite::new();
     suite.source_case(
         "sanitizers",
-        "fn main() -> ():\n    let values = [1, 2, 3, 4]\n    println(values[2])\n",
-        "3\n",
+        r#"fn main() -> ():
+    var values = [1, 2, 3, 4]
+    let whole: *var [i32; 4] = (&var values) as *var [i32; 4]
+    unsafe:
+        let first: *var i32 = whole as *var i32
+        first[1] = 5
+        println(first[1])
+        println(*(first + 2))
+        println((first + 4) - first)
+        let end = first + 4
+        var cursor = first
+        var sum = 0
+        while cursor < end:
+            sum += *cursor
+            cursor += 1
+        println(sum)
+"#,
+        "5\n3\n4\n13\n",
     );
     let report = run_suite(
         &suite.root,

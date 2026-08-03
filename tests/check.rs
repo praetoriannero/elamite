@@ -2253,6 +2253,245 @@ fn main() -> ():
 }
 
 #[test]
+fn raw_pointer_arithmetic_and_indexing_follow_the_unsafe_typed_contract() {
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    var values = [10, 20, 30, 40]
+    let whole: *var [i32; 4] = (&var values) as *var [i32; 4]
+    unsafe:
+        let first: *var i32 = whole as *var i32
+        let second = first + 1
+        let shared: *i32 = second as *i32
+        let distance: isize = shared - first
+        var cursor = first
+        cursor += 2
+        cursor -= 1
+        cursor[1] = 41
+        println(distance)
+"#,
+    );
+
+    for source in [
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    let bad = pointer + 1
+"#,
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    let bad = pointer[0]
+"#,
+        r#"
+fn main() -> ():
+    var value = 1
+    var pointer: *var i32 = (&var value) as *var i32
+    pointer += 1
+"#,
+    ] {
+        assert_has_category(source, Category::UnsafeContext);
+    }
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    let offset: usize = 1
+    unsafe:
+        let bad = pointer + offset
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var left = 1
+    var right = 2i64
+    let first: *var i32 = (&var left) as *var i32
+    let second: *var i64 = (&var right) as *var i64
+    unsafe:
+        let bad = first - second
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var empty: [i32; 0] = []
+    let pointer: *var [i32; 0] = (&var empty) as *var [i32; 0]
+    unsafe:
+        let bad = pointer + 1
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pointer: *std.ffi.CVoid = null
+    unsafe:
+        let bad = pointer + 1
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+@importc("opaque_t", "opaque.h")
+type Opaque
+
+fn main() -> ():
+    let pointer: *Opaque = null
+    unsafe:
+        let bad = pointer + 1
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn callback() -> ():
+    pass
+
+fn main() -> ():
+    let function: &fn() -> () = callback
+    let pointer: *fn() -> () = function as *fn() -> ()
+    unsafe:
+        let bad = pointer + 1
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    let pointer: *i32 = null
+    unsafe:
+        pointer[0] = 1
+"#,
+        Category::Place,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    unsafe:
+        let bad = (null as *i32)[0]
+"#,
+        Category::PointerValidity,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    unsafe:
+        let bad = ((null as *i32) + (2isize - 2isize))[0]
+"#,
+        Category::PointerValidity,
+    );
+}
+
+#[test]
+fn raw_pointer_relational_ordering_is_primitive_unsafe_and_typed() {
+    assert_no_diagnostics(
+        r#"
+@importc("opaque_t", "opaque.h")
+type Opaque
+
+fn compare_opaque(left: *Opaque, right: *var Opaque) -> bool:
+    unsafe:
+        return left <= right
+
+fn main() -> ():
+    var values = [10, 20]
+    let whole: *var [i32; 2] = (&var values) as *var [i32; 2]
+    unsafe:
+        let first: *var i32 = whole as *var i32
+        let second = first + 1
+        let shared_second: *i32 = second as *i32
+        let none: *i32 = null
+        let a = first < shared_second
+        let b = second <= shared_second
+        let c = shared_second > first
+        let d = shared_second >= second
+        let e = none < first
+        let f = first > none
+        let g = none <= null
+        let h = null < first
+
+        let bytes: *std.ffi.CVoid = first as *std.ffi.CVoid
+        let no_bytes: *std.ffi.CVoid = null
+        let i = no_bytes < bytes
+"#,
+    );
+
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    let bad = pointer < null
+"#,
+        Category::UnsafeContext,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var left = 1
+    var right = 2i64
+    let first: *var i32 = (&var left) as *var i32
+    let second: *var i64 = (&var right) as *var i64
+    unsafe:
+        let bad = first < second
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    var value = 1
+    let pointer: *var i32 = (&var value) as *var i32
+    unsafe:
+        let bad = pointer < 1
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn callback() -> ():
+    pass
+
+fn main() -> ():
+    let function: &fn() -> () = callback
+    let pointer: *fn() -> () = function as *fn() -> ()
+    unsafe:
+        let bad = pointer < null
+"#,
+        Category::ExpressionType,
+    );
+    assert_has_category(
+        r#"
+fn main() -> ():
+    unsafe:
+        let bad = null < null
+"#,
+        Category::ExpressionType,
+    );
+
+    // The common-live-extent rule is a runtime obligation. The compiler
+    // accepts unrelated non-null pointers but this fixture is never run.
+    assert_no_diagnostics(
+        r#"
+fn main() -> ():
+    var left = 1
+    var right = 2
+    let first: *var i32 = (&var left) as *var i32
+    let second: *var i32 = (&var right) as *var i32
+    unsafe:
+        let accepted_but_undefined_if_executed = first < second
+"#,
+    );
+}
+
+#[test]
 fn unsafe_only_operations_require_a_lexical_unsafe_block() {
     // M16.3: the lexical `unsafe:` block is the only unsafe context; an
     // `unsafe` function's body is deliberately not one.
@@ -2539,8 +2778,8 @@ fn named_function_references_do_not_directly_erase_to_callable_objects() {
 }
 
 #[test]
-fn concurrency_boundaries_reject_unsynchronized_aliases() {
-    let (sources, diagnostics) = check_diagnostics(
+fn concurrency_boundaries_accept_shared_aliases() {
+    assert_no_diagnostics(
         r#"
 fn main() -> ():
     let value = 7
@@ -2552,19 +2791,6 @@ fn main() -> ():
     let _ = std.sync.Mutex[&i32].new(borrowed)
 "#,
     );
-    let rendered = render(&sources, &diagnostics);
-    for needle in [
-        "spawned callable does not satisfy `Transfer`",
-        "channel elements must satisfy `Transfer`",
-        "mutex values must satisfy `Transfer`",
-    ] {
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains(needle)),
-            "missing `{needle}` in:\n{rendered}"
-        );
-    }
 }
 
 #[test]
@@ -2596,10 +2822,9 @@ fn main() -> ():
 }
 
 #[test]
-fn spawn_rejects_raw_pointer_and_trait_object_captures() {
-    for (source, description) in [
-        (
-            r#"
+fn spawn_accepts_raw_pointer_and_trait_object_captures() {
+    for source in [
+        r#"
 fn main() -> ():
     let value = 7
     let pointer = &value as *i32
@@ -2608,10 +2833,7 @@ fn main() -> ():
             return *pointer
     let _ = std.thread.spawn(worker)
 "#,
-            "raw pointer capture",
-        ),
-        (
-            r#"
+        r#"
 trait Read:
     fn read(self: &Self) -> i32
 
@@ -2629,16 +2851,7 @@ fn main() -> ():
         return erased.read()
     let _ = std.thread.spawn(worker)
 "#,
-            "trait-object capture",
-        ),
     ] {
-        let (sources, diagnostics) = check_diagnostics(source);
-        assert!(
-            diagnostics.iter().any(|diagnostic| diagnostic
-                .message
-                .contains("spawned callable does not satisfy `Transfer`")),
-            "{description} unexpectedly passed:\n{}",
-            render(&sources, &diagnostics)
-        );
+        assert_no_diagnostics(source);
     }
 }

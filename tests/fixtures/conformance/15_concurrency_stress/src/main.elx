@@ -78,3 +78,137 @@ fn main() -> ():
     receiver.close()
     println(total.read())
     println(received.load())
+
+    // Thread creation publishes writes sequenced before `spawn` to the new
+    // thread, even when the captured value reaches ordinary shared backing.
+    var start_values = @vec[11]
+    start_values[0] = 12
+    let read_started = fn[start_values]() -> i32:
+        return start_values[0]
+    match std.thread.spawn(read_started):
+        Result.Ok(thread):
+            println(thread.join())
+        Result.Err(_):
+            println("spawn unavailable")
+
+    // Completion and join publish a worker's ordinary writes back to the
+    // joining thread.
+    var joined_values = @vec[0]
+    let write_before_join = fn[joined_values as shared_values]() -> ():
+        var values = shared_values
+        values[0] = 13
+    match std.thread.spawn(write_before_join):
+        Result.Ok(thread):
+            thread.join()
+            println(joined_values[0])
+        Result.Err(_):
+            println("spawn unavailable")
+
+    // A matching channel send/receive pair publishes earlier writes; the
+    // message need not contain the storage being synchronized.
+    var channel_values = @vec[0]
+    let (publish_sender, publish_receiver) = std.sync.channel[bool](1)
+    let channel_writer = fn[channel_values as shared_values, publish_sender]() -> ():
+        var values = shared_values
+        values[0] = 14
+        let _ = publish_sender.send(true)
+    match std.thread.spawn(channel_writer):
+        Result.Ok(thread):
+            match publish_receiver.receive():
+                Option.Some(_):
+                    println(channel_values[0])
+                Option.None:
+                    println("unexpected close")
+            thread.join()
+        Result.Err(_):
+            println("spawn unavailable")
+
+    // Unlocking one mutex operation publishes an external alias to the next
+    // successful operation on the same handle. The mutex does not own or
+    // isolate that backing; it is the programmer's synchronization token.
+    var mutex_values = @vec[0]
+    let gate = std.sync.Mutex[bool].new(false)
+    let mutex_writer = fn[mutex_values as shared_values, gate]() -> ():
+        var values = shared_values
+        values[0] = 15
+        let _ = gate.replace(true)
+    let mutex_reader = fn[mutex_values, gate]() -> i32:
+        var published = false
+        while !published:
+            published = gate.read()
+        return mutex_values[0]
+    match std.thread.spawn(mutex_writer):
+        Result.Ok(writer):
+            match std.thread.spawn(mutex_reader):
+                Result.Ok(reader):
+                    println(reader.join())
+                Result.Err(_):
+                    println("spawn unavailable")
+            writer.join()
+        Result.Err(_):
+            println("spawn unavailable")
+
+    // A sequentially consistent atomic flag can publish ordinary backing in
+    // the same way, and all atomic cells share the documented SC contract.
+    var atomic_values = @vec[0]
+    let ready = std.sync.AtomicBool.new(false)
+    let atomic_writer = fn[atomic_values as shared_values, ready]() -> ():
+        var values = shared_values
+        values[0] = 16
+        ready.store(true)
+    let atomic_reader = fn[atomic_values, ready]() -> i32:
+        var published = false
+        while !published:
+            published = ready.load()
+        return atomic_values[0]
+    match std.thread.spawn(atomic_writer):
+        Result.Ok(writer):
+            match std.thread.spawn(atomic_reader):
+                Result.Ok(reader):
+                    println(reader.join())
+                Result.Err(_):
+                    println("spawn unavailable")
+            writer.join()
+        Result.Err(_):
+            println("spawn unavailable")
+
+    // Store-buffering is forbidden by a single sequentially consistent total
+    // order. Coordinate both workers, then check several contended executions
+    // never observe both earlier values.
+    var forbidden = 0
+    var attempt = 0
+    while attempt < 16:
+        let begin = std.sync.AtomicBool.new(false)
+        let left_cell = std.sync.AtomicBool.new(false)
+        let right_cell = std.sync.AtomicBool.new(false)
+        let left_body = fn[begin, left_cell, right_cell]() -> bool:
+            var running = false
+            while !running:
+                running = begin.load()
+            left_cell.store(true)
+            return right_cell.load()
+        let right_body = fn[begin, left_cell, right_cell]() -> bool:
+            var running = false
+            while !running:
+                running = begin.load()
+            right_cell.store(true)
+            return left_cell.load()
+        let left_started = std.thread.spawn(left_body)
+        let right_started = std.thread.spawn(right_body)
+        begin.store(true)
+        var left_observed = true
+        var right_observed = true
+        match left_started:
+            Result.Ok(thread):
+                left_observed = thread.join()
+            Result.Err(_):
+                println("spawn unavailable")
+        match right_started:
+            Result.Ok(thread):
+                right_observed = thread.join()
+            Result.Err(_):
+                println("spawn unavailable")
+        if !left_observed && !right_observed:
+            forbidden += 1
+        attempt += 1
+    println(forbidden)

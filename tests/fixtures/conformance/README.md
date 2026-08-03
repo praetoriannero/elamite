@@ -18,7 +18,7 @@ for the Milestone 19 ledger audit.
 | §9 Garbage collection | `09_gc` | reference-formation and promotion suites | OOM collect/retry/terminate generated-C test; best-effort churn test | recursive graph and allocation-churn backend suites |
 | §10 Unsafe/C ABI | `10_unsafe` | unsafe, pointer-validity, and FFI contract suites | raw-pointer and callback trap processes | `examples/c_ffi` and C harness/callback integration tests |
 | §11 Conformance example | `11_example` | earlier section suites own its forms | earlier trap suites | exact normative `Counter` behavior |
-| §10.4 Native concurrency | `14_concurrency` | structural/generic/capture `Transfer` suites | self-join and worker-panic processes | registered callback, lifecycle, channel, mutex, and atomic tests |
+| §10.4 Native concurrency | `14_concurrency` | shared-alias capture and callable-shape suites | self-join and worker-panic processes | registered callback, lifecycle, channel, mutex, and atomic tests |
 
 `12_runtime_stress` is the M19 cross-section stress layer. It combines generic
 instantiation, recursive calls, collection churn and shallow copying, managed cycles,
@@ -33,12 +33,16 @@ files) when present, so x86 and x86-64 must demonstrate their distinct
 `isize`/`usize` widths instead of merely accepting a target flag.
 
 `14_concurrency` is the deterministic concurrency contract fixture. It covers
-registered-thread C callback reentry, collector-visible worker roots, transfer
-copy independence, repeated joins, ordinary `Result` and `defer` behavior,
+registered-thread C callback reentry, collector-visible worker roots, shallow
+publication aliases, repeated joins, ordinary `Result` and `defer` behavior,
 channel state distinctions and closure, mutex copies, and the complete atomic
 surface. `15_concurrency_stress` is its repeated four-producer/four-consumer
 contention layer; consumers run until explicit closure so the test never
-assumes a scheduler-specific distribution of messages.
+assumes a scheduler-specific distribution of messages. It also publishes
+ordinary shared vector backing across thread creation, channel, mutex, atomic,
+and join edges and checks a coordinated store-buffering litmus against the
+single sequentially consistent atomic order. The fixture runs under TSan;
+deliberately racy examples remain compile-only and are never conformance runs.
 
 Run all positive fixtures with:
 

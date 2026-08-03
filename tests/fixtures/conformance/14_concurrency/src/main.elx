@@ -33,13 +33,14 @@ fn main() -> ():
     let body = fn[original]() -> Vec[i32]:
         return original
     let copied = std.thread.spawn(body)
+    original[0] = 7
     original.append(2)
     match copied:
         Result.Ok(thread):
             let other_handle = thread
             let first = thread.join()
             let second = other_handle.join()
-            println(f"transfer={first.len()}:{second.len()}:{original.len()}:{thread.is_finished()}")
+            println(f"shallow={first.len()}:{second.len()}:{original.len()}:{first[0]}:{thread.is_finished()}")
         Result.Err(_):
             println("spawn unavailable")
 

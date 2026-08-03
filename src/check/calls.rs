@@ -1465,7 +1465,7 @@ impl<'a> Checker<'a> {
             return (self.typed.types.error(), PlaceKind::Value);
         };
         let (callable, _) = self.check_expr(body, ExpectedType::None);
-        self.record_transfer_copy(
+        self.record_copy(
             body.span,
             LogicalCopyKind::Argument,
             LogicalCopyLifetime::Thread,
@@ -1537,17 +1537,6 @@ impl<'a> Checker<'a> {
                 return (self.typed.types.error(), PlaceKind::Value);
             }
         };
-        for (ty, description) in [(callable, "callable"), (return_type, "result")] {
-            if !crate::traits::provides(self.resolved, self.typed, ty, "Transfer") {
-                self.diagnostics.push(
-                    Diagnostic::new(
-                        Category::TypeSystem,
-                        format!("spawned {description} does not satisfy `Transfer`"),
-                    )
-                    .with_primary(body.span),
-                );
-            }
-        }
         let Some(thread_builtin) = self.resolved.builtin_named("Thread") else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
@@ -1627,17 +1616,6 @@ impl<'a> Checker<'a> {
             Vec::new()
         };
         self.check_standard_arguments(call_span, "channel", arguments, &parameters);
-        if element != self.typed.types.error()
-            && !crate::traits::provides(self.resolved, self.typed, element, "Transfer")
-        {
-            self.diagnostics.push(
-                Diagnostic::new(
-                    Category::TypeSystem,
-                    "channel elements must satisfy `Transfer`",
-                )
-                .with_primary(call_span),
-            );
-        }
         let (Some(sender_builtin), Some(receiver_builtin)) = (
             self.resolved.builtin_named("Sender"),
             self.resolved.builtin_named("Receiver"),
@@ -1915,25 +1893,13 @@ impl<'a> Checker<'a> {
         {
             let builtin_name = self.resolved.builtin_name(builtin);
             let selected = match (builtin_name, type_arguments.as_slice()) {
-                ("Mutex", [value_type]) => {
-                    if !crate::traits::provides(self.resolved, self.typed, *value_type, "Transfer")
-                    {
-                        self.diagnostics.push(
-                            Diagnostic::new(
-                                Category::TypeSystem,
-                                "mutex values must satisfy `Transfer`",
-                            )
-                            .with_primary(call_span),
-                        );
-                    }
-                    Some((
-                        StandardCall::MutexNew {
-                            mutex: handle,
-                            value_type: *value_type,
-                        },
-                        *value_type,
-                    ))
-                }
+                ("Mutex", [value_type]) => Some((
+                    StandardCall::MutexNew {
+                        mutex: handle,
+                        value_type: *value_type,
+                    },
+                    *value_type,
+                )),
                 ("AtomicBool", []) => Some((
                     StandardCall::AtomicNew {
                         atomic: handle,
@@ -1959,7 +1925,7 @@ impl<'a> Checker<'a> {
             };
             if let Some((operation, value_type)) = selected {
                 self.check_standard_arguments(call_span, &member_name, arguments, &[value_type]);
-                self.record_standard_transfer_arguments(operation, arguments);
+                self.record_standard_copy_arguments(operation, arguments);
                 self.program
                     .calls
                     .insert(call_span, CheckedCall::Standard(operation));
@@ -2221,7 +2187,7 @@ impl<'a> Checker<'a> {
                 );
             }
             self.check_standard_arguments(call_span, &member_name, arguments, &parameters);
-            self.record_standard_transfer_arguments(operation, arguments);
+            self.record_standard_copy_arguments(operation, arguments);
             self.program
                 .calls
                 .insert(call_span, CheckedCall::Standard(operation));
@@ -2707,7 +2673,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn record_standard_transfer_arguments(
+    fn record_standard_copy_arguments(
         &mut self,
         operation: StandardCall,
         arguments: &[&SyntaxNode],
@@ -2725,7 +2691,7 @@ impl<'a> Checker<'a> {
             _ => return,
         };
         for argument in arguments {
-            self.record_transfer_copy(argument.span, LogicalCopyKind::Argument, destination);
+            self.record_copy(argument.span, LogicalCopyKind::Argument, destination);
         }
     }
 

@@ -651,6 +651,7 @@ fn syntax_tree_dump_is_deterministic_and_token_preserving() {
 fn respects_every_expression_precedence_level() {
     let cases = [
         ("value.field()", "CallExpression"),
+        ("(pointer + offset)[index]", "BracketExpression"),
         ("-value.field", "UnaryExpression"),
         ("-value as i32", "CastExpression"),
         ("left as i32 * right", "Star"),

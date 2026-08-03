@@ -900,7 +900,6 @@ impl<'a> TypeBuilder<'a> {
                     | "Ord"
                     | "Hash"
                     | "StableHash"
-                    | "Transfer"
                     | "Display"
             ),
             _ => false,

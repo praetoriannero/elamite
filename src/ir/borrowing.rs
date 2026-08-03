@@ -400,11 +400,10 @@ fn optimize_expression(
                     continue;
                 };
                 let eligible_copy = argument.copy.is_some_and(|copy| {
-                    copy.context.purpose == LogicalCopyPurpose::Ordinary
-                        && matches!(
-                            copy.context.kind,
-                            LogicalCopyKind::Argument | LogicalCopyKind::Receiver
-                        )
+                    matches!(
+                        copy.context.kind,
+                        LogicalCopyKind::Argument | LogicalCopyKind::Receiver
+                    )
                 });
                 if eligible_copy {
                     argument.copy = None;

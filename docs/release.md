@@ -114,9 +114,10 @@ peak RSS remain non-deterministic host observations rather than thresholds.
 Assignment, arguments, returns, tuple destructuring, pattern binding, closure
 capture/copy, indexing results, postfix `?`, iteration yields, and aggregate
 construction now retain explicit copy records while lowering to immediate C
-representation assignments. Recursive helpers remain only for the transitional
-thread/channel/join/mutex transfer boundary. A focused debug/release alias
-matrix covers every migrated value flow.
+representation assignments. At this stage recursive helpers remained only for
+the transitional mutex boundary; the later mutex package below removes that
+last family. A focused debug/release alias matrix covers every migrated value
+flow.
 
 Compared with the preceding COW `String` baseline on the same host, toolchains,
 target, and unchanged workload hashes:
@@ -157,14 +158,159 @@ toolchains, target, and unchanged workload hashes:
 | `string_copy` | 2 → 2 | 265 → 257 | 3 / 256 → 3 / 256 |
 | `vector_copy` | 7 → 6 | 1,032 → 1,008 | 5 / 496 → 5 / 496 |
 
-The temporary `cross_thread` increase is deliberate: the still-implemented
-0.9 transfer boundary promises independent ordinary storage, so mutable
-`String` bytes must now be copied eagerly instead of sharing immutable COW
-backing. The ordered C-like thread/channel publication package removes that
-legacy transfer helper and this temporary proportional copy. The other reduced
-counts come from removing String flag words and heap-allocated vector headers.
+The temporary `cross_thread` increase recorded here came from the then-active
+0.9 publication boundary, which copied mutable `String` bytes eagerly instead
+of sharing backing. The later thread/channel publication section records its
+removal. The other reduced counts come from removing String flag words and
+heap-allocated vector headers.
 All runtimes remained below the timer's `0.01`-second resolution; compile time
 and peak RSS remain non-deterministic observations rather than thresholds.
+
+### Iteration state and mutation invalidation
+
+`for` now emits its hidden shallow iterable and length snapshots once before
+the first condition check instead of re-reading collection length on every
+iteration. Vector element replacement and existing map-value replacement stay
+visible through shared backing. Length-changing vector mutation and structural
+map/set mutation during an active loop remain accepted source but are
+documented undefined behavior, so regression coverage compiles those cases
+without executing them.
+
+This removes one constant-time length read per iteration after the initial
+snapshot and changes no managed-allocation or explicit-byte-copy counter. It is
+not a material memory-cost change, so the collection-representation baseline
+remains the comparable checked-in measurement.
+
+### C-like thread and channel publication
+
+The compiler no longer exposes or recognizes a structural `Transfer`
+capability. Spawn environments, cached and repeated join results, and channel
+messages now use the same shallow immediate copies as ordinary values. Safe
+references, raw pointers, trait objects, strings, and collection backing may
+therefore cross these boundaries; synchronization publishes the immediate
+representation but does not detach backing or make later conflicting access
+race-free.
+
+Focused debug/release runtime coverage exercises shared vector backing across
+spawn and repeated joins, shared channel message backing, and one registered
+worker consuming safe-reference, raw-pointer, and trait-object aliases. The
+existing lifecycle, failure, closure, contention, collector, sanitizer, and
+target-width suites remain in place. At this stage mutex values retained
+temporary recursive isolation for the next ordered package.
+
+Compared with the preceding collection-representation baseline on the same
+host, toolchains, target, and unchanged workload hashes:
+
+| Workload | Allocations, before → after | Allocated bytes, before → after | Explicit `memcpy` calls / bytes, before → after |
+| --- | ---: | ---: | ---: |
+| `cross_thread` | 19,033 → 1,013 | 368,912 → 32,512 | 16,024 / 64,096 → 8 / 32 |
+
+All other workload allocation and explicit-copy counters were unchanged. The
+cross-thread workload also reduced scanned allocation from 3,009 allocations /
+288,792 bytes to 1,005 allocations / 32,472 bytes. All runtimes remained below
+the timer's `0.01`-second resolution; compile time and peak RSS remain
+non-deterministic observations rather than thresholds.
+
+### Programmer-managed mutex values
+
+`Mutex[T].new`, `read`, `replace`, and `update` now assign only the immediate
+`T` representation while holding the mutex lock. Descriptor-bearing values
+therefore retain shared backing across the mutex boundary: locking serializes
+operations on the stored representation but does not isolate backing or
+automatically synchronize access through external aliases. The compiler's
+temporary isolation purpose and recursive per-type copy-helper family have
+been removed.
+
+Focused debug/release coverage checks visible vector aliases through every
+mutex operation and verifies direct C assignments. A deliberately racy
+external-alias example is compile-only evidence that the compiler does not
+claim data-race freedom; it is never executed as a conformance or sanitizer
+test. The fixed memory-cost workloads do not perform mutex value operations,
+so their requested-allocation and explicit-copy counters remain unchanged in
+the comparable post-change baseline; this removal is instead guarded by the
+focused generated-C and runtime alias tests.
+
+### Unsafe pointer arithmetic and indexing
+
+Raw data pointers with complete, nonzero-sized pointees now support unsafe
+element-scaled `+` and `-`, mutable-place `+=` and `-=`, same-pointee pointer
+subtraction to `isize`, and unchecked `pointer[index]` places. Function,
+incomplete, zero-sized, and `std.ffi.CVoid` pointees are rejected. Mixed
+`*T`/`*var T` subtraction is accepted when the resolved pointee agrees.
+
+Index lowering evaluates the pointer and signed index once in left-to-right
+order, forms the adjusted pointer, and routes the access through the existing
+mandatory null/alignment trap path. Focused debug/release tests cover negative
+indices, assignment, compound offsets, one-past construction, pointer distance,
+and exactly-once side effects; generated C is checked for both x86 and x86-64.
+These operations add no managed allocation or explicit byte copying, and the
+fixed cost workloads do not use them, so no comparable baseline counter changes.
+
+### Unsafe pointer relational ordering
+
+Raw data pointers now support unsafe `<`, `<=`, `>`, and `>=` as primitive
+operations, independently of `PartialOrd` and `Ord`. Mixed `*T`/`*var T`
+operands are accepted for the same resolved data pointee. Null is below every
+non-null pointer, while ordering two non-null pointers is defined only when
+both positions belong to the same live extent; unrelated-pointer ordering is
+accepted as an unsafe expression but remains undefined behavior if executed.
+
+The C99 backend tests null explicitly and reaches an unsigned-byte-pointer
+relational comparison only when both operands are non-null, so it never asks C
+to relationally compare a null pointer. Focused tests cover every null case,
+same-extent traversal, mixed mutability, diagnostics, x86/x86-64 generated C,
+debug/release execution, and address/undefined-behavior sanitizers. Ordering is
+constant-size work with no managed allocation or explicit byte copy, and the
+fixed cost workloads do not use it, so their baseline counters remain
+unchanged.
+
+### Concurrent memory-model conformance
+
+The runtime synchronization audit now maps every Section 10.4 ordering edge to
+its C99/POSIX implementation and executable evidence. Thread creation publishes
+earlier writes to the worker; a matching channel receive observes writes before
+send; successive operations on one mutex can coordinate external ordinary
+backing; sequentially consistent atomic flags publish ordinary backing; and a
+successful join publishes worker writes to the joining thread. None of these
+ordinary shared accesses requires `unsafe` syntax.
+
+The high-contention fixture now exercises all five edges over shared vector
+backing and includes a coordinated store-buffering litmus that must never
+observe the SC-forbidden outcome. It remains clean under TSan, debug/release
+repetition, AddressSanitizer/UndefinedBehaviorSanitizer, and the available
+x86/x86-64 conformance matrix. A deliberately racy external-alias fixture is
+compile-only evidence and is never executed. The audit required no runtime or
+representation change, so it changes neither allocation/copy costs nor the
+fixed memory baseline.
+
+### Final 0.10 cost and release identity
+
+The final release-mode x86-64 baseline used the same six workload hashes and
+the same WSL2, rustc 1.89.0, and GCC-compatible 15.2.0 toolchain class as the
+preceding shallow baseline. Every deterministic counter was unchanged:
+
+| Workload | Allocations | Allocated bytes | Scanned allocations / bytes | Explicit `memcpy` calls / bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `aggregate_closure` | 6 | 172 | 2 / 112 | 3 / 25 |
+| `cross_thread` | 1,013 | 32,512 | 1,005 / 32,472 | 8 / 32 |
+| `function_loop` | 2 | 82 | 0 / 0 | 1 / 17 |
+| `map_set_copy` | 17 | 1,544 | 2 / 56 | 12 / 720 |
+| `string_copy` | 2 | 257 | 0 / 0 | 3 / 256 |
+| `vector_copy` | 6 | 1,008 | 0 / 0 | 5 / 496 |
+
+Wall time and peak RSS varied without semantic significance. The local host
+built but could not execute the x86 instrumented artifact, so no cross-width
+cost numbers are claimed; the installed multilib CI matrix continues to own
+x86 semantic execution.
+
+`elamc --version` now reports `SPEC 0.10.0-draft`. The authoritative
+demonstration covers shallow vector/map/set identity, safe shared backing across
+spawn/join, and unsafe pointer arithmetic, indexing, same-extent ordering, and
+null-low ordering in both debug and release. README, specification, ledger,
+toolchain, architecture, roadmap, cost model, fixtures, and release evidence
+now identify the same implemented revision. The broader `m19-baseline.tsv` was
+also refreshed after the demonstration change so its generated-C and native
+artifact sizes describe the released inputs.
 
 ## Accepted 0.10 language revision
 
@@ -181,8 +327,8 @@ Null is ordered below every non-null pointer; two non-null pointers may be
 ordered only within one live extent. Integer-pointer conversion, function-
 pointer arithmetic, and ordering through `PartialOrd`/`Ord` remain absent.
 
-This section records the complete accepted design, not a claim of complete
-implementation. Shallow ordinary-copy lowering and standard collection
-representations have landed, while the compiler version output and
-demonstration remain 0.9 and the remaining iteration, concurrency, and pointer
-packages continue in `roadmap.md`.
+All packages in the accepted design are implemented: shallow
+ordinary-copy lowering, standard collection representations, iteration
+invalidation, thread/channel/mutex publication, the concurrent memory model,
+the complete accepted raw-pointer surface, final cost evidence, release
+identity, and the authoritative demonstration.
