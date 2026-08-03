@@ -71,9 +71,7 @@ pub(super) fn apply_read_only_call_borrowing(
 fn copy_is_costly(types: &TypeContext, ty: TypeId) -> bool {
     matches!(
         logical_copy_strategy(types, ty),
-        LogicalCopyStrategy::Recursive
-            | LogicalCopyStrategy::OwnedString
-            | LogicalCopyStrategy::RuntimeManaged
+        LogicalCopyStrategy::Recursive | LogicalCopyStrategy::RuntimeManaged
     )
 }
 

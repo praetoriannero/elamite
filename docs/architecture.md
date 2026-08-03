@@ -3,6 +3,12 @@
 Milestone 20 established explicit, owned boundaries without changing Elamite
 language behavior or the public compiler commands.
 
+The descriptions below reflect the transitional compiler. Specification 0.10's
+ordinary shallow-copy lowering and collection representations are implemented;
+iteration invalidation, C-like concurrency, and pointer operations remain
+planned in `roadmap.md`. Current reuse, borrowing, and transfer facts remain
+documented here until their implementation is replaced.
+
 ## Pipeline and ownership
 
 | Boundary | Owner |
@@ -20,6 +26,7 @@ language behavior or the public compiler commands.
 | Body-checking orchestration | `src/check/mod.rs` |
 | Typed IR and lowering | `src/ir/typed/model.rs`, `lower.rs` |
 | Internal read-only call analysis and ABI selection | `src/ir/borrowing.rs` |
+| Temporary and return storage-reuse selection | `src/ir/reuse.rs` |
 | Control-flow IR and lowering | `src/ir/control_flow/model.rs`, `lower.rs` |
 | Shared selected operations, logical-copy facts, and traps | `src/operations.rs`, `src/ir/traps.rs` |
 | Target and optimization policy | `src/config.rs` |
@@ -35,9 +42,9 @@ Logical-copy intent is selected before backend lowering. Checking records the
 copy kind, source and destination lifetime classes, and ordinary-versus-transfer
 purpose; typed IR adds the type-selected allocation class; control-flow IR
 assigns a stable per-function copy identity. Debug builds audit that inventory
-for exact-once emission, while the C backend consumes the explicit copy rvalue
-without reconstructing optimization intent from generated representation
-details.
+for exact-once emission. The C backend lowers ordinary copies as immediate
+representation assignments and reserves recursive per-type helpers for the
+temporary legacy transfer purpose.
 
 After concrete typed functions and vtables exist, `src/ir/borrowing.rs`
 conservatively identifies costly internal direct-call parameters whose storage
@@ -45,6 +52,22 @@ cannot be mutated or address-exposed. It records an explicit passing mode on
 parameters and arguments before control-flow lowering. The backend implements
 that mode with a hidden `const` pointer ABI; indirect, closure, vtable, and
 foreign-visible callables retain the ordinary owned ABI.
+
+`src/ir/reuse.rs` retains each remaining semantic copy record while selecting
+an explicit `ReuseSource` physical mode for fresh temporaries and conservatively
+dead local returns. Ordinary `Materialize` and `ReuseSource` copies now both
+preserve the shallow representation; the distinction remains an optimizer seam
+for future inline movement. Transfer copies still materialize recursively.
+
+The typed and control-flow IR classify ordinary `String` copies as
+shared-backing operations. Ordinary copies directly preserve the two-word
+descriptor, whose pointer names writable managed bytes; mutable access does not
+detach. The legacy transfer helper instead copies those bytes to preserve the
+temporary 0.9 cross-thread independence contract. `Vec` uses an inline
+pointer/length/capacity descriptor and mutating calls carry the evaluated
+receiver place through control-flow IR so only that descriptor's length,
+capacity, and growth pointer change. `Map` and `Set` retain shared table
+handles. None of these representations is exposed through the foreign ABI.
 
 The expansion pass owns a lossless nested token-tree view containing exact
 source spellings, layout tokens, and stable origin identities. Parsed units are

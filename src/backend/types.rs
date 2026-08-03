@@ -110,7 +110,16 @@ impl<'a> CEmitter<'a> {
                 }
                 let name = collection_type_name(ty);
                 match (builtin_name, arguments.as_slice()) {
-                    ("Vec" | "Set", [element]) => {
+                    ("Vec", [element]) => {
+                        if let Some(element_type) = self.c_type(*element, span) {
+                            let _ = writeln!(
+                                self.output,
+                                "typedef struct {name} {{\n    {element_type} *values;\n    \
+                                 uintptr_t length;\n    uintptr_t capacity;\n}} {name};\n"
+                            );
+                        }
+                    }
+                    ("Set", [element]) => {
                         if let Some(element_type) = self.c_type(*element, span) {
                             let _ = writeln!(
                                 self.output,

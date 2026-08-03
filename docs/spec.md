@@ -2,12 +2,15 @@
 
 > Status: Draft
 >
-> Version: 0.9.0-draft
+> Version: 0.10.0-draft
 >
-> The current [specification demonstration](../examples/spec_demo.elx) is the
-> authoritative surface-language example. This document describes that design;
-> ambiguities and internal inconsistencies that still need decisions are listed
-> in [issues.md](issues.md).
+> This document is the normative 0.10 design. The compiler has implemented
+> shallow ordinary-copy lowering but retains transitional 0.9 collection,
+> concurrency, and pointer behavior until the ordered migration in
+> [roadmap.md](roadmap.md) completes. Its version identity and current
+> [specification demonstration](../examples/spec_demo.elx) remain 0.9 rather
+> than claiming partial conformance. Ambiguities and internal inconsistencies
+> that still need decisions are listed in [issues.md](issues.md).
 
 ## 1. Overview
 
@@ -16,10 +19,10 @@ It provides value types, explicit references, traits, generic types, algebraic
 data types, recoverable errors, raw pointers behind an unsafe boundary, and
 indentation-delimited control flow.
 
-Ordinary values are passed and assigned by logical value copy. Each copy is
-observably independent except where the copied type explicitly represents an
-alias or identity, such as a safe or raw reference, a function reference, a
-trait-object reference, or a shared resource handle. Passing
+Ordinary values are passed and assigned by shallow value copy. Inline scalar
+and aggregate storage is copied, while references, pointers, functions,
+collection descriptors, mutable text backing, trait-object references, and
+resource handles preserve the identities they contain. Passing
 `&value` explicitly passes a shared reference; passing `&var value` explicitly
 passes a mutable reference. Elamite has no source lifetime parameters. Managed
 memory uses Boehm GC;
@@ -258,41 +261,44 @@ binding patterns. An optional annotation applies to the complete pattern:
 The initializer is evaluated exactly once before any new binding enters scope
 and must have the exact tuple shape and arity of the pattern. Every identifier
 in one pattern must be unique. All of its bindings enter scope together after
-the initializer; `_` creates no binding. Each `let` component receives an
-independent logical copy and is non-rebindable. Each `var` component receives
-an independent logical copy in its own rebindable local place. The initializer
-and any source value remain usable under the ordinary copy rules.
+the initializer; `_` creates no binding. Each `let` component receives a
+shallow copy and is non-rebindable. Each `var` component receives a shallow
+copy in its own rebindable local place. The initializer and any source value
+remain usable under the ordinary copy rules.
 
 Assignment, ordinary argument passing, and ordinary returns copy the source
 value; using the source after that operation is valid. Copying is a core
 property of every value and is not controlled by a trait.
 
-An ordinary copy is recursively and observably independent. Mutating any
-ordinary nested field, string, array, or collection in one copy does not change
-another copy. An implementation may share immutable or copy-on-write backing
-storage, but such sharing cannot be observed through language operations.
+An ordinary copy is shallow and fieldwise. Scalars and inline aggregate slots
+are copied into the destination, while every copied descriptor, reference,
+pointer, callable, collection handle, and resource handle preserves the backing
+or target identity stored in that field. Copying a nested aggregate repeats
+this rule for its immediate fields; it does not recursively duplicate reachable
+managed backing.
 
-Types that explicitly carry aliasing or identity retain that meaning when
-copied. Safe references, raw pointers, trait-object references, and function
-references continue to identify the same target. Copying a containing aggregate
-preserves these explicit aliases while all of its ordinary value fields remain
-independent.
+Consequently, rebinding an inline field in one struct copy does not rebind the
+corresponding field in another copy, but mutating storage reached through a
+copied descriptor is visible through every descriptor that still reaches that
+storage. `Vec` uses Go-like pointer/length/capacity descriptor copies, while
+`Map` and `Set` copies preserve the identity of their complete mutable table.
+The exact built-in behaviors are specified in Section 4.1.
 
 ~~~elx
-struct Address:
-    city: String
-
 struct User:
     name: String
-    address: Address
+    tags: Vec[String]
 
-let original = User { name: "Ari", address: Address { city: "Aster" } }
+let original = User {
+    name: String.from("Ari"),
+    tags: @vec[String.from("first")],
+}
 var changed = original
-changed.name = "Bea"
-changed.address.city = "Beacon"
+changed.name = String.from("Bea")
+changed.tags[0] = String.from("changed")
 
-println(original.name)         // "Ari"
-println(original.address.city) // "Aster"
+println(original.name)    // "Ari": only changed.name was rebound
+println(original.tags[0]) // "changed": vector backing is shared
 
 var counter = 0
 let alias = &var counter
@@ -354,14 +360,15 @@ let from_sum: &i32 = &(left + right)          // invalid
 Collection interiors are never addressable for safe-reference formation.
 Neither shared nor mutable references may be formed to array or `Vec` elements,
 `Map` keys or values, or `Set` elements. Collection access in value context
-instead returns an ordinary independent value copy.
+instead returns an ordinary shallow copy.
 
 An array or `Vec` element and a `Map` value may still be an assignable place
 when reached through a mutable collection path. Replacement, compound
-assignment, and direct nested-field mutation update that collection value, but
-no reference to the selected interior may escape. `Map` keys and `Set` elements
-are never mutable places; changing one requires removing it and inserting a new
-value. These rules make collection backing-storage strategy unobservable.
+assignment, and direct nested-field mutation update the backing reached through
+that descriptor, but no safe reference to the selected interior may escape.
+`Map` keys and `Set` elements are never mutable places; changing one requires
+removing it and inserting a new value. Raw-pointer APIs may expose backing
+explicitly under their own unsafe contracts.
 
 ~~~elx
 var points = @vec[Point { x: 0.0, y: 0.0 }]
@@ -373,7 +380,7 @@ points[0].x = 1.0
 
 println(first.x)              // 0.5
 println(points[0].x)          // 1.0
-println(original_points[0].x) // 0.0
+println(original_points[0].x) // 1.0: both descriptors reach the same backing
 
 // Invalid: collection interiors cannot be referenced.
 // let first_ref = &var points[0]
@@ -452,22 +459,59 @@ Raw pointer types are `*T` and `*var T`. A raw pointer can be `null`; `&T` and
 pointers nor references have implicit truthiness. Code tests a raw pointer with
 an explicit comparison such as `pointer == null`.
 
-Every non-null raw pointer has provenance for one storage instance and one
-designated `T` subobject within that storage. Converting a safe reference to a
-raw pointer preserves the referenced target's provenance. Copying a raw pointer
-or converting `*var T` to `*T` preserves its provenance; comparing raw pointers
-compares only their addresses and does not expose provenance. `null` has no
-provenance. Reuse of the same address for a later storage instance does not
-give an older pointer provenance for the new instance.
+Every non-null raw pointer has provenance for one storage instance, a designated
+byte extent within that storage, and one position in or one-past that extent.
+Converting a safe reference to a raw pointer establishes an extent containing
+the referenced target as one element. Foreign code may establish a larger
+array extent through its contract. Copying a raw pointer or converting
+`*var T` to `*T` preserves its provenance, extent, and position. Reuse of the
+same numerical address for a later storage instance does not give an older
+pointer provenance for the new instance. `null` has no provenance or storage
+position.
 
-The initial language has no raw-pointer arithmetic or integer-to-pointer or
-pointer-to-integer conversion. An explicit `as` cast may change a raw pointer's
-pointee type only in an `unsafe` context. The cast preserves the address,
-storage provenance, designated byte extent, and mutability permission; it does
-not make the storage contain a valid value of the new pointee type. A `*T`
-therefore cannot be cast to any `*var U`. Foreign code may supply a raw pointer
-with provenance, extent, and access rights established by the foreign contract
-defined in Section 10.
+Raw data pointers support typed arithmetic in an `unsafe` context. For a
+complete, nonzero-sized pointee type, `pointer + offset` and
+`pointer - offset` accept `isize` and return the same raw-pointer type;
+`var` pointer places additionally support `+=` and `-=`. The offset is measured
+in pointee elements. The result must remain within the same array extent or its
+one-past position. A single non-array target behaves as an array of length one.
+Creating any other position is undefined behavior even when it is not
+dereferenced.
+
+Subtracting two non-null pointers with the same resolved pointee type is unsafe
+and returns their element distance as `isize`; `*T` and `*var T` may be mixed.
+Both operands must identify positions in the same live extent, and the distance
+must be representable by `isize`, or behavior is undefined. Pointer arithmetic
+is invalid for function pointers, incomplete or zero-sized pointees, and
+`std.ffi.CVoid`.
+
+`pointer[index]` accepts an `isize` index and is equivalent to
+`*(pointer + index)`, except that the pointer and index are each evaluated
+exactly once in left-to-right order. Indexing requires `unsafe`, performs no
+bounds check, and produces a read-only raw target for `*T` or an assignable raw
+target for `*var T`. The existing prohibition on forming a safe reference to a
+raw target remains; conversion of the computed pointer with `as` is explicit.
+
+Equality and inequality remain safe for compatible raw pointers, including
+`null`, and compare address identity without requiring common provenance. Raw
+data pointers also support `<`, `<=`, `>`, and `>=` as compiler-recognized
+unsafe operations without implementing `PartialOrd` or `Ord`. Null is ordered
+below every non-null pointer. Ordering two non-null pointers is defined only
+when they have the same resolved pointee type and identify positions in the
+same live extent, in which case positions later in the extent compare greater;
+ordering unrelated non-null pointers is undefined behavior. Mixed `*T` and
+`*var T` operands are permitted. The null rule is lowered explicitly rather
+than relying on a C relational comparison with a null pointer.
+
+An explicit `as` cast may change a raw pointer's pointee type only in an
+`unsafe` context. The cast preserves the address, storage provenance,
+designated byte extent, position, and mutability permission; subsequent
+arithmetic uses the new pointee size. A cast does not make the storage contain
+a valid value of the new pointee type or enlarge its extent. A `*T` therefore
+cannot be cast to any `*var U`. Integer-to-pointer and pointer-to-integer
+conversions remain unavailable. Foreign code may supply a raw pointer with
+provenance, extent, and access rights established by the foreign contract in
+Section 10.
 
 `&T` may convert safely to `*T`; `&var T` may convert safely to `*var T`.
 `&var T` may also convert to `*T`, and `*var T` may be downgraded to `*T`.
@@ -490,32 +534,34 @@ if pointer != null:
         *recovered = 42
 ~~~
 
-A raw pointer may be dereferenced only while its original storage instance is
-alive, its designated subobject is initialized as the pointee type, and the
-requested access is within that subobject. A write additionally requires
-writable storage. The pointer's provenance and these obligations apply even if
-another storage instance later occupies the same address. For
+A raw pointer may be dereferenced or indexed only while its original storage
+instance is alive, its current position identifies an initialized pointee
+element rather than the one-past position, and the requested access remains
+within its designated extent. A write additionally requires writable storage.
+The pointer's provenance and these obligations apply even if another storage
+instance later occupies the same address. For
 language-managed storage, retaining a separate strong language path is part of
 the liveness obligation because a raw pointer is not a root. For foreign or
 manually managed storage, the foreign contract determines its lifetime and
 access rights.
 
-Every executed raw dereference and raw-to-reference conversion checks for null
-and correct alignment before accessing the target and traps if either check
-fails. Such an operation is instead a compile-time error only when its pointer
-operand is an expression-local compile-time constant known to be null or
-misaligned. This required determination may evaluate literals, casts, and
-operators within that operand expression, but it does not propagate facts
-through local bindings, assignments, branch conditions, reachability, or
-function calls. Broader analysis may produce warnings but does not make an
-otherwise accepted operation a compile-time error.
+Every executed raw dereference, pointer index, and raw-to-reference conversion
+checks for null and correct alignment before accessing the target and traps if
+either check fails. Such an operation is instead a compile-time error only when
+its pointer operand is an expression-local compile-time constant known to be
+null or misaligned. This required determination may evaluate literals, casts,
+pointer arithmetic, and operators within that operand expression, but it does
+not propagate facts through local bindings, assignments, branch conditions,
+reachability, or function calls. Broader analysis may produce warnings but does
+not make an otherwise accepted operation a compile-time error.
 
 The remaining obligations cannot in general be checked by the implementation.
-Violating provenance, liveness, bounds, initialization, pointee-type, or write
-permission requirements is undefined behavior. In particular, accidental
-retention by the conservative collector and later address reuse cannot make a
-dangling raw pointer valid. An implementation may diagnose or trap additional
-violations, but a program cannot rely on it doing so.
+Violating provenance, liveness, arithmetic extent, subtraction/ordering
+compatibility, bounds, initialization, pointee-type, write-permission, or
+concurrent-access requirements is undefined behavior. In particular,
+accidental retention by the conservative collector and later address reuse
+cannot make a dangling raw pointer valid. An implementation may diagnose or
+trap additional violations, but a program cannot rely on it doing so.
 
 Converting a raw pointer to a safe reference asserts that all of the raw
 pointer obligations will remain satisfied for every use while the resulting
@@ -591,7 +637,7 @@ tokenization is unchanged.
 
 Positional access composes left-to-right with every other postfix operation;
 the receiver in `callback().0`, `value.0.name`, or `values.1[index]` is
-evaluated exactly once. In value context, access produces an ordinary logical
+evaluated exactly once. In value context, access produces an ordinary shallow
 copy of the component. When rooted in an addressable tuple path, it is an
 addressable place; when that path is mutable it is also assignable, supporting
 replacement, compound assignment, nested mutation, `&pair.0`, and
@@ -603,9 +649,11 @@ dereferencing, and only `*var Tuple` produces an assignable raw target. A
 reference stored as a tuple component receives no special dereference behavior.
 
 `str` is an immutable UTF-8 character sequence.
-`String` is the standard-library mutable UTF-8 sequence type. A copied `String`
-is an independent logical value; an implementation may use copy-on-write
-storage. `str` qualifies for `StableHash`; `String` does not.
+`String` is the standard-library mutable UTF-8 sequence type. Copying a
+`String` copies its backing descriptor shallowly; content mutation is visible
+through every descriptor that still reaches the same bytes, while replacing
+one descriptor does not replace another. `str` qualifies for `StableHash`;
+`String` does not.
 
 A string literal materializes as `str` or `String` when an expected type is
 available from a binding annotation, field, argument, or return position. With
@@ -642,14 +690,28 @@ expected collection type. Multiline collection literals permit trailing
 commas. A later duplicate map key replaces the earlier value, while duplicate
 set elements collapse to one element.
 
-Arrays are ordinary fixed-size aggregates and follow recursive logical value
-copying. Arrays qualify for `StableHash` when their element type does.
+Arrays are ordinary fixed-size aggregates and shallow-copy their inline element
+slots. An element that contains a descriptor or handle preserves its backing
+identity. Arrays qualify for `StableHash` when their element type does.
 `Vec.new()`, `Map.new()`, and `Set.new()` are the ordinary associated functions
 for empty collections; populated construction uses the corresponding literal
 form.
 
 The standard-library growable sequence type is `Vec[T]`. `Vector` is not an
 alternative name for this type.
+
+Copying a `Vec[T]` copies its backing pointer, length, and capacity. Element
+writes through any copy are visible through every descriptor whose range
+contains that element. Length and capacity belong to each descriptor: an
+append changes only the receiver descriptor's length, reuses shared backing
+when capacity permits, and otherwise gives that descriptor newly allocated
+backing. Whether two vector descriptors continue sharing after growth may
+therefore depend on allocation history.
+
+Copying a `Map[K, V]` or `Set[T]` preserves the identity of the complete table,
+including its current length. Insert, replacement, removal, and `clear` through
+one copy are visible through every copy. Copying an aggregate containing any of
+these collections follows the same shallow rule for its collection fields.
 
 `Map[K, V]` keys and `Set[T]` elements must have the compiler-controlled
 `StableHash` capability. `StableHash` guarantees that equality and hashing do
@@ -670,7 +732,7 @@ rather than target contents and are compiler-known exceptions that qualify for
 must exactly match `ReferenceType`.
 
 Array and `Vec` indices have type `usize`. Indexing either in value context
-produces an ordinary independent copy of the selected element. An out-of-bounds
+produces an ordinary shallow copy of the selected element. An out-of-bounds
 index traps; an index that is statically known to be out of bounds for an array
 is a compile-time error. Through a mutable collection path, indexing may select
 an assignable element for replacement, compound assignment, or direct
@@ -683,19 +745,18 @@ they have no structural mutation operations.
 `insert(index, value) -> ()`, `remove(index) -> T`, and `clear() -> ()`.
 Insertion accepts an index from zero through the current length, inclusive;
 removal requires an index below the current length. An invalid index traps, and
-`remove` returns the removed element as an ordinary independent value.
+`remove` returns a shallow copy of the removed element.
 
-Indexing a `Map[K, V]` with a `K` in value context independently copies the
-stored value and traps when the key is absent. Through a mutable map path, an
+Indexing a `Map[K, V]` with a `K` in value context shallow-copies the stored
+value and traps when the key is absent. Through a mutable map path, an
 indexed value may be replaced or directly mutated as an assignable place, but
 it is not addressable for reference formation. An indexed mutable place requires
 an existing key and traps if the key is absent; insertion uses `insert`. Map key
 arguments are passed by the language's ordinary copy semantics. `Map` provides `len() -> usize`,
 `is_empty() -> bool`, `contains_key(key) -> bool`,
 `get(key) -> Option[V]`, `insert(key, value) -> Option[V]`,
-`remove(key) -> Option[V]`, and `clear() -> ()`. `insert` returns the replaced
-value as an ordinary independent value, if any; `remove` similarly returns the
-removed value.
+`remove(key) -> Option[V]`, and `clear() -> ()`. `insert` returns a shallow copy
+of the replaced value, if any; `remove` similarly returns the removed value.
 
 `Set` has no indexing operation. It provides `len() -> usize`,
 `is_empty() -> bool`, `contains(value) -> bool`, `insert(value) -> bool`,
@@ -773,8 +834,8 @@ explicit indirection type: `&T`,
 `&var T`, `*T`, or `*var T`. Generic wrappers such as `Option[T]` and `Vec[T]`
 and transparent type aliases do not break a containment cycle. This rule makes
 recursive identity, aliasing, and mutability visible in source types. Hidden
-managed storage used to implement a value or copy-on-write optimization does
-not count as explicit indirection.
+managed backing used to implement a descriptor-bearing standard type does not
+count as explicit indirection.
 
 ~~~elx
 struct Chain[T]:
@@ -906,9 +967,12 @@ are conditional on the corresponding capabilities of their components.
 
 Safe references compare target storage identity rather than target contents.
 Trait-object references likewise compare their concrete target identity. Raw
-pointers compare address identity, including comparison with `null`. References,
-trait-object references, and raw pointers have no relational ordering. Function
-references compare their target-function identity as defined in Section 5.
+pointers compare address identity with safe `==` and `!=`, including comparison
+with `null`. Raw data pointers additionally have the unsafe relational operators
+specified in Section 3.3; those operators are primitive provenance-sensitive
+operations and do not implement `PartialOrd` or `Ord`. Safe references and
+trait-object references have no relational ordering. Function references
+compare their target-function identity as defined in Section 5.
 Content comparison through references is explicit, as in
 `*left == *right`. Because recursive aggregate edges cross explicit reference
 or pointer types and those edges compare by identity, compiler-derived
@@ -973,7 +1037,7 @@ example `&fn(i32, ...String) -> ()`. Elamite lowers this form as a slice
 argument rather than as C's untyped variadic calling convention. The packed
 arguments use managed backing storage, so the slice remains valid if it is
 returned, stored, or captured after the call. A slice is immutable: indexing
-and iteration produce independent copies rather than mutable interior places.
+and iteration produce shallow copies rather than mutable interior places.
 It provides `len() -> usize`, checked indexing, and `for` iteration in index
 order.
 
@@ -1089,7 +1153,7 @@ perform anonymous recursion.
 Captures are evaluated exactly once from left to right when execution reaches
 the closure expression:
 
-- `value` stores an independent logical copy;
+- `value` stores an ordinary shallow copy;
 - `&value` forms a shared reference to addressable storage;
 - `&var value` forms a mutable reference and requires mutable storage;
 - `*pointer` copies a raw pointer, downgrading `*var T` to `*T` when needed;
@@ -1099,15 +1163,18 @@ A raw-pointer local cannot use the plain capture form. Raw-pointer captures do
 not dereference the pointer or keep its pointee alive. Their later dereference,
 automatic field access, or conversion to a safe reference follows Section 3.3
 and requires an explicit `unsafe:` block. Merely copying, storing, passing, or
-comparing a captured raw pointer remains safe.
+testing equality on a captured raw pointer remains safe; arithmetic, indexing,
+and relational ordering retain their unsafe requirement.
 
 A capture alias cannot be rebound. Mutation through a captured `&var T` or
-`*var T` changes the referenced storage. A plain captured value is private
-environment storage; logically copying the closure recursively copies such
-values, while captured references and raw pointers preserve their ordinary
-alias identity. Closure environments and address-taken captured storage are
-managed, so a safe reference may outlive the source stack frame. A raw pointer
-alone never roots its pointee.
+`*var T` changes the referenced storage. A plain capture owns its copied inline
+environment slot, but descriptors and handles in that slot retain their shallow
+backing identity. Constructing the closure creates that environment once;
+copying the closure value copies its callable descriptor and preserves the
+environment identity rather than allocating or copying the environment again.
+Closure environments and address-taken captured storage are managed, so a safe
+reference may outlive the source stack frame. A raw pointer alone never roots
+its pointee.
 
 The return annotation is optional. Explicit `return` expressions and an
 expected callable result constrain one exact inferred type; every returned
@@ -1387,8 +1454,8 @@ same types.
 
 A guarded arm uses `Pattern if condition:`. Its bindings are in scope in the
 boolean guard. A failed guard proceeds to the next arm, and guarded arms do not
-contribute to exhaustiveness. Pattern bindings receive ordinary independent
-value copies and behave as `let` bindings. Matching a reference does not
+contribute to exhaustiveness. Pattern bindings receive ordinary shallow copies
+and behave as `let` bindings. Matching a reference does not
 implicitly dereference it; code matches `*reference` when content matching is
 intended.
 
@@ -1409,7 +1476,9 @@ first and then each argument in source order. `&&` and `||` require `bool` and
 short-circuit; `!` is boolean negation. Unary `+` accepts numeric values, unary
 `-` accepts signed integers and floating-point values, and `~` accepts integers.
 Arithmetic and bitwise operators are initially built-in rather than
-user-overloadable; comparison operators use the traits defined in Section 4.5.
+user-overloadable; comparison operators use the traits defined in Section 4.5
+except for the compiler-recognized raw-pointer equality and unsafe relational
+operations in Section 3.3.
 `%` accepts integers only. A shift count must have an unsigned integer type and
 be smaller than the bit width of the left operand. Chained comparisons such as
 `a < b < c` are invalid.
@@ -1444,17 +1513,20 @@ The initial `for` statement directly supports slices, arrays, `Vec`, `Map`, and
 `Set`; there is no user-defined iteration protocol or source-level iterator
 type yet.
 The iterable expression is evaluated exactly once and copied into hidden loop
-state using ordinary logical value semantics. Later mutation of the source
-collection therefore cannot affect the active loop. An implementation may use
-copy-on-write storage so long as this independence remains unobservable.
+state using ordinary shallow value semantics. For a vector, the hidden
+descriptor fixes the loop length while element replacement through another
+descriptor remains visible when both still share backing. Length-changing
+vector mutation through any alias while that vector is being iterated is
+undefined behavior. Inserting, removing, or clearing a map or set during active
+iteration through any alias is likewise undefined behavior; replacing an
+existing map value may be observed by a later iteration step.
 
 Slices, arrays, and vectors iterate in index order. Maps yield `(K, V)` pairs,
 and sets yield their elements; map and set iteration order is unspecified and
 may vary between executions. Each yielded element, key, or value is
-independently copied into the loop's non-rebindable binding. Iteration exposes
-no safe references to collection interiors. It visits only direct elements and
-does not recursively traverse targets reached through explicit reference-like
-values.
+shallow-copied into the loop's non-rebindable binding. Iteration exposes no safe
+references to collection interiors. It visits only direct elements and does not
+recursively traverse targets reached through descriptors or references.
 
 ### 7.2 Formatted strings and display
 
@@ -1503,9 +1575,9 @@ for value in @vec[1, 2, 3]:
 Recoverable errors use `Result[T, E]`. Applying postfix `?` to a
 `Result[T, E]` is valid only inside a function returning `Result[U, E]` with
 the exact same error type. The operand is evaluated exactly once. `Ok(value)`
-copies `value` and makes the independent logical value the value of the postfix
-expression. `Err(error)` independently copies `error` and immediately returns
-`Result.Err(error)` from the enclosing function.
+shallow-copies `value` into the value of the postfix expression. `Err(error)`
+shallow-copies `error` and immediately returns `Result.Err(error)` from the
+enclosing function.
 
 `?` is the explicit exception to the general requirement that returning from a
 function uses `return`. It performs no implicit error conversion. A caller must
@@ -1751,8 +1823,8 @@ collection callbacks. Garbage collection never invokes resource-cleanup
 methods. The runtime may perform internal reclamation work only when it invokes
 no user code and creates no observable external-resource cleanup behavior.
 
-Managed allocation failure is unrecoverable because ordinary copying,
-copy-on-write mutation, and escape promotion may allocate implicitly.
+Managed allocation failure is unrecoverable because construction, collection
+growth, formatting, and escape promotion may allocate implicitly.
 Before reporting out-of-memory, the runtime must attempt a full collection. If
 allocation still fails, it terminates the process with an out-of-memory
 diagnostic. OOM is not represented by `Result`, cannot be caught, and does not
@@ -1978,102 +2050,108 @@ C++ exceptions, `longjmp`, or any other foreign unwinding across an Elamite
 frame are forbidden and cause undefined behavior. Foreign code must catch or
 contain them and translate them before returning through the C boundary.
 
-### 10.4 Native threads, transfer, and synchronization
+### 10.4 Native threads, shared memory, and synchronization
 
 Elamite exposes native parallelism through ordinary declarations in
 `std.thread` and `std.sync`. It adds no thread, task, `concurrent`, `async`, or
 `await` grammar. `std.thread.spawn` accepts one safe zero-argument callable,
-evaluates it exactly once, makes a transfer copy of its environment, starts one
-native thread eagerly, and returns
+evaluates it exactly once, shallow-copies its environment, starts one native
+thread eagerly, and returns
 `Result[std.thread.Thread[R], std.thread.SpawnError]`. Operating-system thread
 creation failure is recoverable; allocation failure retains the process-fatal
 out-of-memory behavior.
 
-A spawned callable and its result must satisfy the compiler-recognized
-structural `Transfer` capability. `Transfer` means that an independent logical
-copy may be used on another thread while the source remains usable. Primitive
-values, strings, function references, and ordinary tuples, arrays, structs,
-enums, closures, and collections satisfy `Transfer` exactly when every
-contained value does. A generic value is transferable only under a matching
-`Transfer` bound. Safe references, mutable references, raw pointers, mutable
-raw pointers, slices, and trait-object references do not satisfy `Transfer`.
-Concurrency-aware standard handles have explicit compiler-reviewed
-`Transfer` behavior. A foreign wrapper may opt in only with an `unsafe impl
-Transfer`; its author guarantees the validity, lifetime, and synchronization
-of every shared address reachable through its copies.
-
-A transfer copy recursively detaches ordinary owned backing storage before the
-destination thread may observe it. Copy-on-write storage may remain physically
-shared only when its reference counts, reads, and detach-on-write operations
-are thread-safe. Approved synchronization handles are the deliberate
-exception: copying a thread, channel endpoint, mutex, or atomic handle
-preserves its synchronized runtime identity.
+There is no `Transfer` capability and no automatic detachment at a thread
+boundary. References, raw pointers, slices, trait objects, strings, collections,
+closures, and aggregates preserve the same shallow identities they preserve in
+ordinary single-threaded copies. A safe reference remains a managed strong path
+when reachable from a registered thread. A raw pointer remains non-rooting, and
+its unsafe provenance, lifetime, bounds, alignment, initialization, write, and
+synchronization obligations are unchanged when it crosses a thread boundary.
 
 `std.thread.Thread[R]` is a copyable identity handle. Every copy names the same
 native thread and cached result. The runtime performs the operating-system join
-at most once, and each successful `join()` returns an independent transfer copy
-of the cached `R`. Joining the current thread traps. Cyclic joins may deadlock
-and need not be detected. A thread handle is transferable exactly when `R` is
-transferable. Threads are joinable and never implicitly detached; losing every
-source handle neither stops nor detaches a thread. After the program entry
-function returns normally and its deferred cleanup completes, runtime shutdown
-waits for every remaining Elamite-created thread. There is no initial
-cancellation, interruption, or detach operation.
+at most once, and each successful `join()` returns a shallow copy of the cached
+`R`; mutable backing in repeated join results may therefore be shared. Joining
+the current thread traps. Cyclic joins may deadlock and need not be detected.
+Threads are joinable and never implicitly detached; losing every source handle
+neither stops nor detaches a thread. After the program entry function returns
+normally and its deferred cleanup completes, runtime shutdown waits for every
+remaining Elamite-created thread. There is no initial cancellation,
+interruption, or detach operation.
 
-A thread body is a safe function boundary. Its `defer` registrations run on
-every ordinary exit, including postfix `?`. Returning `Result[T, E]` produces
-the ordinary value `Thread[Result[T, E]]`; it is not a thread-failure channel.
-A runtime trap, `std.panic`, or out-of-memory failure on any thread terminates
-the complete process and is never converted to a join result or unwound through
-another thread or C frame.
+A thread body is a safe function boundary only in the lexical sense: it begins
+outside `unsafe`, owns its `return` and postfix-`?` context, and runs its `defer`
+registrations on ordinary exit. This does not imply data-race freedom. Returning
+`Result[T, E]` produces `Thread[Result[T, E]]`; it is not a thread-failure
+channel. A runtime trap, `std.panic`, or out-of-memory failure on any thread
+terminates the complete process and is never converted to a join result or
+unwound through another thread or C frame.
 
 `std.sync.channel[T](capacity: usize)` creates a bounded multi-producer,
 multi-consumer channel and returns `(Sender[T], Receiver[T])`. Capacity zero is
 a rendezvous channel. `std.sync.unbounded_channel[T]()` creates an unbounded
-channel. Sending evaluates its argument once, makes a transfer copy, and
-reports closure recoverably. Blocking receive returns `Option[T]`, with `None`
-only after closure and draining. Nonblocking operations distinguish full,
-empty, and closed states. Copies of an endpoint share synchronized identity.
-Closure is explicit and idempotent; garbage collection or loss of the last
-visible endpoint never closes a channel.
+channel. Sending evaluates its argument once, shallow-copies it into the
+message, and reports closure recoverably. Blocking receive returns `Option[T]`,
+with `None` only after closure and draining. Nonblocking operations distinguish
+full, empty, and closed states. Copies of an endpoint share synchronized
+identity. Channel synchronization safely publishes the copied descriptor and
+all writes sequenced before the send; it does not synchronize later access to
+mutable backing shared by sender and receiver. Closure is explicit and
+idempotent; garbage collection or loss of the last visible endpoint never
+closes a channel.
 
-`std.sync.Mutex[T]` is a copyable synchronized identity handle containing a
-transferable value. It provides copy-based `new`, `read`, `replace`, and atomic
-`update` operations. No operation exposes `&T`, `&var T`, or a guard containing
-one, so a reference into protected storage cannot escape after unlocking. An
-update callable receives an independent `T` and returns its replacement while
-the mutex remains locked. Recursive locking and general lock cycles may
-deadlock. Mutex poisoning is unnecessary because an unrecoverable thread
-failure terminates the process.
+`std.sync.Mutex[T]` remains a copyable synchronized identity handle with
+`new`, `read`, `replace`, and atomic `update` operations, but shallow copying
+makes it a synchronization tool rather than an alias-isolation boundary.
+`new`, `read`, `replace`, and the value passed to and returned from `update`
+all use ordinary shallow copying. An alias retained outside the mutex may reach
+the same backing as its stored value, and the programmer must ensure that every
+conflicting access uses a consistent synchronization protocol. Operations on
+the mutex serialize only callers using that same handle; the compiler does not
+associate a backing allocation with a particular mutex. Recursive locking and
+general lock cycles may deadlock. Mutex poisoning is unnecessary because an
+unrecoverable thread failure terminates the process.
 
 `std.sync.AtomicBool`, `std.sync.AtomicI32`, and `std.sync.AtomicUsize` are
-copyable handles to shared atomic cells rather than independent scalar values.
-They provide load, store, exchange, compare-exchange, and the applicable
-integer read-modify-write operations. Spawn, completion, join, channel, mutex,
-and atomic operations are sequentially consistent and establish the documented
-publication and observation edges. Weaker memory-ordering arguments are not
-exposed. The C99 backend implements these operations through runtime/compiler
-hooks rather than C11 `_Atomic`, including target-width `usize` behavior on
-x86.
+copyable handles to shared atomic cells. They provide load, store, exchange,
+compare-exchange, and the applicable integer read-modify-write operations.
+Their operations are sequentially consistent. The C99 backend implements them
+through runtime/compiler hooks rather than C11 `_Atomic`, including target-width
+`usize` behavior on x86.
 
-Safe Elamite programs are data-race free. Scheduling, fairness, relative
-completion, and cross-thread output-call order are unspecified. Each complete
-standard-output call is internally synchronized so concurrent calls cannot
-corrupt one another. Blocking synchronization may deadlock; self-join is the
-only initially required deadlock trap. Unsynchronized concurrent access
-constructed through unsafe code or FFI is undefined behavior.
+Two evaluations conflict when they access the same scalar object or overlapping
+bytes and at least one writes. Conflicting evaluations on different threads
+that are not ordered by a synchronization edge constitute a data race and make
+program behavior undefined. Ordinary collection access needs no `unsafe`
+syntax merely because backing is shared: synchronization is the programmer's
+responsibility. Bounds checks, managed lifetime, and ordinary type checks remain
+in force for executions without undefined behavior, but they do not repair a
+data race in the generated C99 program.
+
+Thread creation orders prior evaluations before the new thread begins. A mutex
+unlock within an operation orders prior evaluations before a later successful
+lock of the same mutex. A successful channel send orders message initialization
+and earlier evaluations before the matching receive. Thread completion orders
+prior evaluations before a successful `join()` returns. Sequentially consistent
+atomic operations participate in one total order. These edges may be composed;
+no other ordinary shallow copy creates synchronization.
+
+Scheduling, fairness, relative completion, and cross-thread output-call order
+are unspecified. Each complete standard-output call is internally synchronized
+so concurrent calls cannot corrupt one another. Blocking synchronization may
+deadlock; self-join is the only initially required deadlock trap.
 
 Every runtime-created thread registers with the garbage collector before it
-executes Elamite code. Its stack, transfer environment, synchronized queues and
+executes Elamite code. Its stack, shallow environment, synchronized queues and
 cells, and unpublished or published result remain visible roots. It unregisters
 only after publishing its result. Completed thread state becomes reclaimable
 after all managed roots to its handles and result disappear.
 
 Cooperative tasks, executors, futures, `async`/`await`, detached execution,
 cancellation, interruption, timeouts, thread-local storage, relaxed atomics,
-scoped reference transfer, guards exposing protected references, parallel
-iterators, fairness guarantees, general deadlock detection, and foreign-thread
-attachment are outside this contract.
+parallel iterators, fairness guarantees, general deadlock detection, automatic
+race prevention, and foreign-thread attachment are outside this contract.
 
 ## 11. Conformance example
 

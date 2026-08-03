@@ -181,7 +181,7 @@ test assertions_hold_for_defined_behavior:
     assert(u8.saturating_from(300) == 255)
     assert(-2.9f64 as i32 == -2)
 
-test copies_stay_independent:
+test vector_copies_share_elements_but_not_descriptor_state:
     var first = @vec[1, 2]
     let second = first
     first.append(3)

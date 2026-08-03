@@ -108,6 +108,7 @@ impl<'a> TypedLowerer<'a> {
             self.resolved,
             &self.typed.types,
         );
+        super::super::reuse::apply_temporary_and_return_reuse(&mut program);
         TypedIrOutput {
             program,
             diagnostics: self.diagnostics,
@@ -126,16 +127,11 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn copy_facts(&self, ty: TypeId, context: LogicalCopyContext) -> LogicalCopyFacts {
-        let allocation = match logical_copy_strategy(&self.typed.types, ty) {
-            LogicalCopyStrategy::Trivial => LogicalCopyAllocation::None,
-            LogicalCopyStrategy::PreserveIdentity => LogicalCopyAllocation::PreserveIdentity,
-            LogicalCopyStrategy::Recursive => LogicalCopyAllocation::Recursive,
-            LogicalCopyStrategy::OwnedString => LogicalCopyAllocation::OwnedBuffer,
-            LogicalCopyStrategy::RuntimeManaged => LogicalCopyAllocation::RuntimeManaged,
-        };
+        let allocation = logical_copy_allocation(&self.typed.types, ty, context.purpose);
         LogicalCopyFacts {
             context,
             allocation,
+            mode: LogicalCopyMode::Materialize,
         }
     }
 

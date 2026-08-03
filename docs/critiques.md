@@ -12,6 +12,12 @@
 > the specification closely but has not written substantial programs in the
 > language, so these notes address design coherence rather than ergonomics in
 > practice.
+>
+> Historical scope: this review evaluated the 0.9 independent-copy,
+> data-race-free design. Specification 0.10 deliberately adopts shallow copies
+> and programmer-managed shared-memory concurrency. Sections praising or
+> criticizing deep-copy/COW/`Transfer` semantics are retained as design history,
+> not descriptions of the accepted language.
 
 ## 1. What the design gets right
 
@@ -42,11 +48,12 @@ particular is a decision most languages get wrong and can never reverse.
 
 ## 2. Principal critique: copy costs have no normative guarantee
 
-> Current response: partially addressed. `cost_model.md` now publishes the
-> measured eager-copy implementation model and its maintenance contract, while
-> `roadmap.md` keeps **Value-copy and allocation optimization** as the next
-> milestone. The remaining critique is about implementation cost and normative
-> asymptotic guarantees, not an absence of implementation documentation.
+> Current response: resolved by the 0.10 design and partially implemented.
+> Ordinary copies are normatively shallow; `Vec` copies its fixed-size
+> descriptor, and `Map`/`Set` preserve table identity. Shallow ordinary-copy
+> lowering has landed; the vector descriptor and remaining concurrency
+> migrations are tracked in `roadmap.md`, while `cost_model.md` records the
+> transitional implementation honestly.
 
 ### 2.1 The gap
 
@@ -64,22 +71,22 @@ Three facts together make that the language's most significant open risk:
    predict exactly which `BuiltinTrap` identity a bad index raises — while the
    future cost of the language's most common operation remains unguaranteed.
 
-2. **Copy-on-write is not implemented yet.** `roadmap.md` now commits planned
-   value-copy and allocation work, including COW text and collections, but the
-   shipped representation remains eager. `roadmap.md` 1 still correctly states
-   that "deep copying and conservative heap promotion are acceptable first
-   implementations."
+2. **Copy-on-write is only partially implemented.** `String` now uses an
+   independently redirectable descriptor over thread-safe shared immutable
+   backing, but `Vec`, `Map`, and `Set` remain eager. `roadmap.md` still commits
+   the remaining collection work in that order.
 
 3. **Copying is the default calling convention.** Assignment, ordinary argument
    passing, and ordinary returns all copy (`spec.md` 3.1). The fast path — `&T`
    — is opt-in.
 
-The honest current statement of the implementation cost is therefore: *every
-copy of a `String`, `Vec`, `Map`, or `Set` is O(n).* The language specification
-still permits a conforming implementation to keep it that way even though the
-compiler roadmap now plans otherwise. For a language whose defining
-characteristic is that copies are everywhere, this remains the load-bearing
-gap until the optimized model lands or reviewed normative bounds are accepted.
+The honest current statement of the implementation cost is therefore: *a
+`String` copy is O(1), while every copy of a `Vec`, `Map`, or `Set` is O(n).*
+The language specification still permits a conforming implementation to use
+eager copies even though the compiler roadmap now plans otherwise. For a
+language whose defining characteristic is that copies are everywhere, this
+remains the load-bearing gap until the collection model lands or reviewed
+normative bounds are accepted.
 
 ### 2.2 Why "unobservable" is the wrong framing
 
@@ -149,38 +156,39 @@ implementation choice.
 
 Stated honestly, because the cost is real:
 
-- **A representation change.** Every copy-on-write type carries a reference
-  count. This should be checked against the C ABI type rules in `spec.md` 10.1
-  before being committed to.
+- **A representation change.** Every copy-on-write type needs shared-state
+  metadata. The implemented `String` uses a sticky shared bit rather than a
+  reference count. Each representation should be checked against the C ABI type
+  rules in `spec.md` 10.1 before being committed to.
 - **A detach check on every mutation.** `values[index] = x` and `text.push(c)`
   become a predictable branch, permanently, in the hot path.
-- **Atomic reference-count traffic once threads exist.** `spec.md` 10.4 already
-  requires that copy-on-write reference counts, reads, and detach-on-write
+- **Atomic shared-state traffic once threads exist.** `spec.md` 10.4 already
+  requires that copy-on-write metadata reads, publication, and detach-on-write
   operations be thread-safe for storage to remain shared across a transfer.
-  Naively this is an atomic read-modify-write on every copy and destruction,
-  including in single-threaded programs. Biased or thread-local reference
-  counting recovers most of the cost but is additional work.
+  The implemented `String` performs an atomic operation on every copy but needs
+  no destruction update because its bit is sticky; more precise collection
+  strategies could require additional traffic.
 
 One property materially reduces the difficulty. **Because the collector owns
-reclamation, the reference count drives only a performance decision, never a
+reclamation, the shared marker drives only a performance decision, never a
 safety one.** It answers "am I shared, must I detach?" and not "may I free?"
 Erring toward *detach* is always semantically correct and merely slower, so the
-count may be conservative and approximate in the safe direction. This is a
+metadata may be conservative and approximate in the safe direction. This is a
 substantially weaker obligation than `Rc::make_mut`, where an undercount is
 memory corruption. It also permits shipping a correct implementation early and
 tightening precision later without touching semantics.
 
 ### 2.6 A staged alternative
 
-Committing to asymptotic bounds before copy-on-write exists carries its own
-risk: a bound could be pinned that some future target cannot meet. A lower-risk
-sequence:
+Committing to asymptotic bounds before copy-on-write exists for each relevant
+type carries its own risk: a bound could be pinned that some future target
+cannot meet. A lower-risk sequence:
 
 1. **Completed:** publish a non-normative cost document stating current costs,
    intended improvements, instrumentation limits, and reproducible baselines.
-2. Promote each bound to normative only as its `roadmap.md` package lands, one
-   collection at a time, gated by the before-and-after measurement rule that
-   section already requires.
+2. **In progress:** `String` COW has landed; implement and measure `Vec`, `Map`,
+   and `Set` one at a time, then consider promoting each achieved bound to a
+   normative guarantee.
 3. Independently, strengthen the `spec.md` 10.4 sentence "Copy-on-write storage
    may remain physically shared" into a requirement for the committed types.
    The asymptotic difference is largest there and most surprising to users.

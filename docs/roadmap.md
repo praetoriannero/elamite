@@ -3,11 +3,11 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next required work package: **Value-copy and allocation optimization** —
-> **Temporary and return copy elision**
+> Next required work package: **Shallow-copy and systems-concurrency
+> migration** — **Iteration and mutation invalidation**
 >
-> Basis: `spec.md` version 0.9.0-draft and
-> `examples/spec_demo.elx`
+> Basis: `spec.md` version 0.10.0-draft; `examples/spec_demo.elx` remains the
+> 0.9 implementation demonstration until migration completes
 
 ## Milestone summary
 
@@ -16,14 +16,14 @@ Keep this table synchronized with the detailed status blocks below.
 | Milestone | Status | Current state or next action |
 | --- | --- | --- |
 | [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
-| [Value-copy and allocation optimization](#value-copy-and-allocation-optimization) | In progress — next | Read-only call borrowing is complete; proceed with **Temporary and return copy elision**, then COW collections, transfer separation, and escape analysis in order. |
+| [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | In progress — next | Shallow ordinary copies and collection representations are complete; reconcile iteration invalidation next, then migrate concurrency, mutexes, pointer operations, and memory-model conformance in order. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | Optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
 | [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The `std.ast` 1.0 façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete. |
 | [Interpreter-backed macros, attributes, and derives](#interpreter-backed-macros-attributes-and-derives) | Complete | All three stable compile-time declaration forms expand through the ordinary semantic pipeline. |
 | [Compile-time diagnostics, tooling, and stabilization](#compile-time-diagnostics-tooling-and-stabilization) | Complete | Expansion diagnostics, recovery, inspection, reproducibility, robustness, compatibility, and stabilization are complete. |
 | [Explicit-capture closures](#explicit-capture-closures) | Complete | Closure syntax, typing, capture semantics, IR/backend lowering, cross-feature behavior, and conformance are complete. |
-| [Standard-library concurrency](#standard-library-concurrency) | Complete | Threads, structural transfer, channels, copy-based mutexes, atomics, GC integration, callbacks, and target conformance are complete. |
+| [Standard-library concurrency](#standard-library-concurrency) | Revision planned | The 0.9 structural-transfer runtime is implemented; 0.10 removes `Transfer`, makes thread and channel copies shallow, and assigns race prevention to programmers and synchronization APIs. |
 | [User-defined iteration](#user-defined-iteration) | Planned | Decide and record the iteration contract before any lowering work; it gates iterable standard-library APIs. |
 | [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
 | [Standard-library expansion](#standard-library-expansion) | Planned | Add filesystem, process and environment, time, ordering, text, and randomness modules as independently reviewed packages. |
@@ -65,8 +65,9 @@ conflicts with the specification, the specification wins and this plan must be
 updated.
 
 Concurrency is a post-closure extension to the initial implementation plan.
-The **Standard-library concurrency** milestone records its normative
-native-thread and synchronization design and implemented runtime surface.
+The **Standard-library concurrency** milestone records the implemented 0.9
+runtime baseline; the active migration milestone owns the normative 0.10
+shallow shared-memory revision.
 
 ## 1. Implementation strategy
 
@@ -103,11 +104,13 @@ Each representation should have one clear responsibility:
   functions, types, and trait implementations.
 - The C backend selects representations and emits strictly sequenced C.
 
-The initial implementation should favor correctness and inspectability over
-optimization. In particular, deep copying and conservative heap promotion are
-acceptable first implementations. Copy-on-write values, precise escape
-analysis, incremental compilation, and aggressive C output optimization should
-come only after the relevant semantics have conformance tests.
+The 0.9 implementation favored correctness and inspectability through deep
+copying and conservative promotion. Specification 0.10 deliberately changes
+ordinary copying to shallow representation copying and adopts programmer-managed
+shared-memory concurrency. The migration must preserve explicit IR facts until
+every ordinary, thread, channel, mutex, closure, pattern, and collection copy
+site follows the revised contract; precise escape analysis, incremental
+compilation, and aggressive C output optimization remain later work.
 
 ## 2. Cross-cutting engineering rules
 
@@ -162,7 +165,7 @@ Maintain four main kinds of tests:
 
 Add focused property or fuzz tests for indentation, literal parsing, parser
 recovery, numeric boundaries, match exhaustiveness, generic instantiation, and
-copy independence once those subsystems exist.
+copy and alias behavior once those subsystems exist.
 
 Each language feature should normally have at least:
 
@@ -214,7 +217,7 @@ intermediate semantics that contradict it.
 > explicit copied bytes, and fixed release workloads establish the baseline.
 >
 > Blocked by: **None**. Its measured baseline should precede
-> **Value-copy and allocation optimization**.
+> **Shallow-copy and systems-concurrency migration**.
 
 **Goal:** Give programmers a usable, versioned account of where Elamite copies,
 allocates, promotes storage, retains memory, and synchronizes, while keeping
@@ -234,36 +237,39 @@ costs have been reviewed separately.
 | **Published cost model (done)** | Add a non-normative `cost_model.md` describing current asymptotic behavior, likely allocation sites, GC retention and nondeterminism, conservative promotion, explicit alias and synchronized-handle costs, and the intended optimized model. | A programmer can predict which source operations may allocate or copy proportionally to data size and can tell a guarantee from an implementation note or optimization target. |
 | **Cost-document maintenance contract (done)** | Define the review rule for representation, lowering, runtime, and optimizer changes that alter documented costs, including required before/after measurements and release-note updates. | A cost-changing implementation cannot be marked complete while `cost_model.md` still describes the previous behavior. |
 
-### Value-copy and allocation optimization
+### Shallow-copy and systems-concurrency migration
 
-> Status: In progress. Read-only call borrowing is complete; the next package
-> is **Temporary and return copy elision**. The accepted direction
-> preserves independent logical value semantics, explicit `&T`/`&var T`
-> aliasing, and data-race-free safe concurrency; it does not adopt Go-style
-> mutable shallow copies or add a source-level move operation.
+> Status: In progress. The normative 0.10 documentation revision is complete;
+> ordinary assignment, calls, returns, captures, patterns, indexing, and
+> propagation now copy shallowly, and standard collections use their accepted
+> shallow representations. The compiler still retains the 0.9 structural
+> `Transfer` boundary. The next package is **Iteration and mutation
+> invalidation**.
 >
-> Depends on: **Memory cost model documentation** and **Standard-library
-> concurrency** (complete).
+> Depends on: **Memory cost model documentation** and the implemented 0.9
+> **Standard-library concurrency** runtime.
 
-**Goal:** Approach the cost of read-only Go-style descriptor passing without
-adopting Go-style implicit mutable aliasing. The compiler may borrow, reuse, or
-share physical storage only when ordinary Elamite copying remains
-observationally independent.
+**Goal:** Implement Go-like shallow ordinary values and C-like shared-memory
+concurrency without weakening existing type, bounds, managed-lifetime, raw
+pointer, trap, evaluation-order, or C99 guarantees beyond the explicitly
+revised copy and data-race contracts.
 
-Work packages are ordered. Each must retain a conservative eager-copy fallback
-when its proof or representation preconditions are not met.
+Work packages are ordered. The compiler must not advertise conformance to
+0.10 until every old deep-copy and `Transfer` boundary has migrated.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Copy-cost instrumentation seam (done)** | Carry logical-copy kind, source/destination lifetime, allocation class, and transfer-versus-ordinary purpose far enough through typed and control-flow IR to measure and select optimizations without backend guesswork. | Debug instrumentation accounts for every emitted logical copy exactly once and has no release-build semantic effect. |
-| **Read-only call borrowing (done)** | Pass large ordinary arguments through hidden read-only storage when local or interprocedural analysis proves the callee cannot mutate, retain, return, or expose that storage; materialize an ordinary copy before any unproven escape. This is an implementation choice, not an implicit source `T` to `&T` conversion. | Direct, generic, trait, closure, recursive, FFI-adjacent, deferred, and escaping calls preserve value behavior, evaluation order, source lifetime, and the explicit reference type system. |
-| **Temporary and return copy elision** | Reuse fresh temporary, argument, aggregate-construction, closure-environment, and return storage when the source is dead and independence cannot become observable. Record the decision as an explicit internal move/reuse operation with no source syntax. | Branches, traps, postfix `?`, `defer`, patterns, repeated use, and nested aggregates never consume a source that remains observably usable. |
-| **Copy-on-write `String`** | Replace eager owned-text copies with constant-size logical handles and shared immutable backing, detaching before every mutation and preserving exact text, formatting, comparison, and concatenation behavior. | Read-only copies cease copying bytes; first mutation detaches once; aliases to the value's place, transfer boundaries, and OOM behavior remain correct. |
-| **Copy-on-write `Vec`** | Give each logical vector value an independently redirectable descriptor over potentially shared backing; lower mutable receiver operations against the owning place so detach changes only that value. | Element and nested-place mutation, growth, removal, clear, concatenation, indexing, closure capture, and loop snapshots remain independent under adversarial copy/mutate sequences. |
-| **Copy-on-write `Map` and `Set`** | Add independently redirectable COW backing for maps and sets after the vector representation is proven, retaining key stability, value copying, hashes, and unspecified iteration order. | Insert, replace, remove, clear, nested values, iteration snapshots, and collision-heavy workloads preserve semantics and detach only when required. |
-| **Ordinary/transfer copy separation** | Make ordinary logical-copy and cross-thread transfer-copy operations distinct in IR and generated helpers. Initially detach or deep-copy ordinary backing at transfer; permit physical cross-thread COW sharing only after its shared-state protocol is race-free on x86 and x86-64. | Spawn environments/results, channel messages, mutex values, and repeated joins remain independent; synchronized identity handles remain shared; sanitizer and contention suites detect no unsynchronized backing access. |
-| **Precise escape analysis** | Keep proven nonescaping address-taken locals and referenced temporaries on the stack while retaining conservative managed promotion for returned, stored, captured, trait-object, deferred, foreign, or otherwise uncertain references. | Root lifetime and identity match the current conservative implementation, including interior and aggregate references, while measured nonescaping cases allocate no managed cell. |
-| **Optimization and cost-model conformance** | Run the full semantic suite plus before/after time, allocation, copied-byte, retained-memory, and cross-thread stress comparisons; update `cost_model.md` with achieved behavior and separately review any proposed normative bound. | Read-heavy copies and calls improve materially on the recorded workloads, mutation-heavy regressions are reported rather than hidden, and no cost claim exceeds the tested target matrix. |
+| **Normative shallow-memory revision (done)** | Revise `spec.md`, `ledger.md`, the roadmap, issues/history notes, and current-versus-planned cost documentation for shallow fieldwise copies, shared collection backing, programmer-managed races, and unsafe pointer traversal. | One normative rule owns assignment, calls, captures, patterns, collections, threads, channels, mutexes, pointer arithmetic/indexing/ordering, null ordering, and undefined behavior. |
+| **Retain the measurement seam (done)** | Keep the existing logical-copy inventory, read-only call analysis, temporary reuse facts, and pre-revision benchmark as migration evidence rather than deleting phase boundaries prematurely. | Tests can distinguish old materialized copies from new shallow copies and benchmark observations remain comparable without becoming semantic thresholds. |
+| **Shallow ordinary-copy lowering (done)** | Change assignment, arguments, returns, tuple destructuring, pattern binding, closure capture/copy, indexing results, postfix `?`, and aggregate operations to copy only immediate representations; retain explicit IR inventory while ordinary C lowering bypasses recursive transfer helpers. | Scalars and inline slots remain independent, while descriptor-bearing nested fields and copied closure environments observably preserve identity through calls, returns, captures, patterns, and repeated copies; the focused alias matrix passes in debug and release. |
+| **Shallow standard collection representations (done)** | Replace String COW detachment and eager ordinary collection duplication with the specified mutable `String` and Go-like `Vec` descriptors plus identity-preserving `Map` and `Set` tables. | String byte mutation aliases; vector element writes alias while length/capacity stay descriptor-local and growth may diverge; map/set structural mutation is visible through every copy. |
+| **Iteration and mutation invalidation** | Lower hidden loop state as a shallow copy and enforce or document the specified invalidation boundary for length-changing vector and structural map/set mutation during iteration. | Element/value replacement visibility, vector growth divergence, invalid mutation cases, and left-to-right evaluation match Section 7.1 without dangling generated-C storage. |
+| **C-like thread and channel publication** | Remove structural `Transfer` checking and recursive transfer helpers; shallow-copy spawn environments, cached join results, repeated joins, and channel messages while retaining native publication and GC rooting. | References, pointers, slices, trait objects, and collection backing can cross threads; pre-publication writes are observed; unsynchronized conflicting access is treated as UB rather than rejected or detached. |
+| **Programmer-managed mutex contract** | Update `Mutex[T]` operations to shallow values and verify that locking serializes callers without claiming that external aliases are isolated or compiler-associated with the mutex. | Tests demonstrate correct synchronized sharing and deliberately racy fixtures remain sanitizer-only negative evidence rather than ordinary executions. |
+| **Unsafe pointer arithmetic and indexing** | Add `*T`/`*var T` element-scaled `+`, `-`, `+=`, `-=`, same-extent subtraction to `isize`, and `pointer[index]` places for complete nonzero-sized data pointees. | Precedence, inference, mixed mutability, one-past construction, assignment, single evaluation, null/alignment traps, incomplete types, both pointer widths, and generated C99 are covered. |
+| **Unsafe pointer relational ordering** | Add `<`, `<=`, `>`, and `>=` as primitive unsafe raw-data-pointer operations without `PartialOrd`/`Ord`; define null below all non-null pointers and require common live extent for two non-null operands. | Null cases lower without invalid C null ordering, same-extent loops work, statically evident invalid forms diagnose, and unrelated non-null ordering remains documented UB. |
+| **Concurrent memory-model conformance** | Test thread-start, mutex, channel, join, and sequentially consistent atomic ordering; document that ordinary shared access needs no `unsafe` and that conflicting unordered C99 accesses are UB. | Correctly synchronized stress remains TSan-clean, race-producing samples are never run as conformance programs, and no documentation claims safe code is data-race-free. |
+| **Cost-model and release migration** | Run comparable before/after memory baselines once lowering changes, replace the current 0.9 cost tables with achieved shallow-copy costs, and record the semantic break in release documentation and version output. | `elamc --version`, README, demo, cost model, fixtures, x86/x86-64 matrices, and release evidence all identify one implemented specification revision. |
 
 ### Post-conformance optimization
 
@@ -281,6 +287,7 @@ proposals, not a promise to implement all of them in table order:
 | --- | --- | --- |
 | **Optimization benchmark gate** | Choose a measured problem, record a reproducible before-state, and define the expected improvement before changing lowering. | The complete compiler-architecture refactor baseline remains available for comparison. |
 | **Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and copy semantics do not change. |
+| **Precise escape analysis** | Keep proven nonescaping address-taken locals and referenced temporaries on the stack while retaining conservative managed promotion for returned, stored, captured, deferred, foreign, or otherwise uncertain references. | Root lifetime and identity match the managed-lifetime contract while measured nonescaping cases allocate no managed cell. |
 | **Devirtualization** | Replace a trait-object call with static dispatch only when the concrete target is proven and evaluation is unchanged. | Vtable-visible behavior, target identity, object safety, and source-order evaluation remain intact. |
 | **Incremental queries** | Introduce stable query boundaries for parsing, resolution, typing, and lowering. | Cache keys include all semantic inputs and clean/incremental outputs are byte-identical. |
 | **Dependency artifact cache** | Reuse built package artifacts by deterministic package identity, target, options, compiler/spec revision, and dependency keys. | Stale artifacts cannot cross package instances or target widths. |
@@ -320,8 +327,8 @@ The implementation must preserve these boundaries throughout the transition:
 
 ### Macro expansion foundations
 
-> Status: Complete against the revised compile-time design in `spec.md`
-> 0.9.0-draft.
+> Status: Complete. The compile-time surface is unchanged by `spec.md`
+> 0.10.0-draft.
 >
 > Blocked by: **None**. It is independent of **Package tests, typed traps, and
 > runner**.
@@ -411,7 +418,9 @@ stable without an experimental gate.
 
 ### Explicit-capture closures
 
-> Status: Complete and conformed against `spec.md` 0.9.0-draft.
+> Status: Complete; 0.10 shallow capture construction and closure-copy identity
+> are implemented. Cross-thread closure publication remains in the concurrency
+> packages of **Shallow-copy and systems-concurrency migration**.
 >
 > Blocked by: **None**. **Standard-library concurrency** is blocked by this
 > milestone because spawned thread bodies rely on closures.
@@ -432,7 +441,7 @@ The accepted surface has these boundaries:
   while module declarations, imports, types, and named functions need no
   capture;
 - captures are constructed once, from left to right, when evaluation reaches
-  the closure expression. A plain capture takes an independent logical copy,
+  the closure expression. A plain capture takes an ordinary shallow copy,
   `&name` forms a shared reference to the binding's storage, and `&var name`
   forms a mutable reference to mutable binding storage. Captures may use an
   explicit local alias to avoid collisions with parameters or other bindings;
@@ -440,17 +449,18 @@ The accepted surface has these boundaries:
   pointer to `*T`; `*var pointer` requires and preserves `*var T`. Neither form
   dereferences the pointer or keeps its pointee alive, and a directly captured
   raw-pointer binding must use one of these explicit forms;
-- raw-pointer capture, copying, storage, passing, and comparison, including
-  comparison with `null`, remain safe. Postfix field access such as
+- raw-pointer capture, copying, storage, passing, equality, and comparison with
+  `null` through `==`/`!=` remain safe. Arithmetic, indexing, and relational
+  ordering require `unsafe`. Postfix field access such as
   `pointer.value` automatically dereferences the pointer and therefore requires
   an ordinary `unsafe:` block, performs the required null and alignment checks,
   and permits a write only through `*var T`. A raw-pointer receiver method
   taking `self: *Self` or `self: *var Self` still receives the pointer without
   dereference;
 - a captured binding cannot be rebound inside the closure. Mutation through
-  `&var T` or `*var T` changes the referenced storage, while ordinary captured
-  values remain the closure's private snapshots and copy independently when
-  the closure value is copied;
+  `&var T` or `*var T` changes the referenced storage; a plain capture owns its
+  inline environment slot while descriptors and handles preserve shallow
+  backing identity when the closure value is copied;
 - closure parameters retain explicit types. The return annotation is optional:
   an expected callable result and explicit `return` expressions determine the
   inferred result, reachable fallthrough contributes `()`, and there is still
@@ -486,10 +496,10 @@ The accepted surface has these boundaries:
 | **Capture typing and construction (done)** | Type-check value, shared-reference, mutable-reference, const-pointer, and mutable-pointer captures; require addressability and mutability where appropriate; record exact-once left-to-right construction and any `*var T` to `*T` downgrade. | Capture types and evaluation order are explicit in typed facts, direct raw-pointer captures cannot bypass `*`/`*var`, and no capture operation itself enters an unsafe context. |
 | **Callable types and return inference (done)** | Give each closure expression a unique anonymous nominal type, add the ordinary user-implementable `Callable[Arguments, Return]` contract and call-syntax selection, infer omitted closure results, and preserve exact annotated results including `!`. | Distinct expressions remain distinct types, all return paths agree, fallthrough is unit, generic callable parameters infer concrete closure types, and erased calls retain exact argument and result types. |
 | **Body, safety, and control checking (done)** | Check a closure as its own safe function boundary with immutable capture bindings, explicit unsafe blocks, ordinary return/error/defer rules, and no inherited unsafe or escaping control context. | Raw-pointer comparisons compile safely; automatic raw-pointer field access requires `unsafe:`, mutable access requires `*var`, and unsafe closure declarations and anonymous recursion are rejected. |
-| **Copy, alias, and escape semantics (done)** | Extend logical-copy recording and promotion analysis to anonymous environments so value fields copy independently, explicit references and pointers preserve identity, and escaping references to captured storage or closure values remain rooted where required. | Later outer rebinding affects only reference captures, copied closures expose independent value state, aliases remain aliases, and a raw pointer alone never roots its pointee. |
+| **Copy, alias, and escape semantics (done, including 0.10 revision)** | Retain logical-copy recording and promotion analysis for anonymous environments, shallow-copy plain captures into one new environment, and preserve that environment identity when the resulting callable is copied. | Inline environment slots remain distinct, descriptor backing aliases, copied callables share their environment, explicit references/pointers preserve identity, and a raw pointer alone never roots its pointee. |
 | **Typed and control-flow IR lowering (done)** | Represent closure construction, environment access, static callable invocation, erased callable dispatch, return flow, traps, and deferred cleanup without embedding syntax or name-resolution facts in later IR. | Construction and argument evaluation order are explicit, closure-local exits cannot target an outer body, and existing named-function lowering is unchanged. |
 | **C99 environment and call emission (done)** | Emit deterministic private environment layouts and static body functions, pass an environment pointer on direct calls, and reuse ordinary trait-object vtables for erased calls while retaining GC-visible roots. | Capturing and captureless closures work on x86 and x86-64, generated C remains C99, symbols are deterministic, and no closure is emitted as a plain C function pointer. |
-| **Cross-feature integration (done)** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Closure support does not weaken coherence, copy independence, visibility, safety, cleanup, trap behavior, or production/test reachability. |
+| **Cross-feature integration (0.10 ordinary-copy revision done; concurrency revision planned)** | Exercise closures with generics in enclosing declarations and higher-order APIs, traits, collections, managed and interior references, raw pointers, `Result`, `!`, `defer`, tests, and nested modules. | Shared-backing capture/copy cases pass; the concurrency migration adds unrestricted cross-thread captures without weakening coherence, visibility, cleanup, trap behavior, or production/test reachability. |
 | **Conformance and tooling closure (done)** | Add parser snapshots, compile-pass/fail cases, run-pass and trap tests, debug/release and x86/x86-64 coverage, generated-C assertions, documentation, editor synchronization, and macro-produced closure cases when macros are available. | The pre-closure suite remains green and every normative closure rule is mapped to deterministic evidence in `ledger.md`. |
 
 Private evolving captured state, implicit or default capture, arbitrary
@@ -504,8 +514,9 @@ before adding any of them.
 
 ### Standard-library concurrency
 
-> Status: Complete. The normative contract, runtime, and conformance matrix are
-> implemented.
+> Status: The 0.9 structural-transfer runtime and conformance matrix are
+> complete. Specification 0.10 supersedes that semantic contract; implementation
+> migration is owned by **Shallow-copy and systems-concurrency migration**.
 >
 > Depends on: **Explicit-capture closures** (complete).
 >
@@ -513,11 +524,12 @@ before adding any of them.
 > grammar. Closures supply executable bodies, and ordinary declarations in
 > `std.thread` and `std.sync` expose every concurrency operation.
 
-**Goal:** Add safe native parallelism using independent transfer copies and
-explicit synchronized identity, without adding ownership, a borrow checker,
-implicit shared aliases, catchable thread traps, or nondeterministic cleanup.
+**Historical 0.9 goal:** Add data-race-free native parallelism using independent
+transfer copies and explicit synchronized identity. The bullets and completed
+tasks below record the implemented baseline being replaced; they are not
+authority for the 0.10 language semantics in `spec.md` Section 10.4.
 
-The accepted thread and transfer contract is:
+The implemented 0.9 thread and transfer contract was:
 
 - `std.thread.spawn` accepts a safe zero-argument callable, evaluates it once,
   copies its environment across the thread boundary, starts one native thread
@@ -561,7 +573,7 @@ The accepted thread and transfer contract is:
   but call order remains nondeterministic. Unsynchronized concurrent access
   constructed through unsafe code or FFI is undefined behavior.
 
-The accepted `std.sync` foundation is:
+The implemented 0.9 `std.sync` foundation was:
 
 - `std.sync.channel[T](capacity: usize)` creates a bounded multi-producer,
   multi-consumer channel and returns a `Sender[T]` and `Receiver[T]`; capacity
@@ -603,7 +615,7 @@ trampoline and concurrency contract.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Normative concurrency contract (done)** | Record the thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules in `spec.md`; update `ledger.md`, `AGENTS.md`, the standard-library documentation, and close the prior umbrella design issue. | Every concurrency operation and exclusion has one normative result before any standard declaration or runtime hook is enabled. |
+| **Normative concurrency contract (0.9 done; superseded by 0.10)** | Record the original thread, transfer, memory-ordering, channel, mutex, atomic, shutdown, trap, cleanup, GC, and callback rules. | Historical evidence remains available while the migration milestone owns the revised normative behavior. |
 | **Structural transfer capability (done)** | Add canonical `Transfer` facts and generic bounds, structural derivation for ordinary values, conditional derivation for closures and standard handles, explicit exclusions for reference/pointer/trait-object aliases, and the accepted unsafe FFI opt-in. | Spawn inputs and results cannot hide an unapproved alias; diagnostics identify the exact nontransferable capture, field, element, or generic obligation. |
 | **Standard concurrency declarations (done)** | Add the accepted `std.thread` and `std.sync` modules and source declarations for thread handles, spawn errors, channels and endpoint outcomes, mutexes, and atomic cells, keeping only representation and lowering hooks intrinsic. | All APIs resolve and type-check through ordinary module, generic, trait, visibility, and standard-library paths. |
 | **Transfer-copy lowering (done)** | Lower cross-thread arguments, results, channel messages, and synchronized cell values through an explicit transfer-copy operation that recursively detaches ordinary backing storage while preserving approved synchronized handles. | Mutation on either side cannot observe shared ordinary storage, explicit synchronized identity remains shared, and evaluation occurs exactly once. |
@@ -636,20 +648,20 @@ and foreign-thread attachment are outside this milestone.
 > or unusable with `for`.
 
 **Goal:** Let an ordinary user type participate in `for` through a normal
-trait, without weakening the iteration-snapshot rule, the copy semantics of
-yielded elements, or the existing collection behavior.
+trait while preserving the 0.10 shallow iterable copy, yielded-element copy,
+and mutation-invalidation rules.
 
 The design decision precedes the implementation: the protocol interacts with
-copy independence, the iteration snapshot, escape promotion, and `Transfer`,
-and it determines whether the privileged collections keep their special
-lowering or become ordinary implementations. Record the accepted contract in
-`issues.md` before any package below begins.
+shallow descriptor copying, mutation invalidation, escape promotion, and
+closures, and it determines whether the privileged collections keep their
+special lowering or become ordinary implementations. Record the accepted
+contract in `issues.md` before any package below begins.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Accepted iteration contract** | Decide and record the protocol shape, the snapshot obligation, element copy behavior, whether iteration borrows or consumes its source, and the interaction with `Transfer` and closures. | One normative result exists in `spec.md` before any lowering changes; the existing unspecified `Map`/`Set` order and snapshot guarantees are preserved or explicitly revised. |
+| **Accepted iteration contract** | Decide and record the protocol shape, shallow iterable copy, element copy behavior, mutation invalidation, and interaction with closures. | One normative result exists in `spec.md` before any lowering changes; unspecified `Map`/`Set` order and the revised Section 7.1 rules are preserved or explicitly revised. |
 | **Protocol declaration and checking** | Add the standard trait, its bounds, and the checking rules that admit a user type in loop-header position. | A conforming user type is accepted, a nonconforming one is diagnosed at the loop header, and the diagnostic names the missing obligation. |
-| **Loop lowering through the protocol** | Lower `for` over a user type through the protocol while retaining the specified snapshot behavior and evaluation order. | Source mutation during iteration cannot affect the active loop, the iterable evaluates exactly once, and cleanup and `break`/`continue` edges are unchanged. |
+| **Loop lowering through the protocol** | Lower `for` over a user type through the protocol while retaining the specified shallow-copy behavior and evaluation order. | The iterable evaluates exactly once, visible element mutation and invalidating structural mutation follow the protocol, and cleanup and `break`/`continue` edges are unchanged. |
 | **Privileged collection reconciliation** | Decide whether `Vec`, `Map`, `Set`, arrays, and slices retain special lowering or are expressed through the protocol, and implement the accepted result. | Existing collection iteration output, ordering guarantees, and performance characteristics are unchanged or their change is recorded in `cost_model.md`. |
 
 ### Deferred specified surface
@@ -677,8 +689,9 @@ remains silently unimplemented.
 > filesystem, environment, process, time, sorting, or randomness surface.
 >
 > Blocked by: **User-defined iteration** for any API that should be iterable.
-> Interacts with **Value-copy and allocation optimization**, because every
-> collection-shaped signature added here inherits the current eager-copy cost.
+> Interacts with **Shallow-copy and systems-concurrency migration**, because
+> every collection-shaped signature added here inherits the revised alias and
+> invalidation behavior.
 
 **Goal:** Provide the ordinary capabilities a program needs to be useful,
 without adding compiler privilege, and while treating every public signature
@@ -696,7 +709,7 @@ change. Every module records its allocation and copying behavior in
 | **Process and environment** | Add environment variable access, command-line arguments, exit status, and process invocation. | Values copy under ordinary semantics, the surface is target-portable, and no operation introduces implicit global mutable state visible across threads. |
 | **Time and duration** | Add monotonic and wall-clock reading and a duration type with checked arithmetic. | Monotonic and wall-clock sources are distinct types, arithmetic follows the ordinary overflow contract, and no operation is specified as a synchronization edge. |
 | **Ordering and search utilities** | Add sorting, binary search, and comparison helpers over slices and `Vec`. | Sorting is deterministic for equal keys or documented as unstable, comparison uses the Section 4.5 ordering rules, and no helper introduces a hidden allocation not recorded in `cost_model.md`. |
-| **Text algorithms** | Add the string search, split, trim, case, and parsing operations not already provided as intrinsics. | `str` and `String` results follow the specified materialization and independence rules, and Unicode behavior matches the Section 4.1 contract. |
+| **Text algorithms** | Add the string search, split, trim, case, and parsing operations not already provided as intrinsics. | `str` and `String` results follow the specified materialization and shallow-backing rules, and Unicode behavior matches the Section 4.1 contract. |
 | **Randomness** | Add a seedable generator with an explicitly documented distribution and reproducibility contract. | Determinism under a fixed seed is guaranteed and tested; no operation silently seeds from the environment. |
 
 ## 9. Toolchain and developer experience
@@ -819,7 +832,7 @@ does not require reading the specification.
 | --- | --- | --- |
 | **Introductory guide** | Write a task-ordered guide covering installation, packages, values and references, errors and cleanup, generics and traits, and concurrency. | A programmer unfamiliar with the language can build a nontrivial program using the guide alone. |
 | **Worked examples** | Maintain example programs that are compiled and run by the ordinary test layers. | Every example in published material is covered by an automated test, so documentation cannot drift from behavior. |
-| **Migration and comparison notes** | Explain the copy, alias, and `Transfer` model to readers arriving from Go, Rust, or C. | The notes state where intuition from each language transfers and where it does not, particularly for copy cost and the absence of borrow checking. |
+| **Migration and comparison notes** | Explain the shallow-copy, alias, pointer, and shared-memory model to readers arriving from Go, Rust, or C. | The notes state where intuition from each language transfers and where it does not, particularly for descriptor aliasing, data-race UB, and the absence of borrow checking. |
 
 ### Project governance and contribution
 

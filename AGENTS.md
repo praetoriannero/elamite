@@ -133,8 +133,9 @@ milestone exit criteria in `docs/roadmap.md`.
 
 ## Design, Commits, and Pull Requests
 
-Treat `docs/spec.md` and the authoritative `examples/spec_demo.elx` as design
-inputs.
+Treat `docs/spec.md` as the normative design input. During the ordered 0.10
+migration, `examples/spec_demo.elx` remains the implemented 0.9 demonstration
+and must be updated before the compiler claims 0.10 conformance.
 Append new entries to `docs/issues.md`; use `I-X.Y` for a sub-issue related to
 `I-X`. Do not implement or change surface grammar while its design review is
 active.
@@ -156,14 +157,32 @@ stateful callbacks may use a closure or `&Trait`; C callbacks continue to carry
 registered state through a separate raw context pointer, and recursion uses
 named functions.
 
+`docs/spec.md` §3.1 owns shallow ordinary copying. Inline scalar and aggregate
+slots copy, while descriptors, references, pointers, callables, collections,
+trait objects, and resource handles preserve contained identities. `Vec` uses
+Go-like pointer/length/capacity descriptors; `Map` and `Set` preserve complete
+table identity; mutable `String` backing is shared. Do not reintroduce deep
+ordinary copies or COW detachment as observable semantics.
+
 `docs/spec.md` §10.4 owns the normative concurrency contract. It adds no
-concurrency syntax: native threads are created through `std.thread`, and channels,
-copy-based mutexes, and sequentially consistent atomic cells live in
-`std.sync`. Cross-thread ordinary values use structural `Transfer` and an
-independent transfer copy; safe references, raw pointers, slices, and trait
-objects are not transferable. Only reviewed synchronized handles preserve
-shared identity. Retain the registered-thread callback restriction and the
+concurrency syntax: native threads are created through `std.thread`, and
+channels, mutex handles, and sequentially consistent atomic cells live in
+`std.sync`. There is no `Transfer` capability or cross-thread detachment;
+spawn environments, channel messages, join results, and mutex values copy
+shallowly. Ordinary shared access needs no `unsafe`; conflicting unordered
+cross-thread access is undefined behavior under the C99 memory model, and the
+programmer owns synchronization. Retain the registered-thread callback
+restriction, GC thread registration, documented happens-before edges, and
 process-fatal trap contract.
+
+`docs/spec.md` §3.3 owns raw data-pointer traversal. Element-scaled `+`, `-`,
+`+=`, `-=`, same-extent subtraction to `isize`, indexing, and relational
+ordering require `unsafe` and complete nonzero-sized data pointees. Indexing
+performs the existing null/alignment checks but no bounds check. Null orders
+below every non-null pointer; ordering two non-null pointers requires one live
+extent. Equality remains safe, raw pointers implement neither `PartialOrd` nor
+`Ord`, and integer-pointer conversion and function-pointer arithmetic remain
+absent.
 
 `docs/spec.md` §3.1 and §4.1 define local tuple destructuring and positional
 fields. Keep local binding patterns irrefutable and limited to nested tuples,

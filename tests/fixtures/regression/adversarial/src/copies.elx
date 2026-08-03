@@ -1,7 +1,7 @@
 /// # Logical value copies (`docs/spec.md` 3.1)
 ///
-/// Every ordinary copy must be recursively and observably independent, while
-/// explicit-alias types keep identity through the same copy.
+/// Every ordinary copy duplicates immediate inline slots while preserving the
+/// backing identities carried by descriptors, references, and handles.
 
 struct Inner:
     label: String
@@ -16,7 +16,7 @@ struct Outer:
     pair: (i32, String)
 
 struct AliasCarrier:
-    /// An ordinary field copies independently.
+    /// An inline scalar field receives its own slot.
     plain: i32
     /// An explicit alias keeps identity across the same copy.
     shared: &var i32
@@ -34,9 +34,10 @@ fn make_outer() -> Outer:
         pair: (7, String.from("seven")),
     }
 
-/// Mutating every reachable ordinary component of one copy must leave the
-/// source untouched at every nesting depth.
-fn deep_independence() -> ():
+/// Rebinding inline descriptor fields is local to one aggregate copy. Vector
+/// element mutation aliases shared backing, while growth updates only the
+/// selected descriptor and may diverge.
+fn shallow_structure() -> ():
     let source = make_outer()
     var copy = source
 
@@ -60,8 +61,8 @@ fn deep_independence() -> ():
     println(f"source pair: {source.pair.0}/{source.pair.1}")
     println(f"copy pair: {copy.pair.0}/{copy.pair.1}")
 
-/// Copying an aggregate preserves its explicit aliases while ordinary fields
-/// stay independent.
+/// Copying an aggregate preserves explicit aliases while inline scalar fields
+/// still occupy distinct slots.
 fn alias_survives_copy() -> ():
     var target = 1
     let carrier = AliasCarrier { plain: 10, shared: &var target }
@@ -74,9 +75,9 @@ fn alias_survives_copy() -> ():
     println(f"alias target through source: {*carrier.shared}")
     println(f"alias target directly: {target}")
 
-/// A copy taken before a mutation is a snapshot; a copy taken after observes
-/// the mutation. Copy order is the only thing that distinguishes them.
-fn copy_is_a_snapshot() -> ():
+/// Descriptor copies taken before and after a backing mutation observe the
+/// same vector state.
+fn copies_share_backing() -> ():
     var counter = Inner {
         label: String.from("counter"),
         counts: @vec[0],
@@ -89,8 +90,9 @@ fn copy_is_a_snapshot() -> ():
         f"before: {before.counts[0]}, live: {counter.counts[0]}, after: {after.counts[0]}"
     )
 
-/// Arguments and returns copy. The callee cannot reach the caller's storage
-/// through an ordinary value parameter.
+/// Arguments and returns shallow-copy, so the callee can mutate backing
+/// reached through a copied descriptor without rebinding the caller's inline
+/// fields.
 fn consume(mut_copy: Inner) -> Inner:
     var local = mut_copy
     local.counts[0] = -1
@@ -115,8 +117,8 @@ fn let_does_not_disable_stored_aliases() -> ():
 
 pub fn run() -> ():
     println("== 3.1 logical copies ==")
-    deep_independence()
+    shallow_structure()
     alias_survives_copy()
-    copy_is_a_snapshot()
+    copies_share_backing()
     argument_and_return_copy()
     let_does_not_disable_stored_aliases()

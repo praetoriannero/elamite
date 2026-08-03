@@ -6,7 +6,7 @@
 use crate::resolution::DeclarationId;
 use crate::types::TypeId;
 
-/// Why the compiler materializes one independent logical value.
+/// Why the compiler materializes one source-level value copy.
 ///
 /// This vocabulary is deliberately phase-neutral: checking records the
 /// source-level reason, typed IR adds the allocation class, and control-flow
@@ -101,8 +101,11 @@ impl LogicalCopyContext {
 pub enum LogicalCopyAllocation {
     None,
     PreserveIdentity,
+    /// Copies one complete inline C representation without recursively
+    /// duplicating managed backing reached through its fields.
+    Shallow,
     Recursive,
-    OwnedBuffer,
+    SharedBacking,
     RuntimeManaged,
 }
 
@@ -111,6 +114,19 @@ pub enum LogicalCopyAllocation {
 pub struct LogicalCopyFacts {
     pub context: LogicalCopyContext,
     pub allocation: LogicalCopyAllocation,
+    /// The selected physical implementation of this semantic copy.
+    pub mode: LogicalCopyMode,
+}
+
+/// How the compiler realizes a source-level value copy.
+///
+/// `ReuseSource` is valid only when the source storage is dead after the
+/// operation. It is explicit in IR so the backend never guesses liveness from
+/// generated C expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogicalCopyMode {
+    Materialize,
+    ReuseSource,
 }
 
 /// How one source-level value parameter crosses an internal call boundary.

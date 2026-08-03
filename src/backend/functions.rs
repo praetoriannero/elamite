@@ -356,6 +356,7 @@ impl<'a> CEmitter<'a> {
             Rvalue::StandardCall {
                 operation,
                 arguments,
+                receiver_place,
             } => {
                 if matches!(operation, StandardCall::SliceLen { .. }) {
                     return Some(format!("{}.length", temporary_name(*arguments.first()?)));
@@ -424,6 +425,9 @@ impl<'a> CEmitter<'a> {
                     .iter()
                     .map(|argument| temporary_name(*argument))
                     .collect::<Vec<_>>();
+                if let Some(receiver) = receiver_place {
+                    arguments.insert(0, format!("&({})", self.place_expression(receiver)));
+                }
                 if matches!(
                     operation,
                     StandardCall::VecInsert { .. } | StandardCall::VecRemove { .. }
@@ -458,9 +462,10 @@ impl<'a> CEmitter<'a> {
                     format!("{}.length", temporary_name(*collection))
                 }
                 IterationKind::Array { length, .. } => format!("(uintptr_t){length}U"),
-                IterationKind::Vec { .. }
-                | IterationKind::Map { .. }
-                | IterationKind::Set { .. } => {
+                IterationKind::Vec { .. } => {
+                    format!("{}.length", temporary_name(*collection))
+                }
+                IterationKind::Map { .. } | IterationKind::Set { .. } => {
                     format!("{}->length", temporary_name(*collection))
                 }
             },
@@ -475,7 +480,10 @@ impl<'a> CEmitter<'a> {
                     IterationKind::Slice { .. } | IterationKind::Array { .. } => {
                         format!("{collection_name}.values[{index_name}]")
                     }
-                    IterationKind::Vec { .. } | IterationKind::Set { .. } => {
+                    IterationKind::Vec { .. } => {
+                        format!("{collection_name}.values[{index_name}]")
+                    }
+                    IterationKind::Set { .. } => {
                         format!("{collection_name}->values[{index_name}]")
                     }
                     IterationKind::Map { pair, .. } => {
@@ -609,11 +617,19 @@ impl<'a> CEmitter<'a> {
                 );
                 destination_name
             }
-            Rvalue::Copy { source, .. } => format!(
-                "{}({})",
-                copy_helper_name(self.resolve_alias(destination_type)),
-                temporary_name(*source)
-            ),
+            Rvalue::Copy { source, facts, .. } => {
+                if facts.context.purpose == LogicalCopyPurpose::Ordinary
+                    || facts.mode == LogicalCopyMode::ReuseSource
+                {
+                    temporary_name(*source)
+                } else {
+                    format!(
+                        "{}({})",
+                        copy_helper_name(self.resolve_alias(destination_type)),
+                        temporary_name(*source)
+                    )
+                }
+            }
             Rvalue::Discriminant(source) => format!("{}.tag", temporary_name(*source)),
             Rvalue::CompareEqual {
                 left,
@@ -1117,7 +1133,7 @@ impl<'a> CEmitter<'a> {
                         self.emit_formatter_text(formatter, "[");
                         let _ = writeln!(
                             self.output,
-                            "    for (uintptr_t {index} = 0U; {index} < {value}->length; ++{index}) {{"
+                            "    for (uintptr_t {index} = 0U; {index} < {value}.length; ++{index}) {{"
                         );
                         let _ = writeln!(
                             self.output,
@@ -1125,7 +1141,7 @@ impl<'a> CEmitter<'a> {
                         );
                         self.emit_formatter_value(
                             formatter,
-                            &format!("{value}->values[{index}]"),
+                            &format!("{value}.values[{index}]"),
                             *element,
                             span,
                         );
@@ -1254,7 +1270,7 @@ impl<'a> CEmitter<'a> {
                         );
                     }
                     IndexKind::Vec { .. } => {
-                        let bound = format!("(uintmax_t){}->length", self.place_expression(base));
+                        let bound = format!("(uintmax_t){}.length", self.place_expression(base));
                         let _ = writeln!(
                             self.output,
                             "    if ((uintmax_t){} >= {bound}) el_trap(\"{}\", {arguments});",
@@ -1322,7 +1338,7 @@ impl<'a> CEmitter<'a> {
                     temporary_name(*index)
                 ),
                 IndexKind::Vec { .. } => format!(
-                    "{}->values[{}]",
+                    "{}.values[{}]",
                     self.place_expression(base),
                     temporary_name(*index)
                 ),

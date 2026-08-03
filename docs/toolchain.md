@@ -93,9 +93,13 @@ spelling.
 ## Compiler interfaces
 
 The Elamite source language described by `spec.md` is the compatibility
-boundary. Initial conformance is complete, but the following developer
-interfaces remain implementation-private and may change between compiler
-revisions:
+boundary. The compiler currently reports 0.9.0-draft while migration is in
+progress: shallow ordinary copies are implemented, but the accepted
+0.10.0-draft collection representations are implemented as well. Iteration
+invalidation, C-like concurrency, and the pointer surface remain scheduled in
+`roadmap.md`. The version is not advanced until the complete contract is
+available. The following developer interfaces remain
+implementation-private and may change between compiler revisions:
 
 - generated C names and helper layout;
 - textual intermediate-representation dump formats;
@@ -111,9 +115,11 @@ C entry points require the explicit FFI forms in `spec.md`.
 
 - Package dependencies are local paths. There is no registry, Git resolver,
   version solver, or lockfile workflow.
-- Cooperative tasks, executors, futures, and async/await are unsupported.
-  Native threads exchange structural `Transfer` copies through `std.thread`
-  and synchronized handles through `std.sync`.
+- Cooperative tasks, executors, futures, and async/await are unsupported. The
+  current 0.9 compiler still enforces structural `Transfer`; 0.10 removes it
+  and adopts shallow cross-thread copies with programmer-managed race safety.
+- Raw data-pointer arithmetic, indexing, subtraction, and relational ordering
+  are accepted in 0.10 but not yet implemented by the 0.9 compiler.
 - Explicit-capture safe closures are supported. Implicit/default captures,
   generic or variadic closure literals, unsafe closures, anonymous recursion,
   and closure-to-function-pointer conversion remain unsupported.

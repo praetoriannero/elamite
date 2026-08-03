@@ -33,7 +33,8 @@ script never applies pass/fail thresholds: compare only identical source
 hashes on comparable hosts and toolchains.
 
 The checked-in `memory-cost-baseline.tsv` observation was recorded on
-2026-08-01 under WSL2 for x86-64 with rustc 1.89.0 and GCC-compatible `cc`
+2026-08-03 after shallow standard collection representations, under WSL2 for
+x86-64 with rustc 1.89.0 and GCC-compatible `cc`
 15.2.0. The script supports x86 as well; record that target on a host that
 permits native 32-bit process execution.
 

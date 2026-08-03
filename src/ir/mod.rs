@@ -11,6 +11,7 @@
 mod borrowing;
 pub mod control_flow;
 mod copy;
+mod reuse;
 mod syntax_helpers;
 mod traps;
 pub mod typed;
@@ -23,9 +24,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::check::{CheckedCall, CheckedProgram, TraitObjectCoercion};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::operations::{
-    LogicalCopyAllocation, LogicalCopyContext, LogicalCopyFacts, LogicalCopyKind,
-    LogicalCopyLifetime, LogicalCopyPurpose, NumericAlternative, NumericOutcome,
-    ReceiverAdjustment, StandardCall, ValuePassingMode,
+    LogicalCopyContext, LogicalCopyFacts, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyMode,
+    LogicalCopyPurpose, NumericAlternative, NumericOutcome, ReceiverAdjustment, StandardCall,
+    ValuePassingMode,
 };
 use crate::resolution::{
     DeclarationId, DeclarationKind, FieldId, ItemId, LocalBindingId, LocalBindingKind, MemberId,
@@ -40,7 +41,7 @@ use crate::types::{
     FunctionInstance, PlaceKind, PrimitiveType, Substitution, TypeContext, TypeId, TypeKind,
     TypedProgram, parse_integer_magnitude,
 };
-pub use copy::{LogicalCopyStrategy, logical_copy_strategy};
+pub use copy::{LogicalCopyStrategy, logical_copy_allocation, logical_copy_strategy};
 use syntax_helpers::*;
 pub use traps::TrapKind;
 

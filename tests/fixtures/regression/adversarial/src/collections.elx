@@ -21,7 +21,7 @@ fn vector_boundaries() -> ():
     let removed = values.remove(0)
     println(f"removed head: {removed}, new head: {values[0]}, len: {values.len()}")
 
-    // A value-context read is an independent copy.
+    // A value-context read is a shallow copy; this scalar is inline.
     var copied = values[0]
     copied += 100
     println(f"read is a copy: {copied} vs {values[0]}")
@@ -40,7 +40,7 @@ fn vector_boundaries() -> ():
     values.clear()
     println(f"cleared: {values.len()} {values.is_empty()}")
 
-/// Nested collections copy independently at every level.
+/// Nested collection reads preserve their backing identities.
 fn nested_collections() -> ():
     var grid = @vec[@vec[1, 2], @vec[3, 4]]
     let snapshot = grid
@@ -49,14 +49,16 @@ fn nested_collections() -> ():
     grid[1].append(5)
 
     println(f"mutated grid: {grid[0][0]} {grid[1].len()}")
-    println(f"snapshot unaffected: {snapshot[0][0]} {snapshot[1].len()}")
+    println(f"snapshot aliases backing: {snapshot[0][0]} {snapshot[1].len()}")
 
     var by_name: Map[str, Vec[i32]] = Map.new()
     by_name.insert("primes", @vec[2, 3, 5])
     var extracted = by_name["primes"]
     extracted.append(7)
     let stored = by_name["primes"]
-    println(f"map value read is a copy: {extracted.len()} vs {stored.len()}")
+    println(
+        f"map value read can diverge on growth: {extracted.len()} vs {stored.len()}"
+    )
 
 /// Map insert and remove report the displaced value, and a duplicate literal
 /// key keeps the last entry.
@@ -135,7 +137,7 @@ fn structural_keys() -> ():
     let looked_up = pairs[(1, "x")]
     println(f"tuple keys: {pairs.len()} {looked_up}")
 
-/// Arrays are fixed-size aggregates with recursive value copy.
+/// Arrays are fixed-size inline aggregates with shallow element-slot copies.
 fn array_boundaries() -> ():
     var values = [1, 2, 3]
     let snapshot = values
@@ -165,9 +167,10 @@ fn array_boundaries() -> ():
     // A zero-length `[T; 0]` array is specified but does not survive C
     // emission; see regressions/zero_length_array.elx.
 
-/// The iterable is evaluated once and copied into hidden loop state, so later
-/// mutation of the source cannot affect the active loop.
-fn iteration_is_a_snapshot() -> ():
+/// The iterable is evaluated once and shallow-copied into hidden loop state.
+/// Element replacement remains visible; structural mutation is undefined and
+/// is deliberately not executed here.
+fn iteration_uses_shallow_hidden_state() -> ():
     var values = @vec[1, 2, 3]
     var visited = 0
     var total = 0
@@ -175,11 +178,11 @@ fn iteration_is_a_snapshot() -> ():
     for value in values:
         visited += 1
         total += value
-        // Growing the source during iteration cannot extend this loop.
-        values.append(value * 10)
+        if visited == 1:
+            values[1] = 20
 
     println(f"loop visited: {visited}, total: {total}")
-    println(f"source grew to: {values.len()}")
+    println(f"source length stayed: {values.len()}")
 
     // Array and vector iteration is in index order.
     var order = String.from("")
@@ -222,5 +225,5 @@ pub fn run() -> ():
     set_boundaries()
     structural_keys()
     array_boundaries()
-    iteration_is_a_snapshot()
+    iteration_uses_shallow_hidden_state()
     unordered_iteration()

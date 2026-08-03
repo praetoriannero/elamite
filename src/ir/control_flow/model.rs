@@ -89,6 +89,10 @@ pub enum Rvalue {
     StandardCall {
         operation: StandardCall,
         arguments: Vec<TemporaryId>,
+        /// The evaluated receiver place for operations that mutate an inline
+        /// descriptor. When present, the receiver is omitted from
+        /// `arguments`.
+        receiver_place: Option<ControlFlowPlace>,
     },
     CollectionLiteral {
         kind: CollectionLiteralKind,

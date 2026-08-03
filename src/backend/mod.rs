@@ -3,7 +3,8 @@
 //! This is the first executable backend (`docs/roadmap.md` Milestones 8-9). It consumes
 //! explicit control-flow IR, uses an internal (unstable) calling convention,
 //! emits one strictly sequenced C statement per IR instruction, and routes
-//! every supported value copy through a generated per-type helper.
+//! ordinary copies through direct shallow C representations, and the legacy
+//! transfer boundary through generated per-type helpers.
 
 mod entry;
 mod functions;
@@ -26,7 +27,8 @@ use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
 };
 use crate::operations::{
-    NumericAlternative, NumericOperator, NumericOutcome, StandardCall, ValuePassingMode,
+    LogicalCopyMode, LogicalCopyPurpose, NumericAlternative, NumericOperator, NumericOutcome,
+    StandardCall, ValuePassingMode,
 };
 use crate::resolution::{DeclarationId, FieldId, ResolvedProgram, VariantId};
 use crate::source::{SourceManager, Span};

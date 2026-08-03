@@ -883,13 +883,26 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::StandardCall {
                 operation,
                 arguments,
-            } => Rvalue::StandardCall {
-                operation: *operation,
-                arguments: arguments
-                    .iter()
-                    .map(|argument| self.lower_expression(argument))
-                    .collect(),
-            },
+            } => {
+                let mut arguments = arguments.as_slice();
+                let receiver_place = if standard_call_mutates_inline_descriptor(*operation) {
+                    let receiver = arguments
+                        .first()
+                        .expect("a mutating standard call has a receiver");
+                    arguments = &arguments[1..];
+                    Some(self.expression_place(receiver))
+                } else {
+                    None
+                };
+                Rvalue::StandardCall {
+                    operation: *operation,
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| self.lower_expression(argument))
+                        .collect(),
+                    receiver_place,
+                }
+            }
             TypedExpressionKind::CollectionLiteral { kind, elements } => {
                 Rvalue::CollectionLiteral {
                     kind: *kind,
@@ -1656,16 +1669,11 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn logical_copy_facts(&self, ty: TypeId, context: LogicalCopyContext) -> LogicalCopyFacts {
-        let allocation = match logical_copy_strategy(&self.types.types, ty) {
-            LogicalCopyStrategy::Trivial => LogicalCopyAllocation::None,
-            LogicalCopyStrategy::PreserveIdentity => LogicalCopyAllocation::PreserveIdentity,
-            LogicalCopyStrategy::Recursive => LogicalCopyAllocation::Recursive,
-            LogicalCopyStrategy::OwnedString => LogicalCopyAllocation::OwnedBuffer,
-            LogicalCopyStrategy::RuntimeManaged => LogicalCopyAllocation::RuntimeManaged,
-        };
+        let allocation = logical_copy_allocation(&self.types.types, ty, context.purpose);
         LogicalCopyFacts {
             context,
             allocation,
+            mode: LogicalCopyMode::Materialize,
         }
     }
 
@@ -1854,13 +1862,24 @@ fn assignment_binary(operator: AssignmentOperator) -> BinaryOperator {
     }
 }
 
+fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
+    matches!(
+        operation,
+        StandardCall::VecAppend { .. }
+            | StandardCall::VecInsert { .. }
+            | StandardCall::VecRemove { .. }
+            | StandardCall::VecClear { .. }
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LogicalCopyStrategy, logical_copy_strategy};
+    use super::{LogicalCopyStrategy, logical_copy_allocation, logical_copy_strategy};
+    use crate::operations::{LogicalCopyAllocation, LogicalCopyPurpose};
     use crate::types::{Mutability, PrimitiveType, TypeContext, TypeKind};
 
     #[test]
-    fn logical_copy_contract_distinguishes_values_aliases_and_owned_buffers() {
+    fn ordinary_copies_are_shallow_while_transfer_strategy_remains_recursive() {
         let mut types = TypeContext::new();
         let integer = types.primitive(PrimitiveType::I32);
         let string = types.primitive(PrimitiveType::String);
@@ -1880,7 +1899,7 @@ mod tests {
         );
         assert_eq!(
             logical_copy_strategy(&types, string),
-            LogicalCopyStrategy::OwnedString
+            LogicalCopyStrategy::MutableString
         );
         assert_eq!(
             logical_copy_strategy(&types, tuple),
@@ -1893,6 +1912,27 @@ mod tests {
         assert_eq!(
             logical_copy_strategy(&types, pointer),
             LogicalCopyStrategy::PreserveIdentity
+        );
+
+        assert_eq!(
+            logical_copy_allocation(&types, tuple, LogicalCopyPurpose::Ordinary),
+            LogicalCopyAllocation::Shallow
+        );
+        assert_eq!(
+            logical_copy_allocation(&types, tuple, LogicalCopyPurpose::Transfer),
+            LogicalCopyAllocation::Recursive
+        );
+        assert_eq!(
+            logical_copy_allocation(&types, reference, LogicalCopyPurpose::Ordinary),
+            LogicalCopyAllocation::PreserveIdentity
+        );
+        assert_eq!(
+            logical_copy_allocation(&types, string, LogicalCopyPurpose::Ordinary),
+            LogicalCopyAllocation::SharedBacking
+        );
+        assert_eq!(
+            logical_copy_allocation(&types, string, LogicalCopyPurpose::Transfer),
+            LogicalCopyAllocation::Recursive
         );
     }
 }

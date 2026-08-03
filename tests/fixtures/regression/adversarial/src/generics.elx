@@ -94,18 +94,19 @@ fn inference() -> ():
     println(f"literal inference: {literal.first}/{literal.second}")
 
 /// Distinct instantiations are distinct types with distinct layouts, and each
-/// monomorphized copy keeps its own behavior.
+/// monomorphized copy follows the same shallow rule.
 fn instantiation_identity() -> ():
     let small: Wrapper[u8] = Wrapper { value: 200 }
     let large: Wrapper[i64] = Wrapper { value: 200 }
     println(f"distinct instantiations: {small.get()} {large.get()}")
 
-    // Copy independence holds inside a generic aggregate.
+    // A descriptor inside a generic aggregate preserves backing identity but
+    // keeps its own length and capacity, so this growth diverges.
     var mutable = Wrapper { value: @vec[1, 2] }
     let snapshot = mutable
     mutable.value.append(3)
     println(
-        f"generic copy independence: {mutable.value.len()} vs {snapshot.value.len()}"
+        f"generic shallow copy: {mutable.value.len()} vs {snapshot.value.len()}"
     )
 
     // A generic enum instantiates the same way.

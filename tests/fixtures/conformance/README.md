@@ -21,7 +21,7 @@ for the Milestone 19 ledger audit.
 | §10.4 Native concurrency | `14_concurrency` | structural/generic/capture `Transfer` suites | self-join and worker-panic processes | registered callback, lifecycle, channel, mutex, and atomic tests |
 
 `12_runtime_stress` is the M19 cross-section stress layer. It combines generic
-instantiation, recursive calls, collection churn and copying, managed cycles,
+instantiation, recursive calls, collection churn and shallow copying, managed cycles,
 an escaped local reference, and nested cleanup registrations. Callback reentry
 is owned by `foreign_callbacks_retain_registered_context_until_close` in
 `tests/backend.rs`, while the C ABI interaction fixture remains

@@ -61,8 +61,8 @@ fn capture_forms() -> ():
     println(f"pointer capture wrote through: {written}")
     println(f"shared reference capture sees updates: {*shared}")
 
-/// A plain capture is a private snapshot, so copying the closure copies its
-/// captured values independently.
+/// A plain capture is shallow-copied once into a private environment; copying
+/// the closure preserves that environment identity.
 fn closure_copies() -> ():
     var total = 0
     let accumulate = fn[&var total as sink](value: i32) -> i32:

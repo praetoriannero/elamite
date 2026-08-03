@@ -322,6 +322,12 @@ impl<'a> CEmitter<'a> {
                  \x20\x20\x20\x20el_cost_allocation(byte_count, true);\n\
                  \x20\x20\x20\x20return result;\n\
                  }\n\
+                 void *el_runtime_alloc_atomic(size_t byte_count) {\n\
+                 \x20\x20\x20\x20void *result = malloc(byte_count);\n\
+                 \x20\x20\x20\x20if (result == NULL) exit(101);\n\
+                 \x20\x20\x20\x20el_cost_allocation(byte_count, false);\n\
+                 \x20\x20\x20\x20return result;\n\
+                 }\n\
                  void el_out_of_memory(void) { exit(101); }\n\n",
             );
             return;
@@ -482,9 +488,10 @@ impl<'a> CEmitter<'a> {
              typedef struct { uint64_t lo; int64_t hi; } el_i128;\n\
              typedef struct { uint64_t lo; uint64_t hi; } el_u128;\n\n\
              typedef struct { const char *bytes; size_t length; } el_str;\n\
-             typedef struct { char *bytes; size_t length; } el_string;\n\n\
+             typedef struct { const char *bytes; size_t length; } el_string;\n\n\
              void el_out_of_memory(void);\n\
-             void *el_runtime_alloc(size_t byte_count);\n\n\
+             void *el_runtime_alloc(size_t byte_count);\n\
+             void *el_runtime_alloc_atomic(size_t byte_count);\n\n\
              #ifdef ELAMITE_COST_INSTRUMENTATION\n\
              static volatile uintptr_t el_cost_allocations = 0U;\n\
              static volatile uintptr_t el_cost_allocated_bytes = 0U;\n\
@@ -578,37 +585,47 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20fwrite(message.bytes, 1U, message.length, stderr); fputc('\\n', stderr);\n\
              \x20\x20\x20\x20fflush(stderr); exit(102);\n\
              }\n\n\
+             el_string el_string_allocate(size_t length) {\n\
+             \x20\x20\x20\x20el_string result = {NULL, length};\n\
+             \x20\x20\x20\x20if (length == SIZE_MAX) el_out_of_memory();\n\
+             \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc_atomic(length + 1U);\n\
+             \x20\x20\x20\x20return result;\n\
+             }\n\
              el_string el_copy_string(el_string value) {\n\
-             \x20\x20\x20\x20el_string copy = {NULL, value.length};\n\
-             \x20\x20\x20\x20copy.bytes = (char *)el_runtime_alloc(value.length + 1U);\n\
-             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy(copy.bytes, value.bytes, value.length);\n\
-             \x20\x20\x20\x20copy.bytes[value.length] = '\\0';\n\
+             \x20\x20\x20\x20el_string copy = el_string_allocate(value.length);\n\
+             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy((char *)copy.bytes, value.bytes, value.length);\n\
+             \x20\x20\x20\x20((char *)copy.bytes)[copy.length] = '\\0';\n\
              \x20\x20\x20\x20return copy;\n\
              }\n\
+             char *el_string_make_mut(el_string *value) {\n\
+             \x20\x20\x20\x20if (value->bytes == NULL) { *value = el_string_allocate(0U); ((char *)value->bytes)[0] = '\\0'; }\n\
+             \x20\x20\x20\x20return (char *)value->bytes;\n\
+             }\n\
              el_string el_string_from(el_str value) {\n\
-             \x20\x20\x20\x20el_string owned = {NULL, value.length};\n\
-             \x20\x20\x20\x20owned.bytes = (char *)el_runtime_alloc(value.length + 1U);\n\
-             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy(owned.bytes, value.bytes, value.length);\n\
-             \x20\x20\x20\x20owned.bytes[value.length] = '\\0';\n\
+             \x20\x20\x20\x20el_string owned = el_string_allocate(value.length);\n\
+             \x20\x20\x20\x20if (value.length != 0U) el_cost_memcpy((char *)owned.bytes, value.bytes, value.length);\n\
+             \x20\x20\x20\x20((char *)owned.bytes)[value.length] = '\\0';\n\
              \x20\x20\x20\x20return owned;\n\
              }\n\
              el_str el_concat_str(el_str left, el_str right) {\n\
              \x20\x20\x20\x20el_str result = {NULL, 0U};\n\
              \x20\x20\x20\x20if (left.length > SIZE_MAX - right.length) el_out_of_memory();\n\
              \x20\x20\x20\x20result.length = left.length + right.length;\n\
-             \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc(result.length == 0U ? 1U : result.length);\n\
+             \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc_atomic(result.length == 0U ? 1U : result.length);\n\
              \x20\x20\x20\x20if (left.length != 0U) el_cost_memcpy((char *)result.bytes, left.bytes, left.length);\n\
              \x20\x20\x20\x20if (right.length != 0U) el_cost_memcpy((char *)result.bytes + left.length, right.bytes, right.length);\n\
              \x20\x20\x20\x20return result;\n\
              }\n\
              el_string el_concat_string(el_string left, el_string right) {\n\
-             \x20\x20\x20\x20el_string result = {NULL, 0U};\n\
+             \x20\x20\x20\x20el_string result;\n\
+             \x20\x20\x20\x20char *bytes;\n\
              \x20\x20\x20\x20if (left.length >= SIZE_MAX - right.length) el_out_of_memory();\n\
-             \x20\x20\x20\x20result.length = left.length + right.length;\n\
-             \x20\x20\x20\x20result.bytes = (char *)el_runtime_alloc(result.length + 1U);\n\
-             \x20\x20\x20\x20if (left.length != 0U) el_cost_memcpy(result.bytes, left.bytes, left.length);\n\
-             \x20\x20\x20\x20if (right.length != 0U) el_cost_memcpy(result.bytes + left.length, right.bytes, right.length);\n\
-             \x20\x20\x20\x20result.bytes[result.length] = '\\0';\n\
+             \x20\x20\x20\x20result = el_string_allocate(left.length + right.length);\n\
+             \x20\x20\x20\x20bytes = (char *)result.bytes;\n\
+             \x20\x20\x20\x20if (left.length != 0U) el_cost_memcpy(bytes, left.bytes, left.length);\n\
+             \x20\x20\x20\x20if (right.length != 0U) el_cost_memcpy(bytes + left.length, right.bytes, right.length);\n\
+             \x20\x20\x20\x20bytes[result.length] = '\\0';\n\
+             \x20\x20\x20\x20result.bytes = bytes;\n\
              \x20\x20\x20\x20return result;\n\
              }\n\n\
              bool el_text_equal(const char *a, size_t a_length, const char *b, size_t b_length) {\n\
@@ -641,13 +658,18 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20size_t capacity;\n\
              } el_formatter;\n\
              void el_fmt_reserve(el_formatter *formatter, size_t extra) {\n\
-             \x20\x20\x20\x20size_t needed = formatter->length + extra + 1U;\n\
+             \x20\x20\x20\x20size_t needed;\n\
              \x20\x20\x20\x20size_t capacity;\n\
              \x20\x20\x20\x20char *replacement;\n\
+             \x20\x20\x20\x20if (extra >= (size_t)PTRDIFF_MAX || formatter->length > (size_t)PTRDIFF_MAX - extra - 1U) el_out_of_memory();\n\
+             \x20\x20\x20\x20needed = formatter->length + extra + 1U;\n\
              \x20\x20\x20\x20if (needed <= formatter->capacity) return;\n\
              \x20\x20\x20\x20capacity = formatter->capacity == 0U ? 32U : formatter->capacity;\n\
-             \x20\x20\x20\x20while (capacity < needed) capacity *= 2U;\n\
-             \x20\x20\x20\x20replacement = (char *)el_runtime_alloc(capacity);\n\
+             \x20\x20\x20\x20while (capacity < needed) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20if (capacity > (size_t)PTRDIFF_MAX / 2U) { capacity = needed; break; }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20capacity *= 2U;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20replacement = (char *)el_runtime_alloc_atomic(capacity);\n\
              \x20\x20\x20\x20if (formatter->length != 0U) el_cost_memcpy(replacement, formatter->bytes, formatter->length);\n\
              \x20\x20\x20\x20formatter->bytes = replacement;\n\
              \x20\x20\x20\x20formatter->capacity = capacity;\n\
@@ -685,7 +707,7 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20el_fmt_append_n(formatter, bytes, length);\n\
              }\n\
              el_str el_fmt_finish(el_formatter *formatter) {\n\
-             \x20\x20\x20\x20if (formatter->bytes == NULL) { formatter->bytes = (char *)el_runtime_alloc(1U); formatter->bytes[0] = '\\0'; }\n\
+             \x20\x20\x20\x20if (formatter->bytes == NULL) { formatter->bytes = (char *)el_runtime_alloc_atomic(1U); formatter->bytes[0] = '\\0'; }\n\
              \x20\x20\x20\x20return (el_str){formatter->bytes, formatter->length};\n\
              }\n\n\
              void el_print_char(uint32_t value) {\n\
@@ -1219,29 +1241,16 @@ impl<'a> CEmitter<'a> {
             .c_type(option, None)
             .unwrap_or_else(|| "el_unit".to_string());
         match (value, variant.fields.first()) {
-            (Some((expression, value_type)), Some((field, _, _))) => format!(
-                "({c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = {}({expression}) }} }}",
+            (Some((expression, _)), Some((field, _, _))) => format!(
+                "({c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = {expression} }} }}",
                 variant_id.index(),
                 variant_member_name(variant_id),
-                field_name(*field),
-                copy_helper_name(self.resolve_alias(value_type))
+                field_name(*field)
             ),
-            _ => {
-                let payload = enumeration
-                    .variants
-                    .iter()
-                    .find(|candidate| !candidate.fields.is_empty())
-                    .map_or_else(
-                        || ".payload._empty = 0".to_string(),
-                        |candidate| {
-                            format!(".payload.{} = {{0}}", variant_member_name(candidate.id))
-                        },
-                    );
-                format!(
-                    "({c_type}){{ .tag = UINT32_C({}), {payload} }}",
-                    variant_id.index()
-                )
-            }
+            // Omitted aggregate members are zero-initialized by C99. Leaving
+            // the inactive payload out also avoids brace-depth diagnostics
+            // whose required nesting depends on the concrete payload type.
+            _ => format!("({c_type}){{ .tag = UINT32_C({}) }}", variant_id.index()),
         }
     }
 
@@ -1277,11 +1286,7 @@ impl<'a> CEmitter<'a> {
         let c_type = self
             .c_type(result, None)
             .unwrap_or_else(|| "el_unit".to_string());
-        let copied = format!(
-            "{}({})",
-            copy_helper_name(self.resolve_alias(value.1)),
-            value.0
-        );
+        let copied = value.0.to_string();
         format!(
             "({c_type}){{ .tag = UINT32_C({}), .payload.{} = {{ .{} = {} }} }}",
             variant_id.index(),
@@ -2260,36 +2265,31 @@ impl<'a> CEmitter<'a> {
             AllocationClass::PointerFree
         };
         let new = standard_call_name(StandardCall::VecNew { collection });
-        let _ = writeln!(self.output, "static {collection_type} {new}(void) {{");
-        let _ = writeln!(self.output, "    {collection_type} result;");
-        self.emit_runtime_allocate("result", "sizeof(*result)", AllocationClass::Scanned);
-        self.output.push_str(
-            "    result->length = 0U;\n    result->capacity = 0U;\n    result->values = NULL;\n    \
-             return result;\n}\n\n",
+        let _ = writeln!(
+            self.output,
+            "static {collection_type} {new}(void) {{ return ({collection_type}){{0}}; }}\n"
         );
 
         if concatenate_used {
-            self.emit_copy_helper(element, None);
-            let element_copy = copy_helper_name(self.resolve_alias(element));
             let concatenate = concatenate_name(collection);
             let _ = writeln!(
                 self.output,
                 "static {collection_type} {concatenate}({collection_type} left, {collection_type} right) {{\n    \
                  {collection_type} result = {new}();\n    uintptr_t length;\n    \
-                 if (left->length > UINTPTR_MAX - right->length) el_out_of_memory();\n    \
-                 length = left->length + right->length;\n    \
+                 if (left.length > UINTPTR_MAX - right.length) el_out_of_memory();\n    \
+                 length = left.length + right.length;\n    \
                  if (length > SIZE_MAX / sizeof({element_type})) el_out_of_memory();\n    \
-                 result->length = length;\n    result->capacity = length;\n    \
+                 result.length = length;\n    result.capacity = length;\n    \
                  if (length != 0U) {{"
             );
             let bytes = format!("length * sizeof({element_type})");
-            self.emit_runtime_allocate("result->values", &bytes, scanned);
+            self.emit_runtime_allocate("result.values", &bytes, scanned);
             let _ = writeln!(
                 self.output,
-                "    }}\n    for (uintptr_t index = 0U; index < left->length; ++index) \
-                 result->values[index] = {element_copy}(left->values[index]);\n    \
-                 for (uintptr_t index = 0U; index < right->length; ++index) \
-                 result->values[left->length + index] = {element_copy}(right->values[index]);\n    \
+                "    }}\n    for (uintptr_t index = 0U; index < left.length; ++index) \
+                 result.values[index] = left.values[index];\n    \
+                 for (uintptr_t index = 0U; index < right.length; ++index) \
+                 result.values[left.length + index] = right.values[index];\n    \
                  return result;\n}}\n"
             );
         }
@@ -2298,7 +2298,7 @@ impl<'a> CEmitter<'a> {
         if calls.contains_key(&operation) {
             let _ = writeln!(
                 self.output,
-                "static uintptr_t {}({collection_type} value) {{ return value->length; }}\n",
+                "static uintptr_t {}({collection_type} value) {{ return value.length; }}\n",
                 standard_call_name(operation)
             );
         }
@@ -2306,7 +2306,7 @@ impl<'a> CEmitter<'a> {
         if calls.contains_key(&operation) {
             let _ = writeln!(
                 self.output,
-                "static bool {}({collection_type} value) {{ return value->length == 0U; }}\n",
+                "static bool {}({collection_type} value) {{ return value.length == 0U; }}\n",
                 standard_call_name(operation)
             );
         }
@@ -2316,11 +2316,11 @@ impl<'a> CEmitter<'a> {
                 .c_type(*result, None)
                 .unwrap_or_else(|| "el_unit".to_string());
             let none = self.option_expression(*result, None);
-            let some = self.option_expression(*result, Some(("value->values[index]", element)));
+            let some = self.option_expression(*result, Some(("value.values[index]", element)));
             let _ = writeln!(
                 self.output,
                 "static {result_type} {}({collection_type} value, uintptr_t index) {{\n    \
-                 if (index >= value->length) return {none};\n    return {some};\n}}\n",
+                 if (index >= value.length) return {none};\n    return {some};\n}}\n",
                 standard_call_name(operation)
             );
         }
@@ -2330,7 +2330,7 @@ impl<'a> CEmitter<'a> {
             let reserve = format!("el_vec_reserve_t{}", collection.index());
             let _ = writeln!(
                 self.output,
-                "static void {reserve}({collection_type} value, uintptr_t needed) {{\n    \
+                "static void {reserve}({collection_type} *value, uintptr_t needed) {{\n    \
                  uintptr_t capacity;\n    {element_type} *replacement;\n    \
                  if (value->capacity >= needed) return;\n    \
                  capacity = value->capacity == 0U ? 4U : value->capacity;\n    \
@@ -2347,7 +2347,7 @@ impl<'a> CEmitter<'a> {
             if calls.contains_key(&append) {
                 let _ = writeln!(
                     self.output,
-                    "static el_unit {}({collection_type} value, {element_type} element) {{\n    \
+                    "static el_unit {}({collection_type} *value, {element_type} element) {{\n    \
                      {reserve}(value, value->length + 1U);\n    \
                      value->values[value->length++] = element;\n    return (el_unit){{0}};\n}}\n",
                     standard_call_name(append)
@@ -2356,7 +2356,7 @@ impl<'a> CEmitter<'a> {
             if calls.contains_key(&insert) {
                 let _ = writeln!(
                     self.output,
-                    "static el_unit {}({collection_type} value, uintptr_t index, \
+                    "static el_unit {}({collection_type} *value, uintptr_t index, \
                      {element_type} element, const char *path, uint32_t line, uint32_t column) {{\n    \
                      if (index > value->length) el_trap(\"E-RUN-INDEX\", path, line, column);\n    \
                      {reserve}(value, value->length + 1U);\n    \
@@ -2372,7 +2372,7 @@ impl<'a> CEmitter<'a> {
         if calls.contains_key(&remove) {
             let _ = writeln!(
                 self.output,
-                "static {element_type} {}({collection_type} value, uintptr_t index, \
+                "static {element_type} {}({collection_type} *value, uintptr_t index, \
                  const char *path, uint32_t line, uint32_t column) {{\n    \
                  {element_type} removed;\n    \
                  if (index >= value->length) el_trap(\"E-RUN-INDEX\", path, line, column);\n    \
@@ -2387,7 +2387,7 @@ impl<'a> CEmitter<'a> {
         if calls.contains_key(&clear) {
             let _ = writeln!(
                 self.output,
-                "static el_unit {}({collection_type} value) {{ value->length = 0U; \
+                "static el_unit {}({collection_type} *value) {{ value->length = 0U; \
                  return (el_unit){{0}}; }}\n",
                 standard_call_name(clear)
             );
@@ -2414,13 +2414,13 @@ impl<'a> CEmitter<'a> {
             );
             if *count != 0 {
                 let bytes = format!("{count}U * sizeof({element_type})");
-                self.emit_runtime_allocate("result->values", &bytes, scanned);
+                self.emit_runtime_allocate("result.values", &bytes, scanned);
                 let _ = writeln!(
                     self.output,
-                    "    result->length = {count}U;\n    result->capacity = {count}U;"
+                    "    result.length = {count}U;\n    result.capacity = {count}U;"
                 );
                 for index in 0..*count {
-                    let _ = writeln!(self.output, "    result->values[{index}] = v{index};");
+                    let _ = writeln!(self.output, "    result.values[{index}] = v{index};");
                 }
             }
             self.output.push_str("    return result;\n}\n\n");
@@ -3102,11 +3102,11 @@ impl<'a> CEmitter<'a> {
             TypeKind::Builtin { builtin, arguments } => {
                 match (self.resolved.builtin_name(*builtin), arguments.as_slice()) {
                     ("Vec", [element]) => {
-                        body.push_str("    if (a->length != b->length) return false;\n");
+                        body.push_str("    if (a.length != b.length) return false;\n");
                         body.push_str(&format!(
-                            "    for (uintptr_t i = 0U; i < a->length; ++i) {{\n        \
+                            "    for (uintptr_t i = 0U; i < a.length; ++i) {{\n        \
                              if (!{}) return false;\n    }}\n",
-                            self.component_equality(*element, "a->values[i]", "b->values[i]")
+                            self.component_equality(*element, "a.values[i]", "b.values[i]")
                         ));
                     }
                     ("Map", [key, value]) => {
@@ -3302,15 +3302,15 @@ impl<'a> CEmitter<'a> {
             {
                 if let [element] = arguments.as_slice() {
                     body.push_str(
-                        "    uintptr_t length = a->length < b->length ? a->length : b->length;\n    \
+                        "    uintptr_t length = a.length < b.length ? a.length : b.length;\n    \
                          for (uintptr_t i = 0U; i < length; ++i) {\n",
                     );
                     let expression =
-                        self.component_ordering(*element, "a->values[i]", "b->values[i]");
+                        self.component_ordering(*element, "a.values[i]", "b.values[i]");
                     append_component(&mut body, expression, "        ");
                     body.push_str(
-                        "    }\n    if (a->length < b->length) return -1;\n    \
-                         if (a->length > b->length) return 1;\n",
+                        "    }\n    if (a.length < b.length) return -1;\n    \
+                         if (a.length > b.length) return 1;\n",
                     );
                 }
             }
@@ -3650,7 +3650,36 @@ impl<'a> CEmitter<'a> {
             }
             TypeKind::Builtin { builtin, arguments } => {
                 match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
-                    ("Vec" | "Set", [element]) => {
+                    ("Vec", [element]) => {
+                        let element_type = self
+                            .c_type(*element, span)
+                            .unwrap_or_else(|| "uint8_t".to_string());
+                        let helper = copy_helper_name(self.resolve_alias(*element));
+                        self.output.push_str(&format!(
+                            "    {c_type} result = {{0}};\n\
+                                 \x20   result.length = value.length;\n\
+                                 \x20   result.capacity = value.length;\n\
+                                 \x20   if (value.length != 0U) {{\n"
+                        ));
+                        let bytes = format!("value.length * sizeof({element_type})");
+                        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                            destination: "result.values",
+                            byte_count: &bytes,
+                            class: if self.scanned_allocation(*element) {
+                                AllocationClass::Scanned
+                            } else {
+                                AllocationClass::PointerFree
+                            },
+                        });
+                        let _ = writeln!(
+                            self.output,
+                            "        if (result.values == NULL) el_out_of_memory();\n\
+                             \x20       for (uintptr_t index = 0U; index < value.length; ++index) \
+                             result.values[index] = {helper}(value.values[index]);\n\
+                             \x20   }}\n    return result;"
+                        );
+                    }
+                    ("Set", [element]) => {
                         let element_type = self
                             .c_type(*element, span)
                             .unwrap_or_else(|| "uint8_t".to_string());

@@ -11,18 +11,18 @@ circular import: 27
 == 3.1 logical copies ==
 source name: original
 source inner label: inner
-source inner counts[0]: 1
+source inner counts[0]: 99
 source inner counts len: 3
-source tags len: 2
-source lookup len: 2
+source tags len: 3
+source lookup len: 3
 source fixed[1]: 20
 source pair: 7/seven
 copy pair: 70/seventy
 alias plain source: 10, copy: 20
 alias target through source: 2
 alias target directly: 2
-before: 0, live: 5, after: 5
-caller label: caller, counts[0]: 42
+before: 5, live: 5, after: 5
+caller label: caller, counts[0]: -1
 returned label: consumed, counts[0]: -1
 stored alias mutation: 101
 == 3.2 references ==
@@ -141,8 +141,8 @@ indexed assignment: 25
 get past end: None
 cleared: 0 true
 mutated grid: 99 3
-snapshot unaffected: 1 2
-map value read is a copy: 4 vs 3
+snapshot aliases backing: 99 3
+map value read can diverge on growth: 4 vs 3
 duplicate literal key collapses: 2 value 3
 insert replaced: 3
 insert added a new key
@@ -162,8 +162,8 @@ array length is fixed: 3
 array get in range: 3
 array get out of range: None
 nested array: 40 vs 4
-loop visited: 3, total: 6
-source grew to: 6
+loop visited: 3, total: 24
+source length stayed: 3
 array iteration order: 312
 map iteration: 3 entries, total 6
 set iteration total: 60
@@ -228,7 +228,7 @@ inferred from expected type: 7
 explicit argument: 255
 literal inference: 1/one
 distinct instantiations: 200 200
-generic copy independence: 3 vs 2
+generic shallow copy: 3 vs 2
 either: left right
 equivalent i32: true false
 equivalent String: true
@@ -340,7 +340,7 @@ rejected forms are listed in this function's documentation
 == 4.1/7.2 text and display ==
 defaults to str: literal
 materialized: immutable / owned / immutable
-string copy independence: changed / shared
+string descriptor rebinding: changed / shared
 str equality: true
 String equality: true
 case is significant: false

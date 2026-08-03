@@ -149,7 +149,7 @@ fn automatic_dereference() -> ():
     // No explicit `*` is needed for field access through a reference.
     println(f"auto field: {shared.name} / {mutable.name}")
 
-    // Explicit dereference produces an independent copy of the whole value.
+    // Explicit dereference produces a shallow copy of the whole inline value.
     let copied: City = *shared
     println(f"explicit dereference copy: {copied.name}")
 

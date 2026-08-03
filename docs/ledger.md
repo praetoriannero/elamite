@@ -2,7 +2,10 @@
 
 > Status: Active — Milestone 0 deliverable, maintained as milestones complete
 >
-> Basis: `spec.md` version 0.9.0-draft and `examples/spec_demo.elx`
+> Basis: `spec.md` version 0.10.0-draft. The authoritative demonstration and
+> compiler version identity remain on 0.9 until the roadmap migration
+> completes; shallow ordinary-copy lowering is already implemented as the
+> first semantic migration package.
 >
 > Purpose: turn the specification into an implementable checklist, per the
 > completed [`roadmap.md`](roadmap.md) Milestone 0. This document assigns no new
@@ -81,7 +84,7 @@ removed.
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
 | Statically typed, GC'd, compiles to C; value types, explicit references, traits, generics, ADTs, `Result`, raw pointers behind `unsafe`, indentation-delimited control flow | M0 (identity only; detailed per section below) | — | — |
-| Ordinary values copy by logical value copy; explicit-alias types (safe/raw ref, function ref, trait-object ref, shared resource handle) retain identity — detailed in §3.1 | M6, M9 | — | see §3.1 |
+| Ordinary values copy shallowly; inline storage is copied while descriptors, references, pointers, functions, collections, trait objects, and resource handles preserve contained identities — detailed in §3.1 | **Shallow ordinary-copy lowering** (done) | — | see §3.1 |
 | `&value` / `&var value` explicit reference formation — detailed in §3.2 | M6, M10 | — | see §3.2 |
 | No source lifetime parameters (no lifetime syntax exists) | M2, M3 (absence of grammar) | — | parse (rejects lifetime syntax as unrecognized) |
 | The initial runtime uses Boehm GC behind a collector-neutral compiler/runtime interface; alternative strategies must preserve the same non-moving, cycle-reclaiming semantics, and programs must not depend on collection timing for cleanup — detailed in §9 | M8 (interface), M10 (integration) | Boehm GC by default | see §9 |
@@ -140,10 +143,10 @@ removed.
 | --- | --- | --- | --- |
 | `let` = non-rebindable, not itself a mutable place; `var` = rebindable mutable place | M6 | — | compile-fail (assign through `let`) |
 | Field through an ordinary `let` aggregate cannot be assigned or `&var`-referenced, recursively; explicit aliases stored inside retain mutation capability | M6 (place classification) | — | compile-fail, compile-pass |
-| Assignment/argument passing/return copy the source value; the source remains usable afterward | M6 (record copy op), M9 (lowering) | — | run-pass |
+| Assignment/argument passing/return shallow-copy the source value; the source remains usable afterward | **Shallow ordinary-copy lowering** (done) | — | run-pass (`shallow_aggregate_copies_preserve_nested_backing_across_value_flows`) |
 | Copying is a core value property, not trait-controlled | M5, M6 | — | — |
-| Ordinary copy is recursively and observably independent; COW backing storage permitted if unobservable | M9 | — | run-pass (independence tests) |
-| Explicit-alias types (safe ref, raw ptr, trait-object ref, function ref) retain identity when copied; copying an aggregate preserves these aliases while ordinary fields stay independent | M9 | — | run-pass |
+| Ordinary copy is shallow and fieldwise: scalar/inline slots are distinct, while descriptor and handle fields preserve backing identity recursively through aggregates | **Shallow ordinary-copy lowering** (done) | — | run-pass (`shallow_aggregate_copies_preserve_nested_backing_across_value_flows`) |
+| Safe refs, raw pointers, trait objects, function refs, strings, collections, closures, and resource handles retain their specified identities when copied | **Shallow ordinary-copy lowering** (done; collection descriptors remain transitional) | — | run-pass |
 
 ### 3.2 References
 
@@ -153,7 +156,7 @@ removed.
 | Reference formation is explicit except a bound-call receiver; no other implicit `T` → `&T` conversion | M6 | — | compile-fail |
 | `&var T` may update target fields; references are not exclusive — any number of shared/mutable refs may alias; sequential last-write-wins; no borrow/alias checking | M6, M10 | — | run-pass (aliasing example) |
 | Go-style addressability: a binding or field of an addressable value; call results/computed expressions are not addressable; a referenced composite literal (`&Point{...}`) is the explicit exception, creating a GC target | M6 (addressability), M10 (composite-literal ref lowering) | Boehm GC | compile-fail (ref to call result), run-pass |
-| Collection interiors are never addressable for reference formation; value-context collection access returns an independent copy | M6, M14 | — | compile-fail |
+| Collection interiors are never addressable for safe-reference formation; value-context collection access returns a shallow copy | M6 plus **Shallow ordinary-copy lowering** (done) | — | compile-fail, run-pass |
 | Array/`Vec` element and `Map` value may be assignable places via a mutable collection path (replace/compound-assign/nested-mutate) without a reference escaping; `Map` keys/`Set` elements are never mutable places | M6, M14 | — | run-pass |
 | References are valid struct fields, enum payloads, parameter types, return types, and explicit closure captures | M5, closures §6 | — | compile-pass |
 | A safe reference stays valid while reachable; an escaping local reference promotes required storage to GC-managed storage; escape analysis may keep non-escaping storage on the stack | M10 (done; promotion is conservative — every address-taken local is promoted, precise escape analysis is **Post-conformance optimization**) | Boehm GC | run-pass (`a_reference_to_a_local_survives_its_frame`) |
@@ -166,12 +169,15 @@ removed.
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
 | `*T`/`*var T`, nullable; `&T`/`&var T` always non-null; nullable safe ref = `Option[&T]`; conditions require `bool` (no pointer/reference truthiness); explicit `== null` test | M5, M6, M14.1 (`Option[&T]` executes), M16 | — | compile-pass/fail, run-pass (`option_of_a_safe_reference_keeps_a_recursive_graph_reachable`) |
-| Provenance model: one storage instance + designated subobject; preserved by safe→raw conversion, copy, `*var T`→`*T`; comparison is address-only; `null` has no provenance; address reuse grants no provenance | M16.1 (done; representation preserves address, comparison compiles to `==`) | — | doc-contract (largely unenforceable), run-pass (`raw_pointers_read_write_and_compare_by_address`) |
-| No pointer arithmetic or int↔pointer conversion initially; pointee-changing `as` cast only in `unsafe`; cast preserves address/provenance/extent/mutability without validating content; `*T` cannot cast to any `*var U` | M16.5 (done) | — | compile-fail (`raw_pointer_conversions_follow_the_exact_matrix`: upgrade, int↔ptr, pointee change outside `unsafe:`), run-pass |
+| Provenance model: one storage instance, designated byte extent, and in/one-past position; preserved by safe→raw conversion, copy, `*var T`→`*T`, cast, and arithmetic; `null` has no provenance; address reuse grants none | M16 baseline plus **Unsafe pointer arithmetic and indexing** | — | doc-contract, run-pass/native harness |
+| Unsafe typed arithmetic: `pointer ± isize`, mutable-place `+=`/`-=`, same-extent pointer subtraction to `isize`, one-past allowed but not dereferenceable; complete nonzero-sized data pointee required; function/incomplete/void pointers rejected | **Unsafe pointer arithmetic and indexing** | — | parse, compile-pass/fail, run-pass, generated-C on x86/x86-64 |
+| Unsafe `pointer[index]` equals single-evaluation `*(pointer + index)`, performs no bounds check, and yields a read-only `*T` or assignable `*var T` raw target | **Unsafe pointer arithmetic and indexing** | null/alignment trap path | compile-fail, run-pass, trap |
+| Safe `==`/`!=` compare address identity universally; unsafe `<`/`<=`/`>`/`>=` order null below non-null and order two non-null pointers only within one live extent; mixed mutability allowed, no `PartialOrd`/`Ord` | **Unsafe pointer relational ordering** | — | compile-pass/fail, run-pass, doc-contract for unrelated-pointer UB |
+| Pointee-changing `as` cast only in `unsafe`; cast preserves address/provenance/extent/position/mutability without validating content; `*T` cannot cast to `*var U`; int↔pointer conversion remains absent | M16.5 plus **Unsafe pointer arithmetic and indexing** | — | compile-fail (`raw_pointer_conversions_follow_the_exact_matrix`), run-pass |
 | `&T`→`*T`, `&var T`→`*var T`/`*T` safe conversions; `*var T`→`*T` safe downgrade; dereference / raw→ref conversion require `unsafe`; write requires `*var T`; raw→ref conversion asserts non-null, aligned, valid, and remains valid for every use; `unsafe` never makes an ordinary reference nullable | M16.2/16.3/16.6/16.9 (done) | — | compile-fail (`unsafe_only_operations_require_a_lexical_unsafe_block`, `raw_dereference_places_permit_writes_but_never_safe_references`), run-pass |
-| Dereference validity: storage alive, subobject initialized as pointee type, access within subobject (write needs writable storage); raw pointer is not itself a GC root, so managed-storage liveness needs a separate strong path; foreign storage lifetime is the foreign contract | M16, M9 (root doc) | — | doc-contract (largely unenforceable) |
-| Every executed raw dereference/raw→ref conversion does a mandatory null+alignment check and traps on failure; compile-time error only for an expression-local constant-evaluable null/misaligned operand (literals/casts/operators within the operand expression — no propagation through bindings, assignment, branches, reachability, or calls); broader analysis may warn only | M16.7/16.8 (done; `E-RUN-NULL`/`E-RUN-ALIGN` via per-pointee C99 `offsetof` probes; only `null` is constructible as a constant pointer, so the misalignment half of the evaluator is vacuous until int→ptr conversion exists) | trap path | run-pass (`raw_pointer_null_and_alignment_checks_trap`), compile-fail/compile-pass (`pointer_validity_is_expression_local`) |
-| Remaining obligations (provenance/liveness/bounds/init/pointee-type/write-permission) are UB if violated and generally unchecked; accidental GC retention or address reuse cannot validate a dangling pointer | M16 | — | doc-contract (not generally constructible as defined behavior), retained malformed-input corpus, and M19 UBSan gate (`generated_c_is_clean_under_address_and_undefined_behavior_sanitizers`) |
+| Access validity: storage alive, current position is an initialized element within extent rather than one-past, and write permission exists; raw pointer is not a GC root, so managed liveness needs a separate strong path | M16 plus **Unsafe pointer arithmetic and indexing** | — | doc-contract |
+| Every executed raw dereference/index/raw→ref conversion performs mandatory null+alignment checks; locally evident invalid operands diagnose using expression-local casts/arithmetic/operators without propagating flow facts | M16.7/16.8 plus **Unsafe pointer arithmetic and indexing** | trap path | run-pass (`raw_pointer_null_and_alignment_checks_trap`), compile-fail/pass (`pointer_validity_is_expression_local`) |
+| Violating provenance/liveness/extent/subtraction-or-order compatibility/bounds/init/pointee-type/write-permission/concurrent-access obligations is UB; accidental GC retention or address reuse cannot validate a dangling pointer | M16 plus **Unsafe pointer arithmetic and indexing**, **Unsafe pointer relational ordering** | — | doc-contract, UBSan gate for defined fixtures |
 | Raw→safe-ref conversion asserts obligations hold for the reference's whole reachable lifetime; once valid it becomes a strong path for managed storage (§9); a reference to foreign/manual storage does not extend its lifetime; safe code alone cannot create UB through a raw pointer | M16.9 (done for managed targets), M17 (foreign contract) | Boehm GC | run-pass (`raw_to_reference_conversion_restores_a_strong_managed_path`), integration at M17 |
 
 ## 4. Types (§4)
@@ -189,21 +195,21 @@ removed.
 | `Type.try_from`/`wrapping_from`/`saturating_from`; `try_from` returns `Result[Type, NumericError]` | M14.3, M14.4 (done) | — | run-pass (`checked_numeric_conversion_reports_instead_of_trapping`, `numeric_alternative_conversions_wrap_and_saturate`) |
 | Integer arithmetic traps on overflow/div-by-zero/signed-min÷-1/bad shift count in every build; `checked_`/`wrapping_`/`saturating_` alternatives return `Option[T]`; float arithmetic follows IEEE 754; statically evident bad literal/conversion/arithmetic is a compile error; `isize`/`usize` use target pointer width | M8 (checked-arith helpers), M6 (static detection), M14.4 (alternatives; done) | trap path | run-pass (`numeric_alternatives_replace_the_trapping_operators_at_the_width_boundary`), compile-fail |
 | Tuples via `()`; `()` = unit = empty tuple; `(v)` groups, `(v,)` is one-element | M3, M5, M6 | — | compile-pass |
-| Local `let`/`var` accept nested irrefutable tuple binding patterns of identifiers/`_`; initializer evaluates once before all names enter scope; exact annotated/inferred shape and unique names required; components are independent copies and `var` components are separate mutable places | **Tuple destructuring and positional fields** (done) | — | parse, compile-fail, run-pass |
+| Local `let`/`var` accept nested irrefutable tuple binding patterns of identifiers/`_`; initializer evaluates once before all names enter scope; exact annotated/inferred shape and unique names required; components are shallow copies and `var` components are separate mutable places | **Tuple destructuring and positional fields**, revised by **Shallow ordinary-copy lowering** (done) | — | parse, compile-fail, run-pass |
 | Canonical in-range decimal postfix selectors such as `.0` access only tuples, preserve float tokenization and single receiver evaluation, copy in value context, and propagate ordinary mutable/addressable place, reference adaptation, raw-pointer safety, and promotion behavior | **Tuple destructuring and positional fields** (done) | raw-pointer trap path | parse, compile-fail, run-pass, generated-C |
-| `str` immutable UTF-8; `String` mutable UTF-8, independently copied (COW allowed internally); `str` qualifies `StableHash`, `String` doesn't | M14 (done) | managed allocation | run-pass (`text_preserves_unicode_and_embedded_nul_bytes`) |
+| `str` immutable UTF-8; mutable `String` descriptors shallow-share writable backing, descriptor replacement remains local, `str` qualifies `StableHash`, and `String` doesn't | **Shallow standard collection representations** (done) | managed allocation | run-pass (alias/rebind/text matrix) |
 | Double-quoted strings and single-quoted characters contain direct Unicode scalars or `\\`/`\"`/`\'`/`\n`/`\r`/`\t`/`\0`/`\u{HEX}` escapes; character literals decode to exactly one scalar; physical newlines, unsupported escapes, invalid scalars, and unterminated literals are errors | M2 | — | parse, compile-fail |
 | String literal materializes `str`/`String` from expected type, defaults `str`; no general implicit `str`→`String` (`String.from` is explicit); replacing a `str` field is valid, mutating existing `str` contents is not | M6, M14 | — | compile-fail, run-pass |
 | Fixed array `[T; N]` (`N` compile-time `usize`); `[a, b]` literal; `@vec[...]`/`@map{...}`/`@set{...}` are ungated compiler macros in the macro prelude; macro names are distinct from `Vec`/`Map`/`Set` type names; user-defined forms follow §12 | M3 (parse), M14 (lower); macro namespace migration in **Macro expansion foundations** | — | compile-pass, run-pass |
 | Literal elements/map entries evaluate left-to-right; must produce one exact type after materialization; empty literal needs an expected collection type; multiline trailing commas allowed; duplicate map key replaces, duplicate set element collapses | M6, M14 | — | compile-pass, run-pass |
-| Arrays are ordinary fixed-size aggregates with recursive value copy; qualify `StableHash` when element does; `Vec.new()`/`Map.new()`/`Set.new()` for empty collections | M14 | — | run-pass |
+| Arrays shallow-copy inline element slots; descriptors within elements retain backing identity; arrays qualify `StableHash` when the element does; empty standard collections use their ordinary constructors | **Shallow ordinary-copy lowering** (done) | — | run-pass |
 | `Vec[T]` is the growable sequence type; `Vector` is not an alternate name | M14 | — | compile-fail (`Vector` usage) |
 | `Map`/`Set` keys/elements require `StableHash` (structural inference: integrals/`bool`/`char`/`str`/`()` qualify; tuples/structs/enums qualify when every hashed field qualifies; `String`/`Vec`/`Map`/`Set`/`&T`/`&var T`/float never qualify) | M13 (inference), M14 (enforcement) | — | compile-fail (non-stable key) |
 | `Map` values have no `StableHash` requirement; no collection API exposes an interior safe reference; `Identity[&T]`/`Identity[&var T]` are formed with `Identity[ReferenceType].from(reference)` and are compiler-known `StableHash` exceptions via managed target identity | M14 (done) | Boehm GC | run-pass (`identity_wrappers_are_stable_collection_keys`) |
-| Array/`Vec` index type `usize`; value-context index copies independently; OOB traps, statically-known-OOB on an array is a compile error; mutable-path index is assignable (replace/compound/nested-mutate), never reference-formable; `Array.len()`/`.get()`, fixed length | M14 | trap path | run-pass, compile-fail |
-| `Vec` API: `len`/`is_empty`/`get`/`append`/`insert`/`remove`/`clear`; `insert` index `0..=len`; `remove` requires index `< len`; invalid index traps; `remove` returns an owned copy | M14 | trap path | run-pass |
-| `Map[K, V]` value-context index copies independently, traps if key absent; mutable-path index is assignable (needs existing key, traps if absent; `insert` for new keys); key args pass by ordinary copy; API: `len`/`is_empty`/`contains_key`/`get`/`insert`/`remove`/`clear` | M14 | trap path | run-pass |
-| `Set` has no indexing; API: `len`/`is_empty`/`contains`/`insert`/`remove`/`clear`; ordinary copy value args; `insert` returns "newly added", `remove` returns "was present" | M14 | — | run-pass |
+| Array/`Vec` index type `usize`; value-context index shallow-copies; OOB traps, statically-known-OOB on an array is a compile error; mutable-path index is assignable and never safe-reference-formable | M14 plus **Shallow ordinary-copy lowering** (done) | trap path | run-pass, compile-fail |
+| `Vec` shallow-copies pointer/length/capacity; element writes alias, descriptor lengths remain local, and growth may reuse backing or diverge; existing API/index traps remain | **Shallow standard collection representations** (done) | managed allocation, trap path | adversarial run-pass and benchmark |
+| `Map`/`Set` copies preserve complete table identity, so insert/replace/remove/clear and length changes are visible through all copies; value results and arguments shallow-copy | **Shallow standard collection representations** (done) | managed allocation, trap path | adversarial run-pass and benchmark |
+| `Set` has no indexing; API: `len`/`is_empty`/`contains`/`insert`/`remove`/`clear`; value arguments shallow-copy; `insert` returns "newly added", `remove` returns "was present" | M14 plus **Shallow standard collection representations** (done) | — | run-pass |
 
 ### 4.2 Structs
 
@@ -216,7 +222,7 @@ removed.
 | `value.name(args)`: field lookup first — if `name` is a field, call its value (must be callable) with no receiver adaptation; otherwise bound-method lookup; a field takes precedence over a same-named trait method in scope; explicit trait qualification reaches the shadowed trait method | M11 | — | run-pass (`IntTransform.apply`), compile-fail (non-callable field call) |
 | `self: *Self`/`*var Self` bound call requires an already-exact-matching raw-pointer receiver, passed unchanged (no borrow/cast/downgrade/deref/null-check); calling doesn't itself access the pointee; body deref still needs `unsafe:`; calling an `unsafe` method still needs `unsafe:` at the call site; raw-pointer receiver never adapts to `self: Self` | M11, M16.3 (done) | — | compile-fail (mismatched pointer type), run-pass (`unsafe_methods_and_references_follow_the_demo_region`) |
 | Struct literal `Type{field: expr, ...}`; any order, each field exactly once; `Type{field}` shorthand; multiline trailing comma; no record-update/spread | M3, M6 | — | compile-pass/fail |
-| Recursive struct/enum containment must cross explicit indirection (`&T`/`&var T`/`*T`/`*var T`); generic wrappers and transparent aliases don't break a cycle; hidden managed/COW storage doesn't count | M5, M6 (containment check) | — | compile-fail (`Node{next: Option[Node]}`), compile-pass (`Chain[T]` via `&Chain[T]`) |
+| Recursive struct/enum containment must cross explicit indirection (`&T`/`&var T`/`*T`/`*var T`); generic wrappers and transparent aliases don't break a cycle; hidden managed backing doesn't count | M5, M6 (containment check) | — | compile-fail (`Node{next: Option[Node]}`), compile-pass (`Chain[T]` via `&Chain[T]`) |
 
 ### 4.3 `Default` derivation and initializers
 
@@ -243,7 +249,7 @@ removed.
 | `PartialEq`/`Eq`/`PartialOrd`/`Ord`/`Hash` compiler-known, manual or derived; `==`/`!=` use `PartialEq`, `<`/`<=`/`>`/`>=` use `PartialOrd`; `Eq` = equivalence, `Ord` requires `Eq`+`PartialOrd`+total order; manual impls responsible for the laws | M13 | — | compile-fail (missing bound) |
 | Derived comparison is structural: tuple/struct fields in declaration order; enum variants by declaration order then payload; `Vec` lexicographic; `Map`/`Set` equality ignores order, no relational order; `str`/`String` compare exact codepoints, no normalization | M13, M14 | — | run-pass |
 | Float `PartialEq`/`PartialOrd` is IEEE (NaN unordered), no `Eq`/`Ord`/`StableHash`; integral/`bool`/`char`/unit/`str` give total eq+ord+hash; other aggregates are conditional on component capabilities | M13 | — | compile-fail (float as `Map` key) |
-| Safe refs compare storage identity; trait-object refs compare concrete target identity; raw pointers compare address (incl. `null`); refs/trait-object-refs/raw-pointers have no relational order; function refs compare target-function identity (§5); content comparison is explicit (`*left == *right`); indirection-crossing + identity-compare makes derived structural equality terminate for recursive values | M11, M13 | — | run-pass |
+| Safe refs compare storage identity; trait-object refs compare concrete target identity; raw pointers compare address with safe `==`/`!=` (including `null`) and raw data pointers additionally support the primitive unsafe relational rules in §3.3 without implementing `PartialOrd`/`Ord`; safe refs, trait-object refs, and function refs have no relational order; function refs compare target-function identity (§5); content comparison is explicit (`*left == *right`); indirection-crossing + identity-compare makes derived structural equality terminate for recursive values | M11, M13 plus **Unsafe pointer relational ordering** | — | run-pass, compile-fail, doc-contract |
 | `StableHash` = compiler-proven stable structure + built-in/derived `Eq`+`Hash`; manually-implemented-equality/hashing types don't qualify initially; `Identity[&T]`/`Identity[&var T]` give `Eq`/`Hash`/`StableHash` via managed address | M13, M14 | Boehm GC | compile-fail, run-pass |
 
 ## 5. Functions and function references (§5)
@@ -259,13 +265,13 @@ removed.
 | Safe/unsafe function references are `&fn`/`&unsafe fn`; general raw function pointers are `*fn`/`*unsafe fn`; both are directly callable, but every raw call requires `unsafe:` and traps on null | M11 (references), M17 (raw function pointers, done) | null trap | run-pass (`raw_function_pointers_are_general_and_directly_callable`), compile-fail |
 | Exact function references explicitly convert to matching raw function pointers; function and data pointer domains never cast between each other | M17 (done) | — | compile-pass/fail (`rejects_invalid_c_contracts_and_unsafe_calls`) |
 | No default parameter values; every non-variadic call needs the exact declared arity | M6 | — | compile-fail (arity mismatch) |
-| Variadic final parameter `name: ...T`: 0+ trailing `T` args bound as immutable `[T]`; homogeneous, only once, final position; type marker preserved (`&fn(i32, ...String) -> ()`); lowered as a managed, safely escaping slice rather than C's variadic ABI; slices provide checked indexing, `len`, and copy-yielding index-order iteration | M3, M6, M8, M14 | managed allocation | compile-pass, run-pass |
+| Variadic final parameter `name: ...T`: 0+ trailing `T` args bound as immutable `[T]`; homogeneous, only once, final position; type marker preserved (`&fn(i32, ...String) -> ()`); lowered as a managed, safely escaping slice rather than C's variadic ABI; slices provide checked indexing, `len`, and shallow-copying index-order iteration | M3, M6, M8, M14 plus **Shallow ordinary-copy lowering** (done) | managed allocation | compile-pass, run-pass |
 | Named-function value = safe `&fn(P) -> R` or unsafe `&unsafe fn(P) -> R`; bare function types remain inhabited only behind a reference; no `&var fn` or bound-method values | M5, M11 | — | compile-fail (bare `fn` type as a value) |
 | Closure syntax is `fn(parameters):` or `fn[nonempty captures](parameters) -> Return:`; parameters are typed, return annotation optional; no implicit, generic, unsafe, or variadic closure forms | Closures: normative contract, syntax, checking | — | parser snapshot, compile-pass/fail |
 | Capture forms are plain logical copy, `&`, `&var`, `*`, and `*var`; `source as alias` renames locally; construction is exact-once left-to-right; raw-pointer locals require an explicit pointer capture form | Closures: capture resolution/typing | Boehm GC for safe-reference escape | run-pass, compile-fail |
 | Every outer local use requires exactly one capture; declarations need none; aliases/parameters cannot collide; initializing self-capture, anonymous recursion, and inherited outer control contexts are rejected | Closures: resolution/body checking | — | compile-fail |
 | Every closure expression has a distinct anonymous nominal type implementing `Callable[Arguments, Return]`; direct and generic-bound call syntax preserves exact tuple arguments/result; named safe function references satisfy static matching `Callable` bounds but do not directly erase to `&Callable`; trait-object erasure requires referenced nominal storage and never casts a function pointer into the data-pointer domain | Closures: callable types/lowering | vtable dispatch | run-pass, compile-fail |
-| Closure copies recursively copy plain capture fields and preserve reference/raw-pointer aliases; capture bindings cannot be rebound; closure environments and address-taken safe referents remain rooted; raw pointers do not root pointees | Closures: copy/escape | Boehm GC | run-pass, generated-C |
+| Closure construction shallow-copies plain captures into one environment; copying the resulting callable preserves that environment identity without another allocation; capture bindings cannot be rebound; closure environments and address-taken safe referents remain rooted, while raw pointers do not root pointees | Closures: copy/escape plus **Shallow ordinary-copy lowering** (done) | Boehm GC | run-pass, generated-C |
 | Closure bodies are separate safe function boundaries; return inference includes explicit returns and reachable unit fallthrough; no tail return; `!`, `?`, `defer`, and explicit inner `unsafe:` retain ordinary rules | Closures: control checking/IR | cleanup/trap paths | run-pass, compile-fail |
 | Closures never convert to function references, raw function pointers, or C callbacks; callable equality/hash, `CallableMut`/`CallableOnce`, private evolving/initialized/default captures remain unsupported | Closures: exclusion rules | — | compile-fail |
 | Referencing a named function (`let bump = increment`) produces an `&fn` value; call syntax auto-dereferences it | M11 | — | run-pass |
@@ -302,7 +308,7 @@ removed.
 | --- | --- | --- | --- |
 | `if`/`else`/`match`/`for`/`while` use indentation bodies, condition after keyword; `match` evaluates the scrutinee, chooses the first matching arm | M3 (parse), M7 (static checks), M8 (`if`/`while` lowering), M9 (`match` lowering), M14 (`for` lowering) | — | compile-pass, run-pass |
 | Refutable patterns are match-arm only; local `let`/`var` additionally accept only the restricted irrefutable tuple binding patterns from §3.1; struct/record-variant match patterns use named fields; `Point{x, ..}` shorthand binds `x` and ignores the rest, without `..` every field is required; alternative patterns must bind identical names+types | M3/M7/M9 (match); **Tuple destructuring and positional fields** (done) | — | compile-fail, run-pass |
-| Guarded arm `Pattern if cond:`; bindings in scope for the guard; a failed guard proceeds to the next arm; guarded arms don't count toward exhaustiveness; pattern bindings are independent copies behaving as `let`; matching a reference does not auto-dereference (`*reference` for content matching) | M7 (static checks), M9 (lowering) | — | compile-fail/run-pass |
+| Guarded arm `Pattern if cond:`; bindings in scope for the guard; a failed guard proceeds to the next arm; guarded arms don't count toward exhaustiveness; pattern bindings are shallow copies behaving as `let`; matching a reference does not auto-dereference (`*reference` for content matching) | M7 plus **Shallow ordinary-copy lowering** (done) | — | compile-fail/run-pass |
 | Every `match` is exhaustive; infinite-domain patterns need a catch-all/`_`; arms test in source order with no fallthrough; a statically unreachable arm is a compile error | M7 (exhaustiveness/usefulness/reachability) | — | compile-fail (non-exhaustive, unreachable arm) |
 | Control-flow constructs/`unsafe` blocks/indented bodies are statements, not expressions; assignment/compound assignment are statements and cannot nest in expressions; there is no increment/decrement operator (`++` is binary concatenation, `--` is invalid); compound assignment evaluates its destination exactly once | M6/M7/M8 (statement rules done); `++` in **Compile-time AST and interpreter** | — | compile-fail (`if` used as expression, `--`), run-pass (destination once, concatenation order) |
 | Left-to-right expression evaluation; a call evaluates callee/receiver then arguments in source order; `&&`/`\|\|` require `bool` and short-circuit; `!` boolean negation; unary `+`/`-` (numeric/signed+float), `~` (integer); arithmetic/bitwise ops are built-in, not overloadable; comparisons use §4.5 traits; `%` integer-only; shift count must be an unsigned integer smaller than the left operand's bit width; chained comparisons (`a < b < c`) are invalid | M6, M7, M8 | — | compile-fail (chained comparison), run-pass (evaluation order) |
@@ -312,8 +318,8 @@ removed.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| `for` initially supports slices/arrays/`Vec`/`Map`/`Set`, no user iteration protocol yet; the iterable evaluates once and copies into hidden loop state via ordinary value semantics; later source mutation cannot affect the active loop; COW allowed if unobservable | M7 (CFG for `for`), M14 (lowering + hidden state) | — | run-pass |
-| Slices/arrays/vectors iterate index order; maps yield `(K, V)` pairs, sets yield elements, order unspecified and may vary; each yielded item is independently copied into a non-rebindable binding; no interior references exposed; visits only direct elements, no recursive traversal through reference-like values | M14 | — | run-pass |
+| `for` initially supports slices/arrays/`Vec`/`Map`/`Set`; iterable evaluates once and shallow-copies into hidden state; vector length-changing and map/set structural mutation during active iteration is UB, while visible replacement follows §7.1 | **Iteration and mutation invalidation** | — | run-pass plus doc-contract invalid cases |
+| Slices/arrays/vectors iterate index order; maps yield `(K, V)`, sets yield elements, order unspecified; each yielded item shallow-copies into a non-rebindable binding and no safe interior reference escapes | M14 plus **Iteration and mutation invalidation** | — | run-pass |
 
 ### 7.2 Formatted strings and display
 
@@ -353,7 +359,7 @@ removed.
 | Raw pointers are *not* language roots; code retaining one is responsible for a separate managed path; Boehm may conservatively over-retain via bit-pattern resemblance but a program cannot rely on it | M10, M16 | Boehm GC | doc-contract, best-effort test |
 | Cycles without a strong-root path are unreachable and collectible; collection timing is unspecified and not guaranteed before exit; unreachable storage may persist indefinitely; collection timing/memory usage are not deterministic program behavior | M10 | Boehm GC | run-pass (`runtime_stress_is_stable_across_repeated_debug_and_release_runs` constructs a managed cycle); reclamation timing remains intentionally unasserted |
 | No `Weak` type, GC finalizers, implicit destruction, or user collection callbacks; GC never invokes resource-cleanup methods; internal runtime reclamation must invoke no user code and cause no observable cleanup behavior | M10, M15 | Boehm GC | design constraint (no such syntax to test) |
-| Managed allocation failure is unrecoverable (copy/COW-mutation/escape-promotion may allocate implicitly); OOM path attempts a full collection, retries the allocation, then terminates with an OOM diagnostic only if the retry fails; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path; retry closure audited at M19) | Boehm GC | generated-C integration (`managed_storage_engages_the_collector_prelude_and_link_inputs` asserts collect → retry → terminal ordering); forced host OOM remains nondeterministic |
+| Managed allocation failure is unrecoverable (collection growth, closure construction, formatting, and escape promotion may allocate implicitly; an ordinary shallow copy does not allocate merely to perform the copy); the OOM path attempts a full collection, retries the allocation, then terminates with an OOM diagnostic only if the retry fails; OOM is not `Result`-represented, uncatchable, and runs no cleanup; safe allocation never produces `null` | M10 (OOM path; retry closure audited at M19) plus **Shallow ordinary-copy lowering** (done) | Boehm GC | generated-C integration (`managed_storage_engages_the_collector_prelude_and_link_inputs` asserts collect → retry → terminal ordering); forced host OOM remains nondeterministic |
 | No portable collection-control/heap-stats API initially; an implementation may offer nonportable diagnostic flags without establishing stronger guarantees or changing language-visible values | M18, **Post-conformance optimization** | Boehm GC (nonportable extensions) | optional tooling, not required |
 
 ## 10. Unsafe operations and C interoperability (§10)
@@ -470,20 +476,23 @@ initial surface.
 
 | Rule | Pass | Runtime | Tests |
 | --- | --- | --- | --- |
-| `spawn` evaluates one safe zero-argument callable once, transfer-copies its environment, starts eagerly, and reports OS creation failure through `SpawnError` | Standard-library concurrency (done) | pthread-compatible C99 hooks | `operating_system_spawn_failure_is_recoverable`; `14_concurrency` |
-| Structural `Transfer` admits independently copyable primitives, strings, functions, recursive aggregates, collections, and closures; references, raw pointers, slices, and trait objects are excluded; reviewed synchronized handles preserve identity | types/check (done) | transfer-copy helpers | `transfer_is_structural_and_excludes_aliasing_types`; `concurrency_boundaries_accept_nested_values_and_synchronized_handles`; `spawn_rejects_raw_pointer_and_trait_object_captures` |
-| `Thread[R]` is a copyable joinable identity with one native join, independently copied repeated results, a self-join trap, no detach/cancellation, and shutdown waiting | check/lowering/backend (done) | thread registry and result state | `native_threads_transfer_closures_join_once_and_copy_results`; `joining_the_current_thread_traps_the_process`; `discarded_and_nested_threads_are_waited_for_at_shutdown` |
-| A thread body is a safe function boundary with ordinary `defer`, `Result`, and `!`; any trap, panic, or OOM remains process-fatal | check/control-flow/backend (done) | process trap path | `14_concurrency`; `a_worker_panic_terminates_the_complete_process`; never-returning C99 lowering test |
-| Bounded, rendezvous, and unbounded MPMC channels transfer-copy messages, distinguish full/empty/closed states, drain after explicit idempotent closure, and never infer closure from GC reachability | check/lowering/backend (done) | synchronized queues | `14_concurrency`; `closing_channels_wakes_blocked_senders_and_receivers`; `15_concurrency_stress` |
-| `Mutex[T]` shares synchronized identity but exposes only independent `read`, `replace`, and locked `update` values, never an escaping protected reference | check/lowering/backend (done) | native mutex | `14_concurrency`; `concurrency_boundaries_reject_unsynchronized_aliases`; `15_concurrency_stress` |
+| `spawn` evaluates one safe zero-argument callable once, shallow-copies its environment without a `Transfer` bound, starts eagerly, and reports OS creation failure through `SpawnError` | **C-like thread and channel publication** | pthread-compatible C99 hooks | lifecycle plus reference/pointer/collection capture run-pass |
+| References, raw pointers, slices, trait objects, strings, collections, closures, and aggregates cross threads with their ordinary shallow identities; safe refs remain roots and raw pointers remain non-rooting unsafe capabilities | **C-like thread and channel publication** | registered-thread GC | compile/run/native harness |
+| `Thread[R]` is a copyable joinable identity with one native join, shallow repeated results, a self-join trap, no detach/cancellation, and shutdown waiting | **C-like thread and channel publication** | thread registry and result state | lifecycle and shared-result alias tests |
+| A thread body begins in a lexically safe function context with ordinary `defer`, `Result`, and `!`, without implying race freedom; any trap, panic, or OOM remains process-fatal | check/control-flow/backend (done) | process trap path | `14_concurrency`; worker-panic and never-returning tests |
+| Bounded, rendezvous, and unbounded MPMC channels shallow-copy messages, publish prior writes, distinguish full/empty/closed states, drain after explicit idempotent closure, and do not synchronize later backing access | **C-like thread and channel publication** | synchronized queues | lifecycle, publication, alias, contention tests |
+| `Mutex[T]` shares synchronized identity and shallow-copies `new`/`read`/`replace`/`update` values; it serializes callers using the same handle but does not isolate or compiler-associate external aliases | **Programmer-managed mutex contract** | native mutex | synchronized sharing and alias tests |
 | Atomic bool, i32, and target-width usize cells share identity and use sequentially consistent load/store/exchange/compare-exchange/read-modify-write operations without C11 `_Atomic` output | check/lowering/backend (done) | C99 atomic hooks | `14_concurrency`; `concurrency_runtime_remains_c99_and_target_width_neutral`; `15_concurrency_stress` |
-| Runtime-created threads register with the collector and retain stacks, environments, synchronized cells, queues, and result state as roots until publication/unregistration | backend/runtime (done) | Boehm thread registration | `14_concurrency` collection stress; address/undefined sanitizer matrix |
+| Runtime-created threads register with the collector and retain stacks, shallow environments, cells, queues, and result state as roots until publication/unregistration | backend/runtime plus **C-like thread and channel publication** | Boehm thread registration | collection stress; address/undefined sanitizer matrix |
 | Synchronous C reentry is valid on the same registered initializer or Elamite-created thread; foreign-created and asynchronous foreign entry remains UB, and traps never unwind through C | FFI/backend/runtime (done) | registered-thread callback boundary | `14_concurrency` native callback header; initializer callback harness |
-| Safe programs are data-race free; scheduling, fairness, completion order, output-call order, and general deadlock detection are unspecified | complete concurrency slice (done) | synchronized output | `concurrent_output_preserves_complete_calls`; repeated debug/release stress; address/undefined and thread sanitizer matrices |
+| Conflicting unordered cross-thread access is UB and requires no `unsafe` syntax; spawn, mutex, channel, join, and SC atomics establish the specified ordering edges; scheduling/fairness/output order remain unspecified | **Concurrent memory-model conformance** | pthread/compiler synchronization hooks | synchronized TSan-clean stress, documentation-only racy negatives |
 
 ## 16. Demonstration coverage
 
-Every construct in `examples/spec_demo.elx` maps to a section of this ledger:
+`examples/spec_demo.elx` remains the implemented 0.9 demonstration. Its
+existing constructs map below; the 0.10 migration must add shallow-alias,
+shared-thread, and unsafe-pointer traversal coverage before the example becomes
+authoritative for the revised specification:
 
 | `spec_demo.elx` region | Ledger section(s) |
 | --- | --- |
@@ -755,9 +764,9 @@ copy recording begin in Milestone 6.
 - [x] Every C-representable canonical type is routed through one explicit
   logical-copy strategy and a deterministic generated copy helper.
 - [x] Tuples, fixed arrays, nested structs, and explicit-discriminant enums
-  recursively copy ordinary payloads; mutable `String` buffers are eagerly
-  duplicated; scalar values and explicit aliases retain their required direct
-  or identity-preserving behavior.
+  recursively copy ordinary payloads; scalar values and explicit aliases retain
+  their required direct or identity-preserving behavior. Milestone 9's eager
+  `String` helper was later superseded by shared-backing COW.
 - [x] Assignment, argument, return, aggregate read, aggregate construction,
   and pattern binding sites consume explicit copy operations in control-flow
   IR.
@@ -765,9 +774,10 @@ copy recording begin in Milestone 6.
   guards, tuple/struct patterns, and unit/tuple/record enum variants. Payload
   bindings are immutable independent copies.
 - [x] Run-pass tests cover nested assignment/argument/return independence,
-  aggregate-read independence, copied match payloads, eager string copy
-  helpers, source order, guards, alternatives, structural patterns, enum
-  representation, and both debug/release optimization.
+  aggregate-read independence, copied match payloads, string-copy helpers,
+  source order, guards, alternatives, structural patterns, enum representation,
+  and both debug/release optimization; later COW tests preserve the same
+  independence contract.
 - [x] Runtime representations not yet present cannot silently receive a
   shallow copy: safe-reference execution remains M10 and collection
   representations/copy hooks remain M14.
@@ -873,7 +883,7 @@ ledger follows the same split.
 | Manifest parsing | `toml` + `serde` | Already adopted at M1; TOML parsing is infrastructure, not language-compiler work | M1 (done) |
 | Diagnostic rendering | `codespan-reporting` | Our `Diagnostic`/`Category`/`Span` shape (§0 legend; `roadmap.md` §2.3) already matches its `Diagnostic`/`Label`/`Files` model directly. Retrofitted into M1 immediately (`SourceManager` implements `Files`, `manifest.rs` captures real spans via `toml::Spanned` and `toml::de::Error::span()`, `main.rs` renders with `term::emit_to_write_style`) rather than left as a future intention — this is real span-based rustc-style output today, not just a plan | M1 (retrofitted), all later milestones |
 | Snapshot testing | `insta` | `roadmap.md` explicitly asks for "golden token streams," "a syntax-tree dump... stable enough to serve as a debugging tool," and snapshot-compared parse tests (§2.4) — exactly insta's purpose, and the standard choice in this niche (rust-analyzer, ruff, and biome all use it for the same purpose) | M2 onward |
-| Property testing | `proptest` | `roadmap.md` §2.4 already calls for "property or fuzz tests for indentation, literal parsing, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy independence" | M2 onward |
+| Property testing | `proptest` | `roadmap.md` §2.4 calls for property or fuzz tests covering indentation, literals, parser recovery, numeric boundaries, match exhaustiveness, generic instantiation, and copy/alias behavior | M2 onward |
 | Retained parser fuzz corpus | `proptest` plus checked-in malformed inputs | M19 combines the existing arbitrary-Unicode parser property test with seeded indentation, delimiter, escape, formatted-string, and recovery inputs; this keeps failures reproducible without making libFuzzer a normal build dependency | M19 (done; `tests/robustness.rs`) |
 | Symbol interning | `lasso` | Backs the existing cross-cutting rule "assign internal IDs rather than using source names as identity" (`roadmap.md` §2.1) once identifiers flow through resolution; cheap `Copy` symbol keys instead of cloning `String` everywhere | M4 (done) |
 | CLI surface | `clap` (derive) | `roadmap.md` Milestone 18's command surface (check/build/dump options, target/output selection — §14 here) is ordinary CLI-flag parsing, not compiler-specific work | M18.6 (done) |
@@ -964,9 +974,9 @@ container's storage, and replacing the container writes through it.
 - A reference into an aggregate therefore keeps its **whole container**
   reachable, not merely the selected subvalue — the same reachability behavior
   as Go.
-- Milestone 9's copy helpers are unaffected. Flat layouts mean an ordinary
-  aggregate copy stays a recursive value copy, and references inside a copied
-  aggregate keep their identity exactly as M9 specified.
+- Flat layouts remain valid under 0.10. The migration changes aggregate copy
+  helpers from recursive backing duplication to shallow fieldwise copying;
+  references and descriptors inside the copied aggregate retain identity.
 
 ### 19.3 Root retention
 

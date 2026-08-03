@@ -30,11 +30,12 @@ fn text_types() -> ():
     println(f"defaults to str: {defaulted}")
     println(f"materialized: {immutable} / {owned} / {converted}")
 
-    // A `String` copies independently.
+    // A `String` descriptor copies shallowly, but rebinding one descriptor is
+    // still local to that inline slot.
     var first = String.from("shared")
     let second = first
     first = String.from("changed")
-    println(f"string copy independence: {first} / {second}")
+    println(f"string descriptor rebinding: {first} / {second}")
 
     // Comparison is exact code points, with no normalization.
     let same_text = "immutable"
