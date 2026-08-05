@@ -16,6 +16,7 @@ fn native_close(app: *var NativeSdlApp)
 struct SdlDemo:
     handle: *var NativeSdlApp
 
+impl SdlDemo:
     fn open(width: i32, height: i32) -> Self:
         unsafe:
             let handle = native_open(width, height)

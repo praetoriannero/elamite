@@ -851,7 +851,56 @@ impl<'a> TypedLowerer<'a> {
                             _ => return None,
                         }
                     }
-                    _ => return None,
+                    _ => {
+                        let iteration = self.checked.iterations.get(&node.span).copied()?;
+                        let state = iterable.ty;
+                        let element = self.concrete_type(iteration.element_type);
+                        let selected = crate::traits::vtable_entry(
+                            self.resolved,
+                            self.typed,
+                            iteration.trait_declaration,
+                            state,
+                            "next",
+                        )?;
+                        let next = FunctionInstance {
+                            declaration: selected.declaration,
+                            arguments: selected.arguments,
+                            self_type: selected.self_type,
+                        };
+                        let signature = self.typed.instantiate_signature(self.resolved, &next)?;
+                        let receiver = signature.receiver?;
+                        let option = signature.return_type;
+                        let option_declaration = self.resolved.standard_declaration("Option")?;
+                        let TypeKind::Nominal {
+                            identity,
+                            arguments,
+                        } = self.expanded_kind(option)
+                        else {
+                            return None;
+                        };
+                        if identity.declaration != option_declaration
+                            || arguments.as_slice() != [element]
+                        {
+                            return None;
+                        }
+                        let some_variant = self.resolved.standard_variant("Option", "Some")?;
+                        let some_field = *self.resolved.variants[some_variant.index()]
+                            .fields
+                            .first()?;
+                        self.enqueue_reachable(next.clone(), node.span);
+                        (
+                            IterationKind::User {
+                                state,
+                                element,
+                                receiver,
+                                option,
+                                some_variant,
+                                some_field,
+                                next,
+                            },
+                            element,
+                        )
+                    }
                 };
                 local_types.insert(binding, binding_type);
                 let body = children

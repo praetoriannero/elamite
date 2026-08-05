@@ -13,7 +13,7 @@ for the Milestone 19 ledger audit.
 | §4 Types | `04_types` | type, construction, literal, and collection compile-fail suites | numeric/index/key trap tests | generic enum/collection backend suites |
 | §5 Functions | `05_functions` | call, receiver, and function-signature compile-fail suites | null raw-function trap | methods/function-reference backend suite |
 | §6 Generics/traits | `06_generics_traits` | inference, conformance, coherence, and object-safety suites | no distinct trap boundary | generic trait and dynamic-dispatch backend suites |
-| §7 Expressions/control flow | `07_control_flow` | expression, pattern, exhaustiveness, and placement suites | arithmetic/index trap suites | evaluation-order and match-lowering suites |
+| §7 Expressions/control flow | `07_control_flow` | expression, pattern, exhaustiveness, iterator-obligation, and placement suites | arithmetic/index trap suites | evaluation-order, user-iterator, and match-lowering suites |
 | §8 Errors/cleanup | `08_errors_cleanup` | propagation and deferred-control compile-fail suites | cleanup/trap termination suite | propagation and cleanup-order backend suites |
 | §9 Garbage collection | `09_gc` | reference-formation and promotion suites | OOM collect/retry/terminate generated-C test; best-effort churn test | recursive graph and allocation-churn backend suites |
 | §10 Unsafe/C ABI | `10_unsafe` | unsafe, pointer-validity, and FFI contract suites | raw-pointer and callback trap processes | `examples/c_ffi` and C harness/callback integration tests |

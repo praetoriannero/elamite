@@ -3,6 +3,7 @@
 struct Wrapper[T]:
     value: T
 
+impl [T] Wrapper[T]:
     fn get(self: &Self) -> T:
         return self.value
 

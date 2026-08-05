@@ -188,6 +188,7 @@ struct Checker<'a> {
     unsafe_depth: u32,
     pointer_bits: u8,
     current_self_declaration: Option<DeclarationId>,
+    current_self_type: Option<TypeId>,
     current_module: Option<ModuleId>,
     program: CheckedProgram,
     diagnostics: Vec<Diagnostic>,
@@ -221,6 +222,7 @@ impl<'a> Checker<'a> {
             unsafe_depth: 0,
             pointer_bits,
             current_self_declaration: None,
+            current_self_type: None,
             current_module: None,
             program: CheckedProgram::default(),
             diagnostics: Vec::new(),
@@ -292,11 +294,21 @@ impl<'a> Checker<'a> {
             .clone();
         self.current_is_test =
             self.resolved.declarations[declaration_id.index()].kind == DeclarationKind::Test;
-        self.current_self_declaration = self.resolved.declarations[declaration_id.index()]
-            .parent_declaration
-            .filter(|parent| {
-                self.resolved.declarations[parent.index()].kind != DeclarationKind::Trait
-            });
+        let declaration = &self.resolved.declarations[declaration_id.index()];
+        self.current_self_declaration = declaration.parent_declaration.filter(|parent| {
+            self.resolved.declarations[parent.index()].kind != DeclarationKind::Trait
+        });
+        self.current_self_type = if let Some(implementation) = declaration.parent_impl {
+            self.typed.impl_target_types.get(&implementation).copied()
+        } else {
+            self.current_self_declaration
+                .and_then(|owner| self.typed.declaration_types.get(&owner).copied())
+        };
+        if self.current_self_declaration.is_none()
+            && let Some(self_type) = self.current_self_type
+        {
+            self.current_self_declaration = self.nominal_owner(self_type);
+        }
         self.current_module = Some(self.resolved.declarations[declaration_id.index()].module);
         self.local_types.clear();
         self.local_rebindable.clear();
@@ -355,6 +367,7 @@ impl<'a> Checker<'a> {
             }
         }
         self.current_self_declaration = None;
+        self.current_self_type = None;
         self.current_module = None;
         self.current_is_test = false;
     }
@@ -422,6 +435,30 @@ impl<'a> Checker<'a> {
         false
     }
 
+    fn require_method_access(&mut self, method: DeclarationId, use_span: Span) -> bool {
+        let declaration = &self.resolved.declarations[method.index()];
+        let accessible = declaration.visibility == Visibility::Public
+            || self.current_module.is_some_and(|current| {
+                self.resolved.modules[current.index()].package.as_ref()
+                    == self.resolved.modules[declaration.module.index()]
+                        .package
+                        .as_ref()
+            });
+        if accessible {
+            return true;
+        }
+        let name = self.resolved.symbol_text(declaration.name);
+        self.diagnostics.push(
+            Diagnostic::new(
+                Category::Visibility,
+                format!("method `{name}` is package-private"),
+            )
+            .with_primary(use_span)
+            .with_related(declaration.span, "package-private method declared here"),
+        );
+        false
+    }
+
     fn resolve_aliases(&self, mut ty: TypeId) -> TypeId {
         loop {
             ty = self.typed.types.resolve_inference(ty);
@@ -429,6 +466,23 @@ impl<'a> Checker<'a> {
                 TypeKind::Alias { target, .. } => ty = *target,
                 _ => return ty,
             }
+        }
+    }
+
+    fn nominal_owner(&self, ty: TypeId) -> Option<DeclarationId> {
+        match self.typed.types.kind(self.resolve_aliases(ty)) {
+            TypeKind::Nominal { identity, .. } | TypeKind::Foreign { identity, .. } => {
+                Some(identity.declaration)
+            }
+            _ => None,
+        }
+    }
+
+    fn nominal_arguments(&self, ty: TypeId) -> Option<Vec<TypeId>> {
+        match self.typed.types.kind(self.resolve_aliases(ty)) {
+            TypeKind::Nominal { arguments, .. } => Some(arguments.clone()),
+            TypeKind::Foreign { .. } => Some(Vec::new()),
+            _ => None,
         }
     }
 
@@ -620,7 +674,7 @@ impl<'a> Checker<'a> {
                         ty
                     })
                     .unwrap_or_else(|| self.typed.types.error());
-                let element_type = match self
+                let mut element_type = match self
                     .typed
                     .types
                     .kind(self.typed.types.resolve_inference(iterable_type))
@@ -640,6 +694,26 @@ impl<'a> Checker<'a> {
                     TypeKind::Error => Some(self.typed.types.error()),
                     _ => None,
                 };
+                if element_type.is_none()
+                    && iterable_type != self.typed.types.error()
+                    && let Some(iterator) = self.resolved.standard_declaration("Iterator")
+                    && let Some(arguments) = crate::traits::trait_arguments_for_target(
+                        self.resolved,
+                        self.typed,
+                        iterable_type,
+                        iterator,
+                    )
+                    && let [element] = arguments.as_slice()
+                {
+                    element_type = Some(*element);
+                    self.program.iterations.insert(
+                        node.span,
+                        CheckedIteration {
+                            trait_declaration: iterator,
+                            element_type: *element,
+                        },
+                    );
+                }
                 let binding = node.children.iter().find_map(|child| match child {
                     SyntaxElement::Token(token)
                         if matches!(token.kind, TokenKind::Identifier(_)) =>
@@ -655,7 +729,8 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::ExpressionType,
-                            "`for` supports only slices, arrays, `Vec`, `Map`, and `Set`",
+                            "a `for` iterable must be a slice, array, `Vec`, `Map`, `Set`, or \
+                             implement `std.Iterator[Element]`",
                         )
                         .with_primary(node.span),
                     );
@@ -2878,6 +2953,7 @@ impl<'a> Checker<'a> {
         let saved_unsafe = self.unsafe_depth;
         let saved_return = self.current_return_type;
         let saved_self = self.current_self_declaration;
+        let saved_self_type = self.current_self_type;
         let saved_test = self.current_is_test;
 
         for capture in &checked_captures {
@@ -2905,6 +2981,7 @@ impl<'a> Checker<'a> {
         self.unsafe_depth = 0;
         self.current_return_type = Some(signature.return_type);
         self.current_self_declaration = None;
+        self.current_self_type = None;
         self.current_is_test = false;
         let definitely_returns = node
             .direct_child(SyntaxKind::Block)
@@ -2954,6 +3031,7 @@ impl<'a> Checker<'a> {
         self.unsafe_depth = saved_unsafe;
         self.current_return_type = saved_return;
         self.current_self_declaration = saved_self;
+        self.current_self_type = saved_self_type;
         self.current_is_test = saved_test;
 
         let closure_type = self.typed.types.intern(TypeKind::Closure {
@@ -3388,7 +3466,8 @@ impl<'a> Checker<'a> {
                 self.resolved.declarations[declaration.index()].kind,
                 DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::ForeignStruct
             ) {
-                return None;
+                let ty = self.type_from_expression(node)?;
+                return Some((self.nominal_owner(ty)?, Some(self.nominal_arguments(ty)?)));
             }
             let arguments = nodes[1..]
                 .iter()
@@ -3396,8 +3475,11 @@ impl<'a> Checker<'a> {
                 .collect::<Option<Vec<_>>>()?;
             return Some((declaration, Some(arguments)));
         }
-        self.type_declaration_expression(node)
-            .map(|declaration| (declaration, None))
+        if let Some(declaration) = self.type_declaration_expression(node) {
+            return Some((declaration, None));
+        }
+        let ty = self.type_from_expression(node)?;
+        Some((self.nominal_owner(ty)?, Some(self.nominal_arguments(ty)?)))
     }
 
     fn enum_variant_arguments(&mut self, node: &SyntaxNode) -> Option<Vec<TypeId>> {
@@ -3701,10 +3783,8 @@ impl<'a> Checker<'a> {
     /// Lazily requests the canonical result from the type subsystem so body
     /// annotations and declaration signatures share one lowering grammar.
     fn lower_type(&mut self, node: &SyntaxNode) -> TypeId {
-        let self_type = self
-            .current_self_declaration
-            .and_then(|declaration| self.typed.declaration_types.get(&declaration).copied());
-        let (ty, diagnostics) = types::lower_annotation(self.resolved, self.typed, node, self_type);
+        let (ty, diagnostics) =
+            types::lower_annotation(self.resolved, self.typed, node, self.current_self_type);
         self.diagnostics.extend(diagnostics);
         ty
     }

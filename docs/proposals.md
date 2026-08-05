@@ -283,11 +283,51 @@ over immutable `std.ast` 1.0 values.
   definition evidence without fabricating source spans.
 
 This replaced the earlier matcher/transcriber and native-plugin possibilities.
+
+## 5. Inherent implementation compatibility boundary (resolved)
+
+Struct declarations become field-only in one diagnosed source transition;
+methods written inside a struct receive a migration diagnostic directing them
+to `impl Type`. The frozen `std.ast` 1.0 interface is not reinterpreted.
+Instead, the compiler publishes exact interface version 2.0, adds a distinct
+`InherentImplementation` value and item/quote role, and makes
+`StructDefinition` field-only.
+
+An attached attribute that adds behavior returns an `ItemList` containing the
+transformed definition and one or more sibling inherent implementations. Later
+derives observe the final transformed definition, including its fields and
+variants, but do not observe sibling items as members of that definition. A
+package artifact requiring 1.0 fails the existing exact-version handshake;
+there is no compatibility window that could give a 1.0 `MemberList` a new
+meaning.
+
+Multiple inherent blocks may contribute methods to one local nominal type.
+Same-named methods require provably disjoint canonical target patterns; bounds
+do not establish disjointness, and an exact target never specializes or
+overrides an overlapping generic target. This preserves a coherent method set
+without adding trait or inherent specialization.
 The former `--unstable-macros` gate has been retired; user-defined forms are
 stable and covered by the macro example, adversarial package, property tests,
 and the conformance ledger. `spec.md` §12 is authoritative.
 
-## 5. Current disposition
+## 5. User-defined iteration (resolved)
+
+The accepted protocol is one ordinary source-backed trait,
+`Iterator[Element]`, whose required method is
+`fn next(self: &var Self) -> Option[Element]`. A `for` loop shallow-copies its
+iterable once into managed hidden state, calls `next` until it returns `None`,
+and shallow-copies each `Some` payload into the loop binding. Generic iterator
+bounds participate in static selection. Trait-object iteration and an
+`IntoIterator` conversion layer are deferred.
+
+Slices, arrays, `Vec`, `Map`, and `Set` retain direct compiler lowering so their
+ordering, shallow descriptor snapshots, mutation invalidation, and existing
+costs do not change. User iterator types document their own invalidation
+behavior. Coherence continues to reject overlapping implementations rather
+than selecting a most-specific element type. `spec.md` Section 7.1 is
+authoritative.
+
+## 6. Current disposition
 
 | Proposal | Current state |
 | --- | --- |
@@ -296,3 +336,4 @@ and the conformance ledger. `spec.md` §12 is authoritative.
 | Programmable `build.elx` | Deferred; no active review or accepted surface |
 | Vector delimiter change | Rejected; `@vec[...]` remains canonical |
 | User macros, attributes, and derives | Implemented and stable under `spec.md` §12 |
+| User-defined iteration | Implemented through `Iterator[Element]` under `spec.md` §7.1 |

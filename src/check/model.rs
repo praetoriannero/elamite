@@ -30,7 +30,17 @@ pub struct CheckedProgram {
     pub function_references: BTreeMap<Span, FunctionInstance>,
     /// Callable resolution selected for each call expression.
     pub calls: BTreeMap<Span, CheckedCall>,
+    /// User-defined `for` loops selected through the standard
+    /// `Iterator[Element]` trait. Built-in collections retain their dedicated
+    /// typed-IR kinds and therefore need no entry here.
+    pub iterations: BTreeMap<Span, CheckedIteration>,
     pub closures: BTreeMap<DeclarationId, CheckedClosure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckedIteration {
+    pub trait_declaration: DeclarationId,
+    pub element_type: TypeId,
 }
 
 #[derive(Debug, Clone)]

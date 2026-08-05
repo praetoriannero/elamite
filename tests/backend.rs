@@ -1480,6 +1480,7 @@ fn infers_enclosing_and_method_generic_arguments_from_bound_calls() {
 struct Box[T]:
     value: T
 
+impl[T] Box[T]:
     fn get(self: &Self) -> T:
         return self.value
 
@@ -1587,6 +1588,7 @@ fn builds_and_runs_methods_function_references_and_variadic_packing() {
 struct Counter:
     value: i32
 
+impl Counter:
     fn new(value: i32) -> Self:
         return Self{value: value}
 
@@ -3803,6 +3805,7 @@ trait Toggle:
 struct Session:
     active: bool
 
+impl Session:
     fn status(self: &Self) -> i32:
         return 1
 
@@ -4719,11 +4722,183 @@ fn main() -> ():
 }
 
 #[test]
+fn user_iterators_drive_for_through_next_and_preserve_control_flow() {
+    let source = r#"
+struct Countdown:
+    current: i32
+
+impl Iterator[i32] for Countdown:
+    fn next(self: &var Self) -> Option[i32]:
+        if self.current <= 0:
+            return Option.None
+        let value = self.current
+        self.current -= 1
+        return Option.Some(value)
+
+fn make_countdown() -> Countdown:
+    println("iterator evaluated")
+    return Countdown { current: 5 }
+
+fn total[I: Iterator[i32]](iterator: I) -> i32:
+    var result = 0
+    for value in iterator:
+        if value == 4:
+            continue
+        if value == 2:
+            break
+        result += value
+    return result
+
+fn first[E, I: Iterator[E]](iterator: I, fallback: E) -> E:
+    for value in iterator:
+        return value
+    return fallback
+
+fn main() -> ():
+    println(total(make_countdown()))
+    println(first(Countdown { current: 5 }, 0))
+    var original = Countdown { current: 2 }
+    var copied_total = 0
+    for value in original:
+        copied_total += value
+    println(f"{copied_total} {original.current}")
+"#;
+
+    for optimization in [Optimization::Debug, Optimization::Release] {
+        let (stdout, stderr, status) = build_and_run(source, optimization);
+        assert_eq!(stdout, "iterator evaluated\n8\n5\n3 2\n");
+        assert_eq!(stderr, "");
+        assert_eq!(status, 0);
+    }
+}
+
+#[test]
+fn references_yielded_from_hidden_iterator_state_remain_valid() {
+    let source = r#"
+struct Once:
+    value: i32
+    yielded: bool
+
+impl Iterator[&i32] for Once:
+    fn next(self: &var Self) -> Option[&i32]:
+        if self.yielded:
+            return Option.None
+        self.yielded = true
+        return Option.Some(&self.value)
+
+fn main() -> ():
+    var saved: Option[&i32] = Option.None
+    for value in Once { value: 42, yielded: false }:
+        saved = Option.Some(value)
+    match saved:
+        Option.Some(value):
+            println(*value)
+        Option.None:
+            println(0)
+"#;
+
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "42\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn generic_iterators_can_yield_shallow_copied_closures() {
+    let source = r#"
+struct Once[T]:
+    value: T
+    yielded: bool
+
+impl[T] Iterator[T] for Once[T]:
+    fn next(self: &var Self) -> Option[T]:
+        if self.yielded:
+            return Option.None
+        self.yielded = true
+        return Option.Some(self.value)
+
+fn main() -> ():
+    let offset = 40
+    let callback = fn[offset]() -> i32:
+        return offset + 2
+    var calls = 0
+    for yielded in Once { value: callback, yielded: false }:
+        calls += 1
+        println(yielded())
+    println(calls)
+"#;
+
+    let (stdout, stderr, status) = build_and_run(source, Optimization::Debug);
+    assert_eq!(stdout, "42\n1\n");
+    assert_eq!(stderr, "");
+    assert_eq!(status, 0);
+}
+
+#[test]
+fn user_iterator_ir_preserves_copy_facts_and_both_target_widths() {
+    let source = r#"
+struct Once:
+    value: String
+    yielded: bool
+
+impl Iterator[String] for Once:
+    fn next(self: &var Self) -> Option[String]:
+        if self.yielded:
+            return Option.None
+        self.yielded = true
+        return Option.Some(self.value)
+
+fn main() -> ():
+    for value in Once { value: String.from("value"), yielded: false }:
+        println(value)
+"#;
+    let tree = TestTree::new("user-iterator-ir");
+    tree.executable(source);
+
+    for target in [Target::X86, Target::X86_64] {
+        let mut sources = SourceManager::new();
+        let graph = tree.graph(&mut sources);
+        let compilation = compile(&graph, &mut sources, target)
+            .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
+        let main = compilation
+            .control_flow_ir
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main is lowered");
+        let copies = main.logical_copy_inventory();
+        assert!(
+            copies
+                .iter()
+                .any(|copy| { copy.facts.context.kind == LogicalCopyKind::IterationSnapshot })
+        );
+        assert!(
+            copies
+                .iter()
+                .any(|copy| { copy.facts.context.kind == LogicalCopyKind::IterationElement })
+        );
+        assert!(
+            main.blocks.iter().any(
+                |block| block.instructions.iter().any(|instruction| matches!(
+                    instruction,
+                    elamite::ir::Instruction::Assign {
+                        value: elamite::ir::Rvalue::AllocateManaged { .. },
+                        ..
+                    }
+                ))
+            )
+        );
+        assert!(compilation.control_flow_ir.requires_managed_memory);
+    }
+}
+
+#[test]
 fn formatted_strings_are_values_and_display_builtin_collections() {
     let source = r#"
 struct Counter:
     value: i32
 
+impl Counter:
     fn observe(self: &var Self, value: i32) -> i32:
         self.value += 1
         print(value)
@@ -5050,6 +5225,7 @@ fn a_returned_shared_handle_observes_its_deferred_close() {
 struct Handle:
     state: &var i32
 
+impl Handle:
     fn close(self: &Self) -> ():
         *self.state = 0
 
@@ -5258,6 +5434,7 @@ struct DemoResource:
     // Copies share state because the handle explicitly contains a reference.
     state: &var DemoResourceState
 
+impl DemoResource:
     fn is_closed(self: &Self) -> bool:
         return self.state.closed
 
@@ -5653,6 +5830,7 @@ fn unsafe_methods_and_references_follow_the_demo_region() {
 struct Session:
     active: bool
 
+impl Session:
     pub fn get_const_self_ptr(self: &Self) -> *Self:
         return self as *Self
 

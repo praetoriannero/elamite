@@ -790,21 +790,10 @@ impl<'a> Resolver<'a> {
 
     pub(super) fn collect_struct_members(&mut self, parent: DeclarationId, foreign: bool) {
         let syntax = self.program.declarations[parent.index()].syntax.clone();
-        let module = self.program.declarations[parent.index()].module;
         let mut namespace = BTreeMap::<Symbol, Span>::new();
-        let mut saw_method = false;
         for member in direct_block_nodes(&syntax) {
             match member.kind {
                 SyntaxKind::Field => {
-                    if saw_method && !foreign {
-                        self.diagnostics.push(
-                            Diagnostic::new(
-                                Category::DeclarationConflict,
-                                "struct fields must be declared before methods",
-                            )
-                            .with_primary(member.span),
-                        );
-                    }
                     if let Some(token) = first_identifier(member) {
                         let name = self.intern(token_text(token));
                         if let Some(previous) = namespace.insert(name, token.span) {
@@ -829,7 +818,6 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 SyntaxKind::Function => {
-                    saw_method = true;
                     if foreign {
                         self.diagnostics.push(
                             Diagnostic::new(
@@ -840,21 +828,14 @@ impl<'a> Resolver<'a> {
                         );
                         continue;
                     }
-                    if let Some(id) =
-                        self.collect_named_declaration(module, member, false, Some(parent), None)
-                    {
-                        let name = self.program.declarations[id.index()].name;
-                        let span = self.program.declarations[id.index()].span;
-                        if let Some(previous) = namespace.insert(name, span) {
-                            self.duplicate_diagnostic("struct member", span, Some(previous));
-                        }
-                        self.program
-                            .declaration_members
-                            .entry(parent)
-                            .or_default()
-                            .entry(name)
-                            .or_insert(MemberId::Method(id));
-                    }
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::DeclarationConflict,
+                            "methods must be declared in a module-level `impl Type` block",
+                        )
+                        .with_primary(member.span),
+                    );
+                    continue;
                 }
                 _ => {}
             }
@@ -975,6 +956,15 @@ impl<'a> Resolver<'a> {
             module,
             span: node.span,
             syntax: node.clone(),
+            kind: if node
+                .direct_tokens()
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::For)))
+            {
+                ImplKind::Trait
+            } else {
+                ImplKind::Inherent
+            },
             generic_parameters: Vec::new(),
             methods: Vec::new(),
         });
@@ -1006,6 +996,17 @@ impl<'a> Resolver<'a> {
             .collect::<Vec<_>>();
         let mut seen_methods = BTreeMap::new();
         for method in methods {
+            if self.program.impls[id.index()].kind == ImplKind::Trait
+                && has_keyword(&method, Keyword::Pub)
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        "trait implementation methods cannot carry a separate `pub` modifier",
+                    )
+                    .with_primary(method.span),
+                );
+            }
             if let Some(declaration) =
                 self.collect_named_declaration(module, &method, false, None, Some(id))
             {

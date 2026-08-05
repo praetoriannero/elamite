@@ -249,6 +249,7 @@ fn role_from_text(text: &str) -> Option<QuoteRole> {
         "std.ast.EnumDefinition" => QuoteRole::EnumDefinition,
         "std.ast.FunctionDefinition" => QuoteRole::FunctionDefinition,
         "std.ast.Implementation" => QuoteRole::Implementation,
+        "std.ast.InherentImplementation" => QuoteRole::InherentImplementation,
         "std.ast.FieldDefinition" => QuoteRole::FieldDefinition,
         _ => return None,
     })
@@ -664,7 +665,7 @@ impl Evaluator<'_> {
             Value::Sequence(values) => values,
             Value::Syntax { role, nodes } if role_is_list(role) => nodes
                 .into_iter()
-                .map(|node| Value::syntax(element_role(role, node.kind), node))
+                .map(|node| Value::syntax(element_role(role, &node), node))
                 .collect(),
             _ => {
                 return self.fail(
@@ -1085,11 +1086,17 @@ impl Evaluator<'_> {
                         nodes: members,
                     },
                 ],
-            ) if matches!(
-                role,
-                QuoteRole::StructDefinition | QuoteRole::EnumDefinition
-            ) =>
-            {
+            ) if role == QuoteRole::StructDefinition => {
+                if members
+                    .iter()
+                    .any(|member| member.kind != SyntaxKind::Field)
+                {
+                    return self.fail(
+                        span,
+                        "`StructDefinition` accepts fields only; emit methods in a sibling \
+                         `InherentImplementation` item",
+                    );
+                }
                 Ok(Value::syntax(
                     role,
                     definition_with_members(
@@ -1098,6 +1105,19 @@ impl Evaluator<'_> {
                     ),
                 ))
             }
+            (
+                Value::Syntax { role, nodes },
+                "with_members",
+                [
+                    Value::Syntax {
+                        role: QuoteRole::MemberList,
+                        nodes: members,
+                    },
+                ],
+            ) if role == QuoteRole::EnumDefinition => Ok(Value::syntax(
+                role,
+                definition_with_members(nodes.first().expect("scalar definition"), members.clone()),
+            )),
             _ => self.fail(
                 span,
                 format!("method `{name}` is not available for this compile-time value"),
@@ -1403,6 +1423,7 @@ fn value_matches_type(value: &Value, ty: &CompileTimeType) -> bool {
                             | QuoteRole::EnumDefinition
                             | QuoteRole::FunctionDefinition
                             | QuoteRole::Implementation
+                            | QuoteRole::InherentImplementation
                     ))
         }
         (Value::Sequence(values), CompileTimeType::Sequence(element)) => values
@@ -1445,20 +1466,29 @@ fn role_accepts_element(list: QuoteRole, element: QuoteRole) -> bool {
                     | QuoteRole::EnumDefinition
                     | QuoteRole::FunctionDefinition
                     | QuoteRole::Implementation
+                    | QuoteRole::InherentImplementation
             )
     )
 }
 
-fn element_role(list: QuoteRole, kind: SyntaxKind) -> QuoteRole {
+fn element_role(list: QuoteRole, node: &SyntaxNode) -> QuoteRole {
     match list {
-        QuoteRole::ItemList => match kind {
+        QuoteRole::ItemList => match node.kind {
             SyntaxKind::Struct => QuoteRole::StructDefinition,
             SyntaxKind::Enum => QuoteRole::EnumDefinition,
             SyntaxKind::Function => QuoteRole::FunctionDefinition,
-            SyntaxKind::Impl => QuoteRole::Implementation,
+            SyntaxKind::Impl
+                if node
+                    .direct_tokens()
+                    .into_iter()
+                    .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::For))) =>
+            {
+                QuoteRole::Implementation
+            }
+            SyntaxKind::Impl => QuoteRole::InherentImplementation,
             _ => QuoteRole::Item,
         },
-        QuoteRole::MemberList => match kind {
+        QuoteRole::MemberList => match node.kind {
             SyntaxKind::Field => QuoteRole::FieldDefinition,
             SyntaxKind::Function => QuoteRole::FunctionDefinition,
             _ => QuoteRole::MemberList,
@@ -1499,7 +1529,8 @@ fn quote_fragment(role: QuoteRole) -> QuoteFragmentKind {
         | QuoteRole::StructDefinition
         | QuoteRole::EnumDefinition
         | QuoteRole::FunctionDefinition
-        | QuoteRole::Implementation => QuoteFragmentKind::Item,
+        | QuoteRole::Implementation
+        | QuoteRole::InherentImplementation => QuoteFragmentKind::Item,
         QuoteRole::ItemList => QuoteFragmentKind::ItemList,
     }
 }

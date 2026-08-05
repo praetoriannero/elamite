@@ -468,6 +468,9 @@ impl<'a> CEmitter<'a> {
                 IterationKind::Map { .. } | IterationKind::Set { .. } => {
                     format!("{}->length", temporary_name(*collection))
                 }
+                IterationKind::User { .. } => {
+                    unreachable!("user iteration never emits a collection-length rvalue")
+                }
             },
             Rvalue::IterationElement {
                 collection,
@@ -492,6 +495,9 @@ impl<'a> CEmitter<'a> {
                             "({pair_type}){{ .v0 = {collection_name}->keys[{index_name}], \
                              .v1 = {collection_name}->values[{index_name}] }}"
                         )
+                    }
+                    IterationKind::User { .. } => {
+                        unreachable!("user iteration never emits a collection-element rvalue")
                     }
                 }
             }

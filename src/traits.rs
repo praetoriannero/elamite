@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::package::PackageId;
 use crate::resolution::{
-    DeclarationId, DeclarationKind, GenericParameterId, ImplId, ModuleId, ResolvedProgram,
-    VariantId, Visibility,
+    DeclarationId, DeclarationKind, GenericParameterId, ImplId, ImplKind, ModuleId,
+    ResolvedProgram, VariantId, Visibility,
 };
 use crate::source::Span;
 use crate::types::{FunctionSignature, PrimitiveType, TypeId, TypeKind, TypedProgram};
@@ -41,6 +41,7 @@ pub struct TraitOutput {
 pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> TraitOutput {
     let mut output = TraitOutput::default();
     check_derivations(resolved, typed, &mut output.diagnostics);
+    check_inherent_implementations(resolved, typed, &mut output.diagnostics);
     let implementations = collect(resolved, typed);
     for implementation in &implementations {
         check_unsafe_implementation(resolved, *implementation, &mut output.diagnostics);
@@ -49,6 +50,139 @@ pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> Tra
     check_coherence(resolved, typed, &implementations, &mut output.diagnostics);
     output.implementations = implementations;
     output
+}
+
+fn check_inherent_implementations(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let inherent = resolved
+        .impls
+        .iter()
+        .filter(|block| block.kind == ImplKind::Inherent)
+        .filter_map(|block| {
+            typed
+                .impl_target_types
+                .get(&block.id)
+                .copied()
+                .map(|target| (block, target))
+        })
+        .collect::<Vec<_>>();
+
+    for (block, target) in &inherent {
+        if crate::syntax::direct_tokens(&block.syntax)
+            .into_iter()
+            .any(|token| {
+                matches!(
+                    token.kind,
+                    crate::lexer::TokenKind::Keyword(crate::syntax::Keyword::Unsafe)
+                )
+            })
+        {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "`unsafe impl` is not part of the language",
+                )
+                .with_primary(block.span),
+            );
+        }
+
+        let Some(owner) = target_declaration(resolved, typed, *target) else {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "an inherent implementation target must be a nominal struct or enum type",
+                )
+                .with_primary(block.span),
+            );
+            continue;
+        };
+        let owner_data = &resolved.declarations[owner.index()];
+        if !matches!(
+            owner_data.kind,
+            DeclarationKind::Struct | DeclarationKind::Enum
+        ) {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "an inherent implementation target must be a nominal struct or enum type",
+                )
+                .with_primary(block.span),
+            );
+        } else if owner_data.module != block.module {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "an inherent implementation must be in the module that declares its target type",
+                )
+                .with_primary(block.span)
+                .with_related(owner_data.span, "the target type is declared here"),
+            );
+        }
+        for parameter in &block.generic_parameters {
+            if !typed.types.mentions_generic_parameter(*target, *parameter) {
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "every inherent implementation generic parameter must occur in its target type",
+                    )
+                    .with_primary(resolved.generic_parameters[parameter.index()].span),
+                );
+            }
+        }
+        if let Some(owner_members) = resolved.declaration_members.get(&owner) {
+            for (name, method) in resolved.impl_members.get(&block.id).into_iter().flatten() {
+                if owner_members.contains_key(name) {
+                    let method_span = resolved.declarations[method.index()].span;
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Category::DeclarationConflict,
+                            format!(
+                                "inherent method `{}` conflicts with a field or variant",
+                                resolved.symbol_text(*name)
+                            ),
+                        )
+                        .with_primary(method_span),
+                    );
+                }
+            }
+        }
+    }
+
+    for (index, (left_block, left_target)) in inherent.iter().enumerate() {
+        for (right_block, right_target) in inherent.iter().skip(index + 1) {
+            if !type_patterns_overlap(typed, *left_target, *right_target) {
+                continue;
+            }
+            let Some(left_members) = resolved.impl_members.get(&left_block.id) else {
+                continue;
+            };
+            let Some(right_members) = resolved.impl_members.get(&right_block.id) else {
+                continue;
+            };
+            for (name, right_method) in right_members {
+                let Some(left_method) = left_members.get(name) else {
+                    continue;
+                };
+                diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        format!(
+                            "inherent method `{}` has overlapping implementation targets",
+                            resolved.symbol_text(*name)
+                        ),
+                    )
+                    .with_primary(resolved.declarations[right_method.index()].span)
+                    .with_related(
+                        resolved.declarations[left_method.index()].span,
+                        "the overlapping method is declared here",
+                    ),
+                );
+            }
+        }
+    }
 }
 
 fn check_unsafe_implementation(
@@ -775,14 +909,20 @@ fn overlapping_arguments(typed: &TypedProgram, left: &[TypeId], right: &[TypeId]
 fn target_declaration(
     resolved: &ResolvedProgram,
     typed: &TypedProgram,
-    target: TypeId,
+    mut target: TypeId,
 ) -> Option<DeclarationId> {
     let _ = resolved;
-    match typed.types.kind(typed.types.resolve_inference(target)) {
-        TypeKind::Nominal { identity, .. } | TypeKind::Foreign { identity, .. } => {
-            Some(identity.declaration)
+    loop {
+        target = typed.types.resolve_inference(target);
+        match typed.types.kind(target) {
+            TypeKind::Alias {
+                target: canonical, ..
+            } => target = *canonical,
+            TypeKind::Nominal { identity, .. } | TypeKind::Foreign { identity, .. } => {
+                return Some(identity.declaration);
+            }
+            _ => return None,
         }
-        _ => None,
     }
 }
 
@@ -818,6 +958,57 @@ pub struct SelectedTraitMethod {
     pub self_type: Option<TypeId>,
     /// Concrete arguments for an implementation block's generic parameters.
     pub arguments: Vec<TypeId>,
+}
+
+/// One applicable inherent method and the concrete arguments bound for its
+/// implementation-level generic parameters.
+#[derive(Debug, Clone)]
+pub struct SelectedInherentMethod {
+    pub declaration: DeclarationId,
+    pub arguments: Vec<TypeId>,
+}
+
+/// Selects the inherent method named `name` whose target pattern and bounds
+/// apply to `target`. Coherence checking guarantees at most one result.
+#[must_use]
+pub fn select_inherent_method(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    target: TypeId,
+    name: &str,
+) -> Option<SelectedInherentMethod> {
+    for block in &resolved.impls {
+        if block.kind != ImplKind::Inherent {
+            continue;
+        }
+        let Some(implemented) = typed.impl_target_types.get(&block.id).copied() else {
+            continue;
+        };
+        let mut bindings = BTreeMap::new();
+        if !match_type_pattern(typed, implemented, target, &mut bindings)
+            || !implementation_bounds_hold(resolved, typed, block, &bindings)
+        {
+            continue;
+        }
+        let Some(declaration) = resolved.impl_members.get(&block.id).and_then(|members| {
+            members
+                .iter()
+                .find(|(symbol, _)| resolved.symbol_text(**symbol) == name)
+                .map(|(_, declaration)| *declaration)
+        }) else {
+            continue;
+        };
+        let arguments = block
+            .generic_parameters
+            .iter()
+            .filter_map(|parameter| bindings.get(parameter).copied())
+            .collect();
+        return Some(SelectedInherentMethod {
+            declaration,
+            arguments,
+        });
+    }
+    None
 }
 
 /// Selects a trait method named `name` for `target`.
@@ -978,6 +1169,72 @@ pub fn implements_trait(
         match_type_pattern(typed, implemented, target, &mut bindings)
             && implementation_bounds_hold(resolved, typed, block, &bindings)
     })
+}
+
+/// The concrete generic arguments of `trait_declaration` implemented by
+/// `target`.
+///
+/// This is the associated-type-free query used by `for`: `Iterator[Element]`
+/// carries its yielded type as an ordinary trait argument. Coherence guarantees
+/// at most one applicable implementation for a concrete target. Generic
+/// parameters are answered from their declared bounds so generic bodies remain
+/// checked once rather than peeking at future monomorphizations.
+#[must_use]
+pub fn trait_arguments_for_target(
+    resolved: &ResolvedProgram,
+    typed: &mut TypedProgram,
+    target: TypeId,
+    trait_declaration: DeclarationId,
+) -> Option<Vec<TypeId>> {
+    let target = typed.types.resolve_inference(target);
+    if let TypeKind::Alias { target, .. } = typed.types.kind(target) {
+        return trait_arguments_for_target(resolved, typed, *target, trait_declaration);
+    }
+    if let TypeKind::GenericParameter(parameter) = typed.types.kind(target) {
+        let obligations = typed
+            .obligations_for(*parameter)
+            .map(|obligation| obligation.trait_type)
+            .collect::<Vec<_>>();
+        return obligations.into_iter().find_map(|trait_type| {
+            if trait_declaration_of(resolved, typed, trait_type) != Some(trait_declaration) {
+                return None;
+            }
+            match typed.types.kind(typed.types.resolve_inference(trait_type)) {
+                TypeKind::Nominal { arguments, .. } => Some(arguments.clone()),
+                _ => None,
+            }
+        });
+    }
+
+    for block in &resolved.impls {
+        let Some(implemented) = typed.impl_target_types.get(&block.id).copied() else {
+            continue;
+        };
+        let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
+            continue;
+        };
+        if trait_declaration_of(resolved, typed, trait_type) != Some(trait_declaration) {
+            continue;
+        }
+        let mut bindings = BTreeMap::new();
+        if !match_type_pattern(typed, implemented, target, &mut bindings)
+            || !implementation_bounds_hold(resolved, typed, block, &bindings)
+        {
+            continue;
+        }
+        let mut substitution = crate::types::Substitution::new();
+        for (parameter, argument) in bindings {
+            substitution.insert(parameter, argument);
+        }
+        let concrete_trait = typed.types.substitute(trait_type, &substitution);
+        if let TypeKind::Nominal { arguments, .. } = typed
+            .types
+            .kind(typed.types.resolve_inference(concrete_trait))
+        {
+            return Some(arguments.clone());
+        }
+    }
+    None
 }
 
 /// A display name for a trait type that is not a user declaration, such as a

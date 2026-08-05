@@ -179,7 +179,7 @@
 
     "type-builtin-trait": {
       "name": "support.type.trait.elx",
-      "match": "\\b(StableHash|PartialOrd|PartialEq|Callable|Default|Display|Hash|Ord|Eq)\\b"
+      "match": "\\b(StableHash|PartialOrd|PartialEq|Callable|Iterator|Default|Display|Hash|Ord|Eq)\\b"
     },
 
     "function-builtin": {

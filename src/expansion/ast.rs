@@ -23,7 +23,7 @@ pub struct AstInterfaceVersion {
     pub minor: u16,
 }
 
-pub const INTERFACE_VERSION: AstInterfaceVersion = AstInterfaceVersion { major: 1, minor: 0 };
+pub const INTERFACE_VERSION: AstInterfaceVersion = AstInterfaceVersion { major: 2, minor: 0 };
 
 /// Stable public type inventory admitted by the initial façade.
 pub const TYPE_NAMES: &[&str] = &[
@@ -36,6 +36,7 @@ pub const TYPE_NAMES: &[&str] = &[
     "std.ast.GenericParameter",
     "std.ast.Identifier",
     "std.ast.Implementation",
+    "std.ast.InherentImplementation",
     "std.ast.Item",
     "std.ast.ItemList",
     "std.ast.Member",
@@ -1440,6 +1441,52 @@ impl HasOrigin for Implementation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InherentImplementation(Arc<InherentImplementationData>);
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct InherentImplementationData {
+    target_type: TypeSyntax,
+    members: MemberList,
+    origin: OriginHandle,
+}
+
+impl InherentImplementation {
+    #[must_use]
+    pub fn target_type(&self) -> &TypeSyntax {
+        &self.0.target_type
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &MemberList {
+        &self.0.members
+    }
+
+    #[must_use]
+    pub fn with_members(&self, members: MemberList) -> Self {
+        Self(Arc::new(InherentImplementationData {
+            target_type: self.0.target_type.clone(),
+            members,
+            origin: self.origin(),
+        }))
+    }
+
+    #[must_use]
+    pub fn with_target_type(&self, target_type: TypeSyntax) -> Self {
+        Self(Arc::new(InherentImplementationData {
+            target_type,
+            members: self.0.members.clone(),
+            origin: self.origin(),
+        }))
+    }
+}
+
+impl HasOrigin for InherentImplementation {
+    fn origin(&self) -> OriginHandle {
+        self.0.origin
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Member {
     Field(FieldDefinition),
     Function(FunctionDefinition),
@@ -1460,6 +1507,7 @@ pub enum Item {
     Enum(EnumDefinition),
     Function(FunctionDefinition),
     Implementation(Implementation),
+    InherentImplementation(InherentImplementation),
 }
 
 impl HasOrigin for Item {
@@ -1469,6 +1517,7 @@ impl HasOrigin for Item {
             Self::Enum(value) => value.origin(),
             Self::Function(value) => value.origin(),
             Self::Implementation(value) => value.origin(),
+            Self::InherentImplementation(value) => value.origin(),
         }
     }
 }
@@ -1763,6 +1812,19 @@ impl AstBuilder {
             origin: self.origin,
         }))
     }
+
+    #[must_use]
+    pub fn inherent_implementation(
+        self,
+        target_type: TypeSyntax,
+        members: MemberList,
+    ) -> InherentImplementation {
+        InherentImplementation(Arc::new(InherentImplementationData {
+            target_type,
+            members,
+            origin: self.origin,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -1799,7 +1861,13 @@ mod tests {
             AstInterface::negotiate(AstInterfaceVersion { major: 1, minor: 1 }),
             Err(AstError::VersionMismatch { .. })
         ));
-        assert_eq!(TYPE_NAMES.len(), 20);
+        let retired = AstInterface::negotiate(AstInterfaceVersion { major: 1, minor: 0 })
+            .expect_err("the frozen 1.0 interface is not reinterpreted as 2.0");
+        assert_eq!(
+            retired.to_string(),
+            "std.ast interface version 1.0 is required, but this compiler provides 2.0"
+        );
+        assert_eq!(TYPE_NAMES.len(), 21);
         assert!(TYPE_NAMES.windows(2).all(|names| names[0] < names[1]));
     }
 
@@ -2260,6 +2328,10 @@ mod tests {
                 .length(),
             1
         );
+
+        let inherent = builder.inherent_implementation(second_type, MemberList::empty());
+        assert_eq!(inherent.target_type().display(), "String");
+        assert!(inherent.members().is_empty());
     }
 
     #[test]

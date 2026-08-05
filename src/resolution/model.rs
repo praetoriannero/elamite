@@ -161,13 +161,21 @@ pub struct Declaration {
     pub test_selected: bool,
 }
 
-/// One `impl Trait for Type` block.
+/// The semantic form of one implementation block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplKind {
+    Inherent,
+    Trait,
+}
+
+/// One `impl Type` or `impl Trait for Type` block.
 #[derive(Debug)]
 pub struct ImplBlock {
     pub id: ImplId,
     pub module: ModuleId,
     pub span: Span,
     pub syntax: SyntaxNode,
+    pub kind: ImplKind,
     pub generic_parameters: Vec<GenericParameterId>,
     pub methods: Vec<DeclarationId>,
 }

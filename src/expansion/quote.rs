@@ -10,7 +10,7 @@
 use crate::diagnostics::{Category, Diagnostic};
 use crate::parser::{ParseOutput, QuoteFragmentKind, parse_quote_fragment};
 use crate::source::Span;
-use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
+use crate::syntax::{Keyword, SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 
 use super::ExpandedUnit;
 
@@ -27,6 +27,7 @@ pub enum QuoteRole {
     EnumDefinition,
     FunctionDefinition,
     Implementation,
+    InherentImplementation,
     FieldDefinition,
 }
 
@@ -62,7 +63,8 @@ impl QuoteRole {
             | Self::StructDefinition
             | Self::EnumDefinition
             | Self::FunctionDefinition
-            | Self::Implementation => QuoteFragmentKind::Item,
+            | Self::Implementation
+            | Self::InherentImplementation => QuoteFragmentKind::Item,
             Self::ItemList => QuoteFragmentKind::ItemList,
         }
     }
@@ -102,6 +104,7 @@ pub fn role_from_type(node: &SyntaxNode) -> Option<QuoteRole> {
         "std.ast.EnumDefinition" => QuoteRole::EnumDefinition,
         "std.ast.FunctionDefinition" => QuoteRole::FunctionDefinition,
         "std.ast.Implementation" => QuoteRole::Implementation,
+        "std.ast.InherentImplementation" => QuoteRole::InherentImplementation,
         "std.ast.FieldDefinition" => QuoteRole::FieldDefinition,
         _ => return None,
     })
@@ -135,6 +138,32 @@ pub fn validate_quote(node: &SyntaxNode, role: QuoteRole) -> ParseOutput {
             )
             .with_primary(body.span),
         );
+    }
+    if output.diagnostics.is_empty()
+        && matches!(
+            role,
+            QuoteRole::Implementation | QuoteRole::InherentImplementation
+        )
+    {
+        let trait_implementation = output
+            .tree
+            .direct_tokens()
+            .into_iter()
+            .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::For)));
+        let role_matches = match role {
+            QuoteRole::Implementation => trait_implementation,
+            QuoteRole::InherentImplementation => !trait_implementation,
+            _ => unreachable!(),
+        };
+        if !role_matches {
+            output.diagnostics.push(
+                Diagnostic::new(
+                    Category::CompileTime,
+                    format!("this quote must produce {}", role.description()),
+                )
+                .with_primary(body.span),
+            );
+        }
     }
     output
 }
@@ -185,6 +214,7 @@ impl QuoteRole {
             Self::EnumDefinition => SyntaxKind::Enum,
             Self::FunctionDefinition => SyntaxKind::Function,
             Self::Implementation => SyntaxKind::Impl,
+            Self::InherentImplementation => SyntaxKind::Impl,
             Self::FieldDefinition => SyntaxKind::Field,
             _ => return None,
         })
@@ -196,6 +226,7 @@ impl QuoteRole {
             Self::EnumDefinition => "an enum definition",
             Self::FunctionDefinition => "a function definition",
             Self::Implementation => "an implementation",
+            Self::InherentImplementation => "an inherent implementation",
             Self::FieldDefinition => "a field definition",
             _ => "the requested AST role",
         }
@@ -432,6 +463,7 @@ mod tests {
             ("EnumDefinition", QuoteRole::EnumDefinition),
             ("FunctionDefinition", QuoteRole::FunctionDefinition),
             ("Implementation", QuoteRole::Implementation),
+            ("InherentImplementation", QuoteRole::InherentImplementation),
             ("FieldDefinition", QuoteRole::FieldDefinition),
         ] {
             let mut sources = SourceManager::new();
@@ -522,6 +554,23 @@ mod tests {
         let (_, implementation) = quote("        impl Display for Record:\n            pass\n");
         assert!(
             validate_quote(&implementation, QuoteRole::Implementation)
+                .diagnostics
+                .is_empty()
+        );
+        assert!(
+            !validate_quote(&implementation, QuoteRole::InherentImplementation)
+                .diagnostics
+                .is_empty()
+        );
+
+        let (_, inherent) = quote("        impl Record:\n            pass\n");
+        assert!(
+            validate_quote(&inherent, QuoteRole::InherentImplementation)
+                .diagnostics
+                .is_empty()
+        );
+        assert!(
+            !validate_quote(&inherent, QuoteRole::Implementation)
                 .diagnostics
                 .is_empty()
         );

@@ -35,6 +35,22 @@ The x86 cells require a working 32-bit libc, C compiler, and Boehm development
 library. CI owns that installed environment; a local machine without multilib
 cannot claim those cells from a frontend-only run.
 
+## Language surface changes
+
+Struct declarations are now field-only. Inherent methods use module-level
+`impl Type` blocks, including explicit generic and bounded forms such as
+`impl[T: Display] Wrapper[T]`. Blocks are confined to the target type's module,
+cannot change layout, and cannot overlap on a same-named method; exact targets
+do not specialize generic ones. Inline methods receive a migration diagnostic.
+
+The exact compile-time AST interface advances from frozen 1.0 to 2.0.
+`std.ast.InherentImplementation` is a distinct value and quote/item role.
+Attributes add methods by returning an `ItemList` with a transformed field-only
+definition and sibling inherent blocks. Artifacts requiring 1.0 receive the
+existing exact version-skew diagnostic. This syntax migration reuses the same
+checked IR and C lowering as the former inline declarations and does not change
+the documented runtime copy or allocation cost model.
+
 Cost-changing releases must include comparable before/after
 `memory-cost-baseline.sh` results, update `cost_model.md`, and describe which
 measurements changed. Those observations never replace semantic or target
@@ -180,6 +196,34 @@ This removes one constant-time length read per iteration after the initial
 snapshot and changes no managed-allocation or explicit-byte-copy counter. It is
 not a material memory-cost change, so the collection-representation baseline
 remains the comparable checked-in measurement.
+
+### User-defined iteration
+
+`for` now accepts ordinary source types implementing `Iterator[Element]`, whose
+`next(self: &var Self)` method returns `Option[Element]`. The iterable still
+evaluates and shallow-copies exactly once, and each `Some` payload receives the
+established shallow iteration-element copy. Built-in slices, arrays, vectors,
+maps, and sets retain their previous direct lowering, ordering, and
+invalidation behavior.
+
+A user-defined iterator loop allocates one managed cell for its hidden mutable
+state. This is the conservative safe-reference promotion required when an
+element returned by `next` contains a reference into that state and the program
+retains it after the loop. A fully exhausted iterator yielding `n` elements
+calls `next` `n + 1` times; `break` performs no final call. Precise escape
+analysis may remove the allocation when no yielded reference can retain the
+state.
+
+The 2026-08-05 UTC x86-64 release-mode rerun used the same six source hashes,
+WSL2 host class, rustc 1.89.0, and GCC-compatible 15.2.0 toolchain as the
+checked-in shallow baseline. Every deterministic allocation, allocated-byte,
+scanned-allocation, scanned-byte, and explicit-`memcpy` counter remained equal
+to the final table below. Compile time ranged from 1.05 to 2.05 seconds,
+compile peak RSS from 44,504 to 47,672 KiB, runtime stayed below the 0.01-second
+timer resolution, and runtime peak RSS ranged from 1,996 to 2,216 KiB. Those
+fixed workloads exercise only direct collection iteration, so they establish
+that existing costs did not regress; no before executable could exercise the
+new source protocol.
 
 ### C-like thread and channel publication
 

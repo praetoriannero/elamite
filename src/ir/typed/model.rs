@@ -340,7 +340,7 @@ pub struct TypedTupleBinding {
     pub indices: Vec<usize>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum IterationKind {
     Slice {
         collection: TypeId,
@@ -363,6 +363,18 @@ pub enum IterationKind {
     Set {
         collection: TypeId,
         element: TypeId,
+    },
+    /// A source type implementing the ordinary `std.Iterator[Element]`
+    /// protocol. The hidden mutable state is managed by control-flow lowering
+    /// before `next` is called, so references yielded from it remain valid.
+    User {
+        state: TypeId,
+        element: TypeId,
+        receiver: TypeId,
+        option: TypeId,
+        some_variant: VariantId,
+        some_field: FieldId,
+        next: FunctionInstance,
     },
 }
 

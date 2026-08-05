@@ -244,9 +244,7 @@ impl<'a> Checker<'a> {
                             .types
                             .intern(TypeKind::GenericParameter(parameter)),
                     ),
-                    NameTarget::SelfType => self.current_self_declaration.and_then(|declaration| {
-                        self.typed.declaration_types.get(&declaration).copied()
-                    }),
+                    NameTarget::SelfType => self.current_self_type,
                     NameTarget::Item(crate::resolution::ItemId::Declaration(declaration)) => self
                         .typed
                         .instantiate_declaration_type(self.resolved, declaration, &[]),
@@ -783,6 +781,18 @@ impl<'a> Checker<'a> {
             .map(|(_, member)| *member)
     }
 
+    fn inherent_method(
+        &mut self,
+        target: TypeId,
+        name: &str,
+        span: Span,
+    ) -> Option<crate::traits::SelectedInherentMethod> {
+        let selected =
+            crate::traits::select_inherent_method(self.resolved, self.typed, target, name)?;
+        self.require_method_access(selected.declaration, span);
+        Some(selected)
+    }
+
     pub(super) fn type_declaration_expression(&self, node: &SyntaxNode) -> Option<DeclarationId> {
         let span = Self::callee_target_span(node)?;
         match self.resolved.reference_at(span)?.target {
@@ -892,15 +902,33 @@ impl<'a> Checker<'a> {
             return (ty, PlaceKind::Value);
         }
         if let Some(declaration) = self.type_declaration_expression(base) {
-            return match self.find_member(declaration, &token_text(member_token)) {
-                Some(MemberId::Method(method))
+            let selecting_self = Self::callee_target_span(base)
+                .and_then(|span| self.resolved.reference_at(span))
+                .is_some_and(|reference| reference.target == NameTarget::SelfType);
+            let target = if selecting_self {
+                self.current_self_type
+            } else {
+                self.typed.declaration_types.get(&declaration).copied()
+            };
+            let inherent = target.and_then(|target| {
+                self.inherent_method(target, &token_text(member_token), member_token.span)
+            });
+            return match inherent
+                .map(|selected| (selected.declaration, selected.arguments))
+                .or_else(
+                    || match self.find_member(declaration, &token_text(member_token)) {
+                        Some(MemberId::Method(method)) => Some((method, Vec::new())),
+                        _ => None,
+                    },
+                ) {
+                Some((method, arguments))
                     if self.resolved.declarations[method.index()]
                         .generic_parameters
                         .is_empty() =>
                 {
                     let instance = FunctionInstance {
                         declaration: method,
-                        arguments: Vec::new(),
+                        arguments,
                         self_type: None,
                     };
                     let ty = self.function_reference_type(&instance);
@@ -977,6 +1005,15 @@ impl<'a> Checker<'a> {
                 TypeKind::Error => return (self.typed.types.error(), PlaceKind::Value),
                 _ => return (self.typed.types.error(), PlaceKind::Value),
             };
+        let inherent_target = self
+            .typed
+            .instantiate_declaration_type(self.resolved, declaration, &owner_arguments)
+            .unwrap_or(resolved_base);
+        let inherent = self.inherent_method(
+            inherent_target,
+            &token_text(member_token),
+            member_token.span,
+        );
         match self.find_member(declaration, &token_text(member_token)) {
             Some(MemberId::Field(field_id)) => {
                 self.require_field_access(field_id, member_token.span);
@@ -1000,6 +1037,23 @@ impl<'a> Checker<'a> {
                     .function_signatures
                     .get(&method)
                     .is_some_and(|signature| signature.receiver.is_some()) =>
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Call,
+                        "an instance method cannot be used as a bound-method value; call it \
+                         directly or select the unbound method from its type",
+                    )
+                    .with_primary(node.span),
+                );
+                (self.typed.types.error(), PlaceKind::Value)
+            }
+            _ if inherent.is_some_and(|selected| {
+                self.typed
+                    .function_signatures
+                    .get(&selected.declaration)
+                    .is_some_and(|signature| signature.receiver.is_some())
+            }) =>
             {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -2095,64 +2149,84 @@ impl<'a> Checker<'a> {
                     .insert(call_span, CheckedCall::DerivedDefault { ty });
                 return Some((ty, PlaceKind::Value));
             }
-            let method = match self.find_member(owner, &member_name) {
-                Some(MemberId::Method(method)) => method,
-                Some(_) => {
-                    for argument in arguments {
-                        self.check_expr(argument, ExpectedType::None);
-                    }
-                    self.diagnostics.push(
-                        Diagnostic::new(
-                            Category::Call,
-                            format!("this type has no associated function named `{member_name}`"),
-                        )
-                        .with_primary(member_token.span),
-                    );
-                    return Some((self.typed.types.error(), PlaceKind::Value));
+            let selection_target = owner_arguments
+                .as_ref()
+                .and_then(|arguments| {
+                    self.typed
+                        .instantiate_declaration_type(self.resolved, owner, arguments)
+                })
+                .or_else(|| {
+                    let selecting_self = Self::callee_target_span(base)
+                        .and_then(|span| self.resolved.reference_at(span))
+                        .is_some_and(|reference| reference.target == NameTarget::SelfType);
+                    selecting_self.then_some(self.current_self_type).flatten()
+                })
+                .or_else(|| self.typed.declaration_types.get(&owner).copied())
+                .unwrap_or_else(|| self.typed.types.error());
+            let inherent = self.inherent_method(selection_target, &member_name, member_token.span);
+            let mut selected_arguments = owner_arguments.clone();
+            let method = match inherent {
+                Some(selected) => {
+                    selected_arguments = owner_arguments.as_ref().map(|_| selected.arguments);
+                    selected.declaration
                 }
-                None => {
-                    let target = owner_arguments
-                        .as_ref()
-                        .and_then(|arguments| {
-                            self.typed
-                                .instantiate_declaration_type(self.resolved, owner, arguments)
-                        })
-                        .or_else(|| self.typed.declaration_types.get(&owner).copied())
-                        .unwrap_or_else(|| self.typed.types.error());
-                    match self.select_trait_method(target, &member_name, member_token.span) {
-                        TraitSelection::Found(selected) => {
-                            self.pending_self_type = selected.self_type;
-                            selected.declaration
+                None => match self.find_member(owner, &member_name) {
+                    Some(MemberId::Method(method)) => method,
+                    Some(_) => {
+                        for argument in arguments {
+                            self.check_expr(argument, ExpectedType::None);
                         }
-                        TraitSelection::Ambiguous => {
-                            for argument in arguments {
-                                self.check_expr(argument, ExpectedType::None);
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::Call,
+                                format!(
+                                    "this type has no associated function named `{member_name}`"
+                                ),
+                            )
+                            .with_primary(member_token.span),
+                        );
+                        return Some((self.typed.types.error(), PlaceKind::Value));
+                    }
+                    None => {
+                        match self.select_trait_method(
+                            selection_target,
+                            &member_name,
+                            member_token.span,
+                        ) {
+                            TraitSelection::Found(selected) => {
+                                self.pending_self_type = selected.self_type;
+                                selected.declaration
                             }
-                            return Some((self.typed.types.error(), PlaceKind::Value));
-                        }
-                        TraitSelection::None => {
-                            for argument in arguments {
-                                self.check_expr(argument, ExpectedType::None);
+                            TraitSelection::Ambiguous => {
+                                for argument in arguments {
+                                    self.check_expr(argument, ExpectedType::None);
+                                }
+                                return Some((self.typed.types.error(), PlaceKind::Value));
                             }
-                            self.diagnostics.push(
-                                Diagnostic::new(
-                                    Category::Call,
-                                    format!(
-                                        "this type has no associated function named \
+                            TraitSelection::None => {
+                                for argument in arguments {
+                                    self.check_expr(argument, ExpectedType::None);
+                                }
+                                self.diagnostics.push(
+                                    Diagnostic::new(
+                                        Category::Call,
+                                        format!(
+                                            "this type has no associated function named \
                                          `{member_name}`"
-                                    ),
-                                )
-                                .with_primary(member_token.span),
-                            );
-                            return Some((self.typed.types.error(), PlaceKind::Value));
+                                        ),
+                                    )
+                                    .with_primary(member_token.span),
+                                );
+                                return Some((self.typed.types.error(), PlaceKind::Value));
+                            }
                         }
                     }
-                }
+                },
             };
             return Some(self.check_function_call(
                 call_span,
                 method,
-                owner_arguments,
+                selected_arguments,
                 arguments,
                 expected,
                 true,
@@ -2360,11 +2434,22 @@ impl<'a> Checker<'a> {
         }
         let receiver = self.receiver_owner(base_type);
         let self_type = receiver.map_or(base_type, |(_, self_type)| self_type);
-        // Fields and inherent methods are found first; a trait method is
-        // selected only when the type itself provides no member of that name
-        // (`docs/spec.md` 6).
-        let member = match receiver.and_then(|(owner, _)| self.find_member(owner, &member_name)) {
-            Some(member) => Some(member),
+        // Fields and applicable inherent methods are found first; a trait
+        // method is selected only when the type itself provides no member of
+        // that name (`docs/spec.md` 6).
+        let declared_member = receiver.and_then(|(owner, _)| self.find_member(owner, &member_name));
+        let inherent = if matches!(declared_member, Some(MemberId::Field(_))) {
+            None
+        } else {
+            self.inherent_method(self_type, &member_name, member_token.span)
+        };
+        let member = match declared_member {
+            Some(MemberId::Field(field)) => Some(MemberId::Field(field)),
+            Some(MemberId::Method(method)) => Some(MemberId::Method(method)),
+            Some(MemberId::Variant(_)) => None,
+            None if inherent.is_some() => {
+                Some(MemberId::Method(inherent.as_ref().unwrap().declaration))
+            }
             None => match self.select_trait_method(self_type, &member_name, member_token.span) {
                 TraitSelection::Found(selected) => {
                     self.pending_self_type = selected.self_type;

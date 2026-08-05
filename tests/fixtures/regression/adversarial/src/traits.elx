@@ -21,6 +21,7 @@ trait Mutate:
 struct Dog:
     name: String
 
+impl Dog:
     /// An inherent method wins over a same-named trait method.
     fn greeting(self: &Self) -> str:
         return "inherent woof"

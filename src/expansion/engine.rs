@@ -841,7 +841,8 @@ fn parse_argument(tokens: &[Token], ty: &CompileTimeType, span: Span) -> Result<
                 | QuoteRole::StructDefinition
                 | QuoteRole::EnumDefinition
                 | QuoteRole::FunctionDefinition
-                | QuoteRole::Implementation => FragmentKind::Item,
+                | QuoteRole::Implementation
+                | QuoteRole::InherentImplementation => FragmentKind::Item,
                 QuoteRole::MemberList | QuoteRole::FieldDefinition => {
                     return Err(Diagnostic::new(
                         Category::CompileTime,

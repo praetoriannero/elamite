@@ -482,13 +482,21 @@ impl<'a> Parser<'a> {
             children.push(node(self.parse_generic_parameters()));
         }
         children.push(node(self.parse_type()));
-        self.expect_keyword(
-            Keyword::For,
+        let trait_implementation = if self.at_keyword(Keyword::For) {
+            children.push(self.bump());
+            children.push(node(self.parse_type()));
+            true
+        } else {
+            false
+        };
+        self.parse_item_block(
             &mut children,
-            "expected `for` in trait implementation",
+            if trait_implementation {
+                MemberContext::TraitImpl
+            } else {
+                MemberContext::InherentImpl
+            },
         );
-        children.push(node(self.parse_type()));
-        self.parse_item_block(&mut children, MemberContext::Impl);
         SyntaxNode::new(SyntaxKind::Impl, children, fallback)
     }
 
@@ -780,6 +788,9 @@ impl<'a> Parser<'a> {
                     MemberContext::Module => self.parse_item(),
                     MemberContext::Struct => {
                         if self.looks_like_function() {
+                            self.error_here(
+                                "methods must be declared in a module-level `impl Type` block",
+                            );
                             self.parse_function(FunctionBody::Required)
                         } else {
                             self.parse_field()
@@ -795,7 +806,14 @@ impl<'a> Parser<'a> {
                     }
                     MemberContext::Enum => self.parse_enum_variant(),
                     MemberContext::Trait => self.parse_function(FunctionBody::Optional),
-                    MemberContext::Impl => self.parse_function(FunctionBody::Required),
+                    MemberContext::TraitImpl | MemberContext::InherentImpl => {
+                        if self.looks_like_function() {
+                            self.parse_function(FunctionBody::Required)
+                        } else {
+                            self.error_here("an implementation block can contain only methods");
+                            self.parse_field()
+                        }
+                    }
                 }
             };
             block.push(node(member));
@@ -2134,7 +2152,8 @@ enum MemberContext {
     Struct,
     Enum,
     Trait,
-    Impl,
+    TraitImpl,
+    InherentImpl,
     ForeignStruct,
 }
 

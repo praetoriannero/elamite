@@ -94,9 +94,9 @@ spelling.
 
 The Elamite source language described by `spec.md` is the compatibility
 boundary. The compiler reports and implements 0.10.0-draft: ordinary copies,
-collection descriptors, iteration snapshots, thread/channel/mutex publication,
-and the unsafe raw-data-pointer surface all follow that revision. The following
-developer interfaces remain
+collection descriptors, direct iteration snapshots, user-defined `Iterator`
+loops, thread/channel/mutex publication, and the unsafe raw-data-pointer
+surface all follow that revision. The following developer interfaces remain
 implementation-private and may change between compiler revisions:
 
 - generated C names and helper layout;

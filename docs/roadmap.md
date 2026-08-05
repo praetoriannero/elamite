@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **User-defined iteration**
+> Next planned milestone: **Standard-library expansion**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft and the authoritative
 > `examples/spec_demo.elx` demonstration
@@ -18,12 +18,13 @@ Keep this table synchronized with the detailed status blocks below.
 | [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | Complete | Shallow values, systems concurrency, unsafe pointer traversal, final cost evidence, release identity, and the authoritative 0.10 demonstration are complete. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | Optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
-| [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The `std.ast` 1.0 façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete. |
+| [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The versioned `std.ast` façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete; inherent blocks advance its exact ABI to 2.0. |
 | [Interpreter-backed macros, attributes, and derives](#interpreter-backed-macros-attributes-and-derives) | Complete | All three stable compile-time declaration forms expand through the ordinary semantic pipeline. |
 | [Compile-time diagnostics, tooling, and stabilization](#compile-time-diagnostics-tooling-and-stabilization) | Complete | Expansion diagnostics, recovery, inspection, reproducibility, robustness, compatibility, and stabilization are complete. |
 | [Explicit-capture closures](#explicit-capture-closures) | Complete | Closure syntax, typing, capture semantics, IR/backend lowering, cross-feature behavior, and conformance are complete. |
 | [Standard-library concurrency](#standard-library-concurrency) | Complete | The 0.10 shallow shared-memory contract, ordering edges, runtime lifecycle, and sanitizer-backed conformance matrix are implemented. |
-| [User-defined iteration](#user-defined-iteration) | Planned | Decide and record the iteration contract before any lowering work; it gates iterable standard-library APIs. |
+| [User-defined iteration](#user-defined-iteration) | Complete | The ordinary `Iterator[Element]` protocol, static checking/lowering, managed hidden state, and unchanged direct collection behavior are implemented. |
+| [Inherent implementation blocks](#inherent-implementation-blocks) | Complete | Field-only structs, local coherent generic inherent blocks, selection/lowering, `std.ast` 2.0, and repository migration are complete. |
 | [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
 | [Standard-library expansion](#standard-library-expansion) | Planned | Add filesystem, process and environment, time, ordering, text, and randomness modules as independently reviewed packages. |
 | [Source-level debugging](#source-level-debugging) | Planned | Map generated C back to `.elx` locations and preserve source-level names so native debuggers are usable. |
@@ -355,7 +356,7 @@ destabilizing the existing compiler.
 
 ### Compile-time AST and interpreter
 
-> Status: Complete. The `std.ast` 1.0 façade, typed quotation, checked lowering,
+> Status: Complete. The versioned `std.ast` façade, typed quotation, checked lowering,
 > bounded interpreter, capability boundary, identities, and validation are
 > implemented.
 >
@@ -366,7 +367,7 @@ bounded interpreter for ordinary safe Elamite compile-time code.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Versioned `std.ast` façade (done)** | Define opaque immutable structural syntax values, stable accessors and `with_` transforms, validating builders, persistent AST lists, origin handles, pattern variants, and contained `std.ast.error` failures without exposing compiler-owned nodes or tables. The exact `1.0` handshake and sorted intrinsic type inventory are carried by every expanded package; only expansion can mint origins, and generated failures retain invocation/definition context without fabricated spans. | Directed and property tests cover every admitted value family and variant, every published transform, invalid identifiers and paths, exact version skew, arbitrary persistent-list concatenation, physical diagnostics, and generated diagnostic context. |
+| **Versioned `std.ast` façade (done)** | Define opaque immutable structural syntax values, stable accessors and `with_` transforms, validating builders, persistent AST lists, origin handles, pattern variants, and contained `std.ast.error` failures without exposing compiler-owned nodes or tables. Expanded packages carry an exact handshake and sorted intrinsic type inventory; the frozen 1.0 surface transitions explicitly to 2.0 for inherent blocks. Only expansion can mint origins, and generated failures retain invocation/definition context without fabricated spans. | Directed and property tests cover every admitted value family and variant, every published transform, invalid identifiers and paths, exact version skew, arbitrary persistent-list concatenation, physical diagnostics, and generated diagnostic context. |
 | **Quote and interpolation syntax (done)** | Lex and parse role-neutral, indentation-delimited `quote:` templates and `$name`/`$(expression)` sites without parsing quoted source prematurely. Infer explicit binding and compile-time return roles for every admitted `std.ast` scalar, list, item, and definition type; distinguish scalar insertion from collection splicing; validate adapted bodies through the ordinary hand-written grammar; preserve physical spans; reject runtime quotation; and retain parameter-driven inference for compile-time signature checking. Hygiene context assignment and conversion to actual façade values remain interpreter-lowering work. | Lexer, parser, formatter, editor, expansion, directed role/malformed/wrong-role/nesting/indentation tests, and property-generated named/computed interpolation streams cover the complete syntax boundary. |
 | **Concatenation operator (done)** | Add binary `++` at additive precedence for strings, supported sequences, and AST lists while keeping numeric `+` separate and rejecting arbitrary AST-expression concatenation. | Lexer, parser, checker, runtime, formatter, and editor tests agree on the new operator. |
 | **Compile-time checking and lowering (done)** | Check compile-time signatures and bodies through the ordinary language front end, reject runtime-only and unsafe capabilities, and lower the admitted subset to a versioned interpreter representation. | Invalid signatures and operations fail before execution with ordinary source spans. |
@@ -642,10 +643,10 @@ and foreign-thread attachment are outside this milestone.
 
 ### User-defined iteration
 
-> Status: Planned. `spec.md` 7.1 currently states that there is no
-> user-defined iteration protocol or source-level iterator, and `for` is
-> restricted to slices, arrays, `Vec`, `Map`, and `Set` by compiler
-> privilege.
+> Status: Complete. `spec.md` 7.1 defines the ordinary source-backed
+> `Iterator[Element]` protocol. Static concrete and generic-bound selection,
+> managed hidden state, shallow yielded values, diagnostics, both target
+> widths, closure interaction, and cost evidence are implemented.
 >
 > Blocked by: **None**. Should precede **Standard-library expansion**,
 > because every collection API added before it is either compiler-privileged
@@ -655,18 +656,68 @@ and foreign-thread attachment are outside this milestone.
 trait while preserving the 0.10 shallow iterable copy, yielded-element copy,
 and mutation-invalidation rules.
 
-The design decision precedes the implementation: the protocol interacts with
-shallow descriptor copying, mutation invalidation, escape promotion, and
-closures, and it determines whether the privileged collections keep their
-special lowering or become ordinary implementations. Record the accepted
-contract in `issues.md` before any package below begins.
+The accepted protocol uses `next(self: &var Self) -> Option[Element]`. It
+shallow-copies the source iterator once into managed hidden state, so a yielded
+safe reference can remain valid after the loop. Slices, arrays, `Vec`, `Map`,
+and `Set` retain their direct lowering and established mutation-invalidation
+rules; trait-object iteration and an implicit into-iterator conversion remain
+outside the milestone.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Accepted iteration contract** | Decide and record the protocol shape, shallow iterable copy, element copy behavior, mutation invalidation, and interaction with closures. | One normative result exists in `spec.md` before any lowering changes; unspecified `Map`/`Set` order and the revised Section 7.1 rules are preserved or explicitly revised. |
-| **Protocol declaration and checking** | Add the standard trait, its bounds, and the checking rules that admit a user type in loop-header position. | A conforming user type is accepted, a nonconforming one is diagnosed at the loop header, and the diagnostic names the missing obligation. |
-| **Loop lowering through the protocol** | Lower `for` over a user type through the protocol while retaining the specified shallow-copy behavior and evaluation order. | The iterable evaluates exactly once, visible element mutation and invalidating structural mutation follow the protocol, and cleanup and `break`/`continue` edges are unchanged. |
-| **Privileged collection reconciliation** | Decide whether `Vec`, `Map`, `Set`, arrays, and slices retain special lowering or are expressed through the protocol, and implement the accepted result. | Existing collection iteration output, ordering guarantees, and performance characteristics are unchanged or their change is recorded in `cost_model.md`. |
+| **Accepted iteration contract (done)** | Decide and record the protocol shape, shallow iterable copy, element copy behavior, mutation invalidation, and interaction with closures. | Section 7.1 owns one normative result; unspecified `Map`/`Set` order and existing direct collection rules are preserved. |
+| **Protocol declaration and checking (done)** | Add the standard trait, its bounds, and the checking rules that admit a user type in loop-header position. | Concrete and generic-bound iterators are accepted; a nonconforming loop names the missing `std.Iterator[Element]` obligation. |
+| **Loop lowering through the protocol (done)** | Lower `for` over a user type through the protocol while retaining the specified shallow-copy behavior and evaluation order. | The iterable evaluates exactly once, `next` controls every step, hidden-state references remain valid, and cleanup and `break`/`continue` edges are unchanged. |
+| **Privileged collection reconciliation (done)** | Retain direct lowering for `Vec`, `Map`, `Set`, arrays, and slices and document the distinct user-iterator cost. | Existing collection output, ordering, invalidation, allocation counters, and performance characteristics remain unchanged. |
+
+### Inherent implementation blocks
+
+> Status: Complete. The compatibility review is closed: source syntax transitions
+> directly to field-only structs, and `std.ast` advances from frozen 1.0 to an
+> exact 2.0 interface with a distinct inherent-implementation value.
+>
+> Blocked by: **None**. This milestone should precede
+> **Standard-library expansion**, so new nominal APIs are not added in syntax
+> that is immediately due for migration. It does not block
+> the completed **User-defined iteration** protocol, which uses trait
+> implementations independently of this syntax change.
+
+**Goal:** Separate nominal storage declarations from inherent behavior through
+Rust-like `impl Type` blocks while preserving static lookup, coherent generic
+applicability, exact nominal identity, layout, visibility, and copying
+semantics.
+
+The accepted language direction is:
+
+- struct bodies become field-only, and inherent methods move to module-level
+  `impl Type` blocks;
+- implementation generic parameters and bounds are explicit, as in
+  `impl[T: Display] Wrapper[T]`;
+- an inherent block may add methods only, never fields or a type-dependent
+  representation;
+- multiple blocks may contribute methods when their target and bounds apply;
+  fields and applicable inherent methods retain one member namespace;
+- two blocks may reuse a method name only when their target sets are provably
+  disjoint; an exact block never overrides an overlapping generic block; and
+- this feature does not add implementation specialization. Trait-implementation
+  overlap remains invalid, and inherent lookup continues to beat trait-method
+  lookup.
+
+Initially, an inherent implementation must be declared in the same module as
+the outermost nominal target type. Every implementation parameter must be
+constrained by that target, aliases are compared through their canonical
+targets, `Self` denotes the complete target type, and method visibility remains
+declared on each method. These restrictions avoid import-sensitive method sets,
+unconstrained monomorphization, and downstream extension of an upstream type.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Normative and compatibility revision (done)** | Close I-1; revise Sections 4.2, 6, and 12; define the source migration; and publish the required `std.ast` interface transition without silently changing ABI 1.0. | The specification has one unambiguous inherent-implementation grammar and method-set rule; existing compile-time packages either remain compatible by an explicitly documented path or fail with an exact interface-version diagnostic. |
+| **Syntax and identity boundary (done)** | Parse field-only structs and module-level `impl Type` blocks; collect stable block and member identities separately from trait implementations. | Inline inherent methods receive the migration diagnostic, fields in an inherent block are rejected, malformed targets recover, and clean versus generated syntax produces deterministic identities. |
+| **Generic applicability and coherence (done)** | Canonicalize targets, bind every explicit implementation parameter, evaluate bounds, enforce local ownership, and reject field/method or potentially overlapping method-name collisions. | Generic, bounded, exact, disjoint, alias-equivalent, unconstrained, foreign-target, and overlapping cases have focused pass/fail coverage with diagnostics pointing to both declarations when relevant. |
+| **Checking, selection, and lowering (done)** | Type-check methods under the block's substitutions, retain all five receiver forms and `Self`, select one applicable inherent member before trait lookup, and reuse ordinary monomorphization and C emission. | Static and bound calls preserve receiver adaptation, evaluation order, visibility, unsafe rules, function-reference behavior, deterministic symbols, and equivalent generated C on x86 and x86-64. |
+| **Compile-time surface migration (done)** | Add the versioned inherent-implementation AST value and item/quote roles; migrate attributes that add methods and ensure derives retain their documented scheduling and observation rules. | Handwritten and generated blocks undergo identical parsing, resolution, coherence, safety, and provenance checks; version-skew, attribute sibling output, derive interaction, and recovery have directed and property coverage. |
+| **Repository migration and conformance (done)** | Move shipped sources, examples, fixtures, and documentation to the accepted syntax and extend editor-grammar synchronization where its structural patterns change. | Formatting, check, test, clippy, both target matrices, the authoritative demonstration, compile-time compatibility fixtures, and documentation links agree with one implemented surface. |
 
 ### Deferred specified surface
 
@@ -692,7 +743,8 @@ remains silently unimplemented.
 > defines an error category with no input/output behind it, and there is no
 > filesystem, environment, process, time, sorting, or randomness surface.
 >
-> Blocked by: **User-defined iteration** for any API that should be iterable.
+> Blocked by: **None**. Nominal APIs use the completed **Inherent implementation
+> blocks**, and iterable APIs use the completed **User-defined iteration** protocol.
 > Every collection-shaped signature added here inherits the implemented 0.10
 > alias and invalidation behavior.
 

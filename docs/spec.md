@@ -763,16 +763,17 @@ copy semantics. `insert` returns whether the value was newly added, and
 
 ### 4.2 Structs
 
-`struct` declares an aggregate value type. Fields must appear before methods in
-the struct body. A struct's inherent methods are declared in that same body;
-there is no inherent `impl` block. Fields and inherent methods share one struct
-member namespace, so a field and an inherent method cannot have the same name.
+`struct` declares an aggregate value type. Its body contains fields only.
+Inherent methods are declared in one or more module-level `impl Type` blocks;
+an inherent block never adds fields or changes representation. Fields and all
+applicable inherent methods share one member namespace.
 
 ~~~elx
 struct Session:
     active: bool
     name: String
 
+impl Session:
     pub fn new(name: String) -> Self:
         return Self { active: true, name: name }
 
@@ -780,7 +781,8 @@ struct Session:
         self.active = false
 ~~~
 
-Within a struct body, `Self` denotes the enclosing struct type. A plain
+Within a struct body, `Self` denotes the enclosing struct in field types.
+Within an inherent implementation, `Self` denotes its complete target type. A plain
 `self: Self` parameter receives a copied receiver. `self: &Self` and
 `self: &var Self` receive shared and mutable references respectively.
 `self: *Self` and `self: *var Self` receive const and mutable raw pointers
@@ -1405,10 +1407,25 @@ Generic implementations use syntax such as
 when any concrete substitution could make both apply. Elamite initially has no
 implementation specialization or negative implementations.
 
+An inherent implementation has the form `impl Type:` or
+`impl[T: Bound] Type:`. Its outermost canonical target must be a nominal type
+declared in the same module as the block. Aliases are compared through their
+canonical targets. Every implementation generic parameter must occur in the
+target type, so the target determines all block substitutions. Methods may
+declare their own generic parameters and their own `pub` visibility.
+
+Several inherent blocks may apply to one type. A field and an inherent method
+may not share a name. Two inherent blocks may declare the same method name only
+when their canonical target patterns are provably disjoint. Generic parameters
+are conservatively able to match any type, and bounds do not prove target
+disjointness. Consequently an exact block does not override an overlapping
+generic block; the overlap is invalid. These rules do not specialize trait
+implementations.
+
 Within a trait declaration, `Self` denotes the type that implements the trait.
-Within `impl Trait for Type`, `Self` denotes the implementation target `Type`.
-`Self` is invalid outside a struct body, trait declaration, or trait
-implementation.
+Within either `impl Type` or `impl Trait for Type`, `Self` denotes the complete
+implementation target `Type`. `Self` is invalid outside a struct body, trait
+declaration, or implementation.
 
 ~~~elx
 fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
@@ -1504,26 +1521,45 @@ Operator precedence from highest to lowest is:
 13. `||`.
 14. Assignment and compound assignment.
 
-### 7.1 Collection iteration
+### 7.1 Iteration
 
-The initial `for` statement directly supports slices, arrays, `Vec`, `Map`, and
-`Set`; there is no user-defined iteration protocol or source-level iterator
-type yet.
+The standard user-implementable `Iterator[Element]` trait declares
+`fn next(self: &var Self) -> Option[Element]`. A `for` iterable may be a value
+whose concrete type implements exactly one instantiation of that trait, or a
+slice, array, `Vec`, `Map`, or `Set`, which retain the direct collection
+behavior below. A generic parameter with an `Iterator[Element]` bound is an
+iterable with that `Element` type. There is no implicit conversion from a
+collection-like value to a separate iterator and no overloaded or
+most-specific iterator implementation.
+
 The iterable expression is evaluated exactly once and copied into hidden loop
-state using ordinary shallow value semantics. For a vector, the hidden
-descriptor fixes the loop length while element replacement through another
-descriptor remains visible when both still share backing. Length-changing
-vector mutation through any alias while that vector is being iterated is
-undefined behavior. Inserting, removing, or clearing a map or set during active
-iteration through any alias is likewise undefined behavior; replacing an
-existing map value may be observed by a later iteration step.
+state using ordinary shallow value semantics. For a user iterator, the hidden
+state is mutable and the loop repeatedly calls `next` through static trait
+selection. `Option.Some(value)` shallow-copies `value` into the loop's
+non-rebindable binding and executes the body; `Option.None` exits the loop.
+`continue` requests the next value and `break` exits without another call.
+The hidden state has managed lifetime because `next` receives `&var Self`; a
+safe reference returned inside an element may therefore outlive the loop.
+Iteration through an `&Iterator` or `&var Iterator` trait-object reference is
+not initially supported.
+
+For a vector, the hidden descriptor fixes the loop length while element
+replacement through another descriptor remains visible when both still share
+backing. Length-changing vector mutation through any alias while that vector is
+being iterated is undefined behavior. Inserting, removing, or clearing a map
+or set during active iteration through any alias is likewise undefined
+behavior; replacing an existing map value may be observed by a later iteration
+step. A user iterator defines its own mutation and invalidation contract; the
+`Iterator` trait adds no undefined behavior beyond operations performed by its
+`next` implementation.
 
 Slices, arrays, and vectors iterate in index order. Maps yield `(K, V)` pairs,
 and sets yield their elements; map and set iteration order is unspecified and
 may vary between executions. Each yielded element, key, or value is
-shallow-copied into the loop's non-rebindable binding. Iteration exposes no safe
-references to collection interiors. It visits only direct elements and does not
-recursively traverse targets reached through descriptors or references.
+shallow-copied into the loop's non-rebindable binding. Direct collection
+iteration exposes no safe references to collection interiors. It visits only
+direct elements and does not recursively traverse targets reached through
+descriptors or references.
 
 ### 7.2 Formatted strings and display
 
@@ -1821,7 +1857,8 @@ methods. The runtime may perform internal reclamation work only when it invokes
 no user code and creates no observable external-resource cleanup behavior.
 
 Managed allocation failure is unrecoverable because construction, collection
-growth, formatting, and escape promotion may allocate implicitly.
+growth, formatting, user-iterator hidden state, and escape promotion may
+allocate implicitly.
 Before reporting out-of-memory, the runtime must attempt a full collection. If
 allocation still fails, it terminates the process with an out-of-memory
 diagnostic. OOM is not represented by `Result`, cannot be caught, and does not
@@ -2252,7 +2289,7 @@ accessors, `with_` transformation methods, structured constructors, pattern
 variants, and persistent list types. The initial interface includes at least:
 
 - `Item`, `StructDefinition`, `EnumDefinition`, `FunctionDefinition`,
-  `Implementation`, and `FieldDefinition`;
+  `Implementation`, `InherentImplementation`, and `FieldDefinition`;
 - `Expression`, `StatementList`, `ItemList`, `MemberList`, `Pattern`, and
   `TypeSyntax`; and
 - `Identifier` plus opaque origin information suitable for diagnostics.
@@ -2261,7 +2298,11 @@ The model represents pre-resolution structural syntax: written names and type
 syntax, visibility, generic syntax, fields, variants, parameters, bodies,
 documentation, attributes, and provenance. It does not expose inferred types,
 resolved trait selection, layouts, target properties, runtime values, mutable
-compiler tables, or arbitrary compiler internals. A later read-only semantic
+compiler tables, or arbitrary compiler internals. The current exact interface
+version is 2.0. Version 1.0 remains frozen and is not source- or artifact-
+compatible: an artifact requiring it receives the exact version-skew
+diagnostic. In 2.0 `StructDefinition` contains fields only, while
+`InherentImplementation` carries a target type and method members. A later read-only semantic
 reflection API, if any, is separate and cannot generate syntax in the same
 compilation phase.
 
@@ -2287,14 +2328,16 @@ scalar inserts one node. `$` has no interpolation meaning outside `quote:` and
 is otherwise invalid source syntax.
 
 ~~~elx
-let members: std.ast.MemberList = quote:
+let fields: std.ast.MemberList = quote:
     id: u64
 
-    pub fn identifier(self: &Self) -> u64:
-        return self.id
+let behavior: std.ast.InherentImplementation = quote:
+    impl Entity:
+        pub fn identifier(self: &Self) -> u64:
+            return self.id
 
-let all_members = target.members() ++ members
-let result = target.with_members(all_members)
+let all_fields = target.members() ++ fields
+let result = target.with_members(all_fields)
 ~~~
 
 Literal syntax written in a quote receives the declaration's definition-site
@@ -2357,21 +2400,30 @@ item is structurally validated before expansion continues.
 
 Attached attributes execute from top to bottom. Each attribute receives the
 complete output definition of the preceding attribute. An attribute may add or
-change fields, variants, functions, visibility, documentation, and ordinary
-attributes, but cannot bypass privacy or any later semantic check.
+change fields, variants, visibility, documentation, and ordinary attributes,
+and may emit behavior as sibling items, but cannot bypass privacy or any later
+semantic check.
+
+`StructDefinition` is field-only in `std.ast` 2.0. An attribute that adds
+inherent behavior returns an `ItemList` containing the transformed definition
+and sibling `InherentImplementation` items. Returning a same-kind definition
+can change only structure carried by that definition.
 
 ~~~elx
 attr identifiable(
     target: std.ast.StructDefinition,
-) -> std.ast.StructDefinition:
-    let additions: std.ast.MemberList = quote:
+) -> std.ast.ItemList:
+    let fields: std.ast.MemberList = quote:
         id: u64
 
-        pub fn identifier(self: &Self) -> u64:
-            return self.id
+    let target_type = target.type_syntax()
+    let behavior: std.ast.InherentImplementation = quote:
+        impl $target_type:
+            pub fn identifier(self: &Self) -> u64:
+                return self.id
 
-    let members = target.members() ++ additions
-    return target.with_members(members)
+    let definition = target.with_members(target.members() ++ fields)
+    return std.ast.items(definition, behavior)
 
 @attr(identifiable)
 struct Entity:
@@ -2384,8 +2436,10 @@ A derive declaration has exactly one target parameter, typed as
 `std.ast.StructDefinition` or `std.ast.EnumDefinition`, and returns
 `std.ast.Implementation`. `@derive(Name, ...)` retains the original definition
 and invokes the selected generators in source order. All ordinary attributes on
-that definition finish first, so derives observe fields, variants, methods, and
-other structure added by attributes.
+that definition finish first, so derives observe the final fields, variants,
+metadata, and attributes of that definition. Sibling items emitted by an
+attribute, including inherent implementations, are scheduled independently and
+are not observed as members of the derive target.
 
 The returned implementation must implement the exact trait named by the derive
 declaration for the exact attached type. It may not replace the type or emit

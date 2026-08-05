@@ -533,9 +533,13 @@ fn retains_member_namespaces_and_reports_member_conflicts() {
             "src/main.elx",
             "struct Broken:\n\
                  \x20\x20\x20\x20value: i32\n\
-                 \x20\x20\x20\x20fn value():\n\
-                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+                 \x20\x20\x20\x20value: i32\n\
                  \x20\x20\x20\x20late: i32\n\
+             impl Broken:\n\
+                 \x20\x20\x20\x20fn method():\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
+                 \x20\x20\x20\x20fn method():\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
              enum Choice:\n\
                  \x20\x20\x20\x20One(i32)\n\
                  \x20\x20\x20\x20Two { value: i32 }\n",
@@ -578,6 +582,8 @@ fn self_type_is_scoped_to_structs_traits_and_trait_impls() {
         &[(
             "src/main.elx",
             "struct Valid:\n\
+                 \x20\x20\x20\x20pass\n\
+             impl Valid:\n\
                  \x20\x20\x20\x20fn copy(self: &Self) -> Self:\n\
                  \x20\x20\x20\x20\x20\x20\x20\x20return *self\n\
              trait Make:\n\
@@ -940,6 +946,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
             "Formatter",
             "Hash",
             "Identity",
+            "Iterator",
             "Map",
             "NumericError",
             "Option",

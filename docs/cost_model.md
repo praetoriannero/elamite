@@ -73,7 +73,8 @@ away from the tail shifts the remaining inline element representations.
 | Return value | Caller receives an ordinary shallow value | One immediate return representation; the existing reuse pass still records proven source handoffs | C may add ABI-level aggregate movement; no managed backing is traversed |
 | Pattern binding | Bound payload is a shallow value; `_` binds nothing | Active payload and named inline representations assign directly | Tests and discriminants allocate nothing; nested descriptors preserve identity |
 | Plain closure capture | Capture evaluates once left-to-right and shallow-copies into a new environment | One environment allocation plus immediate capture assignments | Copying the resulting closure pointer allocates nothing and preserves environment identity |
-| Collection iteration | Iterable evaluates once into shallow hidden state and each yielded value is shallow | One immediate iterable copy and one length snapshot before the loop, then one shallow yielded assignment per visited item | A hidden `Vec` descriptor fixes its own length and backing pointer; map/set structural mutation and vector length mutation during the active loop are UB rather than checked operations |
+| Direct collection iteration | Iterable evaluates once into shallow hidden state and each yielded value is shallow | One immediate iterable copy and one length snapshot before the loop, then one shallow yielded assignment per visited item; no managed allocation merely for the loop | A hidden `Vec` descriptor fixes its own length and backing pointer; map/set structural mutation and vector length mutation during the active loop are UB rather than checked operations |
+| User-defined `Iterator` iteration | Iterator evaluates once and shallow-copies into mutable hidden state; each `Some` payload shallow-copies into the binding | One managed cell for the hidden state, one direct `next` call per attempted step, one `Option` result representation, and one shallow payload assignment per visited item | Managed state permits a yielded safe reference to outlive the loop; a fully exhausted `n`-item iterator makes `n + 1` calls, while `break` makes no final call; proven nonescaping state may eventually remain on the stack |
 | Thread spawn | Callable evaluates once and its environment shallow-copies into startup state | One immediate callable assignment plus thread/startup-state allocation; no capture backing is traversed | Startup state and captured roots remain live through registered thread state until completion |
 | Channel send | Argument evaluates once and shallow-copies into a queue/rendezvous message | One immediate assignment plus one message-node allocation while synchronized | Queue nodes and shared backing stay reachable through the channel until consumed, closed, or collected |
 | Thread join | Every join shallow-copies one cached result | Native join occurs once; each call returns the immediate cached `R` representation | Repeated results may share mutable backing; thread state remains rooted through handles/registry until unregistered |
@@ -199,8 +200,9 @@ reclaims unreachable cycles, but collection timing is unspecified.
 Important consequences of the current implementation are:
 
 - allocation can occur implicitly during closure construction, variadic calls,
-  collection construction/growth, formatting, publication, synchronization, and
-  safe-reference promotion; an ordinary shallow copy alone does not allocate;
+  user-defined iteration state promotion, collection construction/growth,
+  formatting, publication, synchronization, and safe-reference promotion; an
+  ordinary shallow copy alone does not allocate;
 - allocation failure performs one full collection and retries before the
   process-fatal OOM path;
 - `String`, raw `str` concatenation, and formatter byte buffers use the

@@ -98,17 +98,19 @@ macro quoted_implementation() -> std.ast.Item:
 
 attr adds_members(
     target: std.ast.StructDefinition,
-) -> std.ast.StructDefinition:
-    // A member list carries fields and methods together, and `++` joins it to
-    // the target's existing members (`docs/spec.md` 7 and 12.3).
+) -> std.ast.ItemList:
     let additions: std.ast.MemberList = quote:
         id: u64
 
-        pub fn identifier(self: &Self) -> u64:
-            return self.id
+    let target_type = target.type_syntax()
+    let behavior: std.ast.InherentImplementation = quote:
+        impl $target_type:
+            pub fn identifier(self: &Self) -> u64:
+                return self.id
 
     let combined = target.members() ++ additions
-    return target.with_members(combined)
+    let definition = target.with_members(combined)
+    return std.ast.ItemList.empty().push(definition).push(behavior)
 
 // ------------------------------------------------------------- structural --
 

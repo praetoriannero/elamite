@@ -2,13 +2,17 @@ macro pair(left: std.ast.Expression, right: std.ast.Expression) -> std.ast.Expre
     return quote:
         ($left, $right)
 
-attr identifiable(target: std.ast.StructDefinition) -> std.ast.StructDefinition:
+attr identifiable(target: std.ast.StructDefinition) -> std.ast.ItemList:
     let additions: std.ast.MemberList = quote:
         pub id: u64
 
-        pub fn identifier(self: &Self) -> u64:
-            return self.id
-    return target.with_members(target.members() ++ additions)
+    let target_type = target.type_syntax()
+    let behavior: std.ast.InherentImplementation = quote:
+        impl $target_type:
+            pub fn identifier(self: &Self) -> u64:
+                return self.id
+    let definition = target.with_members(target.members() ++ additions)
+    return std.ast.ItemList.empty().push(definition).push(behavior)
 
 trait FieldCount:
     fn field_count() -> usize
@@ -21,8 +25,8 @@ derive FieldCount(target: std.ast.StructDefinition) -> std.ast.Implementation:
             fn field_count() -> usize:
                 return $count
 
-@attr(identifiable)
-@derive(FieldCount)
+@attr (identifiable)
+@derive (FieldCount)
 struct Entity:
     pub name: String
 

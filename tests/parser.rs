@@ -79,6 +79,64 @@ fn parses_the_authoritative_demonstration() {
 }
 
 #[test]
+fn parses_inherent_implementations_and_diagnoses_retired_inline_methods() {
+    let source = r#"
+struct Wrapper[T]:
+    value: T
+
+impl[T] Wrapper[T]:
+    pub fn get(self: &Self) -> T:
+        return self.value
+"#;
+    let (sources, output) = parse_text(source);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    let implementation = output.tree.direct_children(SyntaxKind::Impl)[0];
+    assert_eq!(implementation.direct_children(SyntaxKind::Type).len(), 1);
+
+    let (sources, output) = parse_text(
+        r#"
+struct Retired:
+    fn method(self: &Self) -> ():
+        pass
+"#,
+    );
+    assert!(
+        output.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("module-level `impl Type` block")),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+}
+
+#[test]
+fn implementation_blocks_reject_fields_without_losing_the_following_method() {
+    let (sources, output) = parse_text(
+        r#"
+struct Record:
+    value: i32
+
+impl Record:
+    extra: i32
+    fn value(self: &Self) -> i32:
+        return self.value
+"#,
+    );
+    assert!(
+        output.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("implementation block can contain only methods")),
+        "{}",
+        diagnostics(&sources, &output.diagnostics)
+    );
+    assert_eq!(output.tree.count(SyntaxKind::Function), 1);
+}
+
+#[test]
 fn parses_native_tests_and_expected_trap_blocks() {
     let source =
         "test bounds:\n    expect(std.testing.BuiltinTrap.IndexOutOfBounds):\n        pass\n";

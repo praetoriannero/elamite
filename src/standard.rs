@@ -23,6 +23,7 @@ pub const SYNC_SOURCE: &str = include_str!("../stdlib/src/sync.elx");
 pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.Callable",
     "std.Display",
+    "std.Iterator",
     "std.NumericError",
     "std.Option",
     "std.panic",

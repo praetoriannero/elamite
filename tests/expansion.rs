@@ -546,10 +546,16 @@ fn structural_attribute_can_add_members_immutably() {
         "app",
         &[],
         r#"
-attr identifiable(target: std.ast.StructDefinition) -> std.ast.StructDefinition:
+attr identifiable(target: std.ast.StructDefinition) -> std.ast.ItemList:
     let additions: std.ast.MemberList = quote:
         id: u64
-    return target.with_members(target.members() ++ additions)
+    let target_type = target.type_syntax()
+    let behavior: std.ast.InherentImplementation = quote:
+        impl $target_type:
+            fn identifier(self: &Self) -> u64:
+                return self.id
+    let definition = target.with_members(target.members() ++ additions)
+    return std.ast.ItemList.empty().push(definition).push(behavior)
 
 @attr(identifiable)
 struct Entity:
@@ -572,6 +578,7 @@ struct Entity:
         .expect("struct body")
         .direct_children(elamite::syntax::SyntaxKind::Field);
     assert_eq!(fields.len(), 2, "{}", structure.dump());
+    assert_eq!(user.tree.count(elamite::syntax::SyntaxKind::Impl), 1);
     assert!(
         structure
             .direct_children(elamite::syntax::SyntaxKind::Attribute)

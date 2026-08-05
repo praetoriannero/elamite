@@ -35,11 +35,12 @@ struct Point(Default, PartialEq):
     x: f64
     y: f64
 
+impl Point:
     pub fn new() -> Self:
         // `default` is added as a method because of its trait derivation.
         return Self.default()
 
-    // Inside a struct, `Self` refers to the enclosing struct type.
+    // Inside an inherent implementation, `Self` is the complete target type.
     fn translated(self: Self, dx: f64) -> Self:
         return Point { x: self.x + dx, y: self.y }
 
@@ -60,6 +61,7 @@ struct Session:
     active: bool
     name: String
 
+impl Session:
     pub fn new(name: String) -> Self:
         return Self { active: true, name: name }
 
@@ -126,6 +128,7 @@ struct DemoResource:
     // Copies share state because the handle explicitly contains a reference.
     state: &var DemoResourceState
 
+impl DemoResource:
     fn is_closed(self: &Self) -> bool:
         return self.state.closed
 

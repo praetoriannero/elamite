@@ -651,6 +651,7 @@ fn validates_receiver_forms_and_function_reference_value_types() {
             "src/main.elx",
             "struct Counter:\n\
              \x20\x20\x20\x20value: i32\n\
+             impl Counter:\n\
              \x20\x20\x20\x20fn by_value(self: Self) -> ():\n\
              \x20\x20\x20\x20\x20\x20\x20\x20pass\n\
              \x20\x20\x20\x20fn by_ref(self: &Self) -> ():\n\
@@ -679,6 +680,8 @@ fn validates_receiver_forms_and_function_reference_value_types() {
         (
             "receiver",
             "struct Bad:\n\
+             \x20\x20\x20\x20pass\n\
+             impl Bad:\n\
              \x20\x20\x20\x20fn invalid(self: &i32) -> ():\n\
              \x20\x20\x20\x20\x20\x20\x20\x20pass\n",
             "receiver must have type",

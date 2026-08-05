@@ -90,6 +90,17 @@ fn assert_reports(source: &str, expected: &str) {
     );
 }
 
+fn assert_reports_any(source: &str, expected: &str) {
+    let (sources, diagnostics) = frontend_diagnostics(source);
+    let text = render(&sources, &diagnostics);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains(expected)),
+        "expected a diagnostic containing {expected:?}, got:\n{text}"
+    );
+}
+
 const TRAIT: &str = r#"
 trait Toggle:
     fn status(self: &Self) -> str
@@ -400,6 +411,7 @@ trait Toggle:
 struct Session:
     active: bool
 
+impl Session:
     fn label(self: &Self) -> str:
         return "inherent"
 
@@ -501,6 +513,9 @@ fn main() -> ():
     let (sources, diagnostics) = frontend_diagnostics(
         r#"
 struct Resource:
+    pass
+
+impl Resource:
     fn close(self: &Self) -> ():
         pass
 
@@ -515,6 +530,236 @@ impl Close for Resource:
             .iter()
             .any(|diagnostic| diagnostic.message.contains("cannot resolve `Close`")),
         "expected undeclared `Close` to be absent from the prelude, got:\n{text}"
+    );
+}
+
+#[test]
+fn inherent_blocks_apply_generic_bounds_and_disjoint_exact_targets() {
+    assert_clean(
+        r#"
+trait Mark:
+    fn mark(self: &Self) -> i32
+
+struct Tagged:
+    value: i32
+
+impl Mark for Tagged:
+    fn mark(self: &Self) -> i32:
+        return self.value
+
+struct Wrapper[T]:
+    value: T
+
+impl[T: Mark] Wrapper[T]:
+    fn marked(self: &Self) -> i32:
+        return self.value.mark()
+
+impl Wrapper[i32]:
+    fn kind(self: &Self) -> str:
+        return "integer"
+
+impl Wrapper[str]:
+    fn kind(self: &Self) -> str:
+        return "text"
+
+fn main() -> ():
+    let tagged = Wrapper { value: Tagged { value: 7 } }
+    let integer = Wrapper { value: 1 }
+    let text: Wrapper[str] = Wrapper { value: "x" }
+    println(tagged.marked())
+    println(integer.kind())
+    println(text.kind())
+"#,
+    );
+}
+
+#[test]
+fn inherent_blocks_reject_unconstrained_and_overlapping_methods() {
+    assert_reports_any(
+        r#"
+struct Wrapper[T]:
+    value: T
+
+impl[T, U] Wrapper[T]:
+    fn unused(self: &Self) -> ():
+        pass
+
+fn main() -> ():
+    pass
+"#,
+        "must occur in its target type",
+    );
+    assert_reports_any(
+        r#"
+struct Wrapper[T]:
+    value: T
+
+impl[T] Wrapper[T]:
+    fn label(self: &Self) -> str:
+        return "generic"
+
+impl Wrapper[i32]:
+    fn label(self: &Self) -> str:
+        return "exact"
+
+fn main() -> ():
+    pass
+"#,
+        "overlapping implementation targets",
+    );
+}
+
+#[test]
+fn inherent_blocks_compare_aliases_canonically_and_share_the_field_namespace() {
+    assert_reports_any(
+        r#"
+struct Record:
+    value: i32
+
+type Alias = Record
+
+impl Record:
+    fn name(self: &Self) -> str:
+        return "record"
+
+impl Alias:
+    fn name(self: &Self) -> str:
+        return "alias"
+
+fn main() -> ():
+    pass
+"#,
+        "overlapping implementation targets",
+    );
+    assert_reports_any(
+        r#"
+struct Record:
+    value: i32
+
+impl Record:
+    fn value(self: &Self) -> i32:
+        return 1
+
+fn main() -> ():
+    pass
+"#,
+        "conflicts with a field",
+    );
+
+    assert_clean(
+        r#"
+struct Record:
+    value: i32
+
+type Alias = Record
+
+impl Alias:
+    fn new(value: i32) -> Self:
+        return Self { value: value }
+
+fn main() -> ():
+    let record = Alias.new(7)
+    println(record.value)
+"#,
+    );
+}
+
+#[test]
+fn inherent_blocks_are_confined_to_the_target_declaration_module() {
+    assert_reports_any(
+        r#"
+struct Record:
+    value: i32
+
+mod extensions:
+    impl root.Record:
+        fn extra(self: &Self) -> i32:
+            return self.value
+
+fn main() -> ():
+    pass
+"#,
+        "must be in the module that declares its target type",
+    );
+    assert_reports_any(
+        r#"
+@importc("Foreign", "foreign.h")
+struct Foreign:
+    value: i32
+
+impl Foreign:
+    fn method(self: &Self) -> ():
+        pass
+
+fn main() -> ():
+    pass
+"#,
+        "must be a nominal struct or enum type",
+    );
+}
+
+#[test]
+fn inherent_method_visibility_is_declared_on_each_method() {
+    let tree = TestTree::new("inherent-visibility");
+    let dependency = tree.root.join("dep");
+    let application = tree.root.join("app");
+    fs::create_dir_all(dependency.join("src")).expect("create dependency source");
+    fs::create_dir_all(application.join("src")).expect("create application source");
+    fs::write(
+        dependency.join("elamite.toml"),
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\ntarget_kind = \"lib\"\n",
+    )
+    .expect("write dependency manifest");
+    fs::write(
+        dependency.join("src/lib.elx"),
+        r#"
+pub struct Record:
+    pub value: i32
+
+impl Record:
+    fn hidden(self: &Self) -> i32:
+        return self.value
+
+    pub fn visible(self: &Self) -> i32:
+        return self.value
+"#,
+    )
+    .expect("write dependency source");
+    fs::write(
+        application.join("elamite.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\ntarget_kind = \"exe\"\n\n\
+         [dependencies.dep]\npath = \"../dep\"\n",
+    )
+    .expect("write application manifest");
+    fs::write(
+        application.join("src/main.elx"),
+        r#"
+use dep.Record
+
+fn main() -> ():
+    let record = Record { value: 7 }
+    println(record.visible())
+    println(record.hidden())
+"#,
+    )
+    .expect("write application source");
+
+    let mut sources = SourceManager::new();
+    let graph = PackageGraph::resolve(&application.join("elamite.toml"), &mut sources)
+        .expect("package graph resolves");
+    let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
+        Ok(_) => panic!("the private method must be rejected"),
+        Err(diagnostics) => diagnostics,
+    };
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::Visibility
+                && diagnostic
+                    .message
+                    .contains("method `hidden` is package-private")
+        }),
+        "{}",
+        render(&sources, &diagnostics)
     );
 }
 

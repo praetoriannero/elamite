@@ -5,10 +5,12 @@ language behavior or the public compiler commands.
 
 The descriptions below reflect the compiler targeting Specification 0.10.
 Ordinary shallow-copy lowering and collection representations are implemented;
-hidden iteration state snapshots its shallow iterable and bound once, and
-threads, channels, and mutex operations use shallow values. Pointer arithmetic
-and indexing are implemented, and pointer ordering lowers null cases through
-explicit equality guards before any C relational operator. POSIX start,
+direct collection state snapshots its shallow iterable and bound once, while a
+user-defined iterator is selected statically and promoted into managed hidden
+state for repeated `next` calls. Threads, channels, and mutex operations use
+shallow values. Pointer arithmetic and indexing are implemented, and pointer
+ordering lowers null cases through explicit equality guards before any C
+relational operator. POSIX start,
 channel, mutex, join, and atomic operations own the concurrency ordering
 boundaries. Current
 reuse and borrowing facts remain documented here until their implementation is
@@ -101,7 +103,7 @@ must remain outside compiler-private parsed, resolved, and typed data models and
 must not gain ambient host or target capabilities.
 
 `src/expansion/ast.rs` owns that façade. Expanded packages carry an exact
-`std.ast` 1.0 interface handshake and a stable intrinsic
+`std.ast` 2.0 interface handshake and a stable intrinsic
 type inventory. Its opaque, immutable values cover definitions, items,
 expressions, statements, patterns, written types, metadata, fields, variants,
 parameters, and implementations; persistent typed lists and `with_` methods

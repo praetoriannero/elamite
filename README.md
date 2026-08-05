@@ -3,10 +3,12 @@
 Elamite is a statically typed, garbage-collected language that compiles to C99.
 The compiler targets and implements the normative 0.10.0-draft design. Ordinary
 values copy shallowly, collections use the accepted mutable-sharing contract,
-and iteration snapshots the shallow descriptor and bound once. Threads,
-channels, and mutexes publish those same shallow values under programmer-managed
-synchronization. Raw data pointers support the accepted unsafe arithmetic,
-indexing, subtraction, and null-low relational ordering surface.
+direct collection iteration snapshots the shallow descriptor and bound once,
+and user types participate in `for` through `Iterator[Element]`. Threads,
+channels, and mutexes publish those same shallow values under
+programmer-managed synchronization. Raw data pointers support the accepted
+unsafe arithmetic, indexing, subtraction, and null-low relational ordering
+surface.
 
 ## Documentation map
 

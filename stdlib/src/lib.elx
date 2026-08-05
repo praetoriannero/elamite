@@ -17,6 +17,10 @@ pub enum NumericError:
 pub trait Callable[Arguments, Return]:
     fn call(self: &Self, arguments: Arguments) -> Return
 
+/// Produces zero or more values for a `for` loop.
+pub trait Iterator[Element]:
+    fn next(self: &var Self) -> Option[Element]
+
 /// Terminates the process with an unrecoverable diagnostic.
 pub fn panic(message: str) -> !:
     pass

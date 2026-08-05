@@ -317,6 +317,7 @@ fn checks_methods_receiver_adaptation_and_function_references() {
 struct Counter:
     value: i32
 
+impl Counter:
     fn new(value: i32) -> Self:
         return Self{value: value}
 
@@ -376,6 +377,7 @@ fn rejects_invalid_receivers_bound_method_values_and_function_signatures() {
 struct Counter:
     value: i32
 
+impl Counter:
     fn update(self: &var Self) -> ():
         pass
 
@@ -390,6 +392,7 @@ fn main() -> ():
 struct Counter:
     value: i32
 
+impl Counter:
     fn read(self: &Self) -> i32:
         return self.value
 
@@ -424,6 +427,7 @@ fn main() -> ():
 struct Counter:
     value: i32
 
+impl Counter:
     fn raw(self: *Self) -> ():
         pass
 
@@ -2091,6 +2095,7 @@ fn deferred_calls_must_be_safe_and_unit_returning() {
 struct Resource:
     open: bool
 
+impl Resource:
     fn close(self: &Self) -> ():
         pass
 
@@ -2764,6 +2769,27 @@ fn main():
     mutate(1)
 "#,
         Category::Place,
+    );
+}
+
+#[test]
+fn for_reports_the_missing_iterator_obligation_at_the_loop() {
+    let (sources, diagnostics) = check_diagnostics(
+        r#"
+struct NotAnIterator:
+    value: i32
+
+fn main() -> ():
+    for value in NotAnIterator { value: 1 }:
+        println(value)
+"#,
+    );
+    let rendered = render(&sources, &diagnostics);
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("implement `std.Iterator[Element]`")),
+        "missing iterator obligation diagnostic:\n{rendered}"
     );
 }
 

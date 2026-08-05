@@ -21,6 +21,9 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
                         value: Rvalue::VariadicSlice { .. },
                         ..
                     } | Instruction::Assign {
+                        value: Rvalue::AllocateManaged { .. },
+                        ..
+                    } | Instruction::Assign {
                         value: Rvalue::Binary {
                             operator: BinaryOperator::Concatenate,
                             ..
@@ -326,7 +329,7 @@ impl<'a> FunctionLowerer<'a> {
                 iterable,
                 kind,
                 body,
-            } => self.lower_for(*binding, iterable, *kind, body, statement.span),
+            } => self.lower_for(*binding, iterable, kind, body, statement.span),
             TypedStatementKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms),
             TypedStatementKind::Block(body) => self.lower_scope(body),
             TypedStatementKind::Defer(body) => {
@@ -456,11 +459,15 @@ impl<'a> FunctionLowerer<'a> {
         &mut self,
         binding: LocalBindingId,
         iterable: &TypedExpression,
-        kind: IterationKind,
+        kind: &IterationKind,
         body: &[TypedStatement],
         span: Span,
     ) {
         let collection = self.lower_expression(iterable);
+        if matches!(kind, IterationKind::User { .. }) {
+            self.lower_user_for(binding, collection, kind, body, span);
+            return;
+        }
         let usize_type = self.types.types.primitive_id(PrimitiveType::Usize);
         let bool_type = self.types.types.primitive_id(PrimitiveType::Bool);
         let index = self.temp(usize_type);
@@ -479,7 +486,10 @@ impl<'a> FunctionLowerer<'a> {
         let length = self.temp(usize_type);
         self.emit(Instruction::Assign {
             destination: length,
-            value: Rvalue::CollectionLength { collection, kind },
+            value: Rvalue::CollectionLength {
+                collection,
+                kind: kind.clone(),
+            },
             span,
         });
         let condition_block = self.new_block();
@@ -519,7 +529,7 @@ impl<'a> FunctionLowerer<'a> {
             value: Rvalue::IterationElement {
                 collection,
                 index,
-                kind,
+                kind: kind.clone(),
             },
             span,
         });
@@ -567,6 +577,123 @@ impl<'a> FunctionLowerer<'a> {
             span,
         });
         self.terminate(Terminator::Goto(condition_block));
+        self.current = exit_block;
+    }
+
+    fn lower_user_for(
+        &mut self,
+        binding: LocalBindingId,
+        state: TemporaryId,
+        kind: &IterationKind,
+        body: &[TypedStatement],
+        span: Span,
+    ) {
+        let IterationKind::User {
+            state: state_type,
+            element: element_type,
+            receiver: receiver_type,
+            option: option_type,
+            some_variant,
+            some_field,
+            next,
+        } = kind
+        else {
+            unreachable!("only user iteration reaches user-loop lowering")
+        };
+        // `next` receives `&var Self`, and Elamite references may escape. Give
+        // the hidden iterator state managed lifetime just as an address-taken
+        // source local would receive, rather than borrowing a C temporary.
+        let receiver = self.temp(*receiver_type);
+        self.emit(Instruction::Assign {
+            destination: receiver,
+            value: Rvalue::AllocateManaged {
+                value: state,
+                value_type: *state_type,
+            },
+            span,
+        });
+
+        let condition_block = self.new_block();
+        let body_block = self.new_block();
+        let exit_block = self.new_block();
+        self.terminate(Terminator::Goto(condition_block));
+
+        self.current = condition_block;
+        let next_value = self.temp(*option_type);
+        self.emit(Instruction::Assign {
+            destination: next_value,
+            value: Rvalue::Call {
+                instance: next.clone(),
+                arguments: vec![receiver],
+                argument_modes: vec![ValuePassingMode::Owned],
+            },
+            span,
+        });
+        let u32_type = self.types.types.primitive_id(PrimitiveType::U32);
+        let discriminant = self.temp(u32_type);
+        self.emit(Instruction::Assign {
+            destination: discriminant,
+            value: Rvalue::Discriminant(next_value),
+            span,
+        });
+        let expected = self.temp(u32_type);
+        self.emit(Instruction::Assign {
+            destination: expected,
+            value: Rvalue::Constant(Constant::Integer {
+                magnitude: some_variant.index() as u128,
+                negative: false,
+            }),
+            span,
+        });
+        let has_value = self.temp(self.types.types.primitive_id(PrimitiveType::Bool));
+        self.emit(Instruction::Assign {
+            destination: has_value,
+            value: Rvalue::CompareEqual {
+                left: discriminant,
+                right: expected,
+                operand_type: u32_type,
+            },
+            span,
+        });
+        self.terminate(Terminator::Branch {
+            condition: has_value,
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        self.current = body_block;
+        let raw_element = self.temp(*element_type);
+        self.emit(Instruction::Assign {
+            destination: raw_element,
+            value: Rvalue::Load(ControlFlowPlace::VariantField {
+                base: Box::new(ControlFlowPlace::Temporary(next_value)),
+                variant: *some_variant,
+                field: *some_field,
+            }),
+            span,
+        });
+        let element = self.emit_logical_copy(
+            raw_element,
+            *element_type,
+            LogicalCopyContext::ordinary(
+                LogicalCopyKind::IterationElement,
+                LogicalCopyLifetime::Loop,
+                LogicalCopyLifetime::LexicalScope,
+            ),
+            span,
+        );
+        self.emit(Instruction::Store {
+            place: ControlFlowPlace::Local(binding),
+            value: element,
+            span,
+        });
+        self.loops
+            .push((exit_block, condition_block, self.scopes.len()));
+        self.lower_scope(body);
+        self.loops.pop();
+        if self.is_open(self.current) {
+            self.terminate(Terminator::Goto(condition_block));
+        }
         self.current = exit_block;
     }
 

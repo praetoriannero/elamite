@@ -103,6 +103,13 @@ impl<'a> TypeBuilder<'a> {
             self.lower_generic_bounds(declaration.id);
         }
 
+        // Implementation targets must be canonical before method signatures:
+        // `Self` in either implementation form denotes the complete target.
+        for implementation in &self.resolved.impls {
+            self.lower_impl_bounds(implementation.id);
+            self.lower_impl(implementation.id);
+        }
+
         for field in &self.resolved.fields {
             let self_type = self.self_type_for_declaration(field.parent_declaration);
             let type_node = if field.syntax.kind == SyntaxKind::Type {
@@ -138,11 +145,6 @@ impl<'a> TypeBuilder<'a> {
             ) {
                 self.lower_function_signature(declaration.id);
             }
-        }
-
-        for implementation in &self.resolved.impls {
-            self.lower_impl_bounds(implementation.id);
-            self.lower_impl(implementation.id);
         }
 
         self.nominal_parameters = self
@@ -809,11 +811,15 @@ impl<'a> TypeBuilder<'a> {
     fn lower_impl(&mut self, implementation: ImplId) {
         let data = &self.resolved.impls[implementation.index()];
         let types = direct_children(&data.syntax, SyntaxKind::Type);
-        if let Some(trait_node) = types.first() {
+        let (trait_node, target_node) = match data.kind {
+            crate::resolution::ImplKind::Trait => (types.first().copied(), types.get(1).copied()),
+            crate::resolution::ImplKind::Inherent => (None, types.first().copied()),
+        };
+        if let Some(trait_node) = trait_node {
             let trait_type = self.lower_trait_type(trait_node, None);
             self.impl_trait_types.insert(implementation, trait_type);
         }
-        if let Some(target_node) = types.get(1) {
+        if let Some(target_node) = target_node {
             let target_type = self.lower_type(target_node, None);
             self.impl_target_types.insert(implementation, target_type);
         }
@@ -864,7 +870,11 @@ impl<'a> TypeBuilder<'a> {
             }
             let implementation_data = &self.resolved.impls[implementation.index()];
             let nodes = direct_children(&implementation_data.syntax, SyntaxKind::Type);
-            if let Some(target) = nodes.get(1) {
+            let target = match implementation_data.kind {
+                crate::resolution::ImplKind::Trait => nodes.get(1),
+                crate::resolution::ImplKind::Inherent => nodes.first(),
+            };
+            if let Some(target) = target {
                 return Some(self.lower_type(target, None));
             }
         }

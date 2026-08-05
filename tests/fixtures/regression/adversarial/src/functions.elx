@@ -4,6 +4,7 @@ struct Session:
     active: bool
     name: String
 
+impl Session:
     fn stop(self: &var Self) -> ():
         self.active = false
 

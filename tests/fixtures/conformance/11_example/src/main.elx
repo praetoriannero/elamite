@@ -1,6 +1,7 @@
 struct Counter:
     value: i32
 
+impl Counter:
     fn increment(self: &var Self) -> ():
         self.value = self.value + 1
 

@@ -15,6 +15,7 @@ struct Resource:
     label: str
     state: &var ResourceState
 
+impl Resource:
     fn close(self: &Self) -> ():
         // This API defines `close` as idempotent.
         if self.state.closed:

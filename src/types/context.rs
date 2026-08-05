@@ -494,6 +494,16 @@ impl TypeContext {
         })
     }
 
+    /// Whether `ty` contains one particular declared generic parameter.
+    #[must_use]
+    pub fn mentions_generic_parameter(&self, ty: TypeId, parameter: GenericParameterId) -> bool {
+        self.any_type(
+            ty,
+            &mut BTreeSet::new(),
+            &|kind| matches!(kind, TypeKind::GenericParameter(found) if *found == parameter),
+        )
+    }
+
     #[must_use]
     pub fn contains_type(&self, outer: TypeId, needle: TypeId) -> bool {
         fn visit(
