@@ -2,4 +2,17 @@
 pub enum IoError:
     NotFound
     PermissionDenied
+    AlreadyExists
+    InvalidInput
+    IsDirectory
+    NotDirectory
+    DirectoryNotEmpty
+    ReadOnly
+    BrokenPipe
+    Interrupted
+    WouldBlock
+    TimedOut
+    StorageFull
+    ResourceExhausted
+    Unsupported
     Other

@@ -154,7 +154,11 @@ impl<'a> CEmitter<'a> {
                             element.index()
                         );
                     }
-                    ("Thread" | "Mutex" | "AtomicBool" | "AtomicI32" | "AtomicUsize", _) => {
+                    (
+                        "Thread" | "Mutex" | "AtomicBool" | "AtomicI32" | "AtomicUsize" | "File"
+                        | "Directory",
+                        _,
+                    ) => {
                         let _ = writeln!(self.output, "typedef struct {name}_data *{name};\n");
                     }
                     _ => {}
@@ -637,7 +641,15 @@ impl<'a> CEmitter<'a> {
                         "Vec" | "Set" | "Identity" | "Thread" | "Sender" | "Receiver" | "Mutex",
                         1
                     ) | ("Map", 2)
-                        | ("Formatter" | "AtomicBool" | "AtomicI32" | "AtomicUsize", 0)
+                        | (
+                            "Formatter"
+                                | "AtomicBool"
+                                | "AtomicI32"
+                                | "AtomicUsize"
+                                | "File"
+                                | "Directory",
+                            0
+                        )
                 ) =>
             {
                 collection_type_name(ty)

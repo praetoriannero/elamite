@@ -91,6 +91,27 @@ fn package_variants(
     })
 }
 
+fn package_imports(
+    program: &elamite::resolution::ResolvedProgram,
+) -> impl Iterator<Item = &elamite::resolution::Import> {
+    program
+        .imports
+        .iter()
+        .filter(|import| program.modules[import.module.index()].package.is_some())
+}
+
+fn package_local_bindings<'a>(
+    program: &'a elamite::resolution::ResolvedProgram,
+    sources: &'a SourceManager,
+) -> impl Iterator<Item = &'a elamite::resolution::LocalBinding> {
+    program.local_bindings.iter().filter(|binding| {
+        !sources
+            .path(binding.span.file)
+            .to_string_lossy()
+            .starts_with("<std>")
+    })
+}
+
 fn diagnostic_text(sources: &SourceManager, diagnostics: &[Diagnostic]) -> String {
     diagnostics
         .iter()
@@ -147,10 +168,7 @@ fn predeclares_functions_and_allows_local_shadowing() {
         3
     );
     assert_eq!(
-        output
-            .program
-            .local_bindings
-            .iter()
+        package_local_bindings(&output.program, &sources)
             .filter(|binding| binding.kind == LocalBindingKind::Local)
             .count(),
         1
@@ -211,14 +229,8 @@ fn resolves_circular_imports_after_collecting_declarations() {
         "{}",
         diagnostic_text(&sources, &output.diagnostics)
     );
-    assert_eq!(output.program.imports.len(), 2);
-    assert!(
-        output
-            .program
-            .imports
-            .iter()
-            .all(|import| import.target.is_some())
-    );
+    assert_eq!(package_imports(&output.program).count(), 2);
+    assert!(package_imports(&output.program).all(|import| import.target.is_some()));
 }
 
 #[test]
@@ -248,10 +260,8 @@ fn duplicate_imports_conflict_even_when_their_targets_are_identical() {
         "{}",
         diagnostic_text(&sources, &output.diagnostics)
     );
-    assert_eq!(
-        output.program.imports[0].target,
-        output.program.imports[1].target
-    );
+    let imports = package_imports(&output.program).collect::<Vec<_>>();
+    assert_eq!(imports[0].target, imports[1].target);
 }
 
 #[test]
@@ -318,10 +328,7 @@ fn tuple_binding_names_enter_scope_together_after_the_initializer() {
         diagnostic_text(&sources, &output.diagnostics)
     );
     assert_eq!(
-        output
-            .program
-            .local_bindings
-            .iter()
+        package_local_bindings(&output.program, &sources)
             .filter(|binding| binding.kind == LocalBindingKind::Local)
             .count(),
         3
@@ -473,7 +480,7 @@ fn public_reexport_chain_preserves_the_original_identity() {
         "{}",
         diagnostic_text(&sources, &output.diagnostics)
     );
-    let imports = &output.program.imports;
+    let imports = package_imports(&output.program).collect::<Vec<_>>();
     assert_eq!(imports.len(), 2);
     assert_eq!(imports[0].target, imports[1].target);
     assert!(
@@ -988,7 +995,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
         .iter()
         .filter(|module| module.origin == elamite::resolution::ModuleOrigin::Standard)
         .collect::<Vec<_>>();
-    assert_eq!(standard_modules.len(), 6);
+    assert_eq!(standard_modules.len(), 13);
     for module in standard_modules {
         assert!(
             module.source_file.is_some(),

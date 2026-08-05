@@ -1,6 +1,6 @@
 # Elamite implementation cost model
 
-> Version: 12
+> Version: 13
 >
 > Applies to: the compiler targeting 0.10.0-draft on Linux x86 and x86-64
 >
@@ -58,6 +58,9 @@ width.
 | `&Trait` | Explicit fat reference alias | Data pointer plus vtable pointer; copying preserves identity | None for coercion/copy once the referent exists | Coercing an address-taken local can trigger promotion |
 | `Identity[T]`, `ForeignRoot`, thread/channel/mutex/atomic handles | Shared identity | One managed/raw handle pointer; copying is constant-size and preserves synchronized or registered state | Constructors allocate state; handle copies do not | Ordinary shallow copying treats these like every other identity-bearing descriptor |
 | Slices, including variadic parameter packs | Immutable view | Pointer plus length; a variadic call currently materializes managed backing for its trailing arguments | One backing allocation for a nonempty variadic pack | A proven nonescaping pack may eventually use caller storage |
+| `Duration`, `Instant`, `SystemTime`, `Generator` | Independent numeric state; clock domains remain nominally distinct | One inline `u64`; copying and clock reads are constant-size | None | Clock reads do not create synchronization edges; generator state advances only through its mutable receiver |
+| Filesystem paths and metadata | Ordinary shallow structs | A path contains one shared-backing `String` descriptor; metadata and status records are inline aggregates | Path construction or transformation allocates owned text; metadata copying allocates nothing | Path copies share their string backing; operations never expose a reference into managed storage |
+| File and directory handles | Shared native-resource identity with idempotent cleanup | One pointer to managed handle state containing the native handle and closed flag | One state allocation on successful open | Copies preserve one close state; unreachable open handles can retain native resources, so deterministic code uses `defer` |
 
 `Map` and `Set` operations are currently `O(n)` lookup operations. Their names
 do not promise a particular hashing representation. Vector indexed access and
@@ -89,6 +92,13 @@ away from the tail shifts the remaining inline element representations.
 | Safe reference formation | Reference preserves place identity and lifetime | Address-taken local is conservatively promoted to one managed cell for the function invocation | Current promotion answers only “address taken”; precise escape analysis may keep nonescaping cells on stack |
 | Unsafe raw-pointer arithmetic, subtraction, indexing, and relational ordering | Offsets are element-scaled; indexing performs no bounds check; null orders below every non-null pointer; and non-null operations remain subject to provenance/liveness/extent obligations | Constant-size pointer/integer operations; each executed index reuses the raw null/alignment check before access; ordering uses equality guards before its C relational comparison; no managed allocation | The compiler may fold redundant arithmetic, checks, or comparison branches when validity is proven, but raw pointers remain non-rooting and undefined behavior is not made observable |
 | `defer` | Executes registered code at lexical exits | Registrations are static control-flow edges, not closure allocations; deferred calls have their ordinary argument/copy costs when executed | Compiler may simplify edges while preserving reverse registration order |
+| Stable ordering sort | Mutates vector elements in ascending order while retaining equal-input order | Stable insertion sort over shared vector backing; `O(n²)` comparisons/moves, one shallow element temporary, and no allocation | The deliberately small baseline may be replaced by another stable in-place algorithm |
+| Binary search | Returns the first equal index in sorted input | `O(log n)` comparisons over a slice or copied vector descriptor, with no allocation | No backing is retained beyond the ordinary argument lifetime |
+| Seeded randomness | Advances an explicit SplitMix64 state with a versioned output sequence | Constant-size integer arithmetic with no allocation; rejection sampling may draw repeatedly | Fixed seeds are reproducible across supported targets; no operation reads ambient entropy |
+| Clock read and duration arithmetic | Reads one clock domain or performs checked nanosecond arithmetic | One native clock read or constant-size checked integer operation, with no allocation | Clock reads are observations, not synchronization edges |
+| Borrowed text search, split, and trim | Scalar-indexed exact matching; borrowed results retain original backing | Search/trim scan UTF-8 without allocation; split allocates `O(k)` vector descriptors for `k` results but no substring bytes | Descriptor copies may be eliminated; Unicode scalar and White_Space behavior is preserved |
+| Owned text split, trim, and case mapping | Materializes owned results without mutating input backing | Allocates storage proportional to result bytes and copies or encodes UTF-8, plus vector backing for split; case mapping may expand one scalar | Sizing passes and buffer reuse are permitted when shallow-backing behavior is unchanged |
+| Filesystem/environment/process operation | Returns owned snapshots or explicit native handles and portable failures | Native call plus result construction; storage is proportional to returned path/text/byte data, successful handles allocate state, file reads grow geometrically until EOF, and process capture uses two native temporary streams before materializing its final vectors | No returned value borrows C library storage; process execution does not invoke a shell, and invalid host argument bytes expand to one U+FFFD scalar each |
 
 Collection mutators receive already evaluated shallow arguments. Copying a key
 or value therefore costs only its immediate representation; current linear
@@ -280,6 +290,14 @@ time, runtime time, and peak RSS remain observations rather than thresholds.
 The local host could build but not execute the x86 instrumented artifact, so
 the checked-in row set remains an x86-64 observation; widths must never be
 compared as though their requested sizes were interchangeable.
+
+The version 13 standard-library expansion was measured again on 2026-08-04
+against that checked observation, using the same x86-64 host/toolchain class
+and identical workload hashes. The fixed workloads do not invoke the new APIs,
+so all requested-allocation and explicit-copy counters remained identical.
+Compile time and peak RSS varied and retain their ordinary non-deterministic
+status. New filesystem, process, time, ordering, text, and random costs are
+documented in the tables above rather than inferred from unrelated workloads.
 
 Instrumentation is enabled only by passing:
 

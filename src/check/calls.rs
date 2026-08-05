@@ -1,6 +1,7 @@
 //! Function-value, call, member-selection, and receiver-selection checking.
 
 use super::*;
+use crate::operations::{SystemOperation, TextOperation};
 
 impl<'a> Checker<'a> {
     pub(super) fn function_reference_type(&mut self, instance: &FunctionInstance) -> TypeId {
@@ -547,7 +548,7 @@ impl<'a> Checker<'a> {
                 );
             }
             let call = self
-                .testing_intrinsic_call(declaration, &instance)
+                .standard_function_call(declaration, &instance, signature.return_type)
                 .map_or_else(|| CheckedCall::Direct(instance), CheckedCall::Standard);
             self.program.calls.insert(call_span, call);
             return (signature.return_type, PlaceKind::Value);
@@ -573,9 +574,10 @@ impl<'a> Checker<'a> {
                 );
             }
             self.check_call_arguments(call_span, &parameters, arguments);
-            self.program
-                .calls
-                .insert(call_span, CheckedCall::Direct(instance));
+            let call = self
+                .standard_function_call(declaration, &instance, signature.return_type)
+                .map_or_else(|| CheckedCall::Direct(instance), CheckedCall::Standard);
+            self.program.calls.insert(call_span, call);
             return (signature.return_type, PlaceKind::Value);
         }
 
@@ -698,17 +700,94 @@ impl<'a> Checker<'a> {
             );
         }
         let call = self
-            .testing_intrinsic_call(declaration, &instance)
+            .standard_function_call(declaration, &instance, signature.return_type)
             .map_or_else(|| CheckedCall::Direct(instance), CheckedCall::Standard);
         self.program.calls.insert(call_span, call);
         (signature.return_type, PlaceKind::Value)
     }
 
-    fn testing_intrinsic_call(
+    fn standard_function_call(
         &self,
         declaration: DeclarationId,
         instance: &FunctionInstance,
+        return_type: TypeId,
     ) -> Option<StandardCall> {
+        if self.resolved.is_standard_runtime_hook(declaration) {
+            let declaration_data = &self.resolved.declarations[declaration.index()];
+            let module = self.resolved.modules[declaration_data.module.index()]
+                .path
+                .last()
+                .map(|name| self.resolved.symbol_text(*name));
+            let name = self.resolved.symbol_text(declaration_data.name);
+            let operation = match (module, name) {
+                (Some("fs"), "from") => Some(SystemOperation::PathFrom),
+                (Some("fs"), "is_empty") => Some(SystemOperation::PathIsEmpty),
+                (Some("fs"), "join") => Some(SystemOperation::PathJoin),
+                (Some("fs"), "file_name") => Some(SystemOperation::PathFileName),
+                (Some("fs"), "parent") => Some(SystemOperation::PathParent),
+                (Some("fs"), "open") => Some(SystemOperation::Open),
+                (Some("fs"), "read_dir") => Some(SystemOperation::ReadDir),
+                (Some("fs"), "metadata") => Some(SystemOperation::Metadata),
+                (Some("fs"), "create_dir") => Some(SystemOperation::CreateDir),
+                (Some("fs"), "remove_dir") => Some(SystemOperation::RemoveDir),
+                (Some("fs"), "remove_file") => Some(SystemOperation::RemoveFile),
+                (Some("fs"), "rename") => Some(SystemOperation::Rename),
+                (Some("env"), "args") => Some(SystemOperation::Args),
+                (Some("env"), "get") => Some(SystemOperation::EnvGet),
+                (Some("env"), "current_dir") => Some(SystemOperation::CurrentDir),
+                (Some("process"), "run") => Some(SystemOperation::ProcessRun),
+                (Some("process"), "exit") => Some(SystemOperation::ProcessExit),
+                _ => None,
+            };
+            if let Some(operation) = operation {
+                return Some(StandardCall::System {
+                    operation,
+                    result_type: return_type,
+                });
+            }
+        }
+        if let Some(operation) = [
+            ("find", TextOperation::Find),
+            ("contains", TextOperation::Contains),
+            ("split", TextOperation::Split),
+            ("split_string", TextOperation::SplitString),
+            ("trim", TextOperation::Trim),
+            ("trim_string", TextOperation::TrimString),
+            ("to_lowercase", TextOperation::Lowercase),
+            ("to_uppercase", TextOperation::Uppercase),
+            ("parse_i64", TextOperation::ParseI64),
+            ("parse_u64", TextOperation::ParseU64),
+            ("parse_bool", TextOperation::ParseBool),
+        ]
+        .into_iter()
+        .find_map(|(name, operation)| {
+            self.resolved
+                .is_standard_declaration(declaration, name)
+                .then_some(operation)
+        }) {
+            return Some(StandardCall::Text {
+                operation,
+                result_type: return_type,
+            });
+        }
+        if self
+            .resolved
+            .is_standard_declaration(declaration, "monotonic_now")
+        {
+            return Some(StandardCall::ClockNow {
+                clock_type: return_type,
+                monotonic: true,
+            });
+        }
+        if self
+            .resolved
+            .is_standard_declaration(declaration, "system_now")
+        {
+            return Some(StandardCall::ClockNow {
+                clock_type: return_type,
+                monotonic: false,
+            });
+        }
         let value_type = instance.arguments.first().copied()?;
         if self.resolved.is_standard_declaration(declaration, "fail") {
             return Some(StandardCall::Fail { value_type });
@@ -2615,13 +2694,16 @@ impl<'a> Checker<'a> {
                         LogicalCopyLifetime::Callee,
                     );
                 }
-                self.program.calls.insert(
-                    call_span,
-                    CheckedCall::BoundMethod {
-                        instance,
-                        adjustment,
-                    },
-                );
+                let checked_call = self
+                    .standard_function_call(method, &instance, signature.return_type)
+                    .map_or(
+                        CheckedCall::BoundMethod {
+                            instance,
+                            adjustment,
+                        },
+                        CheckedCall::Standard,
+                    );
+                self.program.calls.insert(call_span, checked_call);
                 Some((signature.return_type, PlaceKind::Value))
             }
             _ => None,
@@ -2886,6 +2968,84 @@ impl<'a> Checker<'a> {
                     name,
                     arguments.as_slice(),
                 ) {
+                    ("File", "read_to_end", []) => {
+                        let u8_type = self.typed.types.primitive(PrimitiveType::U8);
+                        let vec_builtin = self.resolved.builtin_named("Vec")?;
+                        let bytes = self.typed.types.intern(TypeKind::Builtin {
+                            builtin: vec_builtin,
+                            arguments: vec![u8_type],
+                        });
+                        Some((
+                            StandardCall::System {
+                                operation: SystemOperation::FileReadToEnd,
+                                result_type: self.standard_result_type(span, bytes, "IoError"),
+                            },
+                            Vec::new(),
+                            self.standard_result_type(span, bytes, "IoError"),
+                            true,
+                        ))
+                    }
+                    ("File", "write_all", []) => {
+                        let u8_type = self.typed.types.primitive(PrimitiveType::U8);
+                        let bytes = self.typed.types.intern(TypeKind::Slice(u8_type));
+                        let result = self.standard_result_type(span, unit_type, "IoError");
+                        Some((
+                            StandardCall::System {
+                                operation: SystemOperation::FileWriteAll,
+                                result_type: result,
+                            },
+                            vec![bytes],
+                            result,
+                            true,
+                        ))
+                    }
+                    ("File", "metadata", []) => {
+                        let declaration = self.resolved.standard_declaration("Metadata")?;
+                        let metadata = *self.typed.declaration_types.get(&declaration)?;
+                        let result = self.standard_result_type(span, metadata, "IoError");
+                        Some((
+                            StandardCall::System {
+                                operation: SystemOperation::FileMetadata,
+                                result_type: result,
+                            },
+                            Vec::new(),
+                            result,
+                            false,
+                        ))
+                    }
+                    ("File", "close", []) => Some((
+                        StandardCall::System {
+                            operation: SystemOperation::FileClose,
+                            result_type: unit_type,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        false,
+                    )),
+                    ("Directory", "next", []) => {
+                        let declaration = self.resolved.standard_declaration("DirectoryEntry")?;
+                        let entry = *self.typed.declaration_types.get(&declaration)?;
+                        let optional = self.option_type(span, entry);
+                        let result = self.standard_result_type(span, optional, "IoError");
+                        Some((
+                            StandardCall::System {
+                                operation: SystemOperation::DirectoryNext,
+                                result_type: result,
+                            },
+                            Vec::new(),
+                            result,
+                            true,
+                        ))
+                    }
+                    ("Directory", "close", []) => Some((
+                        StandardCall::System {
+                            operation: SystemOperation::DirectoryClose,
+                            result_type: unit_type,
+                        },
+                        Vec::new(),
+                        unit_type,
+                        false,
+                    )),
                     ("ForeignRoot", "pointer", [target]) => {
                         let pointer = self.typed.types.intern(TypeKind::RawPointer {
                             mutability: Mutability::Shared,

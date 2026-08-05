@@ -140,9 +140,9 @@ impl<'a> TypeBuilder<'a> {
                 declaration.kind,
                 DeclarationKind::Function
                     | DeclarationKind::Closure
-                    | DeclarationKind::Test
                     | DeclarationKind::ForeignFunction
-            ) {
+            ) || (declaration.kind == DeclarationKind::Test && declaration.test_selected)
+            {
                 self.lower_function_signature(declaration.id);
             }
         }

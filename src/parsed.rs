@@ -13,10 +13,17 @@ use crate::parser::parse;
 use crate::source::{FileId, SourceManager, Span};
 use crate::syntax::{SyntaxNode, Token};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StandardModule {
     Root,
     Io,
+    Fs,
+    Env,
+    Process,
+    Time,
+    Random,
+    Ordering,
+    Text,
     Ffi,
     Testing,
     Thread,
@@ -98,6 +105,41 @@ fn parse_package_inner(
                 ParsedUnitIdentity::Standard(StandardModule::Io),
                 PathBuf::from("<std>/io.elx"),
                 crate::standard::IO_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Fs),
+                PathBuf::from("<std>/fs.elx"),
+                crate::standard::FS_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Env),
+                PathBuf::from("<std>/env.elx"),
+                crate::standard::ENV_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Process),
+                PathBuf::from("<std>/process.elx"),
+                crate::standard::PROCESS_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Time),
+                PathBuf::from("<std>/time.elx"),
+                crate::standard::TIME_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Random),
+                PathBuf::from("<std>/random.elx"),
+                crate::standard::RANDOM_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Ordering),
+                PathBuf::from("<std>/ordering.elx"),
+                crate::standard::ORDERING_SOURCE,
+            ),
+            (
+                ParsedUnitIdentity::Standard(StandardModule::Text),
+                PathBuf::from("<std>/text.elx"),
+                crate::standard::TEXT_SOURCE,
             ),
             (
                 ParsedUnitIdentity::Standard(StandardModule::Ffi),

@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Standard-library expansion**
+> Next planned milestone: **Source-level debugging**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft and the authoritative
 > `examples/spec_demo.elx` demonstration
@@ -26,7 +26,7 @@ Keep this table synchronized with the detailed status blocks below.
 | [User-defined iteration](#user-defined-iteration) | Complete | The ordinary `Iterator[Element]` protocol, static checking/lowering, managed hidden state, and unchanged direct collection behavior are implemented. |
 | [Inherent implementation blocks](#inherent-implementation-blocks) | Complete | Field-only structs, local coherent generic inherent blocks, selection/lowering, `std.ast` 2.0, and repository migration are complete. |
 | [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
-| [Standard-library expansion](#standard-library-expansion) | Planned | Add filesystem, process and environment, time, ordering, text, and randomness modules as independently reviewed packages. |
+| [Standard-library expansion](#standard-library-expansion) | Complete | Filesystem, process/environment, time, ordering/search, text, and deterministic randomness packages are implemented and documented. |
 | [Source-level debugging](#source-level-debugging) | Planned | Map generated C back to `.elx` locations and preserve source-level names so native debuggers are usable. |
 | [Language server](#language-server) | Candidate | Requires a scope decision and the **Incremental queries** package before implementation. |
 | [API documentation generation](#api-documentation-generation) | Planned | The `doc` command exists but does not yet render API content, cross-links, or a distributable format. |
@@ -739,9 +739,10 @@ remains silently unimplemented.
 
 ### Standard-library expansion
 
-> Status: Planned. The shipped standard library is small: `std.io` currently
-> defines an error category with no input/output behind it, and there is no
-> filesystem, environment, process, time, sorting, or randomness surface.
+> Status: Complete. The shipped source-backed modules and focused native hooks
+> provide the accepted filesystem, environment, process, time, ordering, text,
+> and deterministic-randomness surfaces. Runtime, portable-failure, target-width,
+> and cost evidence is retained with the implementation.
 >
 > Blocked by: **None**. Nominal APIs use the completed **Inherent implementation
 > blocks**, and iterable APIs use the completed **User-defined iteration** protocol.
@@ -760,12 +761,12 @@ change. Every module records its allocation and copying behavior in
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Filesystem and path** | Add reading, writing, metadata, directory traversal, and path manipulation behind `IoError`, with explicit resource handles and idempotent cleanup. | Handles follow the Section 8 cleanup contract, no operation exposes a reference into managed storage, and failure categories are exhaustive and portable. |
-| **Process and environment** | Add environment variable access, command-line arguments, exit status, and process invocation. | Values copy under ordinary semantics, the surface is target-portable, and no operation introduces implicit global mutable state visible across threads. |
-| **Time and duration** | Add monotonic and wall-clock reading and a duration type with checked arithmetic. | Monotonic and wall-clock sources are distinct types, arithmetic follows the ordinary overflow contract, and no operation is specified as a synchronization edge. |
-| **Ordering and search utilities** | Add sorting, binary search, and comparison helpers over slices and `Vec`. | Sorting is deterministic for equal keys or documented as unstable, comparison uses the Section 4.5 ordering rules, and no helper introduces a hidden allocation not recorded in `cost_model.md`. |
-| **Text algorithms** | Add the string search, split, trim, case, and parsing operations not already provided as intrinsics. | `str` and `String` results follow the specified materialization and shallow-backing rules, and Unicode behavior matches the Section 4.1 contract. |
-| **Randomness** | Add a seedable generator with an explicitly documented distribution and reproducibility contract. | Determinism under a fixed seed is guaranteed and tested; no operation silently seeds from the environment. |
+| **Filesystem and path (done)** | Add reading, writing, metadata, directory traversal, and path manipulation behind `IoError`, with explicit resource handles and idempotent cleanup. | Handles follow the Section 8 cleanup contract, no operation exposes a reference into managed storage, and failure categories are exhaustive and portable. |
+| **Process and environment (done)** | Add environment variable access, command-line arguments, exit status, and process invocation. | Values copy under ordinary semantics, the surface is target-portable, and no operation introduces implicit global mutable state visible across threads. |
+| **Time and duration (done)** | Add monotonic and wall-clock reading and a duration type with checked arithmetic. | Monotonic and wall-clock sources are distinct types, arithmetic follows the ordinary overflow contract, and no operation is specified as a synchronization edge. |
+| **Ordering and search utilities (done)** | Add sorting, binary search, and comparison helpers over slices and `Vec`. | Sorting is deterministic for equal keys or documented as unstable, comparison uses the Section 4.5 ordering rules, and no helper introduces a hidden allocation not recorded in `cost_model.md`. |
+| **Text algorithms (done)** | Add the string search, split, trim, case, and parsing operations not already provided as intrinsics. | `str` and `String` results follow the specified materialization and shallow-backing rules, and Unicode behavior matches the Section 4.1 contract. |
+| **Randomness (done)** | Add a seedable generator with an explicitly documented distribution and reproducibility contract. | Determinism under a fixed seed is guaranteed and tested; no operation silently seeds from the environment. |
 
 ## 9. Toolchain and developer experience
 

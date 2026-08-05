@@ -1,0 +1,53 @@
+/// A deterministic SplitMix64 pseudo-random generator.
+///
+/// `Generator.seeded` never consults the clock, process, or operating system.
+/// The same seed and sequence of calls produces the same values on every
+/// supported target. This algorithm and its constants are part of the public
+/// reproducibility contract.
+pub struct Generator:
+    state: u64
+
+impl Generator:
+    pub fn seeded(seed: u64) -> Self:
+        return Self { state: seed }
+
+    /// Returns the next value from the SplitMix64 sequence.
+    pub fn next_u64(self: &var Self) -> u64:
+        self.state = self.state.wrapping_add(0x9e3779b97f4a7c15u64)
+        var value = self.state
+        value = (value ^ (value >> 30u32)).wrapping_mul(0xbf58476d1ce4e5b9u64)
+        value = (value ^ (value >> 27u32)).wrapping_mul(0x94d049bb133111ebu64)
+        return value ^ (value >> 31u32)
+
+    /// A uniform boolean selected from one random bit.
+    pub fn next_bool(self: &var Self) -> bool:
+        return self.next_u64() & 1u64 == 1u64
+
+    /// Samples the uniform integer distribution over `[0, upper)`.
+    ///
+    /// Rejection sampling avoids modulo bias. An empty range returns `None`
+    /// without advancing the generator.
+    pub fn below(self: &var Self, upper: u64) -> Option[u64]:
+        if upper == 0u64:
+            return Option.None
+        let threshold = 0u64.wrapping_sub(upper) % upper
+        while true:
+            let value = self.next_u64()
+            if value >= threshold:
+                return Option.Some(value % upper)
+        return Option.None
+
+    /// Samples the uniform integer distribution over `[start, end)`.
+    /// An empty or reversed range returns `None` without advancing the state.
+    pub fn between(self: &var Self, start: u64, end: u64) -> Option[u64]:
+        match end.checked_sub(start):
+            Option.Some(width) if width != 0u64:
+                match self.below(width):
+                    Option.Some(offset):
+                        return Option.Some(start + offset)
+                    Option.None:
+                        return Option.None
+            Option.Some(_):
+                return Option.None
+            Option.None:
+                return Option.None

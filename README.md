@@ -10,6 +10,10 @@ programmer-managed synchronization. Raw data pointers support the accepted
 unsafe arithmetic, indexing, subtraction, and null-low relational ordering
 surface.
 
+The shipped `std` package includes filesystem, environment, process, time,
+deterministic randomness, stable ordering/search, and UTF-8 text utilities in
+addition to collections, formatting, FFI, testing, and concurrency support.
+
 ## Documentation map
 
 - [`docs/spec.md`](docs/spec.md) is the normative language design.
@@ -18,6 +22,8 @@ surface.
   runtime dependency, and test evidence.
 - [`docs/cost_model.md`](docs/cost_model.md) documents current non-normative copying,
   allocation, retention, promotion, and synchronization costs.
+- [`docs/standard_library.md`](docs/standard_library.md) indexes the shipped modules,
+  portable failure contracts, and allocation-sensitive API choices.
 - [`docs/architecture.md`](docs/architecture.md) records compiler phase ownership and
   expansion boundaries.
 - [`docs/toolchain.md`](docs/toolchain.md) documents installation, commands, supported

@@ -283,9 +283,10 @@ impl<'a> Checker<'a> {
         let Some(signature) = self.typed.function_signatures.get(&declaration_id).cloned() else {
             return;
         };
-        if ["panic", "trap", "assert", "fail"]
-            .into_iter()
-            .any(|name| self.resolved.is_standard_declaration(declaration_id, name))
+        if self.resolved.is_standard_runtime_hook(declaration_id)
+            || ["panic", "trap", "assert", "fail"]
+                .into_iter()
+                .any(|name| self.resolved.is_standard_declaration(declaration_id, name))
         {
             return;
         }

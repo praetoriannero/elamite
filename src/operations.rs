@@ -112,6 +112,48 @@ pub enum ValuePassingMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TextOperation {
+    Find,
+    Contains,
+    Split,
+    SplitString,
+    Trim,
+    TrimString,
+    Lowercase,
+    Uppercase,
+    ParseI64,
+    ParseU64,
+    ParseBool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SystemOperation {
+    PathFrom,
+    PathIsEmpty,
+    PathJoin,
+    PathFileName,
+    PathParent,
+    Open,
+    ReadDir,
+    Metadata,
+    CreateDir,
+    RemoveDir,
+    RemoveFile,
+    Rename,
+    FileReadToEnd,
+    FileWriteAll,
+    FileMetadata,
+    FileClose,
+    DirectoryNext,
+    DirectoryClose,
+    Args,
+    EnvGet,
+    CurrentDir,
+    ProcessRun,
+    ProcessExit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StandardCall {
     Panic,
     Assert,
@@ -122,7 +164,19 @@ pub enum StandardCall {
         reason_type: TypeId,
         trait_declaration: DeclarationId,
     },
+    ClockNow {
+        clock_type: TypeId,
+        monotonic: bool,
+    },
     StringFrom,
+    Text {
+        operation: TextOperation,
+        result_type: TypeId,
+    },
+    System {
+        operation: SystemOperation,
+        result_type: TypeId,
+    },
     IdentityFrom {
         wrapper: TypeId,
     },
@@ -296,6 +350,122 @@ pub enum StandardCall {
     SetClear {
         collection: TypeId,
     },
+}
+
+impl StandardCall {
+    /// Rewrites every type carried by a standard operation. Typed lowering
+    /// uses this when specializing generic source-backed standard functions.
+    pub fn map_types(mut self, mut map: impl FnMut(TypeId) -> TypeId) -> Self {
+        match &mut self {
+            Self::Panic | Self::Assert | Self::StringFrom => {}
+            Self::Text { result_type, .. } | Self::System { result_type, .. } => {
+                *result_type = map(*result_type)
+            }
+            Self::Fail { value_type } => *value_type = map(*value_type),
+            Self::Trap { reason_type, .. } => *reason_type = map(*reason_type),
+            Self::ClockNow { clock_type, .. } => *clock_type = map(*clock_type),
+            Self::IdentityFrom { wrapper } => *wrapper = map(*wrapper),
+            Self::ForeignRootRetain { handle, .. }
+            | Self::ForeignRootPointer { handle, .. }
+            | Self::ForeignRootClose { handle }
+            | Self::ChannelClose { handle, .. } => *handle = map(*handle),
+            Self::ThreadSpawn {
+                thread,
+                callable,
+                return_type,
+                ..
+            } => {
+                *thread = map(*thread);
+                *callable = map(*callable);
+                *return_type = map(*return_type);
+            }
+            Self::ThreadJoin {
+                thread,
+                return_type,
+            } => {
+                *thread = map(*thread);
+                *return_type = map(*return_type);
+            }
+            Self::ThreadIsFinished { thread } => *thread = map(*thread),
+            Self::ChannelCreate {
+                sender,
+                receiver,
+                element,
+                ..
+            } => {
+                *sender = map(*sender);
+                *receiver = map(*receiver);
+                *element = map(*element);
+            }
+            Self::ChannelSend {
+                sender, element, ..
+            } => {
+                *sender = map(*sender);
+                *element = map(*element);
+            }
+            Self::ChannelReceive {
+                receiver, element, ..
+            } => {
+                *receiver = map(*receiver);
+                *element = map(*element);
+            }
+            Self::MutexNew { mutex, value_type }
+            | Self::MutexRead { mutex, value_type }
+            | Self::MutexReplace { mutex, value_type } => {
+                *mutex = map(*mutex);
+                *value_type = map(*value_type);
+            }
+            Self::MutexUpdate {
+                mutex,
+                value_type,
+                callable,
+                ..
+            } => {
+                *mutex = map(*mutex);
+                *value_type = map(*value_type);
+                *callable = map(*callable);
+            }
+            Self::AtomicNew { atomic, value_type }
+            | Self::AtomicLoad { atomic, value_type }
+            | Self::AtomicStore { atomic, value_type }
+            | Self::AtomicExchange { atomic, value_type }
+            | Self::AtomicCompareExchange { atomic, value_type }
+            | Self::AtomicFetchAdd {
+                atomic, value_type, ..
+            } => {
+                *atomic = map(*atomic);
+                *value_type = map(*value_type);
+            }
+            Self::FormatterWrite { formatter } => *formatter = map(*formatter),
+            Self::ArrayLen { collection }
+            | Self::ArrayGet { collection }
+            | Self::SliceLen { collection }
+            | Self::VecNew { collection }
+            | Self::VecLen { collection }
+            | Self::VecIsEmpty { collection }
+            | Self::VecGet { collection }
+            | Self::VecAppend { collection }
+            | Self::VecInsert { collection }
+            | Self::VecRemove { collection }
+            | Self::VecClear { collection }
+            | Self::MapNew { collection }
+            | Self::MapLen { collection }
+            | Self::MapIsEmpty { collection }
+            | Self::MapContainsKey { collection }
+            | Self::MapGet { collection }
+            | Self::MapInsert { collection }
+            | Self::MapRemove { collection }
+            | Self::MapClear { collection }
+            | Self::SetNew { collection }
+            | Self::SetLen { collection }
+            | Self::SetIsEmpty { collection }
+            | Self::SetContains { collection }
+            | Self::SetInsert { collection }
+            | Self::SetRemove { collection }
+            | Self::SetClear { collection } => *collection = map(*collection),
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

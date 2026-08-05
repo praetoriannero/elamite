@@ -1,0 +1,95 @@
+use std.io
+
+/// An owned filesystem path. Copies share the contained `String` backing under
+/// ordinary shallow-copy semantics. Path operations are lexical unless their
+/// documentation explicitly says that they access the filesystem.
+pub struct Path:
+    pub value: String
+
+impl Path:
+    /// Copies `value` into an owned path.
+    pub fn from(value: str) -> Self:
+        pass
+
+    /// Returns whether this path has no components.
+    pub fn is_empty(self: &Self) -> bool:
+        pass
+
+    /// Appends `component`, inserting one target separator when necessary.
+    pub fn join(self: &Self, component: str) -> Path:
+        pass
+
+    /// Returns the final component, or `None` for an empty or root path.
+    pub fn file_name(self: &Self) -> Option[String]:
+        pass
+
+    /// Returns the lexical parent, or `None` when no parent exists.
+    pub fn parent(self: &Self) -> Option[Path]:
+        pass
+
+/// The kind of an entry reported by filesystem metadata. Operating-system
+/// failures are translated to `io.IoError`; no operation exposes raw errno.
+pub enum FileType:
+    File
+    Directory
+    SymbolicLink
+    Other
+
+/// Portable filesystem metadata. Sizes are byte counts and timestamps are
+/// deliberately absent until the standard time types are available.
+pub struct Metadata:
+    pub file_type: FileType
+    pub len: u64
+    pub readonly: bool
+
+/// How a file is opened. `Write` creates or truncates, while `Append` creates
+/// or preserves and writes at the end.
+pub enum OpenMode:
+    Read
+    Write
+    Append
+
+/// One owned directory entry. `path` is a complete child path and `name` is
+/// the final component, so neither value borrows directory-managed storage.
+pub struct DirectoryEntry:
+    pub path: Path
+    pub name: String
+    pub file_type: FileType
+
+/// Opens `path`. The returned handle owns an operating-system resource.
+pub fn open(path: &Path, mode: OpenMode) -> Result[File, io.IoError]:
+    pass
+
+/// Opens a directory for incremental traversal.
+pub fn read_dir(path: &Path) -> Result[Directory, io.IoError]:
+    pass
+
+/// Reads metadata without following the final symbolic link.
+pub fn metadata(path: &Path) -> Result[Metadata, io.IoError]:
+    pass
+
+/// Creates one directory. A missing parent is an error.
+pub fn create_dir(path: &Path) -> Result[(), io.IoError]:
+    pass
+
+/// Removes one empty directory.
+pub fn remove_dir(path: &Path) -> Result[(), io.IoError]:
+    pass
+
+/// Removes one non-directory entry.
+pub fn remove_file(path: &Path) -> Result[(), io.IoError]:
+    pass
+
+/// Renames one entry without copying its contents.
+pub fn rename(from: &Path, to: &Path) -> Result[(), io.IoError]:
+    pass
+
+// `File` and `Directory` own native resources and therefore require intrinsic
+// representations and lowering hooks. Their reviewed cleanup surface is
+// exactly `pub fn close(self: &Self) -> ()` on each type. Closing either handle
+// repeatedly succeeds without another effect and never reports an I/O error.
+// Every other operation on shared closed state reports `IoError.InvalidInput`.
+// Their complete reviewed method surface is:
+//
+// - `File.read_to_end`, `write_all`, `metadata`, and idempotent `close`;
+// - `Directory.next` and idempotent `close`.

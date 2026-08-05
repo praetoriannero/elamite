@@ -356,6 +356,32 @@ now identify the same implemented revision. The broader `m19-baseline.tsv` was
 also refreshed after the demonstration change so its generated-C and native
 artifact sizes describe the released inputs.
 
+### Standard-library expansion
+
+The shipped source-backed standard package now includes `std.fs`, `std.env`,
+`std.process`, `std.time`, `std.random`, `std.ordering`, and `std.text`.
+Compiler-known additions are limited to native File/Directory representations
+and operations that require operating-system or runtime hooks. Focused runtime
+coverage exercises owned filesystem and environment results, portable failures,
+shared idempotent handle cleanup, monotonic and wall clocks, fixed-seed
+SplitMix64 output, stable sorting and first-match search, borrowed/owned UTF-8
+text algorithms, direct child execution, and simultaneous output capture.
+
+The cost model advances to version 13. New programs may allocate for owned
+paths and text, handle state, directory snapshots, growing file reads, split
+vectors, and captured process output; process capture also uses two native
+temporary streams. Ordering, clock reads, checked duration arithmetic, and
+generator steps add no managed allocation. Borrowed text results retain their
+input backing, and native handles retain shared close state.
+
+A comparable 2026-08-04 x86-64 release baseline used the same six workload
+hashes as the checked pre-expansion observation. Those workloads do not invoke
+the new APIs, and every deterministic counter remained identical: requested
+allocations were 6, 1,013, 2, 17, 2, and 6, while explicit copied bytes were
+25, 32, 17, 720, 256, and 496. Runtime remained below the timer's `0.01`-second
+resolution; compile time and peak RSS varied and remain non-semantic host
+observations.
+
 ## Accepted 0.10 language revision
 
 The normative draft now specifies shallow fieldwise ordinary copies, Go-like

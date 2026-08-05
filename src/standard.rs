@@ -14,6 +14,13 @@ pub struct Intrinsic {
 
 pub const ROOT_SOURCE: &str = include_str!("../stdlib/src/lib.elx");
 pub const IO_SOURCE: &str = include_str!("../stdlib/src/io.elx");
+pub const FS_SOURCE: &str = include_str!("../stdlib/src/fs.elx");
+pub const ENV_SOURCE: &str = include_str!("../stdlib/src/env.elx");
+pub const PROCESS_SOURCE: &str = include_str!("../stdlib/src/process.elx");
+pub const TIME_SOURCE: &str = include_str!("../stdlib/src/time.elx");
+pub const RANDOM_SOURCE: &str = include_str!("../stdlib/src/random.elx");
+pub const ORDERING_SOURCE: &str = include_str!("../stdlib/src/ordering.elx");
+pub const TEXT_SOURCE: &str = include_str!("../stdlib/src/text.elx");
 pub const FFI_SOURCE: &str = include_str!("../stdlib/src/ffi.elx");
 pub const TESTING_SOURCE: &str = include_str!("../stdlib/src/testing.elx");
 pub const THREAD_SOURCE: &str = include_str!("../stdlib/src/thread.elx");
@@ -30,6 +37,50 @@ pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.trap",
     "std.Result",
     "std.io.IoError",
+    "std.fs.Path",
+    "std.fs.FileType",
+    "std.fs.Metadata",
+    "std.fs.OpenMode",
+    "std.fs.DirectoryEntry",
+    "std.fs.open",
+    "std.fs.read_dir",
+    "std.fs.metadata",
+    "std.fs.create_dir",
+    "std.fs.remove_dir",
+    "std.fs.remove_file",
+    "std.fs.rename",
+    "std.env.EnvError",
+    "std.env.args",
+    "std.env.get",
+    "std.env.current_dir",
+    "std.process.ProcessError",
+    "std.process.ExitStatus",
+    "std.process.Output",
+    "std.process.run",
+    "std.process.exit",
+    "std.time.Duration",
+    "std.time.Instant",
+    "std.time.SystemTime",
+    "std.time.monotonic_now",
+    "std.time.system_now",
+    "std.random.Generator",
+    "std.ordering.Ordering",
+    "std.ordering.compare",
+    "std.ordering.sort",
+    "std.ordering.binary_search",
+    "std.ordering.binary_search_vec",
+    "std.text.ParseError",
+    "std.text.find",
+    "std.text.contains",
+    "std.text.split",
+    "std.text.split_string",
+    "std.text.trim",
+    "std.text.trim_string",
+    "std.text.to_lowercase",
+    "std.text.to_uppercase",
+    "std.text.parse_i64",
+    "std.text.parse_u64",
+    "std.text.parse_bool",
     "std.testing.RuntimeTrap",
     "std.testing.BuiltinTrap",
     "std.testing.assert",
@@ -193,6 +244,14 @@ pub const INTRINSICS: &[Intrinsic] = &[
     Intrinsic {
         path: "std.thread.spawn",
         reason: "native thread creation and shallow callable publication",
+    },
+    Intrinsic {
+        path: "std.fs.File",
+        reason: "owned native file-handle representation",
+    },
+    Intrinsic {
+        path: "std.fs.Directory",
+        reason: "owned native directory-stream representation",
     },
     Intrinsic {
         path: "std.sync.Sender",

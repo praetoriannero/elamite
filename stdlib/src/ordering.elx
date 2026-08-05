@@ -1,0 +1,63 @@
+/// The result of a total comparison.
+pub enum Ordering:
+    Less
+    Equal
+    Greater
+
+/// Compares two totally ordered values.
+pub fn compare[T: Ord](left: T, right: T) -> Ordering:
+    if left < right:
+        return Ordering.Less
+    if left > right:
+        return Ordering.Greater
+    return Ordering.Equal
+
+/// Sorts `values` in ascending order, in place.
+///
+/// This is a stable insertion sort: equal values retain their input order.
+/// It performs no allocation and uses one shallow element temporary. The
+/// quadratic worst case is intentional for this small, predictable baseline.
+pub fn sort[T: Ord](values: Vec[T]) -> ():
+    var working = values
+    var index: usize = 1
+    while index < working.len():
+        var current = index
+        while current > 0 && working[current] < working[current - 1]:
+            let temporary = working[current - 1]
+            working[current - 1] = working[current]
+            working[current] = temporary
+            current -= 1
+        index += 1
+
+/// Finds `needle` in sorted `values` and returns the first equal index.
+///
+/// The slice is borrowed and this function performs no allocation.
+pub fn binary_search[T: Ord](values: [T], needle: T) -> Option[usize]:
+    var low: usize = 0
+    var high = values.len()
+    while low < high:
+        let middle = low + (high - low) / 2
+        if values[middle] < needle:
+            low = middle + 1
+        else:
+            high = middle
+    if low < values.len() && values[low] == needle:
+        return Option.Some(low)
+    return Option.None
+
+/// Finds `needle` in a sorted vector and returns the first equal index.
+///
+/// The vector backing is observed directly and this function allocates
+/// nothing. Structural mutation during the call is not permitted.
+pub fn binary_search_vec[T: Ord](values: Vec[T], needle: T) -> Option[usize]:
+    var low: usize = 0
+    var high = values.len()
+    while low < high:
+        let middle = low + (high - low) / 2
+        if values[middle] < needle:
+            low = middle + 1
+        else:
+            high = middle
+    if low < values.len() && values[low] == needle:
+        return Option.Some(low)
+    return Option.None

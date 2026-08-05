@@ -5,7 +5,11 @@ use super::*;
 impl<'a> CEmitter<'a> {
     pub(super) fn emit_entry(&mut self) {
         if let Some(entries) = &self.options.test_entries {
-            self.output.push_str("int main(void) {\n");
+            if self.uses_process_arguments() {
+                self.output.push_str("int main(int argc, char **argv) {\n    el_process_argc = argc; el_process_argv = argv;\n");
+            } else {
+                self.output.push_str("int main(void) {\n");
+            }
             self.output.push_str("    el_cost_begin();\n");
             if self.program.requires_managed_memory {
                 self.emit_managed_operation(ManagedMemoryOperation::Initialize);
@@ -107,7 +111,11 @@ impl<'a> CEmitter<'a> {
         // The collector is initialized before any Elamite code runs. A library
         // package emits no shim, so initialization is the linking
         // executable's responsibility.
-        self.output.push_str("int main(void) {\n");
+        if self.uses_process_arguments() {
+            self.output.push_str("int main(int argc, char **argv) {\n    el_process_argc = argc; el_process_argv = argv;\n");
+        } else {
+            self.output.push_str("int main(void) {\n");
+        }
         self.output.push_str("    el_cost_begin();\n");
         if self.program.requires_managed_memory {
             self.emit_managed_operation(ManagedMemoryOperation::Initialize);

@@ -399,6 +399,9 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::Assert
         | StandardCall::Fail { .. }
         | StandardCall::Trap { .. }
+        | StandardCall::ClockNow { .. }
+        | StandardCall::Text { .. }
+        | StandardCall::System { .. }
         | StringFrom
         | StandardCall::IdentityFrom { .. }
         | StandardCall::ForeignRootRetain { .. }

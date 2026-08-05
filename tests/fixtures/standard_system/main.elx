@@ -1,0 +1,203 @@
+use std.env
+use std.env.EnvError
+use std.fs
+use std.fs.FileType
+use std.fs.OpenMode
+use std.io.IoError
+use std.process
+use std.process.ProcessError
+
+fn write_bytes(file: fs.File, bytes: ...u8) -> Result[(), IoError]:
+    var handle = file
+    return handle.write_all(bytes)
+
+fn run_child(program: &fs.Path, arguments: ...str) -> Result[process.Output, ProcessError]:
+    return process.run(program, arguments)
+
+fn parent_is(path: fs.Path, expected: fs.Path) -> bool:
+    match path.parent():
+        Option.Some(parent):
+            return parent.value == expected.value
+        Option.None:
+            return false
+
+fn file_name_is(path: fs.Path, expected: str) -> bool:
+    match path.file_name():
+        Option.Some(name):
+            return name == String.from(expected)
+        Option.None:
+            return false
+
+fn environment_checks() -> ():
+    let arguments = env.args()
+    println(arguments.len() > 0usize)
+    if arguments.len() > 1usize:
+        println(arguments[arguments.len() - 1usize] == String.from("\u{fffd}"))
+    match env.get("ELAMITE_SYSTEM_TEST_VALUE"):
+        Result.Ok(Option.Some(value)):
+            println(value == String.from("present"))
+        _:
+            println(false)
+    match env.get("ELAMITE_SYSTEM_TEST_MISSING"):
+        Result.Ok(Option.None):
+            println(true)
+        _:
+            println(false)
+    match env.get(""):
+        Result.Err(EnvError.InvalidName):
+            pass
+        _:
+            panic("empty environment name was accepted")
+    match env.get("BAD=NAME"):
+        Result.Err(EnvError.InvalidName):
+            pass
+        _:
+            panic("invalid environment name was accepted")
+    match env.get("ELAMITE_SYSTEM_TEST_INVALID"):
+        Result.Err(EnvError.InvalidText):
+            pass
+        _:
+            panic("invalid host text entered String")
+    match env.current_dir():
+        Result.Ok(directory):
+            println(!directory.is_empty())
+        Result.Err(error):
+            println(false)
+
+fn process_checks(base: fs.Path) -> ():
+    let shell = fs.Path.from("/bin/sh")
+    match run_child(
+        &shell,
+        "-c",
+        "printf child-out; printf child-err >&2; exit 7",
+    ):
+        Result.Ok(output):
+            println(output.status.success)
+            match output.status.code:
+                Option.Some(code):
+                    println(code)
+                Option.None:
+                    println(-1)
+            println(f"{output.stdout.len()} {output.stdout[0]} {output.stdout[8]}")
+            println(f"{output.stderr.len()} {output.stderr[0]} {output.stderr[8]}")
+        Result.Err(error):
+            panic("child launch failed")
+
+    let missing = base.join("missing-program")
+    match run_child(&missing):
+        Result.Err(ProcessError.NotFound):
+            println("launch-not-found")
+        _:
+            panic("missing process did not report NotFound")
+
+    let invalid = fs.Path.from("bad\0program")
+    match run_child(&invalid):
+        Result.Err(ProcessError.InvalidInput):
+            pass
+        _:
+            panic("embedded NUL reached process launch")
+
+fn filesystem_checks() -> Result[(), IoError]:
+    let base = fs.Path.from("__TEST_ROOT__")
+    let child = base.join("child")
+    println(parent_is(child, base))
+    println(file_name_is(child, "child"))
+
+    match fs.metadata(&base):
+        Result.Err(IoError.NotFound):
+            pass
+        _:
+            panic("missing metadata did not report NotFound")
+    let invalid_path = fs.Path.from("bad\0path")
+    match fs.metadata(&invalid_path):
+        Result.Err(IoError.InvalidInput):
+            pass
+        _:
+            panic("embedded NUL reached filesystem")
+
+    fs.create_dir(&base)?
+    match fs.create_dir(&base):
+        Result.Err(IoError.AlreadyExists):
+            pass
+        _:
+            panic("duplicate directory did not report AlreadyExists")
+    let data = base.join("data.bin")
+    var writer = fs.open(&data, OpenMode.Write)?
+    write_bytes(writer, 65u8, 66u8, 67u8)?
+    let writer_alias = writer
+    writer_alias.close()
+    writer.close()
+    writer.close()
+    match writer.metadata():
+        Result.Err(IoError.InvalidInput):
+            pass
+        _:
+            panic("closed file remained usable")
+
+    let info = fs.metadata(&data)?
+    println(info.len)
+    match info.file_type:
+        FileType.File:
+            println("file")
+        _:
+            panic("wrong file type")
+    match fs.read_dir(&data):
+        Result.Err(IoError.NotDirectory):
+            pass
+        _:
+            panic("file traversal did not report NotDirectory")
+    match fs.remove_dir(&base):
+        Result.Err(IoError.DirectoryNotEmpty):
+            pass
+        _:
+            panic("nonempty directory removal was accepted")
+    match fs.remove_file(&base):
+        Result.Err(IoError.IsDirectory):
+            pass
+        _:
+            panic("directory file-removal was accepted")
+
+    var reader = fs.open(&data, OpenMode.Read)?
+    let bytes = reader.read_to_end()?
+    println(f"{bytes.len()} {bytes[0]} {bytes[1]} {bytes[2]}")
+    reader.close()
+    reader.close()
+
+    var directory = fs.read_dir(&base)?
+    var saw_data = false
+    var scanning = true
+    while scanning:
+        match directory.next()?:
+            Option.Some(entry):
+                if entry.name == String.from("data.bin"):
+                    match entry.file_type:
+                        FileType.File:
+                            saw_data = true
+                        _:
+                            panic("directory entry reported wrong type")
+            Option.None:
+                scanning = false
+    println(saw_data)
+    let directory_alias = directory
+    directory_alias.close()
+    directory.close()
+    directory.close()
+    match directory.next():
+        Result.Err(IoError.InvalidInput):
+            pass
+        _:
+            panic("closed directory remained usable")
+
+    environment_checks()
+    process_checks(base)
+
+    fs.remove_file(&data)?
+    fs.remove_dir(&base)?
+    return Result.Ok(())
+
+fn main() -> ():
+    match filesystem_checks():
+        Result.Ok(_):
+            pass
+        Result.Err(error):
+            panic("filesystem operation failed")

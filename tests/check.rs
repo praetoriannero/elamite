@@ -1166,9 +1166,18 @@ fn enum_value(state: &State) -> i32:
         "{}",
         render(&sources, &checked.diagnostics)
     );
-    assert_eq!(
-        checked.program.copied_pattern_bindings.len(),
-        1,
+    let inner_type = checked
+        .program
+        .expression_types
+        .iter()
+        .find_map(|(span, ty)| (sources.snippet(*span) == "inner").then_some(*ty))
+        .expect("the returned `inner` expression is typed");
+    assert!(
+        checked
+            .program
+            .pattern_binding_types
+            .values()
+            .any(|ty| *ty == inner_type),
         "the `inner` payload binding must be marked as an independent copy"
     );
 

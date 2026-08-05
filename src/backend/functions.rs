@@ -421,6 +421,13 @@ impl<'a> CEmitter<'a> {
                         self.trap_arguments(span)
                     ));
                 }
+                if matches!(operation, StandardCall::ClockNow { .. }) {
+                    return Some(format!(
+                        "{}({})",
+                        standard_call_name(*operation),
+                        self.trap_arguments(span)
+                    ));
+                }
                 let mut arguments = arguments
                     .iter()
                     .map(|argument| temporary_name(*argument))

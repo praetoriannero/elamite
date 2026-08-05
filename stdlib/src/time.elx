@@ -1,0 +1,87 @@
+/// A nonnegative span measured in nanoseconds.
+///
+/// Arithmetic is explicit and checked: failure is reported as `Option.None`.
+pub struct Duration(PartialEq, Eq, PartialOrd, Ord, Hash):
+    nanoseconds: u64
+
+impl Duration:
+    pub fn from_nanoseconds(nanoseconds: u64) -> Self:
+        return Self { nanoseconds: nanoseconds }
+
+    pub fn from_milliseconds(milliseconds: u64) -> Option[Self]:
+        match milliseconds.checked_mul(1000000u64):
+            Option.Some(value):
+                return Option.Some(Self.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+    pub fn from_seconds(seconds: u64) -> Option[Self]:
+        match seconds.checked_mul(1000000000u64):
+            Option.Some(value):
+                return Option.Some(Self.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+    pub fn as_nanoseconds(self: &Self) -> u64:
+        return self.nanoseconds
+
+    pub fn checked_add(self: &Self, other: Duration) -> Option[Self]:
+        match self.nanoseconds.checked_add(other.nanoseconds):
+            Option.Some(value):
+                return Option.Some(Self.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+    pub fn checked_sub(self: &Self, other: Duration) -> Option[Self]:
+        match self.nanoseconds.checked_sub(other.nanoseconds):
+            Option.Some(value):
+                return Option.Some(Self.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+    pub fn checked_mul(self: &Self, factor: u64) -> Option[Self]:
+        match self.nanoseconds.checked_mul(factor):
+            Option.Some(value):
+                return Option.Some(Self.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+/// A reading from the process-local monotonic clock.
+///
+/// Its origin is unspecified. It is meaningful only when compared with
+/// another `Instant` from the same process and is not a synchronization edge.
+pub struct Instant(PartialEq, Eq, PartialOrd, Ord, Hash):
+    ticks: u64
+
+impl Instant:
+    pub fn duration_since(self: &Self, earlier: Instant) -> Option[Duration]:
+        match self.ticks.checked_sub(earlier.ticks):
+            Option.Some(value):
+                return Option.Some(Duration.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+/// A reading of wall-clock nanoseconds since the Unix epoch.
+///
+/// Wall time may move backward and must not be used to measure elapsed time.
+pub struct SystemTime(PartialEq, Eq, PartialOrd, Ord, Hash):
+    ticks: u64
+
+impl SystemTime:
+    pub fn unix_nanoseconds(self: &Self) -> u64:
+        return self.ticks
+
+    pub fn duration_since(self: &Self, earlier: SystemTime) -> Option[Duration]:
+        match self.ticks.checked_sub(earlier.ticks):
+            Option.Some(value):
+                return Option.Some(Duration.from_nanoseconds(value))
+            Option.None:
+                return Option.None
+
+// These reads require portable operating-system hooks. Neither operation
+// creates a language-level synchronization edge.
+pub fn monotonic_now() -> Instant:
+    pass
+
+pub fn system_now() -> SystemTime:
+    pass

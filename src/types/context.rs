@@ -1007,6 +1007,8 @@ pub(super) fn builtin_has_layout(name: &str) -> bool {
             | "AtomicBool"
             | "AtomicI32"
             | "AtomicUsize"
+            | "File"
+            | "Directory"
     )
 }
 

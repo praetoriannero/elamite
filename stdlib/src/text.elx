@@ -1,0 +1,66 @@
+/// A portable failure produced by a text-to-value conversion.
+pub enum ParseError:
+    Empty
+    InvalidSyntax
+    OutOfRange
+
+/// Returns the Unicode-scalar index of the first exact match.
+///
+/// Neither input is normalized and this operation allocates nothing.
+pub fn find(text: str, needle: str) -> Option[usize]:
+    pass
+
+/// Reports whether `needle` occurs in `text` under exact scalar comparison.
+/// This operation allocates nothing.
+pub fn contains(text: str, needle: str) -> bool:
+    pass
+
+/// Splits at every exact separator match.
+///
+/// The returned vector allocates its descriptor storage, but each `str`
+/// element is a borrowed view into `text`; substring bytes are not copied.
+/// An empty separator splits at Unicode-scalar boundaries.
+pub fn split(text: str, separator: str) -> Vec[str]:
+    pass
+
+/// Splits owned text and materializes independent `String` elements.
+///
+/// The result vector and every returned substring allocate. This explicit
+/// variant avoids disguising materialization behind the borrowed API.
+pub fn split_string(text: String, separator: str) -> Vec[String]:
+    pass
+
+/// Removes leading and trailing Unicode White_Space and returns a borrowed
+/// view into `text`. It performs no allocation.
+pub fn trim(text: str) -> str:
+    pass
+
+/// Removes leading and trailing Unicode White_Space and materializes a new
+/// `String`. The input's shallow backing is not mutated.
+pub fn trim_string(text: String) -> String:
+    pass
+
+/// Maps ASCII uppercase letters to lowercase in a newly allocated string.
+/// Non-ASCII scalars are preserved byte-for-byte and no normalization occurs.
+pub fn to_lowercase(text: str) -> String:
+    pass
+
+/// Maps ASCII lowercase letters to uppercase in a newly allocated string.
+/// U+00DF expands to `SS`; other non-ASCII scalars are preserved byte-for-byte
+/// and no normalization occurs.
+pub fn to_uppercase(text: str) -> String:
+    pass
+
+/// Parses a base-ten signed integer with an optional leading sign.
+/// Surrounding whitespace is rejected; every scalar must be ASCII syntax.
+pub fn parse_i64(text: str) -> Result[i64, ParseError]:
+    pass
+
+/// Parses a base-ten unsigned integer with an optional leading `+`.
+/// Surrounding whitespace is rejected; every scalar must be ASCII syntax.
+pub fn parse_u64(text: str) -> Result[u64, ParseError]:
+    pass
+
+/// Parses `true` or `false` exactly, with no case folding or whitespace.
+pub fn parse_bool(text: str) -> Result[bool, ParseError]:
+    pass

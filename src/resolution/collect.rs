@@ -25,80 +25,44 @@ impl<'a> Resolver<'a> {
         id
     }
 
-    pub(super) fn install_standard_library_names(
-        &mut self,
-    ) -> (ModuleId, ModuleId, ModuleId, ModuleId, ModuleId) {
-        let io = self.intern("io");
-        let ffi = self.intern("ffi");
-        let testing = self.intern("testing");
-        let thread = self.intern("thread");
-        let sync = self.intern("sync");
+    pub(super) fn install_standard_library_names(&mut self) -> BTreeMap<StandardModule, ModuleId> {
         let std = self.intern("std");
-        let io_module = self.push_module(
-            None,
-            vec![std, io],
-            Some(self.program.std_root),
-            ModuleOrigin::Standard,
-        );
-        let ffi_module = self.push_module(
-            None,
-            vec![std, ffi],
-            Some(self.program.std_root),
-            ModuleOrigin::Standard,
-        );
-        let testing_module = self.push_module(
-            None,
-            vec![std, testing],
-            Some(self.program.std_root),
-            ModuleOrigin::Standard,
-        );
-        let thread_module = self.push_module(
-            None,
-            vec![std, thread],
-            Some(self.program.std_root),
-            ModuleOrigin::Standard,
-        );
-        let sync_module = self.push_module(
-            None,
-            vec![std, sync],
-            Some(self.program.std_root),
-            ModuleOrigin::Standard,
-        );
-        self.insert_namespace(
-            self.program.std_root,
-            io,
-            NamespaceTarget::Item(ItemId::Module(io_module)),
-            Visibility::Public,
-            None,
-        );
-        self.insert_namespace(
-            self.program.std_root,
-            ffi,
-            NamespaceTarget::Item(ItemId::Module(ffi_module)),
-            Visibility::Public,
-            None,
-        );
-        self.insert_namespace(
-            self.program.std_root,
-            testing,
-            NamespaceTarget::Item(ItemId::Module(testing_module)),
-            Visibility::Public,
-            None,
-        );
-        self.insert_namespace(
-            self.program.std_root,
-            thread,
-            NamespaceTarget::Item(ItemId::Module(thread_module)),
-            Visibility::Public,
-            None,
-        );
-        self.insert_namespace(
-            self.program.std_root,
-            sync,
-            NamespaceTarget::Item(ItemId::Module(sync_module)),
-            Visibility::Public,
-            None,
-        );
+        let mut modules = BTreeMap::new();
+        for (kind, name) in [
+            (StandardModule::Io, "io"),
+            (StandardModule::Ffi, "ffi"),
+            (StandardModule::Testing, "testing"),
+            (StandardModule::Thread, "thread"),
+            (StandardModule::Sync, "sync"),
+            (StandardModule::Fs, "fs"),
+            (StandardModule::Env, "env"),
+            (StandardModule::Process, "process"),
+            (StandardModule::Time, "time"),
+            (StandardModule::Random, "random"),
+            (StandardModule::Ordering, "ordering"),
+            (StandardModule::Text, "text"),
+        ] {
+            let name = self.intern(name);
+            let module = self.push_module(
+                None,
+                vec![std, name],
+                Some(self.program.std_root),
+                ModuleOrigin::Standard,
+            );
+            self.insert_namespace(
+                self.program.std_root,
+                name,
+                NamespaceTarget::Item(ItemId::Module(module)),
+                Visibility::Public,
+                None,
+            );
+            modules.insert(kind, module);
+        }
+        let io_module = modules[&StandardModule::Io];
+        let fs_module = modules[&StandardModule::Fs];
+        let ffi_module = modules[&StandardModule::Ffi];
+        let thread_module = modules[&StandardModule::Thread];
+        let sync_module = modules[&StandardModule::Sync];
 
         for name in [
             "bool",
@@ -155,6 +119,7 @@ impl<'a> Resolver<'a> {
             (io_module, &["print", "println"][..]),
             (ffi_module, &["ForeignRoot", "ForeignRootMut", "CVoid"][..]),
             (thread_module, &["Thread", "spawn"][..]),
+            (fs_module, &["File", "Directory"][..]),
             (
                 sync_module,
                 &[
@@ -189,13 +154,7 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
-        (
-            io_module,
-            ffi_module,
-            testing_module,
-            thread_module,
-            sync_module,
-        )
+        modules
     }
 
     pub(super) fn push_builtin(&mut self, name: Symbol) -> BuiltinId {
@@ -295,20 +254,12 @@ impl<'a> Resolver<'a> {
 
     pub(super) fn install_expanded_units(
         &mut self,
-        io_module: ModuleId,
-        ffi_module: ModuleId,
-        testing_module: ModuleId,
-        thread_module: ModuleId,
-        sync_module: ModuleId,
+        standard_modules: &BTreeMap<StandardModule, ModuleId>,
     ) {
         for unit in std::mem::take(&mut self.expanded.units) {
             let module = match unit.identity {
                 ExpandedUnitIdentity::Standard(StandardModule::Root) => self.program.std_root,
-                ExpandedUnitIdentity::Standard(StandardModule::Io) => io_module,
-                ExpandedUnitIdentity::Standard(StandardModule::Ffi) => ffi_module,
-                ExpandedUnitIdentity::Standard(StandardModule::Testing) => testing_module,
-                ExpandedUnitIdentity::Standard(StandardModule::Thread) => thread_module,
-                ExpandedUnitIdentity::Standard(StandardModule::Sync) => sync_module,
+                ExpandedUnitIdentity::Standard(module) => standard_modules[&module],
                 ExpandedUnitIdentity::PackageRoot(package) => self.program.package_roots[&package],
                 ExpandedUnitIdentity::PackageModule { package, path } => {
                     self.program.module_keys[&(package, path.components().to_vec())]

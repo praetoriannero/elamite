@@ -2,7 +2,9 @@
 
 use std::fmt::Write as _;
 
-use crate::operations::{NumericAlternative, NumericOutcome, StandardCall};
+use crate::operations::{
+    NumericAlternative, NumericOutcome, StandardCall, SystemOperation, TextOperation,
+};
 use crate::resolution::{DeclarationId, FieldId, LocalBindingId, VariantId};
 use crate::types::{TypeId, TypedProgram};
 
@@ -74,7 +76,64 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         StandardCall::Assert => return "el_assert".to_string(),
         StandardCall::Fail { .. } => return "el_assert_fail".to_string(),
         StandardCall::Trap { .. } => return "el_typed_trap".to_string(),
+        StandardCall::ClockNow {
+            clock_type,
+            monotonic,
+        } => {
+            let source = if monotonic { "monotonic" } else { "system" };
+            return format!("el_{source}_now_t{}", clock_type.index());
+        }
         StringFrom => return "el_string_from".to_string(),
+        StandardCall::Text {
+            operation,
+            result_type,
+        } => {
+            let operation = match operation {
+                TextOperation::Find => "find",
+                TextOperation::Contains => "contains",
+                TextOperation::Split => "split",
+                TextOperation::SplitString => "split_string",
+                TextOperation::Trim => "trim",
+                TextOperation::TrimString => "trim_string",
+                TextOperation::Lowercase => "lowercase",
+                TextOperation::Uppercase => "uppercase",
+                TextOperation::ParseI64 => "parse_i64",
+                TextOperation::ParseU64 => "parse_u64",
+                TextOperation::ParseBool => "parse_bool",
+            };
+            return format!("el_text_{operation}_t{}", result_type.index());
+        }
+        StandardCall::System {
+            operation,
+            result_type,
+        } => {
+            let operation = match operation {
+                SystemOperation::PathFrom => "path_from",
+                SystemOperation::PathIsEmpty => "path_is_empty",
+                SystemOperation::PathJoin => "path_join",
+                SystemOperation::PathFileName => "path_file_name",
+                SystemOperation::PathParent => "path_parent",
+                SystemOperation::Open => "fs_open",
+                SystemOperation::ReadDir => "fs_read_dir",
+                SystemOperation::Metadata => "fs_metadata",
+                SystemOperation::CreateDir => "fs_create_dir",
+                SystemOperation::RemoveDir => "fs_remove_dir",
+                SystemOperation::RemoveFile => "fs_remove_file",
+                SystemOperation::Rename => "fs_rename",
+                SystemOperation::FileReadToEnd => "file_read_to_end",
+                SystemOperation::FileWriteAll => "file_write_all",
+                SystemOperation::FileMetadata => "file_metadata",
+                SystemOperation::FileClose => "file_close",
+                SystemOperation::DirectoryNext => "directory_next",
+                SystemOperation::DirectoryClose => "directory_close",
+                SystemOperation::Args => "env_args",
+                SystemOperation::EnvGet => "env_get",
+                SystemOperation::CurrentDir => "env_current_dir",
+                SystemOperation::ProcessRun => "process_run",
+                SystemOperation::ProcessExit => "process_exit",
+            };
+            return format!("el_{operation}_t{}", result_type.index());
+        }
         StandardCall::IdentityFrom { wrapper } => ("identity_from", wrapper),
         StandardCall::ForeignRootRetain { handle, .. } => ("foreign_root_retain", handle),
         StandardCall::ForeignRootPointer { handle, .. } => ("foreign_root_pointer", handle),

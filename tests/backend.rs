@@ -106,7 +106,21 @@ fn production_c_is_unchanged_when_tests_are_appended() {
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)))
         .generated_c;
 
-    assert_eq!(without_tests, with_tests);
+    let first_difference = without_tests
+        .bytes()
+        .zip(with_tests.bytes())
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| without_tests.len().min(with_tests.len()));
+    assert!(
+        without_tests == with_tests,
+        "production C differs at byte {first_difference} (without tests: {} bytes; with tests: {} bytes)\nwithout: {:?}\nwith: {:?}",
+        without_tests.len(),
+        with_tests.len(),
+        &without_tests
+            [first_difference.saturating_sub(80)..without_tests.len().min(first_difference + 160)],
+        &with_tests
+            [first_difference.saturating_sub(80)..with_tests.len().min(first_difference + 160)],
+    );
 }
 
 fn build_and_run(source: &str, optimization: Optimization) -> (String, String, i32) {

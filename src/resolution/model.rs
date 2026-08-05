@@ -412,6 +412,58 @@ impl ResolvedProgram {
         self.standard_declaration(name) == Some(declaration)
     }
 
+    /// Whether a source-backed standard declaration is implemented by a
+    /// platform/runtime hook rather than its placeholder `pass` body.
+    #[must_use]
+    pub fn is_standard_runtime_hook(&self, declaration: DeclarationId) -> bool {
+        let declaration_data = &self.declarations[declaration.index()];
+        if self.modules[declaration_data.module.index()]
+            .package
+            .is_some()
+        {
+            return false;
+        }
+        let module = self.modules[declaration_data.module.index()]
+            .path
+            .last()
+            .map(|name| self.symbol_text(*name));
+        let name = self.symbol_text(declaration_data.name);
+        matches!(
+            (module, name),
+            (
+                Some("fs"),
+                "from"
+                    | "is_empty"
+                    | "join"
+                    | "file_name"
+                    | "parent"
+                    | "open"
+                    | "read_dir"
+                    | "metadata"
+                    | "create_dir"
+                    | "remove_dir"
+                    | "remove_file"
+                    | "rename"
+            ) | (Some("env"), "args" | "get" | "current_dir")
+                | (Some("process"), "run" | "exit")
+                | (Some("time"), "monotonic_now" | "system_now")
+                | (
+                    Some("text"),
+                    "find"
+                        | "contains"
+                        | "split"
+                        | "split_string"
+                        | "trim"
+                        | "trim_string"
+                        | "to_lowercase"
+                        | "to_uppercase"
+                        | "parse_i64"
+                        | "parse_u64"
+                        | "parse_bool"
+                )
+        )
+    }
+
     /// The variant `name` of the standard declaration `owner`.
     #[must_use]
     pub fn standard_variant(&self, owner: &str, name: &str) -> Option<VariantId> {

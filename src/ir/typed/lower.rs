@@ -2,6 +2,7 @@
 
 use super::super::*;
 use crate::check::CheckedClosureCapture;
+use crate::operations::SystemOperation;
 use crate::resolution::ClosureCaptureKind;
 
 /// Monomorphizes and lowers checked syntax into typed high-level IR.
@@ -70,6 +71,7 @@ impl<'a> TypedLowerer<'a> {
                 (declaration.kind == DeclarationKind::Function
                     || (declaration.kind == DeclarationKind::Test && declaration.test_selected))
                     && declaration.parent_impl.is_none()
+                    && !self.resolved.is_standard_runtime_hook(declaration.id)
                     && !["panic", "trap", "assert", "fail"]
                         .into_iter()
                         .any(|name| self.resolved.is_standard_declaration(declaration.id, name))
@@ -1952,6 +1954,7 @@ impl<'a> TypedLowerer<'a> {
                 });
             }
             CheckedCall::Standard(operation) => {
+                let operation = operation.map_types(|ty| self.concrete_type(ty));
                 match operation {
                     StandardCall::Trap {
                         reason_type,
@@ -1970,23 +1973,40 @@ impl<'a> TypedLowerer<'a> {
                     _ => {}
                 }
                 let mut arguments = Vec::new();
-                let has_receiver = !matches!(
-                    operation,
-                    StandardCall::Panic
-                        | StandardCall::Assert
-                        | StandardCall::Fail { .. }
-                        | StandardCall::Trap { .. }
-                        | StandardCall::StringFrom
-                        | StandardCall::IdentityFrom { .. }
-                        | StandardCall::ForeignRootRetain { .. }
-                        | StandardCall::ThreadSpawn { .. }
-                        | StandardCall::ChannelCreate { .. }
-                        | StandardCall::MutexNew { .. }
-                        | StandardCall::AtomicNew { .. }
-                        | StandardCall::VecNew { .. }
-                        | StandardCall::MapNew { .. }
-                        | StandardCall::SetNew { .. }
-                );
+                let has_receiver = match operation {
+                    StandardCall::System { operation, .. } => matches!(
+                        operation,
+                        SystemOperation::PathIsEmpty
+                            | SystemOperation::PathJoin
+                            | SystemOperation::PathFileName
+                            | SystemOperation::PathParent
+                            | SystemOperation::FileReadToEnd
+                            | SystemOperation::FileWriteAll
+                            | SystemOperation::FileMetadata
+                            | SystemOperation::FileClose
+                            | SystemOperation::DirectoryNext
+                            | SystemOperation::DirectoryClose
+                    ),
+                    _ => !matches!(
+                        operation,
+                        StandardCall::Panic
+                            | StandardCall::Assert
+                            | StandardCall::Fail { .. }
+                            | StandardCall::Trap { .. }
+                            | StandardCall::ClockNow { .. }
+                            | StandardCall::StringFrom
+                            | StandardCall::Text { .. }
+                            | StandardCall::IdentityFrom { .. }
+                            | StandardCall::ForeignRootRetain { .. }
+                            | StandardCall::ThreadSpawn { .. }
+                            | StandardCall::ChannelCreate { .. }
+                            | StandardCall::MutexNew { .. }
+                            | StandardCall::AtomicNew { .. }
+                            | StandardCall::VecNew { .. }
+                            | StandardCall::MapNew { .. }
+                            | StandardCall::SetNew { .. }
+                    ),
+                };
                 if has_receiver {
                     let base = child_nodes(callee_node).into_iter().next()?;
                     arguments.push(self.lower_expression(base)?);

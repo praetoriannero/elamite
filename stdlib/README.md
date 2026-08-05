@@ -29,3 +29,17 @@ The intrinsic method surface is:
 
 Channel constructors and operation outcome types are declared in `std.sync`;
 thread construction and `SpawnError` are declared in `std.thread`.
+
+The utility modules are intentionally small and independently reviewable:
+
+- `std.fs`, `std.env`, and `std.process` own portable operating-system APIs;
+- `std.time` keeps monotonic and wall-clock readings in distinct nominal types;
+- `std.random` provides an explicitly seeded, reproducible SplitMix64 stream;
+- `std.ordering` provides stable sorting and first-match binary search; and
+- `std.text` separates borrowed substring results from allocating owned-text
+  results.
+
+Native filesystem handles remain compiler-represented because safe source code
+cannot express an owned C file or directory stream. Their intrinsic method
+surface is `File.read_to_end`, `write_all`, `metadata`, and `close`, plus
+`Directory.next` and `close`; both `close` operations are idempotent.
