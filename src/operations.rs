@@ -113,26 +113,16 @@ pub enum ValuePassingMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TextOperation {
-    Find,
-    Contains,
-    Split,
-    SplitString,
-    Trim,
-    TrimString,
-    Lowercase,
-    Uppercase,
-    ParseI64,
-    ParseU64,
-    ParseBool,
+    ByteLen,
+    NextScalar,
+    SliceBytes,
+    StringView,
+    FromChars,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemOperation {
-    PathFrom,
-    PathIsEmpty,
-    PathJoin,
-    PathFileName,
-    PathParent,
+    PathView,
     Open,
     ReadDir,
     Metadata,
@@ -172,6 +162,7 @@ pub enum StandardCall {
     Text {
         operation: TextOperation,
         result_type: TypeId,
+        input_type: TypeId,
     },
     System {
         operation: SystemOperation,
@@ -358,9 +349,15 @@ impl StandardCall {
     pub fn map_types(mut self, mut map: impl FnMut(TypeId) -> TypeId) -> Self {
         match &mut self {
             Self::Panic | Self::Assert | Self::StringFrom => {}
-            Self::Text { result_type, .. } | Self::System { result_type, .. } => {
-                *result_type = map(*result_type)
+            Self::Text {
+                result_type,
+                input_type,
+                ..
+            } => {
+                *result_type = map(*result_type);
+                *input_type = map(*input_type);
             }
+            Self::System { result_type, .. } => *result_type = map(*result_type),
             Self::Fail { value_type } => *value_type = map(*value_type),
             Self::Trap { reason_type, .. } => *reason_type = map(*reason_type),
             Self::ClockNow { clock_type, .. } => *clock_type = map(*clock_type),

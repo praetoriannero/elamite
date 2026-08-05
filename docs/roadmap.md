@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Source-hosted standard library**
+> Next planned milestone: **Source-level debugging**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft and the authoritative
 > `examples/spec_demo.elx` demonstration
@@ -27,7 +27,7 @@ Keep this table synchronized with the detailed status blocks below.
 | [Inherent implementation blocks](#inherent-implementation-blocks) | Complete | Field-only structs, local coherent generic inherent blocks, selection/lowering, `std.ast` 2.0, and repository migration are complete. |
 | [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
 | [Standard-library expansion](#standard-library-expansion) | Complete | The accepted filesystem, process/environment, time, ordering/search, text, and deterministic-randomness surfaces are implemented and documented; source hosting is the follow-up milestone below. |
-| [Source-hosted standard library](#source-hosted-standard-library) | Planned | Introduce the minimal private representation/runtime primitives needed to move every expressible standard-library algorithm and public wrapper into Elamite. |
+| [Source-hosted standard library](#source-hosted-standard-library) | Complete | An exact native inventory, explicit intrinsic declarations, a minimal UTF-8 kernel, source-hosted text/path algorithms, and demand-driven standard reachability are implemented. |
 | [Source-level debugging](#source-level-debugging) | Planned | Map generated C back to `.elx` locations and preserve source-level names so native debuggers are usable. |
 | [Language server](#language-server) | Candidate | Requires a scope decision and the **Incremental queries** package before implementation. |
 | [API documentation generation](#api-documentation-generation) | Planned | The `doc` command exists but does not yet render API content, cross-links, or a distributable format. |
@@ -772,7 +772,10 @@ change. Every module records its allocation and copying behavior in
 
 ### Source-hosted standard library
 
-> Status: Planned; this is the next milestone.
+> Status: Complete. Public text algorithms, lexical path behavior, and portable
+> host wrappers are ordinary Elamite. Exact bodyless intrinsic declarations now
+> expose only representation, allocation, host, resource, synchronization, and
+> caller-location capabilities that source cannot implement.
 >
 > Blocked by: **None**. It builds on the completed **Inherent implementation
 > blocks** and **User-defined iteration** milestones and preserves the public
@@ -788,9 +791,9 @@ operation that Elamite cannot implement because the representation is opaque
 or the operation crosses into the runtime or host. It must not implement a
 complete public algorithm merely because direct C is convenient. Public
 standard-library functions remain ordinary source declarations and wrap those
-private capabilities where a native boundary is unavoidable. No public API is
-added or changed by this milestone unless a separate specification review
-accepts it.
+private capabilities where a native boundary is unavoidable, except for
+`panic`, typed traps, and test failures whose required caller location makes
+the public call boundary itself intrinsic. No public API was added or changed.
 
 For text, the private kernel must be sufficient to write search, splitting,
 trimming, case conversion, and parsing in ordinary Elamite without exposing
@@ -802,12 +805,12 @@ are implementation details rather than stable user APIs.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Native-boundary inventory** | Classify every compiler-known standard call and every bodyless or `pass`-bodied shipped function as an opaque-representation primitive, managed-runtime primitive, trap/synchronization primitive, host operation, or source-migration candidate. Record the reason for every retained native entry in one exact inventory. | Every current entry has one owner and reason; an inventory test fails when a native hook, `StandardCall`, or shipped placeholder is added without classification. Convenience and performance alone are not accepted reasons for native ownership. |
-| **Explicit private intrinsic boundary** | Replace executable `pass` placeholders with bodyless declarations in a compiler-owned private standard module, accepted only for the exact intrinsic inventory and unavailable to user packages. Public standard declarations call these capabilities through ordinary checked Elamite bodies. | `stdlib/src/` contains no executable function whose `pass` body is silently replaced by the checker; copying or spelling an intrinsic declaration in a user package is rejected; missing intrinsic lowering is a compiler error rather than a generated abort or fallthrough. |
-| **Text traversal and construction kernel** | Add private, UTF-8-preserving primitives for text length, scalar advancement with byte boundaries, checked substring views, and amortized owned-text construction. Keep backing reachability, shallow `String` sharing, overflow behavior, and allocation accounting explicit. | Arbitrary valid UTF-8 can be traversed and sliced without unsafe code or invalid views; malformed boundaries are rejected; empty, ASCII, multibyte, maximum-scalar, and allocation-overflow cases have x86 and x86-64 coverage. No raw address or mutable text backing enters the public language surface. |
-| **Elamite text algorithms** | Reimplement `std.text` search, contains, borrowed and owned split, trim, case conversion, and boolean/integer parsing as ordinary Elamite functions over the private kernel. Remove their `TextOperation` call classification and generated per-algorithm C helpers. | Typed and control-flow IR contain ordinary monomorphized Elamite functions for every text algorithm; existing Unicode, error, aliasing, allocation, and result-materialization tests remain unchanged; generated C contains only the minimal text primitives, not native copies of the migrated algorithms. |
-| **Wider source migration** | Move lexical path manipulation, assertion control and formatting, portable error translation, validation, and all other expressible standard-library policy into Elamite. Retain only actual file/process/environment/clock, resource-handle, collection-representation, trap, thread, synchronization, GC, and formatter capabilities that require native access. Prefer meaningful source implementations over forwarding wrappers, while keeping public wrappers in source at unavoidable host boundaries. | Every public standard function either has an ordinary checked Elamite body or is documented by the exact inventory as inseparable from a native capability. `Path` operations and other host-independent helpers lower as ordinary Elamite calls. Runtime and compiler tests prove that shadowing or copying a standard name grants no privilege. |
-| **Cost, conformance, and cleanup** | Remove superseded checker, IR, naming, and backend special cases; update the cost model and release evidence for changed allocation or copying; and compare the source-hosted implementation on both supported targets. | Formatting, check, test, and clippy pass; x86 and x86-64 generated-C and run-pass matrices agree; standard-library behavior is unchanged; comparable memory-cost baselines accompany material cost changes; an exact test proves that no source-migration candidate remains native. |
+| **Native-boundary inventory (done)** | Classify every compiler-known standard call and every bodyless or `pass`-bodied shipped function as an opaque-representation primitive, managed-runtime primitive, trap/synchronization primitive, host operation, or source-migration candidate. Record the reason for every retained native entry in one exact inventory. | Every current entry has one owner and reason; an inventory test fails when a native hook, `StandardCall`, or shipped placeholder is added without classification. Convenience and performance alone are not accepted reasons for native ownership. |
+| **Explicit private intrinsic boundary (done)** | Replace executable `pass` placeholders with bodyless declarations accepted only for the exact compiler-owned standard inventory and unavailable to user packages. Public standard declarations call these capabilities through ordinary checked Elamite bodies unless caller-location semantics require the public boundary itself. | `stdlib/src/` contains no executable function whose `pass` body is silently replaced by the checker; copying or spelling an intrinsic declaration in a user package is rejected; missing intrinsic lowering is a compiler error rather than a generated abort or fallthrough. |
+| **Text traversal and construction kernel (done)** | Add private, UTF-8-preserving primitives for text length, scalar advancement with byte boundaries, checked substring views, and amortized owned-text construction. Keep backing reachability, shallow `String` sharing, overflow behavior, and allocation accounting explicit. | Arbitrary valid UTF-8 can be traversed and sliced without unsafe code or invalid views; malformed boundaries are rejected; empty, ASCII, multibyte, maximum-scalar, and allocation-overflow cases have x86 and x86-64 coverage. No raw address or mutable text backing enters the public language surface. |
+| **Elamite text algorithms (done)** | Reimplement `std.text` search, contains, borrowed and owned split, trim, case conversion, and boolean/integer parsing as ordinary Elamite functions over the private kernel. Remove their algorithm-level `TextOperation` call classification and generated C helpers. | Typed and control-flow IR contain ordinary monomorphized Elamite functions for every text algorithm; existing Unicode, error, aliasing, allocation, and result-materialization tests remain unchanged; generated C contains only the minimal text primitives, not native copies of the migrated algorithms. |
+| **Wider source migration (done)** | Move lexical path manipulation, portable host wrappers, validation, and all other expressible standard-library policy into Elamite. Retain only actual file/process/environment/clock, resource-handle, collection-representation, trap, thread, synchronization, GC, formatter, and caller-location capabilities that require native access. | Every public standard function either has an ordinary checked Elamite body or is documented by the exact inventory as inseparable from a native capability. `Path` operations and other host-independent helpers lower as ordinary Elamite calls. Runtime and compiler tests prove that shadowing or copying a standard name grants no privilege. |
+| **Cost, conformance, and cleanup (done)** | Remove superseded checker, IR, naming, and backend special cases; update the cost model and release evidence for changed allocation or copying; and compare the source-hosted implementation on both supported targets. | Formatting, check, test, and clippy pass; x86 and x86-64 generated-C and run-pass matrices agree; standard-library behavior is unchanged; comparable memory-cost baselines accompany material cost changes; an exact test proves that no source-migration candidate remains native. |
 
 ## 9. Toolchain and developer experience
 

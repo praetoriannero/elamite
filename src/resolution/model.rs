@@ -417,51 +417,25 @@ impl ResolvedProgram {
     #[must_use]
     pub fn is_standard_runtime_hook(&self, declaration: DeclarationId) -> bool {
         let declaration_data = &self.declarations[declaration.index()];
-        if self.modules[declaration_data.module.index()]
-            .package
-            .is_some()
-        {
+        let module = &self.modules[declaration_data.module.index()];
+        if module.package.is_some() || module.origin != ModuleOrigin::Standard {
             return false;
         }
-        let module = self.modules[declaration_data.module.index()]
+        let path = module
             .path
-            .last()
-            .map(|name| self.symbol_text(*name));
-        let name = self.symbol_text(declaration_data.name);
-        matches!(
-            (module, name),
-            (
-                Some("fs"),
-                "from"
-                    | "is_empty"
-                    | "join"
-                    | "file_name"
-                    | "parent"
-                    | "open"
-                    | "read_dir"
-                    | "metadata"
-                    | "create_dir"
-                    | "remove_dir"
-                    | "remove_file"
-                    | "rename"
-            ) | (Some("env"), "args" | "get" | "current_dir")
-                | (Some("process"), "run" | "exit")
-                | (Some("time"), "monotonic_now" | "system_now")
-                | (
-                    Some("text"),
-                    "find"
-                        | "contains"
-                        | "split"
-                        | "split_string"
-                        | "trim"
-                        | "trim_string"
-                        | "to_lowercase"
-                        | "to_uppercase"
-                        | "parse_i64"
-                        | "parse_u64"
-                        | "parse_bool"
-                )
-        )
+            .iter()
+            .map(|segment| self.symbol_text(*segment))
+            .chain(std::iter::once(self.symbol_text(declaration_data.name)))
+            .collect::<Vec<_>>()
+            .join(".");
+        crate::standard::native_declaration_reason(&path).is_some()
+            && crate::syntax::direct_children(&declaration_data.syntax, SyntaxKind::Attribute)
+                .into_iter()
+                .any(|attribute| {
+                    attribute.children.iter().any(|child| {
+                        matches!(child, SyntaxElement::Token(token) if matches!(&token.kind, TokenKind::Identifier(name) if name == "intrinsic"))
+                    })
+                })
     }
 
     /// The variant `name` of the standard declaration `owner`.

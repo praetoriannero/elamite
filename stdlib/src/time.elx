@@ -80,8 +80,14 @@ impl SystemTime:
 
 // These reads require portable operating-system hooks. Neither operation
 // creates a language-level synchronization edge.
+@intrinsic()
+fn _monotonic_now() -> Instant
+
 pub fn monotonic_now() -> Instant:
-    pass
+    return _monotonic_now()
+
+@intrinsic()
+fn _system_now() -> SystemTime
 
 pub fn system_now() -> SystemTime:
-    pass
+    return _system_now()

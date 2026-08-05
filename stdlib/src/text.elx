@@ -4,16 +4,90 @@ pub enum ParseError:
     InvalidSyntax
     OutOfRange
 
+// Private representation capabilities. Public text policy is implemented
+// below in ordinary Elamite and cannot observe raw storage.
+struct ScalarStep:
+    value: char
+    next: usize
+
+@intrinsic()
+fn _byte_len(text: str) -> usize
+
+@intrinsic()
+fn _next_scalar(text: str, byte_offset: usize) -> Option[ScalarStep]
+
+@intrinsic()
+fn _slice_bytes(text: str, start: usize, end: usize) -> Option[str]
+
+@intrinsic()
+fn _string_view(text: String) -> str
+
+@intrinsic()
+fn _from_chars(values: Vec[char]) -> String
+
+fn _view(text: str, start: usize, end: usize) -> str:
+    match _slice_bytes(text, start, end):
+        Option.Some(value):
+            return value
+        Option.None:
+            panic("invalid internal UTF-8 text boundary")
+
+fn _find_byte(text: str, needle: str, start: usize) -> Option[usize]:
+    let text_length = _byte_len(text)
+    let needle_length = _byte_len(needle)
+    if start > text_length:
+        return Option.None
+    if needle_length == 0:
+        return Option.Some(start)
+    var offset = start
+    while offset < text_length:
+        match offset.checked_add(needle_length):
+            Option.Some(end) if end <= text_length:
+                match _slice_bytes(text, offset, end):
+                    Option.Some(candidate) if candidate == needle:
+                        return Option.Some(offset)
+                    Option.Some(_):
+                        pass
+                    Option.None:
+                        pass
+            Option.Some(_):
+                return Option.None
+            Option.None:
+                return Option.None
+        match _next_scalar(text, offset):
+            Option.Some(step):
+                offset = step.next
+            Option.None:
+                return Option.None
+    return Option.None
+
 /// Returns the Unicode-scalar index of the first exact match.
 ///
 /// Neither input is normalized and this operation allocates nothing.
 pub fn find(text: str, needle: str) -> Option[usize]:
-    pass
+    match _find_byte(text, needle, 0):
+        Option.None:
+            return Option.None
+        Option.Some(found):
+            var scalar_index: usize = 0
+            var offset: usize = 0
+            while offset < found:
+                match _next_scalar(text, offset):
+                    Option.Some(step):
+                        offset = step.next
+                        scalar_index += 1
+                    Option.None:
+                        return Option.None
+            return Option.Some(scalar_index)
 
 /// Reports whether `needle` occurs in `text` under exact scalar comparison.
 /// This operation allocates nothing.
 pub fn contains(text: str, needle: str) -> bool:
-    pass
+    match _find_byte(text, needle, 0):
+        Option.Some(_):
+            return true
+        Option.None:
+            return false
 
 /// Splits at every exact separator match.
 ///
@@ -21,46 +95,368 @@ pub fn contains(text: str, needle: str) -> bool:
 /// element is a borrowed view into `text`; substring bytes are not copied.
 /// An empty separator splits at Unicode-scalar boundaries.
 pub fn split(text: str, separator: str) -> Vec[str]:
-    pass
+    var pieces: Vec[str] = Vec.new()
+    let text_length = _byte_len(text)
+    let separator_length = _byte_len(separator)
+    var start: usize = 0
+    if separator_length == 0:
+        while start < text_length:
+            match _next_scalar(text, start):
+                Option.Some(step):
+                    pieces.append(_view(text, start, step.next))
+                    start = step.next
+                Option.None:
+                    return pieces
+        return pieces
+    while true:
+        match _find_byte(text, separator, start):
+            Option.Some(found):
+                pieces.append(_view(text, start, found))
+                start = found + separator_length
+            Option.None:
+                pieces.append(_view(text, start, text_length))
+                return pieces
+    return pieces
 
 /// Splits owned text and materializes independent `String` elements.
 ///
 /// The result vector and every returned substring allocate. This explicit
 /// variant avoids disguising materialization behind the borrowed API.
 pub fn split_string(text: String, separator: str) -> Vec[String]:
-    pass
+    let borrowed = split(_string_view(text), separator)
+    var pieces: Vec[String] = Vec.new()
+    for piece in borrowed:
+        pieces.append(String.from(piece))
+    return pieces
+
+fn _is_whitespace(value: char) -> bool:
+    return (value >= '\u{0009}' && value <= '\u{000d}')
+        || value == '\u{0020}'
+        || value == '\u{0085}'
+        || value == '\u{00a0}'
+        || value == '\u{1680}'
+        || (value >= '\u{2000}' && value <= '\u{200a}')
+        || value == '\u{2028}'
+        || value == '\u{2029}'
+        || value == '\u{202f}'
+        || value == '\u{205f}'
+        || value == '\u{3000}'
 
 /// Removes leading and trailing Unicode White_Space and returns a borrowed
 /// view into `text`. It performs no allocation.
 pub fn trim(text: str) -> str:
-    pass
+    let length = _byte_len(text)
+    var offset: usize = 0
+    var first: usize = 0
+    var last: usize = 0
+    var found_nonspace = false
+    while offset < length:
+        match _next_scalar(text, offset):
+            Option.Some(step):
+                if !found_nonspace && _is_whitespace(step.value):
+                    first = step.next
+                else:
+                    found_nonspace = true
+                    if !_is_whitespace(step.value):
+                        last = step.next
+                offset = step.next
+            Option.None:
+                panic("invalid internal UTF-8 text")
+    if !found_nonspace:
+        return _view(text, length, length)
+    return _view(text, first, last)
 
 /// Removes leading and trailing Unicode White_Space and materializes a new
 /// `String`. The input's shallow backing is not mutated.
 pub fn trim_string(text: String) -> String:
-    pass
+    return String.from(trim(_string_view(text)))
+
+fn _lower_ascii(value: char) -> char:
+    match value:
+        'A':
+            return 'a'
+        'B':
+            return 'b'
+        'C':
+            return 'c'
+        'D':
+            return 'd'
+        'E':
+            return 'e'
+        'F':
+            return 'f'
+        'G':
+            return 'g'
+        'H':
+            return 'h'
+        'I':
+            return 'i'
+        'J':
+            return 'j'
+        'K':
+            return 'k'
+        'L':
+            return 'l'
+        'M':
+            return 'm'
+        'N':
+            return 'n'
+        'O':
+            return 'o'
+        'P':
+            return 'p'
+        'Q':
+            return 'q'
+        'R':
+            return 'r'
+        'S':
+            return 's'
+        'T':
+            return 't'
+        'U':
+            return 'u'
+        'V':
+            return 'v'
+        'W':
+            return 'w'
+        'X':
+            return 'x'
+        'Y':
+            return 'y'
+        'Z':
+            return 'z'
+        _:
+            return value
+
+fn _upper_ascii(value: char) -> char:
+    match value:
+        'a':
+            return 'A'
+        'b':
+            return 'B'
+        'c':
+            return 'C'
+        'd':
+            return 'D'
+        'e':
+            return 'E'
+        'f':
+            return 'F'
+        'g':
+            return 'G'
+        'h':
+            return 'H'
+        'i':
+            return 'I'
+        'j':
+            return 'J'
+        'k':
+            return 'K'
+        'l':
+            return 'L'
+        'm':
+            return 'M'
+        'n':
+            return 'N'
+        'o':
+            return 'O'
+        'p':
+            return 'P'
+        'q':
+            return 'Q'
+        'r':
+            return 'R'
+        's':
+            return 'S'
+        't':
+            return 'T'
+        'u':
+            return 'U'
+        'v':
+            return 'V'
+        'w':
+            return 'W'
+        'x':
+            return 'X'
+        'y':
+            return 'Y'
+        'z':
+            return 'Z'
+        _:
+            return value
 
 /// Maps ASCII uppercase letters to lowercase in a newly allocated string.
 /// Non-ASCII scalars are preserved byte-for-byte and no normalization occurs.
 pub fn to_lowercase(text: str) -> String:
-    pass
+    var values: Vec[char] = Vec.new()
+    var offset: usize = 0
+    while true:
+        match _next_scalar(text, offset):
+            Option.Some(step):
+                values.append(_lower_ascii(step.value))
+                offset = step.next
+            Option.None:
+                return _from_chars(values)
+    return _from_chars(values)
 
 /// Maps ASCII lowercase letters to uppercase in a newly allocated string.
 /// U+00DF expands to `SS`; other non-ASCII scalars are preserved byte-for-byte
 /// and no normalization occurs.
 pub fn to_uppercase(text: str) -> String:
-    pass
+    var values: Vec[char] = Vec.new()
+    var offset: usize = 0
+    while true:
+        match _next_scalar(text, offset):
+            Option.Some(step):
+                if step.value == '\u{00df}':
+                    values.append('S')
+                    values.append('S')
+                else:
+                    values.append(_upper_ascii(step.value))
+                offset = step.next
+            Option.None:
+                return _from_chars(values)
+    return _from_chars(values)
+
+fn _digit_u64(value: char) -> Option[u64]:
+    match value:
+        '0':
+            return Option.Some(0u64)
+        '1':
+            return Option.Some(1u64)
+        '2':
+            return Option.Some(2u64)
+        '3':
+            return Option.Some(3u64)
+        '4':
+            return Option.Some(4u64)
+        '5':
+            return Option.Some(5u64)
+        '6':
+            return Option.Some(6u64)
+        '7':
+            return Option.Some(7u64)
+        '8':
+            return Option.Some(8u64)
+        '9':
+            return Option.Some(9u64)
+        _:
+            return Option.None
+
+fn _digit_i64(value: char) -> Option[i64]:
+    match value:
+        '0':
+            return Option.Some(0i64)
+        '1':
+            return Option.Some(1i64)
+        '2':
+            return Option.Some(2i64)
+        '3':
+            return Option.Some(3i64)
+        '4':
+            return Option.Some(4i64)
+        '5':
+            return Option.Some(5i64)
+        '6':
+            return Option.Some(6i64)
+        '7':
+            return Option.Some(7i64)
+        '8':
+            return Option.Some(8i64)
+        '9':
+            return Option.Some(9i64)
+        _:
+            return Option.None
 
 /// Parses a base-ten signed integer with an optional leading sign.
 /// Surrounding whitespace is rejected; every scalar must be ASCII syntax.
 pub fn parse_i64(text: str) -> Result[i64, ParseError]:
-    pass
+    if _byte_len(text) == 0:
+        return Result.Err(ParseError.Empty)
+    var offset: usize = 0
+    var negative = false
+    match _next_scalar(text, offset):
+        Option.Some(first) if first.value == '-' || first.value == '+':
+            negative = first.value == '-'
+            offset = first.next
+            if offset == _byte_len(text):
+                return Result.Err(ParseError.InvalidSyntax)
+        Option.Some(_):
+            pass
+        Option.None:
+            return Result.Err(ParseError.InvalidSyntax)
+    var value: i64 = 0i64
+    while true:
+        match _next_scalar(text, offset):
+            Option.Some(step):
+                match _digit_i64(step.value):
+                    Option.Some(digit):
+                        match value.checked_mul(10i64):
+                            Option.Some(scaled):
+                                if negative:
+                                    match scaled.checked_sub(digit):
+                                        Option.Some(next):
+                                            value = next
+                                        Option.None:
+                                            return Result.Err(ParseError.OutOfRange)
+                                else:
+                                    match scaled.checked_add(digit):
+                                        Option.Some(next):
+                                            value = next
+                                        Option.None:
+                                            return Result.Err(ParseError.OutOfRange)
+                            Option.None:
+                                return Result.Err(ParseError.OutOfRange)
+                    Option.None:
+                        return Result.Err(ParseError.InvalidSyntax)
+                offset = step.next
+            Option.None:
+                return Result.Ok(value)
+    return Result.Ok(value)
 
 /// Parses a base-ten unsigned integer with an optional leading `+`.
 /// Surrounding whitespace is rejected; every scalar must be ASCII syntax.
 pub fn parse_u64(text: str) -> Result[u64, ParseError]:
-    pass
+    if _byte_len(text) == 0:
+        return Result.Err(ParseError.Empty)
+    var offset: usize = 0
+    match _next_scalar(text, offset):
+        Option.Some(first) if first.value == '+':
+            offset = first.next
+            if offset == _byte_len(text):
+                return Result.Err(ParseError.InvalidSyntax)
+        Option.Some(_):
+            pass
+        Option.None:
+            return Result.Err(ParseError.InvalidSyntax)
+    var value: u64 = 0u64
+    while true:
+        match _next_scalar(text, offset):
+            Option.Some(step):
+                match _digit_u64(step.value):
+                    Option.Some(digit):
+                        match value.checked_mul(10u64):
+                            Option.Some(scaled):
+                                match scaled.checked_add(digit):
+                                    Option.Some(next):
+                                        value = next
+                                    Option.None:
+                                        return Result.Err(ParseError.OutOfRange)
+                            Option.None:
+                                return Result.Err(ParseError.OutOfRange)
+                    Option.None:
+                        return Result.Err(ParseError.InvalidSyntax)
+                offset = step.next
+            Option.None:
+                return Result.Ok(value)
+    return Result.Ok(value)
 
 /// Parses `true` or `false` exactly, with no case folding or whitespace.
 pub fn parse_bool(text: str) -> Result[bool, ParseError]:
-    pass
+    if _byte_len(text) == 0:
+        return Result.Err(ParseError.Empty)
+    if text == "true":
+        return Result.Ok(true)
+    if text == "false":
+        return Result.Ok(false)
+    return Result.Err(ParseError.InvalidSyntax)

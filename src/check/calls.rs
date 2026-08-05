@@ -720,23 +720,19 @@ impl<'a> Checker<'a> {
                 .map(|name| self.resolved.symbol_text(*name));
             let name = self.resolved.symbol_text(declaration_data.name);
             let operation = match (module, name) {
-                (Some("fs"), "from") => Some(SystemOperation::PathFrom),
-                (Some("fs"), "is_empty") => Some(SystemOperation::PathIsEmpty),
-                (Some("fs"), "join") => Some(SystemOperation::PathJoin),
-                (Some("fs"), "file_name") => Some(SystemOperation::PathFileName),
-                (Some("fs"), "parent") => Some(SystemOperation::PathParent),
-                (Some("fs"), "open") => Some(SystemOperation::Open),
-                (Some("fs"), "read_dir") => Some(SystemOperation::ReadDir),
-                (Some("fs"), "metadata") => Some(SystemOperation::Metadata),
-                (Some("fs"), "create_dir") => Some(SystemOperation::CreateDir),
-                (Some("fs"), "remove_dir") => Some(SystemOperation::RemoveDir),
-                (Some("fs"), "remove_file") => Some(SystemOperation::RemoveFile),
-                (Some("fs"), "rename") => Some(SystemOperation::Rename),
-                (Some("env"), "args") => Some(SystemOperation::Args),
-                (Some("env"), "get") => Some(SystemOperation::EnvGet),
-                (Some("env"), "current_dir") => Some(SystemOperation::CurrentDir),
-                (Some("process"), "run") => Some(SystemOperation::ProcessRun),
-                (Some("process"), "exit") => Some(SystemOperation::ProcessExit),
+                (Some("fs"), "_view") => Some(SystemOperation::PathView),
+                (Some("fs"), "_open") => Some(SystemOperation::Open),
+                (Some("fs"), "_read_dir") => Some(SystemOperation::ReadDir),
+                (Some("fs"), "_metadata") => Some(SystemOperation::Metadata),
+                (Some("fs"), "_create_dir") => Some(SystemOperation::CreateDir),
+                (Some("fs"), "_remove_dir") => Some(SystemOperation::RemoveDir),
+                (Some("fs"), "_remove_file") => Some(SystemOperation::RemoveFile),
+                (Some("fs"), "_rename") => Some(SystemOperation::Rename),
+                (Some("env"), "_args") => Some(SystemOperation::Args),
+                (Some("env"), "_get") => Some(SystemOperation::EnvGet),
+                (Some("env"), "_current_dir") => Some(SystemOperation::CurrentDir),
+                (Some("process"), "_run") => Some(SystemOperation::ProcessRun),
+                (Some("process"), "_exit") => Some(SystemOperation::ProcessExit),
                 _ => None,
             };
             if let Some(operation) = operation {
@@ -747,17 +743,11 @@ impl<'a> Checker<'a> {
             }
         }
         if let Some(operation) = [
-            ("find", TextOperation::Find),
-            ("contains", TextOperation::Contains),
-            ("split", TextOperation::Split),
-            ("split_string", TextOperation::SplitString),
-            ("trim", TextOperation::Trim),
-            ("trim_string", TextOperation::TrimString),
-            ("to_lowercase", TextOperation::Lowercase),
-            ("to_uppercase", TextOperation::Uppercase),
-            ("parse_i64", TextOperation::ParseI64),
-            ("parse_u64", TextOperation::ParseU64),
-            ("parse_bool", TextOperation::ParseBool),
+            ("_byte_len", TextOperation::ByteLen),
+            ("_next_scalar", TextOperation::NextScalar),
+            ("_slice_bytes", TextOperation::SliceBytes),
+            ("_string_view", TextOperation::StringView),
+            ("_from_chars", TextOperation::FromChars),
         ]
         .into_iter()
         .find_map(|(name, operation)| {
@@ -768,11 +758,17 @@ impl<'a> Checker<'a> {
             return Some(StandardCall::Text {
                 operation,
                 result_type: return_type,
+                input_type: self
+                    .typed
+                    .function_signatures
+                    .get(&declaration)
+                    .and_then(|signature| signature.parameters.first())
+                    .map_or(self.typed.types.error(), |parameter| parameter.ty),
             });
         }
         if self
             .resolved
-            .is_standard_declaration(declaration, "monotonic_now")
+            .is_standard_declaration(declaration, "_monotonic_now")
         {
             return Some(StandardCall::ClockNow {
                 clock_type: return_type,
@@ -781,7 +777,7 @@ impl<'a> Checker<'a> {
         }
         if self
             .resolved
-            .is_standard_declaration(declaration, "system_now")
+            .is_standard_declaration(declaration, "_system_now")
         {
             return Some(StandardCall::ClockNow {
                 clock_type: return_type,

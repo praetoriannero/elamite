@@ -47,7 +47,8 @@ To produce a `.vsix`, run `npx @vscode/vsce package` from this directory.
 - Formatted strings, with interpolation highlighted as real expressions,
   variable names using the same scope as ordinary source, nested braces
   balanced, and `{{`/`}}` treated as literal braces
-- `@importc`/`@exportc` attributes and built-in or user-defined macros, with
+- `@importc`/`@exportc` attributes, compiler-owned `@intrinsic` declarations,
+  and built-in or user-defined macros, with
   macro names using the same function-call scope as ordinary functions
 - Declaration names for `fn`, `struct`, `enum`, `trait`, `type`, and `mod`
 - Operators and punctuation

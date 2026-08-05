@@ -1932,33 +1932,7 @@ impl<'a> CEmitter<'a> {
                 );
                 continue;
             }
-            if operation == SystemOperation::PathFrom {
-                let Some(argument) = arguments.first().copied() else {
-                    continue;
-                };
-                let Some(argument_c) = self.c_type(argument, Some(span)) else {
-                    continue;
-                };
-                let Some(structure) = self.structs.get(&result).copied() else {
-                    continue;
-                };
-                let Some((field, _, _)) = structure.fields.first() else {
-                    continue;
-                };
-                let _ = writeln!(
-                    self.output,
-                    "static {result_c} {name}({argument_c} value) {{ return ({result_c}){{ .{} = el_string_from(value) }}; }}\n",
-                    field_name(*field)
-                );
-                continue;
-            }
-            if matches!(
-                operation,
-                SystemOperation::PathIsEmpty
-                    | SystemOperation::PathJoin
-                    | SystemOperation::PathFileName
-                    | SystemOperation::PathParent
-            ) {
+            if operation == SystemOperation::PathView {
                 let Some(path) = arguments.first().copied() else {
                     continue;
                 };
@@ -1967,7 +1941,6 @@ impl<'a> CEmitter<'a> {
                 else {
                     continue;
                 };
-                let member = field_name(field);
                 let access = if matches!(
                     self.typed.types.kind(self.resolve_alias(path)),
                     TypeKind::Reference { .. }
@@ -1976,74 +1949,11 @@ impl<'a> CEmitter<'a> {
                 } else {
                     "."
                 };
-                match operation {
-                    SystemOperation::PathIsEmpty => {
-                        let _ = writeln!(
-                            self.output,
-                            "static {result_c} {name}({path_c} path) {{return path{access}{member}.length==0U;}}\n"
-                        );
-                    }
-                    SystemOperation::PathJoin => {
-                        let Some(component) = arguments.get(1).copied() else {
-                            continue;
-                        };
-                        let Some(component_c) = self.c_type(component, Some(span)) else {
-                            continue;
-                        };
-                        let Some(structure) = self.structs.get(&result).copied() else {
-                            continue;
-                        };
-                        let Some(out_field) = structure.fields.first().map(|f| f.0) else {
-                            continue;
-                        };
-                        let _ = writeln!(
-                            self.output,
-                            "static {result_c} {name}({path_c} path,{component_c} component) {{{result_c} out={{0}};size_t n=path{access}{member}.length,total;bool slash=n!=0U&&path{access}{member}.bytes[n-1U]!='/';if(component.length>SIZE_MAX-n-(slash?1U:0U))el_out_of_memory();total=n+(slash?1U:0U)+component.length;out.{}=el_string_allocate(total);memcpy((char*)out.{}.bytes,path{access}{member}.bytes,n);if(slash)((char*)out.{}.bytes)[n++]='/';memcpy((char*)out.{}.bytes+n,component.bytes,component.length);((char*)out.{}.bytes)[total]='\\0';return out;}}\n",
-                            field_name(out_field),
-                            field_name(out_field),
-                            field_name(out_field),
-                            field_name(out_field),
-                            field_name(out_field)
-                        );
-                    }
-                    SystemOperation::PathFileName => {
-                        let Some((payload, _, _)) = self.option_variant_payload(result, "Some")
-                        else {
-                            continue;
-                        };
-                        let none = self.option_expression(result, None);
-                        let some = self.option_expression(result, Some(("owned", payload)));
-                        let _ = writeln!(
-                            self.output,
-                            "static {result_c} {name}({path_c} path) {{size_t end=path{access}{member}.length,start;el_string owned;while(end>0U&&path{access}{member}.bytes[end-1U]=='/')--end;if(end==0U)return {none};start=end;while(start>0U&&path{access}{member}.bytes[start-1U]!='/')--start;owned=el_string_from((el_str){{path{access}{member}.bytes+start,end-start}});return {some};}}\n"
-                        );
-                    }
-                    SystemOperation::PathParent => {
-                        let Some((payload, _, _)) = self.option_variant_payload(result, "Some")
-                        else {
-                            continue;
-                        };
-                        let Some(payload_c) = self.c_type(payload, Some(span)) else {
-                            continue;
-                        };
-                        let Some(payload_field) = self
-                            .structs
-                            .get(&payload)
-                            .and_then(|s| s.fields.first())
-                            .map(|f| f.0)
-                        else {
-                            continue;
-                        };
-                        let none = self.option_expression(result, None);
-                        let some = self.option_expression(result, Some(("parent", payload)));
-                        let _ = writeln!(
-                            self.output,
-                            "static {result_c} {name}({path_c} path) {{size_t end=path{access}{member}.length;{payload_c} parent={{0}};while(end>0U&&path{access}{member}.bytes[end-1U]=='/')--end;while(end>0U&&path{access}{member}.bytes[end-1U]!='/')--end;if(end==0U)return {none};while(end>1U&&path{access}{member}.bytes[end-1U]=='/')--end;parent.{}=el_string_from((el_str){{path{access}{member}.bytes,end}});return {some};}}\n",
-                            field_name(payload_field)
-                        );
-                    }
-                    _ => {}
-                }
+                let member = field_name(field);
+                let _ = writeln!(
+                    self.output,
+                    "static {result_c} {name}({path_c} path) {{ return (el_str){{path{access}{member}.bytes,path{access}{member}.length}}; }}\n"
+                );
                 continue;
             }
             if matches!(
@@ -2151,23 +2061,6 @@ impl<'a> CEmitter<'a> {
         let field = self
             .enums
             .get(&result)?
-            .variants
-            .iter()
-            .find(|item| item.id == variant)?
-            .fields
-            .first()?;
-        Some((field.2, field.0, variant))
-    }
-
-    fn option_variant_payload(
-        &self,
-        option: TypeId,
-        name: &str,
-    ) -> Option<(TypeId, FieldId, VariantId)> {
-        let variant = self.resolved.standard_variant("Option", name)?;
-        let field = self
-            .enums
-            .get(&option)?
             .variants
             .iter()
             .find(|item| item.id == variant)?
@@ -2455,7 +2348,7 @@ impl<'a> CEmitter<'a> {
     for (i = 0U; i < arguments.length; ++i) {{ if (memchr(arguments.values[i].bytes, '\\0', arguments.values[i].length) != NULL) goto invalid_error; argv[i + 1U] = (char *)malloc(arguments.values[i].length + 1U); if (argv[i + 1U] == NULL) goto unavailable_error; memcpy(argv[i + 1U], arguments.values[i].bytes, arguments.values[i].length); argv[i + 1U][arguments.values[i].length] = '\\0'; }}
     out_file = tmpfile(); err_file = tmpfile(); if (out_file == NULL || err_file == NULL || pipe(exec_pipe) != 0) goto unavailable_error; (void)fcntl(exec_pipe[1], F_SETFD, FD_CLOEXEC);
     child = fork(); if (child < 0) {{ close(exec_pipe[0]); close(exec_pipe[1]); goto unavailable_error; }}
-    if (child == 0) {{ close(exec_pipe[0]); if (dup2(fileno(out_file), STDOUT_FILENO) < 0 || dup2(fileno(err_file), STDERR_FILENO) < 0) {{ child_errno = errno; (void)write(exec_pipe[1], &child_errno, sizeof(child_errno)); _exit(126); }} execv(path, argv); child_errno = errno; (void)write(exec_pipe[1], &child_errno, sizeof(child_errno)); _exit(127); }}
+    if (child == 0) {{ close(exec_pipe[0]); if (dup2(fileno(out_file), STDOUT_FILENO) < 0 || dup2(fileno(err_file), STDERR_FILENO) < 0) {{ child_errno = errno; if (write(exec_pipe[1], &child_errno, sizeof(child_errno)) < 0) child_errno = errno; _exit(126); }} execv(path, argv); child_errno = errno; if (write(exec_pipe[1], &child_errno, sizeof(child_errno)) < 0) child_errno = errno; _exit(127); }}
     close(exec_pipe[1]); {{ ssize_t count; do {{ count = read(exec_pipe[0], &child_errno, sizeof(child_errno)); }} while (count < 0 && errno == EINTR); if (count < 0 || (count != 0 && count != (ssize_t)sizeof(child_errno))) child_errno = EIO; else if (count == 0) child_errno = 0; }} close(exec_pipe[0]); {{ pid_t waited; do {{ waited = waitpid(child, &status, 0); }} while (waited < 0 && errno == EINTR); if (waited < 0 && child_errno == 0) child_errno = EIO; }}
     for (i = 0U; i < arguments.length; ++i) {{ free(argv[i + 1U]); }}
     free(argv); argv = NULL; free(path); path = NULL;
@@ -2566,18 +2459,38 @@ unavailable_error:
         if text_calls.is_empty() {
             return;
         }
-        self.output.push_str(
-            "static size_t el_utf8_width(unsigned char c) { return c < 0x80U ? 1U : c < 0xE0U ? 2U : c < 0xF0U ? 3U : 4U; }\n\
-             static uintptr_t el_utf8_scalars(const char *p, size_t n) { uintptr_t r = 0U; size_t i = 0U; while (i < n) { i += el_utf8_width((unsigned char)p[i]); ++r; } return r; }\n\
-             static size_t el_text_find_byte(el_str text, el_str needle) { size_t i; if (needle.length == 0U) return 0U; if (needle.length > text.length) return SIZE_MAX; for (i = 0U; i <= text.length - needle.length; ++i) if ((i == 0U || (((unsigned char)text.bytes[i] & 0xC0U) != 0x80U)) && memcmp(text.bytes + i, needle.bytes, needle.length) == 0) return i; return SIZE_MAX; }\n\
-             static uint32_t el_utf8_decode(const char *p, size_t n, size_t *width) { unsigned char a = (unsigned char)p[0]; if (a < 0x80U) { *width=1U; return a; } if (a < 0xE0U && n>=2U) { *width=2U; return ((uint32_t)(a&31U)<<6)|((unsigned char)p[1]&63U); } if (a < 0xF0U && n>=3U) { *width=3U; return ((uint32_t)(a&15U)<<12)|((uint32_t)((unsigned char)p[1]&63U)<<6)|((unsigned char)p[2]&63U); } *width=4U; return ((uint32_t)(a&7U)<<18)|((uint32_t)((unsigned char)p[1]&63U)<<12)|((uint32_t)((unsigned char)p[2]&63U)<<6)|((unsigned char)p[3]&63U); }\n\
-             static bool el_unicode_space(uint32_t c) { return (c>=9U&&c<=13U)||c==32U||c==133U||c==160U||c==5760U||(c>=8192U&&c<=8202U)||c==8232U||c==8233U||c==8239U||c==8287U||c==12288U; }\n\
-             static el_str el_text_trim_view(el_str text) { size_t first=0U,last=text.length,w; while(first<last) { uint32_t c=el_utf8_decode(text.bytes+first,last-first,&w); if(!el_unicode_space(c)) break; first+=w; } while(first<last) { size_t start=last-1U; while(start>first && (((unsigned char)text.bytes[start]&0xC0U)==0x80U)) --start; (void)el_utf8_decode(text.bytes+start,last-start,&w); if(!el_unicode_space(el_utf8_decode(text.bytes+start,last-start,&w))) break; last=start; } return (el_str){text.bytes+first,last-first}; }\n\n",
-        );
+        if text_calls.iter().any(|(call, _)| {
+            matches!(
+                call,
+                StandardCall::Text {
+                    operation: TextOperation::NextScalar,
+                    ..
+                }
+            )
+        }) {
+            self.output.push_str(
+                "static uint32_t el_utf8_decode(const char *p, size_t n, size_t *width) { unsigned char a = (unsigned char)p[0]; if (a < 0x80U) { *width=1U; return a; } if (a < 0xE0U && n>=2U) { *width=2U; return ((uint32_t)(a&31U)<<6)|((unsigned char)p[1]&63U); } if (a < 0xF0U && n>=3U) { *width=3U; return ((uint32_t)(a&15U)<<12)|((uint32_t)((unsigned char)p[1]&63U)<<6)|((unsigned char)p[2]&63U); } *width=4U; return ((uint32_t)(a&7U)<<18)|((uint32_t)((unsigned char)p[1]&63U)<<12)|((uint32_t)((unsigned char)p[2]&63U)<<6)|((unsigned char)p[3]&63U); }\n\n",
+            );
+        }
+        if text_calls.iter().any(|(call, _)| {
+            matches!(
+                call,
+                StandardCall::Text {
+                    operation: TextOperation::FromChars,
+                    ..
+                }
+            )
+        }) {
+            self.output.push_str(
+                "static size_t el_utf8_encoded_width(uint32_t value) { return value < UINT32_C(0x80) ? 1U : value < UINT32_C(0x800) ? 2U : value < UINT32_C(0x10000) ? 3U : 4U; }\n\
+                 static size_t el_utf8_encode(char *out, uint32_t value) { if(value<UINT32_C(0x80)){out[0]=(char)value;return 1U;} if(value<UINT32_C(0x800)){out[0]=(char)(0xC0U|(value>>6));out[1]=(char)(0x80U|(value&0x3FU));return 2U;} if(value<UINT32_C(0x10000)){out[0]=(char)(0xE0U|(value>>12));out[1]=(char)(0x80U|((value>>6)&0x3FU));out[2]=(char)(0x80U|(value&0x3FU));return 3U;} out[0]=(char)(0xF0U|(value>>18));out[1]=(char)(0x80U|((value>>12)&0x3FU));out[2]=(char)(0x80U|((value>>6)&0x3FU));out[3]=(char)(0x80U|(value&0x3FU));return 4U;}\n\n",
+            );
+        }
         for (call, (result, _)) in text_calls {
             let StandardCall::Text {
                 operation,
                 result_type,
+                input_type,
             } = call
             else {
                 continue;
@@ -2587,140 +2500,78 @@ unavailable_error:
                 continue;
             };
             match operation {
-                TextOperation::Find => {
+                TextOperation::ByteLen => {
+                    let _ = writeln!(
+                        self.output,
+                        "static {result_c} {name}(el_str text) {{ return (uintptr_t)text.length; }}\n"
+                    );
+                }
+                TextOperation::StringView => {
+                    let _ = writeln!(
+                        self.output,
+                        "static {result_c} {name}(el_string text) {{ return (el_str){{text.bytes,text.length}}; }}\n"
+                    );
+                }
+                TextOperation::SliceBytes => {
                     let none = self.option_expression(*result_type, None);
-                    let some = self.option_expression(
-                        *result_type,
-                        Some((
-                            "el_utf8_scalars(text.bytes, byte)",
-                            self.typed.types.primitive_id(PrimitiveType::Usize),
-                        )),
-                    );
+                    let str_type = self.typed.types.primitive_id(PrimitiveType::Str);
+                    let some = self.option_expression(*result_type, Some(("view", str_type)));
                     let _ = writeln!(
                         self.output,
-                        "static {result_c} {name}(el_str text, el_str needle) {{ size_t byte=el_text_find_byte(text,needle); if(byte==SIZE_MAX) return {none}; return {some}; }}\n"
+                        "static {result_c} {name}(el_str text, uintptr_t start, uintptr_t end) {{ el_str view; if(start>end||end>(uintptr_t)text.length) return {none}; if((start<(uintptr_t)text.length&&(((unsigned char)text.bytes[start]&0xC0U)==0x80U))||(end<(uintptr_t)text.length&&(((unsigned char)text.bytes[end]&0xC0U)==0x80U))) return {none}; view=(el_str){{text.bytes+start,(size_t)(end-start)}}; return {some}; }}\n"
                     );
                 }
-                TextOperation::Contains => {
+                TextOperation::NextScalar => {
+                    let TypeKind::Nominal { arguments, .. } =
+                        self.typed.types.kind(*result_type).clone()
+                    else {
+                        continue;
+                    };
+                    let [step_type] = arguments.as_slice() else {
+                        continue;
+                    };
+                    let Some(fields) = self
+                        .structs
+                        .get(step_type)
+                        .map(|structure| structure.fields.clone())
+                    else {
+                        continue;
+                    };
+                    let Some((value_field, _, _)) =
+                        fields.iter().find(|(_, field, _)| field == "value")
+                    else {
+                        continue;
+                    };
+                    let Some((next_field, _, _)) =
+                        fields.iter().find(|(_, field, _)| field == "next")
+                    else {
+                        continue;
+                    };
+                    let Some(step_c) = self.c_type(*step_type, None) else {
+                        continue;
+                    };
+                    let step = format!(
+                        "({step_c}){{ .{} = value, .{} = (uintptr_t)(start + width) }}",
+                        field_name(*value_field),
+                        field_name(*next_field)
+                    );
+                    let none = self.option_expression(*result_type, None);
+                    let some = self.option_expression(*result_type, Some((&step, *step_type)));
                     let _ = writeln!(
                         self.output,
-                        "static bool {name}(el_str text, el_str needle) {{ return el_text_find_byte(text,needle)!=SIZE_MAX; }}\n"
+                        "static {result_c} {name}(el_str text, uintptr_t start) {{ size_t width; uint32_t value; if(start>=(uintptr_t)text.length||(((unsigned char)text.bytes[start]&0xC0U)==0x80U)) return {none}; value=el_utf8_decode(text.bytes+start,text.length-(size_t)start,&width); if(start>UINTPTR_MAX-width||start+width>(uintptr_t)text.length) return {none}; return {some}; }}\n"
                     );
                 }
-                TextOperation::Trim => {
-                    let _ = writeln!(
-                        self.output,
-                        "static el_str {name}(el_str text) {{ return el_text_trim_view(text); }}\n"
-                    );
-                }
-                TextOperation::TrimString => {
-                    let _ = writeln!(
-                        self.output,
-                        "static el_string {name}(el_string text) {{ el_str view=el_text_trim_view((el_str){{text.bytes,text.length}}); return el_string_from(view); }}\n"
-                    );
-                }
-                TextOperation::Lowercase | TextOperation::Uppercase => {
-                    let upper = matches!(operation, TextOperation::Uppercase);
-                    let ascii_a = if upper { "'a'" } else { "'A'" };
-                    let ascii_z = if upper { "'z'" } else { "'Z'" };
-                    let delta = if upper { "-'a'+'A'" } else { "-'A'+'a'" };
-                    let special = if upper {
-                        "if(i+1U<text.length&&(unsigned char)text.bytes[i]==0xC3U&&(unsigned char)text.bytes[i+1U]==0x9FU){ ((char*)out.bytes)[w++]='S'; ((char*)out.bytes)[w++]='S'; i+=2U; continue; }"
-                    } else {
-                        ""
+                TextOperation::FromChars => {
+                    let Some(input_c) = self.c_type(*input_type, None) else {
+                        continue;
                     };
                     let _ = writeln!(
                         self.output,
-                        "static el_string {name}(el_str text) {{ size_t i=0U,w=0U; el_string out; if(text.length>SIZE_MAX/2U) el_out_of_memory(); out=el_string_allocate(text.length*2U); while(i<text.length){{ unsigned char c=(unsigned char)text.bytes[i]; {special} if(c>={ascii_a}&&c<={ascii_z}) c=(unsigned char)(c{delta}); ((char*)out.bytes)[w++]=(char)c; ++i; }} out.length=w; ((char*)out.bytes)[w]='\\0'; return out; }}\n"
+                        "static {result_c} {name}({input_c} chars) {{ uintptr_t i; size_t total=0U,written=0U,width; el_string out; for(i=0U;i<chars.length;++i){{width=el_utf8_encoded_width(chars.values[i]);if(width>SIZE_MAX-total)el_out_of_memory();total+=width;}} out=el_string_allocate(total);for(i=0U;i<chars.length;++i)written+=el_utf8_encode((char*)out.bytes+written,chars.values[i]);((char*)out.bytes)[written]='\\0';return out; }}\n"
                     );
                 }
-                TextOperation::Split | TextOperation::SplitString => {
-                    self.emit_text_split(*call, *result_type, *operation)
-                }
-                TextOperation::ParseI64 | TextOperation::ParseU64 | TextOperation::ParseBool => {
-                    self.emit_text_parse(*call, *result_type, *operation)
-                }
             }
-        }
-    }
-
-    fn emit_text_split(&mut self, call: StandardCall, result: TypeId, operation: TextOperation) {
-        let Some(result_c) = self.c_type(result, None) else {
-            return;
-        };
-        let name = standard_call_name(call);
-        let owned = matches!(operation, TextOperation::SplitString);
-        let input = if owned {
-            "el_string text"
-        } else {
-            "el_str text"
-        };
-        let element = if owned { "el_string" } else { "el_str" };
-        let conversion = if owned {
-            "el_string_from(piece)"
-        } else {
-            "piece"
-        };
-        let _ = writeln!(self.output,
-            "static {result_c} {name}({input}, el_str separator) {{\n\
-                 {result_c} out={{0}}; size_t start=0U,pos,count=0U,i=0U;\n\
-                 if(separator.length==0U) count=(size_t)el_utf8_scalars(text.bytes,text.length); else {{ while(i<=text.length){{ el_str tail={{text.bytes+i,text.length-i}}; pos=el_text_find_byte(tail,separator); if(pos==SIZE_MAX) break; ++count; i+=pos+separator.length; }} ++count; }}\n\
-                 out.length=(uintptr_t)count; out.capacity=(uintptr_t)count; if(count!=0U) out.values=({element}*)el_runtime_alloc(sizeof({element})*count);\n\
-                 count=0U; if(separator.length==0U){{ while(start<text.length){{ size_t width=el_utf8_width((unsigned char)text.bytes[start]); el_str piece={{text.bytes+start,width}}; out.values[count++]={conversion}; start+=width; }} }} else {{ while(start<=text.length){{ el_str tail={{text.bytes+start,text.length-start}}; pos=el_text_find_byte(tail,separator); if(pos==SIZE_MAX) pos=text.length-start; el_str piece={{text.bytes+start,pos}}; out.values[count++]={conversion}; if(start+pos==text.length) break; start+=pos+separator.length; }} }} return out;\n}}
-");
-    }
-
-    fn emit_text_parse(&mut self, call: StandardCall, result: TypeId, operation: TextOperation) {
-        let TypeKind::Nominal { arguments, .. } = self.typed.types.kind(result).clone() else {
-            return;
-        };
-        let [ok_type, error_type] = arguments.as_slice() else {
-            return;
-        };
-        let error = |this: &mut Self, name: &str| {
-            let variant = this.resolved.standard_variant("ParseError", name)?;
-            Some(this.enum_unit_variant_expression(*error_type, variant))
-        };
-        let Some(empty_value) = error(self, "Empty") else {
-            return;
-        };
-        let Some(syntax_value) = error(self, "InvalidSyntax") else {
-            return;
-        };
-        let Some(range_value) = error(self, "OutOfRange") else {
-            return;
-        };
-        let empty = self.result_expression(result, "Err", (&empty_value, *error_type));
-        let syntax = self.result_expression(result, "Err", (&syntax_value, *error_type));
-        let range = self.result_expression(result, "Err", (&range_value, *error_type));
-        let name = standard_call_name(call);
-        let Some(result_c) = self.c_type(result, None) else {
-            return;
-        };
-        match operation {
-            TextOperation::ParseBool => {
-                let yes = self.result_expression(result, "Ok", ("true", *ok_type));
-                let no = self.result_expression(result, "Ok", ("false", *ok_type));
-                let _ = writeln!(
-                    self.output,
-                    "static {result_c} {name}(el_str text) {{ if(text.length==0U) return {empty}; if(text.length==4U&&memcmp(text.bytes,\"true\",4U)==0) return {yes}; if(text.length==5U&&memcmp(text.bytes,\"false\",5U)==0) return {no}; return {syntax}; }}\n"
-                );
-            }
-            TextOperation::ParseU64 => {
-                let ok = self.result_expression(result, "Ok", ("value", *ok_type));
-                let _ = writeln!(
-                    self.output,
-                    "static {result_c} {name}(el_str text) {{ size_t i=0U; uint64_t value=0U,digit; if(text.length==0U) return {empty}; if(text.bytes[0]=='+'){{i=1U;if(i==text.length)return {syntax};}} for(;i<text.length;++i){{if(text.bytes[i]<'0'||text.bytes[i]>'9')return {syntax};digit=(uint64_t)(text.bytes[i]-'0');if(value>(UINT64_MAX-digit)/10U)return {range};value=value*10U+digit;}} return {ok}; }}\n"
-                );
-            }
-            TextOperation::ParseI64 => {
-                let ok = self.result_expression(result, "Ok", ("value", *ok_type));
-                let _ = writeln!(
-                    self.output,
-                    "static {result_c} {name}(el_str text) {{ size_t i=0U; uint64_t magnitude=0U,limit,digit; int negative=0; int64_t value; if(text.length==0U)return {empty}; if(text.bytes[0]=='-'||text.bytes[0]=='+'){{negative=text.bytes[0]=='-';i=1U;if(i==text.length)return {syntax};}} limit=negative?(uint64_t)INT64_MAX+1U:(uint64_t)INT64_MAX; for(;i<text.length;++i){{if(text.bytes[i]<'0'||text.bytes[i]>'9')return {syntax};digit=(uint64_t)(text.bytes[i]-'0');if(magnitude>(limit-digit)/10U)return {range};magnitude=magnitude*10U+digit;}} value=negative?(magnitude==(uint64_t)INT64_MAX+1U?INT64_MIN:-(int64_t)magnitude):(int64_t)magnitude; return {ok}; }}\n"
-                );
-            }
-            _ => {}
         }
     }
 

@@ -12,6 +12,116 @@ pub struct Intrinsic {
     pub reason: &'static str,
 }
 
+/// One compiler-owned bodyless standard declaration and the irreducible
+/// capability supplied by its backend lowering. These declarations are
+/// intentionally private implementation details of shipped Elamite modules.
+pub const NATIVE_DECLARATIONS: &[Intrinsic] = &[
+    Intrinsic {
+        path: "std.panic",
+        reason: "process-fatal runtime trap entry with caller location",
+    },
+    Intrinsic {
+        path: "std.trap",
+        reason: "typed process-fatal runtime trap entry with caller location",
+    },
+    Intrinsic {
+        path: "std.fs._view",
+        reason: "borrowed view of opaque owned text stored by a source path",
+    },
+    Intrinsic {
+        path: "std.fs._open",
+        reason: "native file-handle acquisition",
+    },
+    Intrinsic {
+        path: "std.fs._read_dir",
+        reason: "native directory-stream acquisition",
+    },
+    Intrinsic {
+        path: "std.fs._metadata",
+        reason: "host filesystem metadata query",
+    },
+    Intrinsic {
+        path: "std.fs._create_dir",
+        reason: "host filesystem directory creation",
+    },
+    Intrinsic {
+        path: "std.fs._remove_dir",
+        reason: "host filesystem directory removal",
+    },
+    Intrinsic {
+        path: "std.fs._remove_file",
+        reason: "host filesystem entry removal",
+    },
+    Intrinsic {
+        path: "std.fs._rename",
+        reason: "host filesystem rename operation",
+    },
+    Intrinsic {
+        path: "std.env._args",
+        reason: "host process argument snapshot",
+    },
+    Intrinsic {
+        path: "std.env._get",
+        reason: "host process environment lookup",
+    },
+    Intrinsic {
+        path: "std.env._current_dir",
+        reason: "host current-directory query",
+    },
+    Intrinsic {
+        path: "std.process._run",
+        reason: "native child-process creation and pipe collection",
+    },
+    Intrinsic {
+        path: "std.process._exit",
+        reason: "immediate host process termination",
+    },
+    Intrinsic {
+        path: "std.time._monotonic_now",
+        reason: "host monotonic-clock read",
+    },
+    Intrinsic {
+        path: "std.time._system_now",
+        reason: "host wall-clock read",
+    },
+    Intrinsic {
+        path: "std.testing.assert",
+        reason: "structured assertion trap entry with caller location",
+    },
+    Intrinsic {
+        path: "std.testing.fail",
+        reason: "formatted structured assertion trap entry with caller location",
+    },
+    Intrinsic {
+        path: "std.text._byte_len",
+        reason: "opaque borrowed-text descriptor length",
+    },
+    Intrinsic {
+        path: "std.text._next_scalar",
+        reason: "validated UTF-8 decoding over an opaque text descriptor",
+    },
+    Intrinsic {
+        path: "std.text._slice_bytes",
+        reason: "checked UTF-8 view construction retaining managed backing",
+    },
+    Intrinsic {
+        path: "std.text._string_view",
+        reason: "borrowed view of opaque owned-text backing",
+    },
+    Intrinsic {
+        path: "std.text._from_chars",
+        reason: "managed owned-text allocation and UTF-8 scalar encoding",
+    },
+];
+
+#[must_use]
+pub fn native_declaration_reason(path: &str) -> Option<&'static str> {
+    NATIVE_DECLARATIONS
+        .iter()
+        .find(|intrinsic| intrinsic.path == path)
+        .map(|intrinsic| intrinsic.reason)
+}
+
 pub const ROOT_SOURCE: &str = include_str!("../stdlib/src/lib.elx");
 pub const IO_SOURCE: &str = include_str!("../stdlib/src/io.elx");
 pub const FS_SOURCE: &str = include_str!("../stdlib/src/fs.elx");

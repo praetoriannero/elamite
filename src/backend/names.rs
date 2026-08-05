@@ -87,19 +87,14 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         StandardCall::Text {
             operation,
             result_type,
+            ..
         } => {
             let operation = match operation {
-                TextOperation::Find => "find",
-                TextOperation::Contains => "contains",
-                TextOperation::Split => "split",
-                TextOperation::SplitString => "split_string",
-                TextOperation::Trim => "trim",
-                TextOperation::TrimString => "trim_string",
-                TextOperation::Lowercase => "lowercase",
-                TextOperation::Uppercase => "uppercase",
-                TextOperation::ParseI64 => "parse_i64",
-                TextOperation::ParseU64 => "parse_u64",
-                TextOperation::ParseBool => "parse_bool",
+                TextOperation::ByteLen => "byte_len",
+                TextOperation::NextScalar => "next_scalar",
+                TextOperation::SliceBytes => "slice_bytes",
+                TextOperation::StringView => "string_view",
+                TextOperation::FromChars => "from_chars",
             };
             return format!("el_text_{operation}_t{}", result_type.index());
         }
@@ -108,11 +103,7 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
             result_type,
         } => {
             let operation = match operation {
-                SystemOperation::PathFrom => "path_from",
-                SystemOperation::PathIsEmpty => "path_is_empty",
-                SystemOperation::PathJoin => "path_join",
-                SystemOperation::PathFileName => "path_file_name",
-                SystemOperation::PathParent => "path_parent",
+                SystemOperation::PathView => "path_view",
                 SystemOperation::Open => "fs_open",
                 SystemOperation::ReadDir => "fs_read_dir",
                 SystemOperation::Metadata => "fs_metadata",

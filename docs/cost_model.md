@@ -1,6 +1,6 @@
 # Elamite implementation cost model
 
-> Version: 13
+> Version: 14
 >
 > Applies to: the compiler targeting 0.10.0-draft on Linux x86 and x86-64
 >
@@ -11,7 +11,8 @@
 > copies, including spawn environments, join results, channel messages, and
 > mutex storage and results. No recursive copy-helper boundary remains. Unsafe
 > raw-pointer arithmetic, indexing, and relational ordering add no managed
-> allocation.
+> allocation. Standard text and lexical path algorithms now execute as
+> ordinary Elamite over a minimal UTF-8/runtime kernel.
 
 This document explains where the current compiler copies values, allocates
 storage, retains memory, and synchronizes. `spec.md` defines the 0.10 observable
@@ -59,7 +60,7 @@ width.
 | `Identity[T]`, `ForeignRoot`, thread/channel/mutex/atomic handles | Shared identity | One managed/raw handle pointer; copying is constant-size and preserves synchronized or registered state | Constructors allocate state; handle copies do not | Ordinary shallow copying treats these like every other identity-bearing descriptor |
 | Slices, including variadic parameter packs | Immutable view | Pointer plus length; a variadic call currently materializes managed backing for its trailing arguments | One backing allocation for a nonempty variadic pack | A proven nonescaping pack may eventually use caller storage |
 | `Duration`, `Instant`, `SystemTime`, `Generator` | Independent numeric state; clock domains remain nominally distinct | One inline `u64`; copying and clock reads are constant-size | None | Clock reads do not create synchronization edges; generator state advances only through its mutable receiver |
-| Filesystem paths and metadata | Ordinary shallow structs | A path contains one shared-backing `String` descriptor; metadata and status records are inline aggregates | Path construction or transformation allocates owned text; metadata copying allocates nothing | Path copies share their string backing; operations never expose a reference into managed storage |
+| Filesystem paths and metadata | Ordinary shallow structs | A path contains one shared-backing `String` descriptor; metadata and status records are inline aggregates | Path construction allocates owned text; source-hosted lexical transformations may allocate a split vector and one or more concatenation results; metadata copying allocates nothing | Path copies share their string backing; operations never expose a reference into managed storage |
 | File and directory handles | Shared native-resource identity with idempotent cleanup | One pointer to managed handle state containing the native handle and closed flag | One state allocation on successful open | Copies preserve one close state; unreachable open handles can retain native resources, so deterministic code uses `defer` |
 
 `Map` and `Set` operations are currently `O(n)` lookup operations. Their names
@@ -96,8 +97,8 @@ away from the tail shifts the remaining inline element representations.
 | Binary search | Returns the first equal index in sorted input | `O(log n)` comparisons over a slice or copied vector descriptor, with no allocation | No backing is retained beyond the ordinary argument lifetime |
 | Seeded randomness | Advances an explicit SplitMix64 state with a versioned output sequence | Constant-size integer arithmetic with no allocation; rejection sampling may draw repeatedly | Fixed seeds are reproducible across supported targets; no operation reads ambient entropy |
 | Clock read and duration arithmetic | Reads one clock domain or performs checked nanosecond arithmetic | One native clock read or constant-size checked integer operation, with no allocation | Clock reads are observations, not synchronization edges |
-| Borrowed text search, split, and trim | Scalar-indexed exact matching; borrowed results retain original backing | Search/trim scan UTF-8 without allocation; split allocates `O(k)` vector descriptors for `k` results but no substring bytes | Descriptor copies may be eliminated; Unicode scalar and White_Space behavior is preserved |
-| Owned text split, trim, and case mapping | Materializes owned results without mutating input backing | Allocates storage proportional to result bytes and copies or encodes UTF-8, plus vector backing for split; case mapping may expand one scalar | Sizing passes and buffer reuse are permitted when shallow-backing behavior is unchanged |
+| Borrowed text search, split, and trim | Scalar-indexed exact matching; borrowed results retain original backing | Source-hosted search/trim scan UTF-8 through constant-size scalar steps without allocation; split geometrically grows an `O(k)` result vector for `k` borrowed descriptors but copies no substring bytes | Descriptor copies and repeated candidate comparisons may be optimized; Unicode scalar and White_Space behavior is preserved |
+| Owned text split, trim, and case mapping | Materializes owned results without mutating input backing | Owned split adds one exact string allocation per result to the borrowed split vector; trim allocates one exact string; case mapping geometrically grows a temporary `Vec[char]` and then performs one exact UTF-8 string allocation/encoding pass, including scalar expansion | A private builder may remove the temporary scalar vector later while preserving shallow-backing behavior |
 | Filesystem/environment/process operation | Returns owned snapshots or explicit native handles and portable failures | Native call plus result construction; storage is proportional to returned path/text/byte data, successful handles allocate state, file reads grow geometrically until EOF, and process capture uses two native temporary streams before materializing its final vectors | No returned value borrows C library storage; process execution does not invoke a shell, and invalid host argument bytes expand to one U+FFFD scalar each |
 
 Collection mutators receive already evaluated shallow arguments. Copying a key
@@ -298,6 +299,16 @@ so all requested-allocation and explicit-copy counters remained identical.
 Compile time and peak RSS varied and retain their ordinary non-deterministic
 status. New filesystem, process, time, ordering, text, and random costs are
 documented in the tables above rather than inferred from unrelated workloads.
+
+Version 14 was measured on 2026-08-05 UTC after source-hosting the standard
+text and lexical path algorithms. The same x86-64 compiler/toolchain class and
+all six unchanged workload hashes produced the same deterministic counters:
+the workloads requested 6, 1,013, 2, 17, 2, and 6 allocations and explicitly
+copied 25, 32, 17, 720, 256, and 496 bytes. Those fixed workloads do not call
+the migrated APIs, so their unchanged counters establish that demand-driven
+standard-library reachability adds no unused runtime cost. The operation tables
+above record the material split, case-mapping, and path-allocation changes;
+compile time, runtime time, and peak RSS remain non-semantic observations.
 
 Instrumentation is enabled only by passing:
 

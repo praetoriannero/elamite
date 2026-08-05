@@ -2,13 +2,21 @@
 
 The `.elx` files in `src/` are compiled into the Elamite compiler and pass
 through the ordinary lexer, parser, resolver, type checker, and lowering
-pipeline. `src/standard.rs` contains the reviewed inventory of entities that
-remain intrinsic because Elamite source cannot yet express their runtime
-representation or lowering hook.
+pipeline. `src/standard.rs` contains both the reviewed entity inventory and the
+exact bodyless native-declaration inventory. `@intrinsic()` is reserved for
+those compiler-owned declarations and is rejected in user packages.
 
 Keep the manifest and source tree valid as an ordinary `lib` package. Moving an
 entity out of the intrinsic catalog requires source declarations plus
 behavioral and diagnostic compatibility tests.
+
+Text search, splitting, trimming, case conversion, numeric parsing, and lexical
+path manipulation are implemented in Elamite. Their native kernel is limited
+to UTF-8 scalar advancement, checked views, owned-text encoding, and the opaque
+`String` view needed by `Path`. Host-facing public APIs are Elamite wrappers
+over private OS capabilities. `panic`, typed traps, and testing failures remain
+public intrinsic declarations because their diagnostics must retain the
+caller's physical location.
 
 Native concurrency follows `docs/spec.md` Section 10.4. Public declarations live
 in `std.thread` and `std.sync`; only native representation, publication, thread,

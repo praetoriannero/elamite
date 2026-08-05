@@ -253,18 +253,17 @@ fn grammar_highlights_exactly_the_standard_inventory() {
 }
 
 #[test]
-fn grammar_accepts_exactly_the_known_foreign_attributes() {
+fn grammar_accepts_exactly_the_known_compiler_attributes() {
     let resolution = read("src/resolution/collect.rs");
-    let expected: BTreeSet<String> = resolution
-        .lines()
-        .filter(|line| line.contains("ForeignDirection::"))
-        .filter_map(|line| {
-            let start = line.find("Some(\"")? + "Some(\"".len();
-            let end = line[start..].find('"')? + start;
-            Some(line[start..end].to_string())
-        })
-        .collect();
-    assert!(!expected.is_empty(), "no FFI attributes found to compare");
+    let expected = some_literals(slice_between(
+        &resolution,
+        "let (direction, expected) = match name {",
+        "\n            };",
+    ));
+    assert!(
+        !expected.is_empty(),
+        "no compiler attributes found to compare"
+    );
 
     let grammar = read(GRAMMAR);
     let actual = grammar_group(&grammar, "\"attributes\"", 2);

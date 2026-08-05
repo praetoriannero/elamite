@@ -44,9 +44,9 @@ impl RuntimeTrap for BuiltinTrap:
         return String.from(self.code())
 
 /// Fails unless `condition` is true.
-pub fn assert(condition: bool) -> ():
-    pass
+@intrinsic()
+pub fn assert(condition: bool) -> ()
 
 /// Terminates with a formatted assertion failure.
-pub fn fail[T: Display](message: T) -> !:
-    pass
+@intrinsic()
+pub fn fail[T: Display](message: T) -> !

@@ -1,4 +1,5 @@
 use std.io
+use std.text
 
 /// An owned filesystem path. Copies share the contained `String` backing under
 /// ordinary shallow-copy semantics. Path operations are lexical unless their
@@ -9,23 +10,60 @@ pub struct Path:
 impl Path:
     /// Copies `value` into an owned path.
     pub fn from(value: str) -> Self:
-        pass
+        return Self { value: String.from(value) }
 
     /// Returns whether this path has no components.
     pub fn is_empty(self: &Self) -> bool:
-        pass
+        return self.value == ""
 
     /// Appends `component`, inserting one target separator when necessary.
     pub fn join(self: &Self, component: str) -> Path:
-        pass
+        let suffix = String.from(component)
+        let current = _view(self)
+        if current == "":
+            return Path { value: suffix }
+        let pieces = text.split(current, "/")
+        if pieces[pieces.len() - 1] == "":
+            return Path { value: self.value ++ suffix }
+        let separator: String = "/"
+        return Path { value: self.value ++ separator ++ suffix }
 
     /// Returns the final component, or `None` for an empty or root path.
     pub fn file_name(self: &Self) -> Option[String]:
-        pass
+        let pieces = text.split(_view(self), "/")
+        var remaining = pieces.len()
+        while remaining > 0:
+            remaining -= 1
+            if pieces[remaining] != "":
+                return Option.Some(String.from(pieces[remaining]))
+        return Option.None
 
     /// Returns the lexical parent, or `None` when no parent exists.
     pub fn parent(self: &Self) -> Option[Path]:
-        pass
+        let pieces = text.split(_view(self), "/")
+        var retained = pieces.len()
+        while retained > 0 && pieces[retained - 1] == "":
+            retained -= 1
+        if retained == 0:
+            return Option.None
+        retained -= 1
+        while retained > 1 && pieces[retained - 1] == "":
+            retained -= 1
+        if retained == 0:
+            return Option.None
+        if retained == 1 && pieces[0] == "":
+            let root_path: String = "/"
+            return Option.Some(Path { value: root_path })
+        var value = String.from(pieces[0])
+        var index: usize = 1
+        while index < retained:
+            let separator: String = "/"
+            value = value ++ separator ++ String.from(pieces[index])
+            index += 1
+        return Option.Some(Path { value: value })
+
+@intrinsic()
+fn _view(path: &Path) -> str
 
 /// The kind of an entry reported by filesystem metadata. Operating-system
 /// failures are translated to `io.IoError`; no operation exposes raw errno.
@@ -57,32 +95,53 @@ pub struct DirectoryEntry:
     pub file_type: FileType
 
 /// Opens `path`. The returned handle owns an operating-system resource.
+@intrinsic()
+fn _open(path: &Path, mode: OpenMode) -> Result[File, io.IoError]
+
 pub fn open(path: &Path, mode: OpenMode) -> Result[File, io.IoError]:
-    pass
+    return _open(path, mode)
 
 /// Opens a directory for incremental traversal.
+@intrinsic()
+fn _read_dir(path: &Path) -> Result[Directory, io.IoError]
+
 pub fn read_dir(path: &Path) -> Result[Directory, io.IoError]:
-    pass
+    return _read_dir(path)
 
 /// Reads metadata without following the final symbolic link.
+@intrinsic()
+fn _metadata(path: &Path) -> Result[Metadata, io.IoError]
+
 pub fn metadata(path: &Path) -> Result[Metadata, io.IoError]:
-    pass
+    return _metadata(path)
 
 /// Creates one directory. A missing parent is an error.
+@intrinsic()
+fn _create_dir(path: &Path) -> Result[(), io.IoError]
+
 pub fn create_dir(path: &Path) -> Result[(), io.IoError]:
-    pass
+    return _create_dir(path)
 
 /// Removes one empty directory.
+@intrinsic()
+fn _remove_dir(path: &Path) -> Result[(), io.IoError]
+
 pub fn remove_dir(path: &Path) -> Result[(), io.IoError]:
-    pass
+    return _remove_dir(path)
 
 /// Removes one non-directory entry.
+@intrinsic()
+fn _remove_file(path: &Path) -> Result[(), io.IoError]
+
 pub fn remove_file(path: &Path) -> Result[(), io.IoError]:
-    pass
+    return _remove_file(path)
 
 /// Renames one entry without copying its contents.
+@intrinsic()
+fn _rename(from: &Path, to: &Path) -> Result[(), io.IoError]
+
 pub fn rename(from: &Path, to: &Path) -> Result[(), io.IoError]:
-    pass
+    return _rename(from, to)
 
 // `File` and `Directory` own native resources and therefore require intrinsic
 // representations and lowering hooks. Their reviewed cleanup surface is

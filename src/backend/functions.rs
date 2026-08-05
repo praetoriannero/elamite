@@ -1005,25 +1005,11 @@ impl<'a> CEmitter<'a> {
             } => {
                 let member = variant_member_name(*variant);
                 if fields.is_empty() {
-                    let payload = self
-                        .enums
-                        .get(&ty)
-                        .and_then(|enumeration| {
-                            enumeration
-                                .variants
-                                .iter()
-                                .find(|variant| !variant.fields.is_empty())
-                        })
-                        .map_or_else(
-                            || ".payload._empty = 0".to_string(),
-                            |variant| {
-                                format!(".payload.{} = {{0}}", variant_member_name(variant.id))
-                            },
-                        );
-                    format!(
-                        "({c_type}){{ .tag = UINT32_C({}), {payload} }}",
-                        variant.index(),
-                    )
+                    // C99 zero-initializes omitted aggregate members. Avoid
+                    // selecting an inactive union member here: its nested
+                    // brace depth depends on the payload type and triggers
+                    // `-Wmissing-braces` for otherwise valid unit variants.
+                    format!("({c_type}){{ .tag = UINT32_C({}) }}", variant.index())
                 } else {
                     format!(
                         "({c_type}){{ .tag = UINT32_C({}), .payload.{member} = {{ {} }} }}",

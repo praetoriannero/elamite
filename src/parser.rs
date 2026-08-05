@@ -264,7 +264,9 @@ impl<'a> Parser<'a> {
             ItemHead::Trait => self.parse_trait(),
             ItemHead::Impl => self.parse_impl(),
             ItemHead::Function => {
-                let body = if self.leading_attribute_named("importc") {
+                let body = if self.leading_attribute_named("importc")
+                    || self.leading_attribute_named("intrinsic")
+                {
                     FunctionBody::Forbidden
                 } else {
                     FunctionBody::Required
@@ -295,7 +297,8 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::Attr | Keyword::Derive))
         ) || matches!(
             self.kind_at(offset + 1),
-            Some(TokenKind::Identifier(name)) if matches!(name.as_str(), "importc" | "exportc")
+            Some(TokenKind::Identifier(name))
+                if matches!(name.as_str(), "importc" | "exportc" | "intrinsic")
         );
         if matches!(self.kind_at(offset), Some(TokenKind::At)) && !attached {
             return ItemHead::MacroInvocation;

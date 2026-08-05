@@ -22,12 +22,12 @@ pub trait Iterator[Element]:
     fn next(self: &var Self) -> Option[Element]
 
 /// Terminates the process with an unrecoverable diagnostic.
-pub fn panic(message: str) -> !:
-    pass
+@intrinsic()
+pub fn panic(message: str) -> !
 
 /// Raises an unrecoverable typed runtime trap.
-pub fn trap[T: testing.RuntimeTrap](reason: T) -> !:
-    pass
+@intrinsic()
+pub fn trap[T: testing.RuntimeTrap](reason: T) -> !
 
 /// Formats a value into a standard formatter.
 pub trait Display:

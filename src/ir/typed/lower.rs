@@ -71,10 +71,9 @@ impl<'a> TypedLowerer<'a> {
                 (declaration.kind == DeclarationKind::Function
                     || (declaration.kind == DeclarationKind::Test && declaration.test_selected))
                     && declaration.parent_impl.is_none()
+                    && self.resolved.modules[declaration.module.index()].origin
+                        != crate::resolution::ModuleOrigin::Standard
                     && !self.resolved.is_standard_runtime_hook(declaration.id)
-                    && !["panic", "trap", "assert", "fail"]
-                        .into_iter()
-                        .any(|name| self.resolved.is_standard_declaration(declaration.id, name))
                     && self
                         .typed
                         .callable_generic_parameters(self.resolved, declaration.id)
@@ -1976,11 +1975,7 @@ impl<'a> TypedLowerer<'a> {
                 let has_receiver = match operation {
                     StandardCall::System { operation, .. } => matches!(
                         operation,
-                        SystemOperation::PathIsEmpty
-                            | SystemOperation::PathJoin
-                            | SystemOperation::PathFileName
-                            | SystemOperation::PathParent
-                            | SystemOperation::FileReadToEnd
+                        SystemOperation::FileReadToEnd
                             | SystemOperation::FileWriteAll
                             | SystemOperation::FileMetadata
                             | SystemOperation::FileClose

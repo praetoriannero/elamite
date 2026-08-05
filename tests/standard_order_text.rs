@@ -117,7 +117,11 @@ fn text_surface_states_borrowing_materialization_and_unicode_rules() {
     let parsed = parses("text.elx", source);
 
     assert_eq!(parsed.tree.count(SyntaxKind::Enum), 1);
-    assert_eq!(parsed.tree.count(SyntaxKind::Function), 11);
+    assert_eq!(parsed.tree.count(SyntaxKind::Function), 23);
+    assert_eq!(parsed.tree.count(SyntaxKind::Attribute), 5);
+    assert!(source.contains("fn _next_scalar"));
+    assert!(source.contains("pub fn find(text: str, needle: str) -> Option[usize]:"));
+    assert!(!source.contains("pub fn find(text: str, needle: str) -> Option[usize]:\n    pass"));
     assert!(source.contains("element is a borrowed view"));
     assert!(source.contains("every returned substring allocate"));
     assert!(source.contains("Unicode-scalar index"));
@@ -186,4 +190,27 @@ fn main() -> ():
         String::from_utf8(run.stdout).expect("UTF-8 output"),
         "2\ntrue\n3:a:λ:雪\n3:a:b:\n2:x:y\n[hi]\n[owned]\nSTRASSE\nascii\n-42\nempty\nsyntax\nrange\n18446744073709551615\ntrue\n"
     );
+
+    let built = Command::new(env!("CARGO_BIN_EXE_elamc"))
+        .arg("build")
+        .arg(&package.root)
+        .arg("--keep-c")
+        .output()
+        .expect("build source-hosted text package");
+    assert!(built.status.success(), "{}", stderr(&built));
+    let generated = std::fs::read_to_string(package.root.join("build/standard_ordering_test.c"))
+        .expect("read retained generated C");
+    for removed in [
+        "el_text_find_t",
+        "el_text_split_t",
+        "el_text_trim_t",
+        "el_text_parse_i64_t",
+        "el_text_lowercase_t",
+    ] {
+        assert!(
+            !generated.contains(removed),
+            "algorithm-level native helper `{removed}` survived source hosting"
+        );
+    }
+    assert!(generated.contains("el_text_next_scalar_t"));
 }

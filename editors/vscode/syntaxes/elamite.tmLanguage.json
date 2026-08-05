@@ -62,7 +62,7 @@
       "comment": "Compiler FFI attributes and the stable attached-transform introducers. Arbitrary `@path(...)` forms are handled as function-like macros by the expression grammar.",
       "patterns": [
         {
-          "match": "(@)(importc|exportc)\\b",
+          "match": "(@)(importc|exportc|intrinsic)\\b",
           "captures": {
             "1": { "name": "punctuation.definition.attribute.elx" },
             "2": { "name": "storage.modifier.attribute.elx" }

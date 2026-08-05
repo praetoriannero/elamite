@@ -1004,3 +1004,75 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
         );
     }
 }
+
+#[test]
+fn native_declaration_inventory_matches_shipped_sources_exactly() {
+    let modules = [
+        ("std", elamite::standard::ROOT_SOURCE),
+        ("std.io", elamite::standard::IO_SOURCE),
+        ("std.fs", elamite::standard::FS_SOURCE),
+        ("std.env", elamite::standard::ENV_SOURCE),
+        ("std.process", elamite::standard::PROCESS_SOURCE),
+        ("std.time", elamite::standard::TIME_SOURCE),
+        ("std.random", elamite::standard::RANDOM_SOURCE),
+        ("std.ordering", elamite::standard::ORDERING_SOURCE),
+        ("std.text", elamite::standard::TEXT_SOURCE),
+        ("std.ffi", elamite::standard::FFI_SOURCE),
+        ("std.testing", elamite::standard::TESTING_SOURCE),
+        ("std.thread", elamite::standard::THREAD_SOURCE),
+        ("std.sync", elamite::standard::SYNC_SOURCE),
+    ];
+    let mut actual = Vec::new();
+    for (module, source) in modules {
+        let mut intrinsic = false;
+        for line in source.lines().map(str::trim) {
+            if line == "@intrinsic()" {
+                assert!(!intrinsic, "nested intrinsic marker in {module}");
+                intrinsic = true;
+                continue;
+            }
+            if intrinsic
+                && let Some(rest) = line
+                    .strip_prefix("fn ")
+                    .or_else(|| line.strip_prefix("pub fn "))
+            {
+                let name = rest.split_once(['[', '(']).map_or(rest, |(name, _)| name);
+                actual.push(format!("{module}.{name}"));
+                intrinsic = false;
+            }
+        }
+        assert!(!intrinsic, "orphan intrinsic marker in {module}");
+    }
+    actual.sort();
+    let mut expected = elamite::standard::NATIVE_DECLARATIONS
+        .iter()
+        .map(|intrinsic| intrinsic.path.to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(actual, expected);
+    assert!(
+        elamite::standard::NATIVE_DECLARATIONS
+            .iter()
+            .all(|intrinsic| !intrinsic.reason.trim().is_empty())
+    );
+}
+
+#[test]
+fn user_packages_cannot_declare_compiler_intrinsics() {
+    let tree = TestTree::new("reserved-intrinsic");
+    let package = tree.package(
+        "app",
+        "exe",
+        &[],
+        &[(
+            "src/main.elx",
+            "@intrinsic()\nfn steal() -> i32\n\nfn main() -> ():\n    pass\n",
+        )],
+    );
+    let (sources, output) = resolve_package(&package);
+    let text = diagnostic_text(&sources, &output.diagnostics);
+    assert!(
+        text.contains("`@intrinsic` is reserved for exact compiler-owned standard declarations"),
+        "{text}"
+    );
+}

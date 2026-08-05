@@ -382,6 +382,35 @@ allocations were 6, 1,013, 2, 17, 2, and 6, while explicit copied bytes were
 resolution; compile time and peak RSS varied and remain non-semantic host
 observations.
 
+### Source-hosted standard library
+
+Standard text search, split, trim, case conversion, and boolean/integer parsing
+now compile as ordinary Elamite functions. Five private capabilities retain the
+opaque representation boundary: byte length, UTF-8 scalar advancement, checked
+substring views, an owned-string view, and UTF-8 encoding from scalar vectors.
+Lexical `Path` construction, emptiness, join, filename, and parent behavior are
+also Elamite; only its borrowed view of opaque `String` storage remains native.
+
+Filesystem, environment, process, and clock APIs now have source-backed public
+wrappers over explicitly bodyless private host declarations. `panic`, typed
+traps, and testing failures remain explicit public intrinsic declarations
+because moving the call into a wrapper would replace the required caller
+location with a `<std>` location. `@intrinsic()` is compiler-owned and rejected
+in user packages, and an exact inventory test requires a nonempty reason for
+every admitted declaration. Standard source functions are now demand-driven
+monomorphization roots, so unused host wrappers do not pull process, thread, or
+collector support into unrelated programs.
+
+The cost model advances to version 14. Source-hosted split grows its result
+vector geometrically, case mapping uses a temporary `Vec[char]` followed by one
+exact UTF-8 encoding allocation, and lexical path transformations may allocate
+split descriptors and intermediate concatenations. A comparable 2026-08-05 UTC
+x86-64 release run used the same six workload hashes as version 13; all
+deterministic counters remained identical at 6, 1,013, 2, 17, 2, and 6 requested
+allocations and 25, 32, 17, 720, 256, and 496 explicitly copied bytes. Those
+workloads intentionally establish zero unused-runtime cost; the versioned cost
+tables document the migrated APIs' changed physical work.
+
 ## Accepted 0.10 language revision
 
 The normative draft now specifies shallow fieldwise ordinary copies, Go-like

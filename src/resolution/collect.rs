@@ -544,6 +544,28 @@ impl<'a> Resolver<'a> {
                 && self.resolve_test_bodies
                 && self.program.modules[module.index()].package.as_ref() == Some(&self.graph.root),
         });
+        if let Some(attribute) = compiler_attribute(node, "intrinsic") {
+            let path = self.program.modules[module.index()]
+                .path
+                .iter()
+                .map(|segment| self.program.symbol_text(*segment))
+                .chain(std::iter::once(name_text.as_str()))
+                .collect::<Vec<_>>()
+                .join(".");
+            if parent_declaration.is_some()
+                || parent_impl.is_some()
+                || self.program.modules[module.index()].origin != ModuleOrigin::Standard
+                || crate::standard::native_declaration_reason(&path).is_none()
+            {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::DeclarationConflict,
+                        "`@intrinsic` is reserved for exact compiler-owned standard declarations",
+                    )
+                    .with_primary(attribute.span),
+                );
+            }
+        }
         self.program.declaration_members.entry(id).or_default();
         if parent_declaration.is_none() && parent_impl.is_none() {
             self.insert_namespace(
@@ -597,6 +619,18 @@ impl<'a> Resolver<'a> {
             let (direction, expected) = match name {
                 Some("importc") => (ForeignDirection::Import, 2usize),
                 Some("exportc") => (ForeignDirection::Export, 1usize),
+                Some("intrinsic") => {
+                    if !arguments.is_empty() {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::DeclarationConflict,
+                                "`@intrinsic` takes no arguments",
+                            )
+                            .with_primary(attribute.span),
+                        );
+                    }
+                    continue;
+                }
                 Some(other) => {
                     self.diagnostics.push(
                         Diagnostic::new(
@@ -1021,6 +1055,16 @@ impl<'a> Resolver<'a> {
         }
         self.diagnostics.push(diagnostic);
     }
+}
+
+fn compiler_attribute<'a>(node: &'a SyntaxNode, expected: &str) -> Option<&'a SyntaxNode> {
+    crate::syntax::direct_children(node, SyntaxKind::Attribute)
+        .into_iter()
+        .find(|attribute| {
+            attribute.children.iter().any(|child| {
+                matches!(child, SyntaxElement::Token(token) if matches!(&token.kind, TokenKind::Identifier(name) if name == expected))
+            })
+        })
 }
 
 fn is_compile_time_use(node: &SyntaxNode) -> bool {
