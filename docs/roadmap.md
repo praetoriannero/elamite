@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Ownership facts and explicit use IR**
+> Next planned milestone: **Move and initialization checking**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -19,9 +19,9 @@ Keep this table synchronized with the detailed status blocks below.
 | [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
 | [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | Complete baseline | Shallow values, systems concurrency, unsafe pointer traversal, final cost evidence, release identity, and the authoritative 0.10 demonstration define the implementation from which the owned model migrates. |
 | [Owned-model semantic contract](#owned-model-semantic-contract) | Complete | Move, borrow, cleanup, closure, sharing, concurrency, FFI, demonstration, ledger, and split design-corpus rules are accepted as 0.11.0-draft. |
-| [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Complete | Package revision selection, owned slice/closure/borrow syntax, `std.ast` 3.0 selection, canonical mutable slices, and the pre-check compatibility boundary are implemented. |
-| [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Planned — next | Make move, copy, clone, borrow, reborrow, and drop operations explicit across checking and IR. |
-| [Move and initialization checking](#move-and-initialization-checking) | Planned | Enforce move-by-default use, definite initialization, partial moves, reinitialization, and branch merging. |
+| [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Complete | Package revision selection, owned slice/closure/borrow syntax, `std.ast` 3.0 selection, canonical mutable slices, and the compatibility boundary are implemented. |
+| [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Complete | Canonical capabilities, projected places, ordered ownership uses in both IR levels, and the legacy-copy backend seam are implemented. |
+| [Move and initialization checking](#move-and-initialization-checking) | Planned — next | Enforce move-by-default use, definite initialization, partial moves, reinitialization, and branch merging. |
 | [Structural borrow provenance](#structural-borrow-provenance) | Planned | Infer hidden provenance, enforce shared/exclusive access, and carry borrows structurally through values. |
 | [Deterministic destruction](#deterministic-destruction) | Planned | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
 | [Owned core values and collections](#owned-core-values-and-collections) | Planned | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
@@ -349,8 +349,9 @@ concurrency, and foreign-boundary operation unambiguous before implementation.
 
 > Status: Complete. `SemanticRevision` is selected once while constructing the
 > package graph and is retained by parsed, expanded, resolved, and typed
-> programs. The 0.11 path stops at one diagnostic boundary before body
-> checking; `tests/semantic_revision.rs` owns the focused acceptance matrix.
+> programs. The 0.11 path now stops after ownership-aware body checking and
+> explicit-use construction; `tests/semantic_revision.rs` owns the focused
+> acceptance matrix.
 >
 > Blocked by: **Owned-model semantic contract**.
 
@@ -368,7 +369,9 @@ models.
 
 ### Ownership facts and explicit use IR
 
-> Status: Planned; this is the next milestone.
+> Status: Complete. Canonical ownership facts are independent of layout;
+> projected places and ordered ownership uses survive typed and control-flow
+> lowering. The driver boundary has advanced to the next milestone.
 >
 > Blocked by: **Migration seam and accepted surface**.
 
@@ -377,11 +380,11 @@ give later dataflow passes an exact ownership vocabulary.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Canonical ownership facts** | Compute canonical `Copy`, clone availability, destruction need, borrow containment, and provisional `Send`/`Sync` facts through primitives, aggregates, substitutions, trait objects, and errors. | Recursive and generic types terminate deterministically, error recovery does not grant capabilities, and facts do not depend on backend layout accidents. |
-| **Ownership-aware places** | Extend place facts with stable roots and projections for fields, tuple positions, indexing, dereference, and receiver adaptation. | Later analysis can conservatively decide whether two paths are disjoint, equal, or potentially overlapping without re-walking syntax. |
-| **Explicit typed operations** | Record move, bitwise `Copy`, explicit clone call, shared borrow, exclusive borrow, reborrow, and drop requirements in typed IR and shared operation vocabulary. | Every value-producing or consuming expression reaches lowering with one operation kind; an ordinary source use cannot silently become recursive transfer or clone. |
-| **Control-flow preservation** | Carry ownership operations and originating spans into control-flow IR with strict left-to-right evaluation and explicit branch edges. | Dumps expose operation order and all existing trap, postfix `?`, return, and `defer` sequencing remains testable. |
-| **Backend representation seam** | Lower explicit operations without introducing destruction yet, preserving 0.10 shallow copies only when the legacy frontend emitted an explicit copy. | Generated C follows IR operations rather than semantic mode tests, giving move and destruction work one backend path. |
+| **Canonical ownership facts (done)** | Compute canonical `Copy`, clone availability, destruction need, borrow containment, and provisional `Send`/`Sync` facts through primitives, aggregates, substitutions, trait objects, and errors. | Recursive and generic types terminate deterministically, error recovery does not grant capabilities, and facts do not depend on backend layout accidents. |
+| **Ownership-aware places (done)** | Extend place facts with stable roots and projections for fields, tuple positions, indexing, dereference, and receiver adaptation. | Later analysis can conservatively decide whether two paths are disjoint, equal, or potentially overlapping without re-walking syntax. |
+| **Explicit typed operations (done)** | Record move, bitwise `Copy`, explicit clone call, shared borrow, exclusive borrow, reborrow, and drop requirements in typed IR and shared operation vocabulary. | Every value-producing or consuming expression reaches lowering with an ordered operation kind; an ordinary source use cannot silently become recursive transfer or clone. |
+| **Control-flow preservation (done)** | Carry ownership operations and originating spans into control-flow IR with strict left-to-right evaluation and explicit branch edges. | Dumps expose operation order and all existing trap, postfix `?`, return, and `defer` sequencing remains testable. |
+| **Backend representation seam (done)** | Lower explicit operations without introducing destruction yet, preserving 0.10 shallow copies only when the legacy frontend emitted an explicit copy. | Generated C follows IR operations rather than semantic mode tests, giving move and destruction work one backend path. |
 
 ### Move and initialization checking
 

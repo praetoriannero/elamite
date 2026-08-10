@@ -10,6 +10,11 @@ Keep the manifest and source tree valid as an ordinary `lib` package. Moving an
 entity out of the intrinsic catalog requires source declarations plus
 behavioral and diagnostic compatibility tests.
 
+`Clone` and `Drop` are source-declared traits. `Copy`, `Send`, and `Sync` stay
+compiler-controlled because user code cannot implement structural
+capabilities. Their owned-model hooks are analysis-only until the migration
+roadmap advances the compiling driver beyond its semantic boundary.
+
 Text search, splitting, trimming, case conversion, numeric parsing, and lexical
 path manipulation are implemented in Elamite. Their native kernel is limited
 to UTF-8 scalar advancement, checked views, owned-text encoding, and the opaque

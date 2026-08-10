@@ -8,10 +8,12 @@
 pub mod context;
 pub mod lower;
 pub mod model;
+mod ownership;
 
 pub use context::*;
 pub use lower::{lower_annotation, resolve_types};
 pub use model::*;
+pub use ownership::ownership_facts;
 
 use std::collections::{BTreeMap, BTreeSet};
 

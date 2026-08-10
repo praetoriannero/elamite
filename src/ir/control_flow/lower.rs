@@ -44,6 +44,7 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
                 .any(|ty| type_contains_runtime_managed(&types.types, *ty, 32))
     });
     ControlFlowProgram {
+        semantic_revision: program.semantic_revision,
         functions,
         structs: program.structs.clone(),
         enums: program.enums.clone(),
@@ -102,6 +103,7 @@ struct FunctionLowerer<'a> {
     current: BlockId,
     temporary_types: Vec<TypeId>,
     next_logical_copy: u32,
+    next_ownership_use: u32,
     /// Break target, continue target, and the cleanup-scope depth of the
     /// loop's body: `break`/`continue` run cleanup for every scope deeper
     /// than that base and no other (Milestone 15.8).
@@ -122,6 +124,7 @@ impl<'a> FunctionLowerer<'a> {
             current: BlockId(0),
             temporary_types: Vec::new(),
             next_logical_copy: 0,
+            next_ownership_use: 0,
             loops: Vec::new(),
             scopes: Vec::new(),
         }
@@ -145,6 +148,8 @@ impl<'a> FunctionLowerer<'a> {
         }
         #[cfg(debug_assertions)]
         let expected_logical_copies = self.next_logical_copy;
+        #[cfg(debug_assertions)]
+        let expected_ownership_uses = self.next_ownership_use;
         let blocks = self
             .blocks
             .into_iter()
@@ -157,6 +162,8 @@ impl<'a> FunctionLowerer<'a> {
             .collect::<Vec<_>>();
         #[cfg(debug_assertions)]
         assert_logical_copy_accounting(&blocks, expected_logical_copies);
+        #[cfg(debug_assertions)]
+        assert_ownership_use_accounting(&blocks, expected_ownership_uses);
         ControlFlowFunction {
             declaration: self.function.declaration,
             instance: self.function.instance.clone(),
@@ -165,6 +172,7 @@ impl<'a> FunctionLowerer<'a> {
             parameters: self.function.parameters.clone(),
             return_type: self.function.return_type,
             local_types: self.function.local_types.clone(),
+            drop_requirements: self.function.drop_requirements.clone(),
             promoted_locals: self.function.promoted_locals.clone(),
             allocates_managed: self.function.allocates_managed,
             closure: self.function.closure.clone(),
@@ -1390,9 +1398,22 @@ impl<'a> FunctionLowerer<'a> {
             value,
             span: expression.span,
         });
-        expression.copy.map_or(raw, |facts| {
-            self.emit_logical_copy_with_facts(raw, expression.ty, facts, expression.span)
-        })
+        let mut result = raw;
+        for operation in &expression.ownership {
+            result = match operation.kind {
+                OwnershipUseKind::Produce => result,
+                OwnershipUseKind::LegacyCopy => operation.legacy_copy.map_or(result, |facts| {
+                    self.emit_logical_copy_with_facts(result, expression.ty, facts, expression.span)
+                }),
+                _ => self.emit_ownership_use(
+                    result,
+                    expression.ty,
+                    operation.clone(),
+                    expression.span,
+                ),
+            };
+        }
+        result
     }
 
     fn lower_never_call(&mut self, expression: &TypedExpression) -> Option<NeverCall> {
@@ -1817,6 +1838,36 @@ impl<'a> FunctionLowerer<'a> {
         id
     }
 
+    fn take_ownership_use_id(&mut self) -> OwnershipUseId {
+        let id = OwnershipUseId(self.next_ownership_use);
+        self.next_ownership_use = self
+            .next_ownership_use
+            .checked_add(1)
+            .expect("too many ownership uses in one function");
+        id
+    }
+
+    fn emit_ownership_use(
+        &mut self,
+        source: TemporaryId,
+        ty: TypeId,
+        operation: OwnershipUse,
+        span: Span,
+    ) -> TemporaryId {
+        let destination = self.temp(ty);
+        let id = self.take_ownership_use_id();
+        self.emit(Instruction::Assign {
+            destination,
+            value: Rvalue::OwnershipUse {
+                source,
+                id,
+                operation,
+            },
+            span,
+        });
+        destination
+    }
+
     fn emit_logical_copy(
         &mut self,
         source: TemporaryId,
@@ -1896,6 +1947,32 @@ fn assert_logical_copy_accounting(blocks: &[BasicBlock], expected: u32) {
     debug_assert!(
         (0..expected).all(|index| unique.contains(&LogicalCopyId(index))),
         "logical-copy identities must form a complete per-function sequence"
+    );
+}
+
+#[cfg(debug_assertions)]
+fn assert_ownership_use_accounting(blocks: &[BasicBlock], expected: u32) {
+    let ids = blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::OwnershipUse { id, .. },
+                ..
+            } => Some(*id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let unique = ids.iter().copied().collect::<BTreeSet<_>>();
+    debug_assert_eq!(
+        ids.len(),
+        usize::try_from(expected).expect("ownership-use count fits usize"),
+        "every emitted ownership use must be accounted for exactly once"
+    );
+    debug_assert_eq!(unique.len(), ids.len(), "ownership-use IDs must be unique");
+    debug_assert!(
+        (0..expected).all(|index| unique.contains(&OwnershipUseId(index))),
+        "ownership-use identities must form a complete per-function sequence"
     );
 }
 

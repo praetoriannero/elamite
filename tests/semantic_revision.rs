@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use elamite::check::check_for_target;
 use elamite::config::{SemanticRevision, Target};
 use elamite::diagnostics::Category;
 use elamite::driver::check_frontend;
@@ -11,13 +12,18 @@ use elamite::expansion::ast::{
 };
 use elamite::expansion::expand;
 use elamite::formatter::{FormatOptions, format_source_for_revision};
+use elamite::ir::{lower_control_flow, lower_typed_ir};
 use elamite::lexer::lex;
+use elamite::operations::{
+    CapabilityState, OwnershipPlace, OwnershipPlaceRoot, OwnershipProjection, OwnershipUseKind,
+    PlaceOverlap,
+};
 use elamite::package::PackageGraph;
 use elamite::parsed::parse_package;
 use elamite::parser::parse_for_revision;
 use elamite::resolution::{resolve, resolve_expanded};
 use elamite::source::SourceManager;
-use elamite::types::{Mutability, TypeKind, resolve_types};
+use elamite::types::{Mutability, PrimitiveType, TypeKind, ownership_facts, resolve_types};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -343,7 +349,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_once_before_legacy_body_semantics() {
+fn owned_packages_stop_after_explicit_ownership_ir() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -356,7 +362,7 @@ fn owned_packages_stop_once_before_legacy_body_semantics() {
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
     assert_eq!(diagnostics[0].category, Category::SemanticRevision);
-    assert!(diagnostics[0].message.contains("source-type lowering"));
+    assert!(diagnostics[0].message.contains("explicit ownership facts"));
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
@@ -368,4 +374,260 @@ fn owned_packages_stop_once_before_legacy_body_semantics() {
         "{:?}",
         resolved.diagnostics
     );
+}
+
+#[test]
+fn ownership_facts_places_and_operations_cross_both_ir_levels() {
+    let package = TestPackage::new(
+        "owned_operations",
+        r#"use std.Clone
+
+struct Borrowing:
+    value: &i32
+
+struct Recursive:
+    next: &Recursive
+
+struct Wrapper[T]:
+    value: T
+
+struct Resource:
+    value: i32
+
+impl Drop for Resource:
+    fn drop(self: &var Self) -> ():
+        pass
+
+impl Clone for Resource:
+    fn clone(self: &Self) -> Self:
+        return Resource { value: self.value }
+
+fn clone_resource(value: Resource) -> Resource:
+    return value.clone()
+
+pub fn copy_generic[T: Copy](value: T) -> T:
+    return value
+
+pub fn transfer[T: Send + Sync](value: T) -> T:
+    return value
+
+fn reborrow_ops(input: &var i32) -> ():
+    var slot = input
+    let shared = &slot
+    let exclusive = &var slot
+
+pub fn ownership_ops(value: String, number: i32) -> String:
+    let moved = value
+    let copied = number
+    let view = &number
+    return moved
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut type_output = resolve_types(&resolved);
+    assert!(
+        type_output.diagnostics.is_empty(),
+        "{:#?}",
+        type_output.diagnostics
+    );
+    let trait_output = elamite::traits::check_traits(&resolved, &mut type_output.program);
+    assert!(
+        trait_output.diagnostics.is_empty(),
+        "{:#?}",
+        trait_output.diagnostics
+    );
+
+    let string = type_output.program.types.primitive(PrimitiveType::String);
+    let integer = type_output.program.types.primitive(PrimitiveType::I32);
+    let string_facts = ownership_facts(&resolved, &mut type_output.program, string);
+    assert_eq!(string_facts.copy, CapabilityState::Absent);
+    assert_eq!(string_facts.clone, CapabilityState::Present);
+    assert_eq!(string_facts.needs_drop, CapabilityState::Present);
+    let integer_facts = ownership_facts(&resolved, &mut type_output.program, integer);
+    assert_eq!(integer_facts.copy, CapabilityState::Present);
+    assert_eq!(integer_facts.needs_drop, CapabilityState::Absent);
+    let named_types = resolved
+        .declarations
+        .iter()
+        .filter_map(|declaration| {
+            type_output
+                .program
+                .declaration_types
+                .get(&declaration.id)
+                .map(|ty| (resolved.symbol_text(declaration.name).to_string(), *ty))
+        })
+        .collect::<Vec<_>>();
+    let declaration_type = |name: &str| {
+        named_types
+            .iter()
+            .find_map(|(candidate, ty)| (candidate == name).then_some(*ty))
+            .unwrap_or_else(|| panic!("missing canonical type for {name}"))
+    };
+    let borrowing = declaration_type("Borrowing");
+    let borrowing_facts = ownership_facts(&resolved, &mut type_output.program, borrowing);
+    assert_eq!(borrowing_facts.copy, CapabilityState::Present);
+    assert_eq!(borrowing_facts.contains_borrow, CapabilityState::Present);
+    let recursive = declaration_type("Recursive");
+    assert_eq!(
+        ownership_facts(&resolved, &mut type_output.program, recursive).copy,
+        CapabilityState::Present,
+        "recursive structural queries must terminate deterministically"
+    );
+    let wrapper = declaration_type("Wrapper");
+    assert_eq!(
+        ownership_facts(&resolved, &mut type_output.program, wrapper).copy,
+        CapabilityState::Conditional
+    );
+    let resource = declaration_type("Resource");
+    let resource_facts = ownership_facts(&resolved, &mut type_output.program, resource);
+    assert_eq!(resource_facts.copy, CapabilityState::Absent);
+    assert_eq!(resource_facts.clone, CapabilityState::Present);
+    assert_eq!(resource_facts.needs_drop, CapabilityState::Present);
+    for (name, capability) in [
+        ("copy_generic", (true, false, false)),
+        ("transfer", (false, true, true)),
+    ] {
+        let declaration = resolved
+            .declarations
+            .iter()
+            .find(|declaration| resolved.symbol_text(declaration.name) == name)
+            .expect("generic function declaration");
+        let parameter = type_output.program.function_signatures[&declaration.id].parameters[0].ty;
+        let facts = ownership_facts(&resolved, &mut type_output.program, parameter);
+        if capability.0 {
+            assert_eq!(facts.copy, CapabilityState::Present);
+        }
+        if capability.1 {
+            assert_eq!(facts.send, CapabilityState::Present);
+        }
+        if capability.2 {
+            assert_eq!(facts.sync, CapabilityState::Present);
+        }
+    }
+    let error = type_output.program.types.error();
+    assert_eq!(
+        ownership_facts(&resolved, &mut type_output.program, error),
+        elamite::operations::OwnershipFacts::ERROR,
+        "error recovery must not grant ownership capabilities"
+    );
+
+    let checked = check_for_target(&resolved, &mut type_output.program, 64);
+    assert_eq!(checked.diagnostics.len(), 1, "{:#?}", checked.diagnostics);
+    assert_eq!(checked.diagnostics[0].category, Category::SemanticRevision);
+    assert_eq!(
+        checked.program.expression_types.len(),
+        checked.program.ownership_uses.len(),
+        "every checked expression must have explicit ownership intent"
+    );
+    let checked_kinds = checked
+        .program
+        .ownership_uses
+        .values()
+        .flatten()
+        .map(|operation| operation.kind)
+        .collect::<Vec<_>>();
+    assert!(checked_kinds.contains(&OwnershipUseKind::Move));
+    assert!(checked_kinds.contains(&OwnershipUseKind::Copy));
+    assert!(checked_kinds.contains(&OwnershipUseKind::BorrowShared));
+    assert!(checked_kinds.contains(&OwnershipUseKind::ReborrowShared));
+    assert!(checked_kinds.contains(&OwnershipUseKind::ReborrowExclusive));
+    assert!(checked_kinds.contains(&OwnershipUseKind::Clone));
+    assert!(!checked_kinds.contains(&OwnershipUseKind::LegacyCopy));
+
+    let typed_ir = lower_typed_ir(&resolved, &mut type_output.program, &checked.program);
+    assert!(
+        typed_ir.diagnostics.is_empty(),
+        "{:#?}",
+        typed_ir.diagnostics
+    );
+    assert_eq!(typed_ir.program.semantic_revision, SemanticRevision::V0_11);
+    let typed_function = typed_ir
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "ownership_ops")
+        .expect("ownership_ops typed body");
+    assert!(
+        typed_function
+            .drop_requirements
+            .iter()
+            .any(|requirement| requirement.operation.kind == OwnershipUseKind::Drop),
+        "owned locals retain explicit destruction requirements without scheduling cleanup yet"
+    );
+    let control_flow = lower_control_flow(&typed_ir.program, &type_output.program);
+    assert_eq!(control_flow.semantic_revision, SemanticRevision::V0_11);
+    let control_flow_function = control_flow
+        .functions
+        .iter()
+        .find(|function| function.name == "ownership_ops")
+        .expect("ownership_ops control-flow body");
+    assert_eq!(
+        control_flow_function.drop_requirements,
+        typed_function.drop_requirements
+    );
+    let operations = control_flow_function.ownership_use_inventory();
+    let kinds = operations
+        .iter()
+        .map(|record| record.operation.kind)
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&OwnershipUseKind::Move));
+    assert!(kinds.contains(&OwnershipUseKind::Copy));
+    assert!(kinds.contains(&OwnershipUseKind::BorrowShared));
+    assert!(
+        operations
+            .iter()
+            .all(|record| record.operation.legacy_copy.is_none())
+    );
+    let clone_operations = control_flow
+        .functions
+        .iter()
+        .find(|function| function.name == "clone_resource")
+        .expect("clone_resource control-flow body")
+        .ownership_use_inventory();
+    assert!(
+        clone_operations
+            .iter()
+            .any(|record| record.operation.kind == OwnershipUseKind::Clone)
+    );
+    let reborrow_operations = control_flow
+        .functions
+        .iter()
+        .find(|function| function.name == "reborrow_ops")
+        .expect("reborrow_ops control-flow body")
+        .ownership_use_inventory();
+    assert!(
+        reborrow_operations
+            .iter()
+            .any(|record| { record.operation.kind == OwnershipUseKind::ReborrowShared })
+    );
+    assert!(
+        reborrow_operations
+            .iter()
+            .any(|record| { record.operation.kind == OwnershipUseKind::ReborrowExclusive })
+    );
+
+    let file = sources.add_text(PathBuf::from("places.elx"), String::new());
+    let root = OwnershipPlaceRoot::Expression(elamite::source::Span::new(file, 0, 0));
+    let left = OwnershipPlace {
+        root,
+        projections: vec![OwnershipProjection::TupleField(0)],
+    };
+    let right = OwnershipPlace {
+        root,
+        projections: vec![OwnershipProjection::TupleField(1)],
+    };
+    let dynamic = OwnershipPlace {
+        root,
+        projections: vec![OwnershipProjection::DynamicIndex],
+    };
+    assert_eq!(left.overlap(&right), PlaceOverlap::Disjoint);
+    assert_eq!(left.overlap(&dynamic), PlaceOverlap::MayOverlap);
 }

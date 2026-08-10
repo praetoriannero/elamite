@@ -21,6 +21,14 @@ pub trait Callable[Arguments, Return]:
 pub trait Iterator[Element]:
     fn next(self: &var Self) -> Option[Element]
 
+/// Explicitly duplicates an independently owned value.
+pub trait Clone:
+    fn clone(self: &Self) -> Self
+
+/// Performs a value's custom deterministic cleanup.
+pub trait Drop:
+    fn drop(self: &var Self) -> ()
+
 /// Terminates the process with an unrecoverable diagnostic.
 @intrinsic()
 pub fn panic(message: str) -> !

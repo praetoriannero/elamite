@@ -9,8 +9,7 @@
 /// This is a temporary migration seam, not a source-level edition mechanism.
 /// The package graph selects one value before parsing and every frontend phase
 /// carries it as immutable data. The owned revision deliberately stops before
-/// ownership-dependent body checking until the later migration milestones are
-/// complete.
+/// move-state enforcement until the next migration milestone is complete.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SemanticRevision {
     #[default]

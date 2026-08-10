@@ -630,7 +630,9 @@ impl<'a> CEmitter<'a> {
                 );
                 destination_name
             }
-            Rvalue::Copy { source, .. } => temporary_name(*source),
+            Rvalue::Copy { source, .. } | Rvalue::OwnershipUse { source, .. } => {
+                temporary_name(*source)
+            }
             Rvalue::Discriminant(source) => format!("{}.tag", temporary_name(*source)),
             Rvalue::CompareEqual {
                 left,

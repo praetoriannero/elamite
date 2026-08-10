@@ -25,7 +25,8 @@ use crate::check::{CheckedCall, CheckedProgram, TraitObjectCoercion};
 use crate::diagnostics::{Category, Diagnostic};
 use crate::operations::{
     LogicalCopyContext, LogicalCopyFacts, LogicalCopyKind, LogicalCopyLifetime, LogicalCopyMode,
-    NumericAlternative, NumericOutcome, ReceiverAdjustment, StandardCall, ValuePassingMode,
+    NumericAlternative, NumericOutcome, OwnershipPlace, OwnershipPlaceRoot, OwnershipProjection,
+    OwnershipUse, OwnershipUseKind, ReceiverAdjustment, StandardCall, ValuePassingMode,
 };
 use crate::resolution::{
     DeclarationId, DeclarationKind, FieldId, ItemId, LocalBindingId, LocalBindingKind, MemberId,
@@ -61,6 +62,7 @@ macro_rules! id_type {
 id_type!(BlockId);
 id_type!(TemporaryId);
 id_type!(LogicalCopyId);
+id_type!(OwnershipUseId);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {

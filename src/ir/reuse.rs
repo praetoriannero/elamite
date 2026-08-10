@@ -217,6 +217,14 @@ fn optimize_expression(
     if fresh_temporary || dead_return_local {
         facts.mode = LogicalCopyMode::ReuseSource;
     }
+    let updated = *facts;
+    if let Some(operation) = expression
+        .ownership
+        .iter_mut()
+        .find(|operation| operation.kind == OwnershipUseKind::LegacyCopy)
+    {
+        operation.legacy_copy = Some(updated);
+    }
 }
 
 fn optimize_place(

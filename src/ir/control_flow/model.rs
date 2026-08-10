@@ -133,6 +133,14 @@ pub enum Rvalue {
         id: LogicalCopyId,
         facts: LogicalCopyFacts,
     },
+    /// An owned-model value use. The operation is emitted after its source is
+    /// fully evaluated, preserving source order without asking the backend to
+    /// infer semantic intent from C expressions.
+    OwnershipUse {
+        source: TemporaryId,
+        id: OwnershipUseId,
+        operation: OwnershipUse,
+    },
     Discriminant(TemporaryId),
     CompareEqual {
         left: TemporaryId,
@@ -309,6 +317,8 @@ pub struct ControlFlowFunction {
     pub parameters: Vec<TypedParameter>,
     pub return_type: TypeId,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
+    /// Destruction requirements retained for later cleanup-edge elaboration.
+    pub drop_requirements: Vec<DropRequirement>,
     /// Locals promoted to managed storage; see [`TypedFunction::promoted_locals`].
     pub promoted_locals: BTreeSet<LocalBindingId>,
     /// See [`TypedFunction::allocates_managed`].
@@ -323,6 +333,13 @@ pub struct ControlFlowFunction {
 pub struct LogicalCopyRecord {
     pub id: LogicalCopyId,
     pub facts: LogicalCopyFacts,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnershipUseRecord {
+    pub id: OwnershipUseId,
+    pub operation: OwnershipUse,
     pub span: Span,
 }
 
@@ -348,10 +365,32 @@ impl ControlFlowFunction {
             })
             .collect()
     }
+
+    /// Every owned-model operation in exact control-flow lowering order.
+    #[must_use]
+    pub fn ownership_use_inventory(&self) -> Vec<OwnershipUseRecord> {
+        self.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value: Rvalue::OwnershipUse { id, operation, .. },
+                    span,
+                    ..
+                } => Some(OwnershipUseRecord {
+                    id: *id,
+                    operation: operation.clone(),
+                    span: *span,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct ControlFlowProgram {
+    pub semantic_revision: crate::config::SemanticRevision,
     pub functions: Vec<ControlFlowFunction>,
     pub structs: Vec<TypedStruct>,
     pub enums: Vec<TypedEnum>,

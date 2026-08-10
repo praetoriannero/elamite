@@ -171,6 +171,11 @@ pub struct TypedExpression {
     /// Complete facts for a logical copy materialized after evaluating this
     /// expression. `None` means the expression's value can flow directly.
     pub copy: Option<LogicalCopyFacts>,
+    /// Ordered source ownership intents after generic substitution and stable
+    /// place projection. Unlike `copy`, this is nonempty for every expression;
+    /// a borrow expression consumed by a binding, for example, carries both
+    /// borrow and copy/move operations.
+    pub ownership: Vec<OwnershipUse>,
     pub span: Span,
     pub kind: TypedExpressionKind,
 }
@@ -270,6 +275,101 @@ impl TypedPlace {
             | Self::TupleField { span, .. }
             | Self::Index { span, .. }
             | Self::Dereference { span, .. } => *span,
+        }
+    }
+
+    #[must_use]
+    pub fn ownership_place(&self) -> OwnershipPlace {
+        match self {
+            Self::Local { binding, .. } => OwnershipPlace {
+                root: OwnershipPlaceRoot::Local(*binding),
+                projections: Vec::new(),
+            },
+            Self::ClosureCapture { index, .. } => OwnershipPlace {
+                root: OwnershipPlaceRoot::ClosureCapture(*index),
+                projections: Vec::new(),
+            },
+            Self::Field { base, field, .. } => {
+                let mut place = base.ownership_place();
+                place.projections.push(OwnershipProjection::Field(*field));
+                place
+            }
+            Self::TupleField { base, index, .. } => {
+                let mut place = base.ownership_place();
+                place
+                    .projections
+                    .push(OwnershipProjection::TupleField(*index));
+                place
+            }
+            Self::Index { base, index, .. } => {
+                let mut place = base.ownership_place();
+                let projection = match &index.kind {
+                    TypedExpressionKind::Constant(Constant::Integer {
+                        magnitude,
+                        negative: false,
+                    }) => OwnershipProjection::ConstantIndex(*magnitude),
+                    _ => OwnershipProjection::DynamicIndex,
+                };
+                place.projections.push(projection);
+                place
+            }
+            Self::Dereference { base, .. } => {
+                let mut place = base.ownership_place().unwrap_or(OwnershipPlace {
+                    root: OwnershipPlaceRoot::Expression(base.span),
+                    projections: Vec::new(),
+                });
+                place.projections.push(OwnershipProjection::Dereference);
+                place
+            }
+        }
+    }
+}
+
+impl TypedExpression {
+    #[must_use]
+    pub fn ownership_place(&self) -> Option<OwnershipPlace> {
+        match &self.kind {
+            TypedExpressionKind::Local(binding) => Some(OwnershipPlace {
+                root: OwnershipPlaceRoot::Local(*binding),
+                projections: Vec::new(),
+            }),
+            TypedExpressionKind::ClosureCapture(index) => Some(OwnershipPlace {
+                root: OwnershipPlaceRoot::ClosureCapture(*index),
+                projections: Vec::new(),
+            }),
+            TypedExpressionKind::Field { base, field } => {
+                let mut place = base.ownership_place()?;
+                place.projections.push(OwnershipProjection::Field(*field));
+                Some(place)
+            }
+            TypedExpressionKind::TupleField { base, index } => {
+                let mut place = base.ownership_place()?;
+                place
+                    .projections
+                    .push(OwnershipProjection::TupleField(*index));
+                Some(place)
+            }
+            TypedExpressionKind::Index { base, index } => {
+                let mut place = base.ownership_place()?;
+                place.projections.push(match &index.kind {
+                    TypedExpressionKind::Constant(Constant::Integer {
+                        magnitude,
+                        negative: false,
+                    }) => OwnershipProjection::ConstantIndex(*magnitude),
+                    _ => OwnershipProjection::DynamicIndex,
+                });
+                Some(place)
+            }
+            TypedExpressionKind::Dereference(base) => {
+                let mut place = base.ownership_place().unwrap_or(OwnershipPlace {
+                    root: OwnershipPlaceRoot::Expression(base.span),
+                    projections: Vec::new(),
+                });
+                place.projections.push(OwnershipProjection::Dereference);
+                Some(place)
+            }
+            TypedExpressionKind::AddressOf(place) => Some(place.ownership_place()),
+            _ => None,
         }
     }
 }
@@ -392,6 +492,17 @@ pub struct TypedParameter {
     pub passing: ValuePassingMode,
 }
 
+/// A local whose initialized value requires destruction. This is an analysis
+/// requirement, not an already-scheduled cleanup edge; deterministic
+/// destruction consumes it after move-state checking is available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropRequirement {
+    pub binding: LocalBindingId,
+    pub ty: TypeId,
+    pub span: Span,
+    pub operation: OwnershipUse,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedFunction {
     pub declaration: DeclarationId,
@@ -402,6 +513,7 @@ pub struct TypedFunction {
     pub return_type: TypeId,
     pub body: Vec<TypedStatement>,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
+    pub drop_requirements: Vec<DropRequirement>,
     /// Locals whose address is taken, and which therefore need managed storage
     /// rather than a C stack slot (`docs/roadmap.md` Milestone 10). Conservative: every
     /// address-taken local is promoted.
@@ -444,6 +556,7 @@ pub struct TypedEnum {
 
 #[derive(Debug, Default)]
 pub struct TypedIrProgram {
+    pub semantic_revision: crate::config::SemanticRevision,
     pub functions: Vec<TypedFunction>,
     pub structs: Vec<TypedStruct>,
     pub enums: Vec<TypedEnum>,

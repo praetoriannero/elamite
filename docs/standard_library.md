@@ -14,6 +14,12 @@ Public APIs favor owned results at operating-system boundaries. An operation
 does not return a reference into a managed buffer, C library allocation, or
 directory stream. Ordinary copying remains shallow throughout these modules.
 
+The root source now declares the accepted 0.11 `Clone` and `Drop` traits, and
+the compiler inventory exposes the structural `Copy`, `Send`, and `Sync`
+capabilities to owned-model analysis. The executable 0.10 path does not invoke
+`Drop` or infer owned collection behavior from those declarations; their
+runtime hooks remain gated by the ordered migration milestones.
+
 ## System modules
 
 `std.fs.Path` owns a `String`. Its `from`, `join`, `parent`, and `file_name`

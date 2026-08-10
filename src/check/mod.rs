@@ -49,7 +49,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diagnostics::{Category, Diagnostic};
 pub use crate::operations::{
     LogicalCopyContext, LogicalCopyKind, LogicalCopyLifetime, NumericAlternative, NumericOperator,
-    NumericOutcome, ReceiverAdjustment, StandardCall,
+    NumericOutcome, OwnershipUse, OwnershipUseKind, ReceiverAdjustment, StandardCall,
 };
 use crate::resolution::{
     ClosureCaptureKind, DeclarationId, DeclarationKind, FieldId, GenericParameterId,
@@ -155,10 +155,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The single temporary boundary between accepted 0.11 syntax/types and the
-/// still-0.10 ownership-dependent checker. Keeping this test here prevents
-/// embedders from bypassing the driver and accidentally applying shallow-copy
-/// semantics to an owned-model package.
+/// The temporary boundary after ownership-aware body checking and explicit-use
+/// construction. Move-state enforcement is deliberately the next pass rather
+/// than an accidental side effect of the legacy checker.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -167,8 +166,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft is accepted through source-type lowering, but \
-                 ownership-dependent body checking is not implemented yet",
+                "semantic revision 0.11.0-draft has explicit ownership facts and use IR, but \
+                 move and initialization checking is not implemented yet",
             )
         })
 }
@@ -181,13 +180,11 @@ pub fn check_for_target(
     typed: &mut TypedProgram,
     pointer_bits: u8,
 ) -> CheckOutput {
+    let mut output = Checker::new(resolved, typed, pointer_bits).run();
     if let Some(diagnostic) = semantic_revision_boundary(resolved) {
-        return CheckOutput {
-            program: CheckedProgram::default(),
-            diagnostics: vec![diagnostic],
-        };
+        output.diagnostics.push(diagnostic);
     }
-    Checker::new(resolved, typed, pointer_bits).run()
+    output
 }
 
 struct Checker<'a> {
@@ -277,10 +274,117 @@ impl<'a> Checker<'a> {
             self.check_function(declaration_id);
         }
         self.check_containment_cycles();
+        self.finalize_ownership_uses();
         CheckOutput {
             program: self.program,
             diagnostics: self.diagnostics,
         }
+    }
+
+    fn finalize_ownership_uses(&mut self) {
+        let expression_types = self
+            .program
+            .expression_types
+            .iter()
+            .map(|(span, ty)| (*span, *ty))
+            .collect::<Vec<_>>();
+        for (span, ty) in expression_types {
+            let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+            self.program.ownership_uses.entry(span).or_insert_with(|| {
+                vec![OwnershipUse {
+                    kind: OwnershipUseKind::Produce,
+                    facts,
+                    place: None,
+                    legacy_copy: None,
+                }]
+            });
+        }
+
+        let copies = self.program.copies.keys().copied().collect::<Vec<_>>();
+        for span in copies {
+            let ty = self
+                .program
+                .expression_types
+                .get(&span)
+                .copied()
+                .unwrap_or_else(|| self.typed.types.error());
+            let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+            let kind = if self.resolved.semantic_revision.supports_owned_surface() {
+                if facts.copy.is_present() {
+                    OwnershipUseKind::Copy
+                } else {
+                    OwnershipUseKind::Move
+                }
+            } else {
+                OwnershipUseKind::LegacyCopy
+            };
+            let uses = self.program.ownership_uses.entry(span).or_default();
+            if uses.len() == 1 && uses[0].kind == OwnershipUseKind::Produce {
+                uses.clear();
+            }
+            uses.push(OwnershipUse {
+                kind,
+                facts,
+                place: None,
+                legacy_copy: None,
+            });
+        }
+
+        for (span, call) in &self.program.calls {
+            let declaration = match call {
+                CheckedCall::Direct(instance) | CheckedCall::BoundMethod { instance, .. } => {
+                    Some(instance.declaration)
+                }
+                CheckedCall::Closure { declaration } => Some(*declaration),
+                _ => None,
+            };
+            if declaration.is_some_and(|declaration| self.is_clone_method(declaration))
+                && let Some(use_facts) = self.program.ownership_uses.get_mut(span)
+            {
+                if use_facts.len() == 1 && use_facts[0].kind == OwnershipUseKind::Produce {
+                    use_facts[0].kind = OwnershipUseKind::Clone;
+                } else {
+                    let facts = self
+                        .program
+                        .expression_types
+                        .get(span)
+                        .copied()
+                        .map(|ty| crate::types::ownership_facts(self.resolved, self.typed, ty))
+                        .unwrap_or(crate::operations::OwnershipFacts::ERROR);
+                    use_facts.insert(
+                        0,
+                        OwnershipUse {
+                            kind: OwnershipUseKind::Clone,
+                            facts,
+                            place: None,
+                            legacy_copy: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn is_clone_method(&self, declaration: DeclarationId) -> bool {
+        let data = &self.resolved.declarations[declaration.index()];
+        if self.resolved.symbol_text(data.name) != "clone" {
+            return false;
+        }
+        data.parent_impl
+            .and_then(|implementation| self.typed.impl_trait_types.get(&implementation))
+            .is_some_and(|trait_type| {
+                let mut trait_type = *trait_type;
+                while let TypeKind::Alias { target, .. } = self.typed.types.kind(trait_type) {
+                    trait_type = *target;
+                }
+                matches!(
+                    self.typed.types.kind(trait_type),
+                    TypeKind::Nominal { identity, .. }
+                        if self.resolved.symbol_text(
+                            self.resolved.declarations[identity.declaration.index()].name
+                        ) == "Clone"
+                )
+            })
     }
 
     fn record_copy(
@@ -1504,6 +1608,27 @@ impl<'a> Checker<'a> {
                     mutability,
                     target: operand_type,
                 });
+                let reborrow = matches!(
+                    self.typed
+                        .types
+                        .kind(self.typed.types.resolve_inference(operand_type)),
+                    TypeKind::Reference { .. } | TypeKind::Slice { .. }
+                );
+                self.program
+                    .ownership_uses
+                    .entry(node.span)
+                    .or_default()
+                    .push(OwnershipUse {
+                        kind: match (mutable, reborrow) {
+                            (false, false) => OwnershipUseKind::BorrowShared,
+                            (true, false) => OwnershipUseKind::BorrowExclusive,
+                            (false, true) => OwnershipUseKind::ReborrowShared,
+                            (true, true) => OwnershipUseKind::ReborrowExclusive,
+                        },
+                        facts: crate::types::ownership_facts(self.resolved, self.typed, ty),
+                        place: None,
+                        legacy_copy: None,
+                    });
                 (ty, PlaceKind::Value)
             }
             TokenKind::Star => {

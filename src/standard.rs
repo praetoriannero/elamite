@@ -139,7 +139,9 @@ pub const SYNC_SOURCE: &str = include_str!("../stdlib/src/sync.elx");
 /// Exact source-backed public declarations shipped by the compiler.
 pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.Callable",
+    "std.Clone",
     "std.Display",
+    "std.Drop",
     "std.Iterator",
     "std.NumericError",
     "std.Option",
@@ -318,6 +320,18 @@ pub const INTRINSICS: &[Intrinsic] = &[
     Intrinsic {
         path: "StableHash",
         reason: "compiler-inferred collection-key capability",
+    },
+    Intrinsic {
+        path: "Copy",
+        reason: "compiler-controlled structural ownership capability",
+    },
+    Intrinsic {
+        path: "Send",
+        reason: "compiler-controlled structural thread-transfer capability",
+    },
+    Intrinsic {
+        path: "Sync",
+        reason: "compiler-controlled structural shared-thread capability",
     },
     Intrinsic {
         path: "Formatter",

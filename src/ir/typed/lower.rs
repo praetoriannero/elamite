@@ -63,7 +63,10 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn run(mut self) -> TypedIrOutput {
-        let mut program = TypedIrProgram::default();
+        let mut program = TypedIrProgram {
+            semantic_revision: self.resolved.semantic_revision,
+            ..TypedIrProgram::default()
+        };
         let roots = self
             .resolved
             .declarations
@@ -138,6 +141,9 @@ impl<'a> TypedLowerer<'a> {
     }
 
     fn checked_copy(&self, span: Span, ty: TypeId, place: PlaceKind) -> Option<LogicalCopyFacts> {
+        if self.resolved.semantic_revision.supports_owned_surface() {
+            return None;
+        }
         self.checked.copies.get(&span).copied().map(|mut context| {
             context.source_lifetime = match place {
                 PlaceKind::Value => LogicalCopyLifetime::Temporary,
@@ -147,6 +153,61 @@ impl<'a> TypedLowerer<'a> {
             };
             self.copy_facts(ty, context)
         })
+    }
+
+    fn checked_ownership(
+        &mut self,
+        span: Span,
+        ty: TypeId,
+        place: Option<OwnershipPlace>,
+        legacy_copy: Option<LogicalCopyFacts>,
+    ) -> Vec<OwnershipUse> {
+        let kinds = self
+            .checked
+            .ownership_uses
+            .get(&span)
+            .map(|values| values.iter().map(|value| value.kind).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![OwnershipUseKind::Produce]);
+        let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+        kinds
+            .into_iter()
+            .map(|kind| OwnershipUse {
+                kind,
+                facts,
+                place: place.clone(),
+                legacy_copy: (kind == OwnershipUseKind::LegacyCopy)
+                    .then_some(legacy_copy)
+                    .flatten(),
+            })
+            .collect()
+    }
+
+    fn ownership_for_consumption(
+        &mut self,
+        ty: TypeId,
+        context: LogicalCopyContext,
+        place: Option<OwnershipPlace>,
+    ) -> OwnershipUse {
+        let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+        if self.resolved.semantic_revision.supports_owned_surface() {
+            OwnershipUse {
+                kind: if facts.copy.is_present() {
+                    OwnershipUseKind::Copy
+                } else {
+                    OwnershipUseKind::Move
+                },
+                facts,
+                place,
+                legacy_copy: None,
+            }
+        } else {
+            OwnershipUse {
+                kind: OwnershipUseKind::LegacyCopy,
+                facts,
+                place,
+                legacy_copy: Some(self.copy_facts(ty, context)),
+            }
+        }
     }
 
     fn concrete_instance(&mut self, instance: &FunctionInstance) -> FunctionInstance {
@@ -619,6 +680,35 @@ impl<'a> TypedLowerer<'a> {
         let body = crate::syntax::direct_child(&data.syntax, SyntaxKind::Block)
             .map(|block| self.lower_block(block, &mut local_types))
             .unwrap_or_default();
+        let drop_requirements = if self.resolved.semantic_revision.supports_owned_surface() {
+            local_types
+                .iter()
+                .filter_map(|(binding, ty)| {
+                    let facts = crate::types::ownership_facts(self.resolved, self.typed, *ty);
+                    matches!(
+                        facts.needs_drop,
+                        crate::operations::CapabilityState::Present
+                            | crate::operations::CapabilityState::Conditional
+                    )
+                    .then(|| DropRequirement {
+                        binding: *binding,
+                        ty: *ty,
+                        span: self.resolved.local_bindings[binding.index()].span,
+                        operation: OwnershipUse {
+                            kind: OwnershipUseKind::Drop,
+                            facts,
+                            place: Some(OwnershipPlace {
+                                root: OwnershipPlaceRoot::Local(*binding),
+                                projections: Vec::new(),
+                            }),
+                            legacy_copy: None,
+                        },
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Some(TypedFunction {
             declaration,
             instance: instance.clone(),
@@ -628,6 +718,7 @@ impl<'a> TypedLowerer<'a> {
             return_type: signature.return_type,
             body,
             local_types,
+            drop_requirements,
             promoted_locals,
             allocates_managed,
             closure,
@@ -1402,6 +1493,7 @@ impl<'a> TypedLowerer<'a> {
                                 ty,
                                 place,
                                 copy: None,
+                                ownership: vec![OwnershipUse::default()],
                                 span: node.span,
                             },
                         );
@@ -1417,6 +1509,7 @@ impl<'a> TypedLowerer<'a> {
                             ty,
                             place,
                             copy: None,
+                            ownership: vec![OwnershipUse::default()],
                             span: node.span,
                         },
                     );
@@ -1430,6 +1523,7 @@ impl<'a> TypedLowerer<'a> {
                             ty,
                             place,
                             copy: self.checked_copy(node.span, ty, place),
+                            ownership: vec![OwnershipUse::default()],
                             span: node.span,
                         },
                     );
@@ -1571,6 +1665,7 @@ impl<'a> TypedLowerer<'a> {
                             ty: pointer_type,
                             place: PlaceKind::Value,
                             copy: None,
+                            ownership: vec![OwnershipUse::default()],
                             span: node.span,
                             kind: TypedExpressionKind::Binary {
                                 operator: BinaryOperator::PointerOffsetAdd,
@@ -1655,6 +1750,7 @@ impl<'a> TypedLowerer<'a> {
                 ty,
                 place,
                 copy: self.checked_copy(node.span, ty, place),
+                ownership: vec![OwnershipUse::default()],
                 span: node.span,
                 kind,
             },
@@ -1666,6 +1762,9 @@ impl<'a> TypedLowerer<'a> {
         node: &SyntaxNode,
         mut expression: TypedExpression,
     ) -> Option<TypedExpression> {
+        let ownership_place = expression.ownership_place();
+        expression.ownership =
+            self.checked_ownership(node.span, expression.ty, ownership_place, expression.copy);
         let Some(coercion) = self.checked.trait_object_coercions.get(&node.span).copied() else {
             return Some(expression);
         };
@@ -1690,11 +1789,22 @@ impl<'a> TypedLowerer<'a> {
         let trait_type = *trait_type;
         self.register_vtable(trait_declaration, trait_type, concrete, node.span);
         let copy = self.checked_copy(node.span, target, expression.place);
+        let ownership = self.checked_ownership(
+            node.span,
+            target,
+            expression
+                .ownership
+                .first()
+                .and_then(|operation| operation.place.clone()),
+            copy,
+        );
+        expression.ownership = vec![OwnershipUse::default()];
         expression.copy = None;
         Some(TypedExpression {
             ty: target,
             place: PlaceKind::Value,
             copy,
+            ownership,
             span: node.span,
             kind: TypedExpressionKind::MakeTraitObject {
                 value: Box::new(expression),
@@ -1848,6 +1958,7 @@ impl<'a> TypedLowerer<'a> {
                                 ty: self.typed.types.primitive(PrimitiveType::Unit),
                                 place: PlaceKind::Value,
                                 copy: None,
+                                ownership: vec![OwnershipUse::default()],
                                 span: node.span,
                                 kind: TypedExpressionKind::Constant(crate::ir::Constant::Unit),
                             }
@@ -1858,6 +1969,7 @@ impl<'a> TypedLowerer<'a> {
                                 )),
                                 place: PlaceKind::Value,
                                 copy: None,
+                                ownership: vec![OwnershipUse::default()],
                                 span: node.span,
                                 kind: TypedExpressionKind::Tuple(lowered),
                             }
@@ -1871,6 +1983,7 @@ impl<'a> TypedLowerer<'a> {
                             ty: receiver_type,
                             place: PlaceKind::Value,
                             copy: None,
+                            ownership: vec![OwnershipUse::default()],
                             span: callee_node.span,
                             kind: TypedExpressionKind::AddressOf(Box::new(
                                 self.lower_place(callee_node)?,
@@ -1904,6 +2017,7 @@ impl<'a> TypedLowerer<'a> {
                         ty: self.typed.types.primitive(PrimitiveType::Unit),
                         place: PlaceKind::Value,
                         copy: None,
+                        ownership: vec![OwnershipUse::default()],
                         span: node.span,
                         kind: TypedExpressionKind::Constant(crate::ir::Constant::Unit),
                     }
@@ -1914,6 +2028,7 @@ impl<'a> TypedLowerer<'a> {
                         )),
                         place: PlaceKind::Value,
                         copy: None,
+                        ownership: vec![OwnershipUse::default()],
                         span: node.span,
                         kind: TypedExpressionKind::Tuple(lowered),
                     }
@@ -2183,6 +2298,7 @@ impl<'a> TypedLowerer<'a> {
             ty,
             place: PlaceKind::Value,
             copy: None,
+            ownership: vec![OwnershipUse::default()],
             span: arguments
                 .get(fixed)
                 .map_or(call_span, |argument| argument.span),
@@ -2201,44 +2317,69 @@ impl<'a> TypedLowerer<'a> {
             ReceiverAdjustment::Pass => self.lower_expression(base),
             ReceiverAdjustment::CopyValue => {
                 let mut receiver = self.lower_expression(base)?;
-                receiver.copy = self
-                    .checked_copy(base.span, receiver.ty, receiver.place)
-                    .or_else(|| {
-                        Some(self.copy_facts(
-                            receiver.ty,
-                            LogicalCopyContext::ordinary(
-                                LogicalCopyKind::Receiver,
-                                LogicalCopyLifetime::Temporary,
-                                LogicalCopyLifetime::Callee,
-                            ),
-                        ))
-                    });
+                let context = LogicalCopyContext::ordinary(
+                    LogicalCopyKind::Receiver,
+                    LogicalCopyLifetime::Temporary,
+                    LogicalCopyLifetime::Callee,
+                );
+                let place = receiver.ownership_place().map(|mut place| {
+                    place
+                        .projections
+                        .push(OwnershipProjection::ReceiverAdaptation);
+                    place
+                });
+                let ownership = self.ownership_for_consumption(receiver.ty, context, place);
+                receiver.copy = ownership.legacy_copy;
+                receiver.ownership = vec![ownership];
                 Some(receiver)
             }
             ReceiverAdjustment::DereferenceAndCopy => {
                 let operand = self.lower_expression(base)?;
+                let context = LogicalCopyContext::ordinary(
+                    LogicalCopyKind::Receiver,
+                    LogicalCopyLifetime::Temporary,
+                    LogicalCopyLifetime::Callee,
+                );
+                let place = operand.ownership_place().map(|mut place| {
+                    place.projections.push(OwnershipProjection::Dereference);
+                    place
+                        .projections
+                        .push(OwnershipProjection::ReceiverAdaptation);
+                    place
+                });
+                let ownership = self.ownership_for_consumption(receiver_type, context, place);
                 Some(TypedExpression {
                     ty: receiver_type,
                     place: PlaceKind::Value,
-                    copy: Some(self.copy_facts(
-                        receiver_type,
-                        LogicalCopyContext::ordinary(
-                            LogicalCopyKind::Receiver,
-                            LogicalCopyLifetime::Temporary,
-                            LogicalCopyLifetime::Callee,
-                        ),
-                    )),
+                    copy: ownership.legacy_copy,
+                    ownership: vec![ownership],
                     span: base.span,
                     kind: TypedExpressionKind::Dereference(Box::new(operand)),
                 })
             }
             ReceiverAdjustment::BorrowShared | ReceiverAdjustment::BorrowMutable => {
+                let target = self.lower_place(base)?;
+                let facts = crate::types::ownership_facts(self.resolved, self.typed, receiver_type);
+                let mut place = target.ownership_place();
+                place
+                    .projections
+                    .push(OwnershipProjection::ReceiverAdaptation);
                 Some(TypedExpression {
                     ty: receiver_type,
                     place: PlaceKind::Value,
                     copy: None,
+                    ownership: vec![OwnershipUse {
+                        kind: if adjustment == ReceiverAdjustment::BorrowMutable {
+                            OwnershipUseKind::BorrowExclusive
+                        } else {
+                            OwnershipUseKind::BorrowShared
+                        },
+                        facts,
+                        place: Some(place),
+                        legacy_copy: None,
+                    }],
                     span: base.span,
-                    kind: TypedExpressionKind::AddressOf(Box::new(self.lower_place(base)?)),
+                    kind: TypedExpressionKind::AddressOf(Box::new(target)),
                 })
             }
         }
@@ -2305,21 +2446,24 @@ impl<'a> TypedLowerer<'a> {
                 };
                 let template = self.typed.field_types.get(&field).copied()?;
                 let ty = self.concrete_type(template);
+                let context = LogicalCopyContext::ordinary(
+                    LogicalCopyKind::AggregateElement,
+                    LogicalCopyLifetime::LexicalScope,
+                    LogicalCopyLifetime::Aggregate,
+                );
+                let ownership = self.ownership_for_consumption(
+                    ty,
+                    context,
+                    Some(OwnershipPlace {
+                        root: OwnershipPlaceRoot::Local(binding),
+                        projections: Vec::new(),
+                    }),
+                );
                 TypedExpression {
                     ty,
                     place: PlaceKind::Addressable,
-                    copy: self
-                        .checked_copy(name_token.span, ty, PlaceKind::Addressable)
-                        .or_else(|| {
-                            Some(self.copy_facts(
-                                ty,
-                                LogicalCopyContext::ordinary(
-                                    LogicalCopyKind::AggregateElement,
-                                    LogicalCopyLifetime::LexicalScope,
-                                    LogicalCopyLifetime::Aggregate,
-                                ),
-                            ))
-                        }),
+                    copy: ownership.legacy_copy,
+                    ownership: vec![ownership],
                     span: name_token.span,
                     kind: TypedExpressionKind::Local(binding),
                 }
@@ -2461,6 +2605,7 @@ impl<'a> TypedLowerer<'a> {
                             ty: pointer_type,
                             place: PlaceKind::Value,
                             copy: None,
+                            ownership: vec![OwnershipUse::default()],
                             span: node.span,
                             kind: TypedExpressionKind::Binary {
                                 operator: BinaryOperator::PointerOffsetAdd,
@@ -2535,6 +2680,7 @@ impl<'a> TypedLowerer<'a> {
             ty: target,
             place: PlaceKind::Mutable,
             copy: None,
+            ownership: vec![OwnershipUse::default()],
             span: base.span,
             kind: TypedExpressionKind::Dereference(Box::new(value)),
         })
@@ -2566,6 +2712,7 @@ impl<'a> TypedLowerer<'a> {
             ty: target,
             place: PlaceKind::Mutable,
             copy: None,
+            ownership: vec![OwnershipUse::default()],
             span: base.span,
             kind: TypedExpressionKind::Dereference(Box::new(value)),
         })
@@ -2719,6 +2866,19 @@ impl<'a> TypedLowerer<'a> {
     ) -> Option<TypedExpression> {
         let source_ty = self.concrete_type(capture.source_ty);
         let target_ty = self.concrete_type(capture.ty);
+        let context = LogicalCopyContext::ordinary(
+            LogicalCopyKind::ClosureCapture,
+            LogicalCopyLifetime::LexicalScope,
+            LogicalCopyLifetime::Closure,
+        );
+        let ownership = self.ownership_for_consumption(
+            source_ty,
+            context,
+            Some(OwnershipPlace {
+                root: OwnershipPlaceRoot::Local(capture.source),
+                projections: Vec::new(),
+            }),
+        );
         let source = TypedExpression {
             kind: TypedExpressionKind::Local(capture.source),
             ty: source_ty,
@@ -2729,16 +2889,9 @@ impl<'a> TypedLowerer<'a> {
                     | ClosureCaptureKind::SharedRawPointer
                     | ClosureCaptureKind::MutableRawPointer
             )
-            .then(|| {
-                self.copy_facts(
-                    source_ty,
-                    LogicalCopyContext::ordinary(
-                        LogicalCopyKind::ClosureCapture,
-                        LogicalCopyLifetime::LexicalScope,
-                        LogicalCopyLifetime::Closure,
-                    ),
-                )
-            }),
+            .then_some(ownership.legacy_copy)
+            .flatten(),
+            ownership: vec![ownership],
             span: capture.span,
         };
         match capture.kind {
@@ -2754,11 +2907,13 @@ impl<'a> TypedLowerer<'a> {
                         ty: target_ty,
                         place: PlaceKind::Value,
                         copy: None,
+                        ownership: vec![OwnershipUse::default()],
                         span: capture.span,
                     })
                 }
             }
             ClosureCaptureKind::SharedReference | ClosureCaptureKind::MutableReference => {
+                let facts = crate::types::ownership_facts(self.resolved, self.typed, target_ty);
                 Some(TypedExpression {
                     kind: TypedExpressionKind::AddressOf(Box::new(TypedPlace::Local {
                         binding: capture.source,
@@ -2768,6 +2923,19 @@ impl<'a> TypedLowerer<'a> {
                     ty: target_ty,
                     place: PlaceKind::Value,
                     copy: None,
+                    ownership: vec![OwnershipUse {
+                        kind: if capture.kind == ClosureCaptureKind::MutableReference {
+                            OwnershipUseKind::BorrowExclusive
+                        } else {
+                            OwnershipUseKind::BorrowShared
+                        },
+                        facts,
+                        place: Some(OwnershipPlace {
+                            root: OwnershipPlaceRoot::Local(capture.source),
+                            projections: Vec::new(),
+                        }),
+                        legacy_copy: None,
+                    }],
                     span: capture.span,
                 })
             }

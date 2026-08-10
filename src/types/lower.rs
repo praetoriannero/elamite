@@ -54,6 +54,7 @@ struct TypeBuilder<'a> {
     impl_trait_types: BTreeMap<ImplId, TypeId>,
     impl_target_types: BTreeMap<ImplId, TypeId>,
     obligations: Vec<TraitObligation>,
+    ownership_cache: BTreeMap<TypeId, crate::operations::OwnershipFacts>,
     foreign_fields: BTreeMap<DeclarationId, Vec<TypeId>>,
     nominal_fields: BTreeMap<DeclarationId, Vec<TypeId>>,
     nominal_parameters: BTreeMap<DeclarationId, Vec<GenericParameterId>>,
@@ -78,6 +79,7 @@ impl<'a> TypeBuilder<'a> {
             impl_trait_types: BTreeMap::new(),
             impl_target_types: BTreeMap::new(),
             obligations: Vec::new(),
+            ownership_cache: BTreeMap::new(),
             foreign_fields: BTreeMap::new(),
             nominal_fields: BTreeMap::new(),
             nominal_parameters: BTreeMap::new(),
@@ -188,6 +190,7 @@ impl<'a> TypeBuilder<'a> {
             impl_trait_types,
             impl_target_types,
             obligations,
+            ownership_cache,
             foreign_fields,
             nominal_fields,
             nominal_parameters,
@@ -207,6 +210,7 @@ impl<'a> TypeBuilder<'a> {
             impl_trait_types,
             impl_target_types,
             obligations,
+            ownership_cache,
             foreign_fields,
             nominal_fields,
             nominal_parameters,
@@ -231,6 +235,7 @@ impl<'a> TypeBuilder<'a> {
             impl_trait_types: self.impl_trait_types,
             impl_target_types: self.impl_target_types,
             obligations: self.obligations,
+            ownership_cache: self.ownership_cache,
             foreign_fields: self.foreign_fields,
             nominal_fields: self.nominal_fields,
             nominal_parameters: self.nominal_parameters,
@@ -924,6 +929,9 @@ impl<'a> TypeBuilder<'a> {
                     | "Ord"
                     | "Hash"
                     | "StableHash"
+                    | "Copy"
+                    | "Send"
+                    | "Sync"
                     | "Display"
             ),
             _ => false,

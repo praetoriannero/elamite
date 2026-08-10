@@ -9,6 +9,10 @@ use super::*;
 pub struct CheckedProgram {
     pub expression_types: BTreeMap<Span, TypeId>,
     pub expression_places: BTreeMap<Span, PlaceKind>,
+    /// One explicit ownership intent for every checked value expression.
+    /// Place projections are attached during typed lowering, after member and
+    /// receiver selection has stable identities.
+    pub ownership_uses: BTreeMap<Span, Vec<OwnershipUse>>,
     /// Validated implicit conversions from concrete safe references to
     /// trait-object references. Lowering consumes these facts to construct the
     /// target-plus-vtable fat reference at the contextual conversion point.

@@ -64,6 +64,10 @@ pub struct TypedProgram {
     pub impl_trait_types: BTreeMap<ImplId, TypeId>,
     pub impl_target_types: BTreeMap<ImplId, TypeId>,
     pub obligations: Vec<TraitObligation>,
+    /// Memoized canonical ownership facts. The cache is keyed only by stable
+    /// canonical `TypeId`; body checking may intern more types without
+    /// invalidating facts for existing identities.
+    pub(super) ownership_cache: BTreeMap<TypeId, crate::operations::OwnershipFacts>,
     pub(super) foreign_fields: BTreeMap<DeclarationId, Vec<TypeId>>,
     pub(super) nominal_fields: BTreeMap<DeclarationId, Vec<TypeId>>,
     pub(super) nominal_parameters: BTreeMap<DeclarationId, Vec<GenericParameterId>>,
@@ -85,6 +89,7 @@ impl Default for TypedProgram {
             impl_trait_types: BTreeMap::new(),
             impl_target_types: BTreeMap::new(),
             obligations: Vec::new(),
+            ownership_cache: BTreeMap::new(),
             foreign_fields: BTreeMap::new(),
             nominal_fields: BTreeMap::new(),
             nominal_parameters: BTreeMap::new(),

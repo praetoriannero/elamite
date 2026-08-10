@@ -131,9 +131,6 @@ pub fn check_frontend_with_features(
     if !type_output.diagnostics.is_empty() {
         return Err(type_output.diagnostics);
     }
-    if let Some(diagnostic) = crate::check::semantic_revision_boundary(&resolved) {
-        return Err(vec![diagnostic]);
-    }
     let trait_output = crate::traits::check_traits(&resolved, &mut type_output.program);
     if !trait_output.diagnostics.is_empty() {
         return Err(trait_output.diagnostics);

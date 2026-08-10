@@ -3,8 +3,169 @@
 //! The checker selects these operations, IR preserves them, and the backend
 //! lowers them. No one phase owns their shared vocabulary.
 
-use crate::resolution::DeclarationId;
+use crate::resolution::{DeclarationId, FieldId, LocalBindingId};
+use crate::source::Span;
 use crate::types::TypeId;
+
+/// The result of one structural ownership-capability query.
+///
+/// `Conditional` is retained for generic and erased types whose concrete
+/// substitutions decide the answer. `Error` is deliberately distinct from
+/// `Present`: recovery types must never accidentally acquire a capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CapabilityState {
+    Absent,
+    Present,
+    Conditional,
+    Error,
+}
+
+impl CapabilityState {
+    #[must_use]
+    pub const fn is_present(self) -> bool {
+        matches!(self, Self::Present)
+    }
+}
+
+/// Canonical facts used by move, borrow, cleanup, and concurrency analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OwnershipFacts {
+    pub copy: CapabilityState,
+    pub clone: CapabilityState,
+    pub needs_drop: CapabilityState,
+    pub contains_borrow: CapabilityState,
+    pub send: CapabilityState,
+    pub sync: CapabilityState,
+}
+
+impl OwnershipFacts {
+    pub const ERROR: Self = Self {
+        copy: CapabilityState::Error,
+        clone: CapabilityState::Error,
+        needs_drop: CapabilityState::Error,
+        contains_borrow: CapabilityState::Error,
+        send: CapabilityState::Error,
+        sync: CapabilityState::Error,
+    };
+}
+
+/// A stable ownership-analysis root. Expression roots are used only when an
+/// indirection prevents the compiler from naming unique source storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OwnershipPlaceRoot {
+    Local(LocalBindingId),
+    ClosureCapture(usize),
+    Expression(Span),
+}
+
+/// One source-independent projection from an ownership place root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OwnershipProjection {
+    Field(FieldId),
+    TupleField(usize),
+    ConstantIndex(u128),
+    DynamicIndex,
+    Dereference,
+    ReceiverAdaptation,
+}
+
+/// A place description retained by typed and control-flow IR so later passes
+/// never need to reconstruct aliasing paths from syntax.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OwnershipPlace {
+    pub root: OwnershipPlaceRoot,
+    pub projections: Vec<OwnershipProjection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaceOverlap {
+    Equal,
+    Disjoint,
+    MayOverlap,
+}
+
+impl OwnershipPlace {
+    #[must_use]
+    pub fn overlap(&self, other: &Self) -> PlaceOverlap {
+        if self.root != other.root {
+            return if matches!(self.root, OwnershipPlaceRoot::Expression(_))
+                || matches!(other.root, OwnershipPlaceRoot::Expression(_))
+                || self.projections.contains(&OwnershipProjection::Dereference)
+                || other
+                    .projections
+                    .contains(&OwnershipProjection::Dereference)
+            {
+                PlaceOverlap::MayOverlap
+            } else {
+                PlaceOverlap::Disjoint
+            };
+        }
+        if self.projections == other.projections {
+            return PlaceOverlap::Equal;
+        }
+        for (left, right) in self.projections.iter().zip(&other.projections) {
+            if left == right {
+                continue;
+            }
+            return match (left, right) {
+                (OwnershipProjection::Field(left), OwnershipProjection::Field(right))
+                    if left != right =>
+                {
+                    PlaceOverlap::Disjoint
+                }
+                (OwnershipProjection::TupleField(left), OwnershipProjection::TupleField(right))
+                    if left != right =>
+                {
+                    PlaceOverlap::Disjoint
+                }
+                (
+                    OwnershipProjection::ConstantIndex(left),
+                    OwnershipProjection::ConstantIndex(right),
+                ) if left != right => PlaceOverlap::Disjoint,
+                _ => PlaceOverlap::MayOverlap,
+            };
+        }
+        // One path is a projection of the other, so replacing the shorter
+        // place overlaps the longer path.
+        PlaceOverlap::MayOverlap
+    }
+}
+
+/// Semantic intent of one source value use. `LegacyCopy` is the only variant
+/// that carries the 0.10 shallow-copy contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OwnershipUseKind {
+    Produce,
+    Move,
+    Copy,
+    Clone,
+    BorrowShared,
+    BorrowExclusive,
+    ReborrowShared,
+    ReborrowExclusive,
+    Drop,
+    LegacyCopy,
+}
+
+/// Complete phase-neutral facts for one value-producing or consuming use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnershipUse {
+    pub kind: OwnershipUseKind,
+    pub facts: OwnershipFacts,
+    pub place: Option<OwnershipPlace>,
+    pub legacy_copy: Option<LogicalCopyFacts>,
+}
+
+impl Default for OwnershipUse {
+    fn default() -> Self {
+        Self {
+            kind: OwnershipUseKind::Produce,
+            facts: OwnershipFacts::ERROR,
+            place: None,
+            legacy_copy: None,
+        }
+    }
+}
 
 /// Why the compiler materializes one source-level value copy.
 ///

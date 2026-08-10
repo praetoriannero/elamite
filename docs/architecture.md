@@ -28,6 +28,7 @@ replaced.
 | Stable names, IDs, and resolution tables | `src/resolution/model.rs` |
 | Collection, imports, bodies, visibility | matching modules in `src/resolution/` |
 | Canonical types and interning | `src/types/context.rs` |
+| Canonical ownership capabilities | `src/types/ownership.rs` |
 | Typed-program facts | `src/types/model.rs` |
 | Source-type lowering | `src/types/lower.rs` |
 | Checked output and pure checker analyses | `src/check/model.rs`, `coverage.rs`, `containment.rs` |
@@ -36,7 +37,7 @@ replaced.
 | Internal read-only call analysis and ABI selection | `src/ir/borrowing.rs` |
 | Temporary and return storage-reuse selection | `src/ir/reuse.rs` |
 | Control-flow IR and lowering | `src/ir/control_flow/model.rs`, `lower.rs` |
-| Shared selected operations, logical-copy facts, and traps | `src/operations.rs`, `src/ir/traps.rs` |
+| Shared ownership/use operations, logical-copy facts, and traps | `src/operations.rs`, `src/ir/traps.rs` |
 | Target and optimization policy | `src/config.rs` |
 | C naming, types, runtime, functions, entry | matching modules in `src/backend/` |
 
@@ -49,12 +50,27 @@ directly.
 `src/config.rs::SemanticRevision` is chosen once while the package graph is
 constructed. Every package on a dependency edge must carry the same revision;
 parsed, expanded, resolved, and typed results retain it explicitly. The 0.11
-path admits the accepted slice, array, closure-capture, and borrow syntax and
-canonicalizes its source types, then stops at
-`check::semantic_revision_boundary`. No owned-model value reaches traits, body
-checking, IR, or the backend until the later ownership milestones replace that
-boundary. Consequently the backend has no revision switch and cannot infer a
-semantic model from syntax.
+path admits the accepted slice, array, closure-capture, and borrow syntax,
+canonicalizes its source types, validates trait declarations, and constructs
+ownership-aware checked facts. It then stops at
+`check::semantic_revision_boundary` before move-state enforcement. Focused
+tests lower those checked facts through both IR levels, but compiling driver
+entry points do not yet send an owned-model value to the backend. Consequently
+the backend has no revision switch and cannot infer a semantic model from
+syntax.
+
+`src/types/ownership.rs` computes `Copy`, clone availability, destruction,
+borrow containment, and provisional `Send`/`Sync` from canonical types and
+declared traits. Recovery types grant nothing, generic facts remain explicit,
+and recursive queries use monotone seeds rather than layout recursion.
+`OwnershipPlace` gives later dataflow a stable root plus field, tuple, index,
+dereference, and receiver projections with a conservative overlap query.
+Checking assigns an ordered operation sequence to every expression because one
+expression may both form a borrow and copy or move the resulting reference.
+Typed IR substitutes concrete facts and attaches projected places;
+control-flow IR assigns stable per-function operation IDs after source
+evaluation. Move, `Copy`, clone, borrow, reborrow, and future drop operations
+therefore remain distinct without backend inference.
 
 Logical-copy intent is selected before backend lowering. Checking records the
 copy kind and source and destination lifetime classes; typed IR adds the
@@ -63,6 +79,12 @@ copy identity. Debug builds audit that inventory for exact-once emission. The C
 backend lowers every copy, including thread, channel, and mutex values, as an
 immediate representation assignment. There is no recursive per-type copy-helper
 family.
+
+Logical copies are now explicitly the compatibility operation
+`OwnershipUseKind::LegacyCopy`. Only that variant enters the 0.10 copy
+materialization path. Owned moves and bitwise copies lower as explicit
+ownership uses whose C representation is an ordinary temporary transfer;
+neither operation can select recursive cloning or shallow managed sharing.
 
 Typed IR distinguishes numeric arithmetic from raw-pointer offset and distance
 operations. Pointer indexing adapts to an element-scaled offset followed by a
