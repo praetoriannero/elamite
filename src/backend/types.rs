@@ -1,6 +1,7 @@
 //! Type/layout declarations and C type selection.
 
 use super::*;
+use crate::types::Mutability;
 
 impl<'a> CEmitter<'a> {
     pub(super) fn emit_forward_structs(&mut self) {
@@ -93,7 +94,7 @@ impl<'a> CEmitter<'a> {
                     );
                 }
             }
-            TypeKind::Slice(element) => {
+            TypeKind::Slice { element, .. } => {
                 self.emit_type_definition(*element, span);
                 let name = slice_name(ty);
                 if let Some(c_type) = self.c_type(*element, span) {
@@ -202,8 +203,10 @@ impl<'a> CEmitter<'a> {
                 for parameter in parameters {
                     self.emit_type_definition(parameter.ty, span);
                     if parameter.variadic
-                        && let Some(slice) =
-                            self.typed.types.id_for_kind(&TypeKind::Slice(parameter.ty))
+                        && let Some(slice) = self.typed.types.id_for_kind(&TypeKind::Slice {
+                            mutability: Mutability::Shared,
+                            element: parameter.ty,
+                        })
                     {
                         self.emit_type_definition(slice, span);
                     }
@@ -222,7 +225,10 @@ impl<'a> CEmitter<'a> {
                     let parameter_type = if parameter.variadic {
                         self.typed
                             .types
-                            .id_for_kind(&TypeKind::Slice(parameter.ty))
+                            .id_for_kind(&TypeKind::Slice {
+                                mutability: Mutability::Shared,
+                                element: parameter.ty,
+                            })
                             .and_then(|slice| self.c_type(slice, span))
                     } else {
                         self.c_type(parameter.ty, span)
@@ -523,7 +529,7 @@ impl<'a> CEmitter<'a> {
                 | TypeKind::Error => true,
                 TypeKind::Alias { target, .. } => walk(types, *target, depth - 1),
                 TypeKind::Array { element, .. } => walk(types, *element, depth - 1),
-                TypeKind::Slice(element) => walk(types, *element, depth - 1),
+                TypeKind::Slice { element, .. } => walk(types, *element, depth - 1),
                 TypeKind::Tuple(elements) => elements
                     .iter()
                     .any(|element| walk(types, *element, depth - 1)),
@@ -562,7 +568,7 @@ impl<'a> CEmitter<'a> {
             .to_string(),
             TypeKind::Tuple(_) => tuple_name(ty),
             TypeKind::Array { .. } => array_name(ty),
-            TypeKind::Slice(_) => slice_name(ty),
+            TypeKind::Slice { .. } => slice_name(ty),
             TypeKind::Nominal { .. } if self.structs.contains_key(&ty) => {
                 struct_name(self.structs[&ty].declaration, ty)
             }

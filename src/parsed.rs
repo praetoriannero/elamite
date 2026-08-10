@@ -6,10 +6,11 @@
 
 use std::path::PathBuf;
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::lexer::lex;
 use crate::package::{ModulePath, PackageGraph, PackageId};
-use crate::parser::parse;
+use crate::parser::parse_for_revision;
 use crate::source::{FileId, SourceManager, Span};
 use crate::syntax::{SyntaxNode, Token};
 
@@ -61,6 +62,7 @@ impl ParsedUnit {
 
 #[derive(Debug, Default)]
 pub struct ParsedPackage {
+    pub semantic_revision: SemanticRevision,
     pub units: Vec<ParsedUnit>,
 }
 
@@ -92,7 +94,11 @@ fn parse_package_inner(
     include_standard: bool,
 ) -> ParsedPackageOutput {
     let mut units = Vec::new();
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = graph
+        .validate_semantic_revisions()
+        .err()
+        .unwrap_or_default();
+    let semantic_revision = graph.semantic_revision();
 
     if include_standard {
         for (identity, path, source) in [
@@ -163,7 +169,15 @@ fn parse_package_inner(
             ),
         ] {
             let file = sources.add_text(path.clone(), source.to_string());
-            parse_unit(identity, path, file, sources, &mut units, &mut diagnostics);
+            parse_unit(
+                identity,
+                path,
+                file,
+                sources,
+                semantic_revision,
+                &mut units,
+                &mut diagnostics,
+            );
         }
     }
 
@@ -187,7 +201,15 @@ fn parse_package_inner(
 
     for (identity, path) in files {
         match sources.load_file(&path) {
-            Ok(file) => parse_unit(identity, path, file, sources, &mut units, &mut diagnostics),
+            Ok(file) => parse_unit(
+                identity,
+                path,
+                file,
+                sources,
+                semantic_revision,
+                &mut units,
+                &mut diagnostics,
+            ),
             Err(error) => {
                 diagnostics.push(Diagnostic::new(Category::NameResolution, error.to_string()))
             }
@@ -195,7 +217,10 @@ fn parse_package_inner(
     }
 
     ParsedPackageOutput {
-        package: ParsedPackage { units },
+        package: ParsedPackage {
+            semantic_revision,
+            units,
+        },
         diagnostics,
     }
 }
@@ -205,6 +230,7 @@ fn parse_unit(
     path: PathBuf,
     file: FileId,
     sources: &SourceManager,
+    semantic_revision: SemanticRevision,
     units: &mut Vec<ParsedUnit>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -212,7 +238,7 @@ fn parse_unit(
     let span = Span::new(file, 0, u32::try_from(source.len()).unwrap_or(u32::MAX));
     let lexed = lex(file, source);
     diagnostics.extend(lexed.diagnostics);
-    let parsed = parse(&lexed.tokens);
+    let parsed = parse_for_revision(&lexed.tokens, semantic_revision);
     diagnostics.extend(parsed.diagnostics);
     units.push(ParsedUnit {
         identity,

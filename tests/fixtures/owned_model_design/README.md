@@ -16,5 +16,5 @@ specification must not make the compiler pretend to implement it.
 | Target width | `target_width/handles.elx` | graph ownership plus final x86/x86-64 conformance |
 
 The authoritative integrated target remains
-`examples/owned_spec_demo.elx`. Focused fixtures, rather than comments in that
+`owned_spec_demo.elx`. Focused fixtures, rather than comments in that
 large file, own diagnostics and runtime boundary evidence.

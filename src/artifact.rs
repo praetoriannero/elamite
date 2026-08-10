@@ -9,7 +9,7 @@ use crate::package::{PackageGraph, PackageId};
 use crate::resolution::{ItemId, ResolvedProgram, Visibility};
 use crate::source::SourceManager;
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicApi {
@@ -25,6 +25,7 @@ pub struct PackageMetadata {
     pub package_name: String,
     pub package_version: String,
     pub package_identity: String,
+    pub semantic_revision: String,
     pub public_api: Vec<PublicApi>,
     pub include_paths: Vec<String>,
     pub library_paths: Vec<String>,
@@ -90,6 +91,7 @@ impl PackageMetadata {
             package_name: package.manifest.name.clone(),
             package_version: package.manifest.version.clone(),
             package_identity: package_id.display().to_string(),
+            semantic_revision: package.semantic_revision().as_str().to_string(),
             public_api,
             include_paths: package
                 .manifest

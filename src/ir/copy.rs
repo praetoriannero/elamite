@@ -31,7 +31,7 @@ pub fn logical_copy_strategy(types: &TypeContext, mut ty: TypeId) -> LogicalCopy
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }
             | TypeKind::TraitObject { .. }
-            | TypeKind::Slice(_) => LogicalCopyStrategy::PreserveIdentity,
+            | TypeKind::Slice { .. } => LogicalCopyStrategy::PreserveIdentity,
             TypeKind::Foreign { complete: true, .. } => LogicalCopyStrategy::Trivial,
             TypeKind::Builtin { .. }
             | TypeKind::Foreign {
@@ -61,7 +61,7 @@ pub fn logical_copy_allocation(types: &TypeContext, mut ty: TypeId) -> LogicalCo
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }
             | TypeKind::TraitObject { .. }
-            | TypeKind::Slice(_)
+            | TypeKind::Slice { .. }
             | TypeKind::Closure { .. }
             | TypeKind::Builtin { .. } => LogicalCopyAllocation::PreserveIdentity,
             TypeKind::Primitive(PrimitiveType::String) => LogicalCopyAllocation::SharedBacking,

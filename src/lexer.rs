@@ -48,6 +48,16 @@ struct PendingNewline {
     span: Span,
 }
 
+/// A layout block whose header appears while an enclosing expression
+/// delimiter remains open, as with a closure literal passed directly to a
+/// function call. The delimiter depth identifies when the containing call has
+/// closed; `base_indent` identifies the closure/block header indentation.
+#[derive(Debug, Clone, Copy)]
+struct GroupedLayoutBlock {
+    delimiter_depth: usize,
+    base_indent: usize,
+}
+
 /// Lexes one UTF-8 source file.
 #[must_use]
 pub fn lex(file: FileId, source: &str) -> LexOutput {
@@ -64,6 +74,7 @@ struct Lexer<'a> {
     pending_newline: Option<PendingNewline>,
     active_statement_base: Option<usize>,
     expected_block_base: Option<usize>,
+    grouped_layout_blocks: Vec<GroupedLayoutBlock>,
 }
 
 impl<'a> Lexer<'a> {
@@ -78,6 +89,7 @@ impl<'a> Lexer<'a> {
             pending_newline: None,
             active_statement_base: None,
             expected_block_base: None,
+            grouped_layout_blocks: Vec::new(),
         }
     }
 
@@ -167,7 +179,9 @@ impl<'a> Lexer<'a> {
 
         let is_doc_comment = rest.starts_with("///");
         let grouped_at_start = !self.delimiters.is_empty();
-        if !grouped_at_start {
+        let layout_is_active =
+            !self.grouped_layout_blocks.is_empty() || self.expected_block_base.is_some();
+        if !grouped_at_start || layout_is_active {
             if self.prepare_logical_line(indent, is_doc_comment, line_start, content_start) {
                 // This physical line continues the current logical statement.
             } else {
@@ -188,7 +202,25 @@ impl<'a> Lexer<'a> {
             self.lex_line_tokens(content_start, line_end);
         }
 
-        if self.delimiters.is_empty() && self.tokens.len() > token_start {
+        while self.grouped_layout_blocks.last().is_some_and(|block| {
+            self.delimiters.len() < block.delimiter_depth
+                && self
+                    .block_indents
+                    .last()
+                    .is_some_and(|indent| *indent <= block.base_indent)
+        }) {
+            self.grouped_layout_blocks.pop();
+        }
+
+        let ends_block_header = matches!(
+            self.tokens.last().map(|token| &token.kind),
+            Some(TokenKind::Colon)
+        );
+        if (self.delimiters.is_empty()
+            || !self.grouped_layout_blocks.is_empty()
+            || ends_block_header)
+            && self.tokens.len() > token_start
+        {
             let newline_start = if newline_end > line_end {
                 line_end
             } else {
@@ -206,10 +238,13 @@ impl<'a> Lexer<'a> {
                 return;
             }
 
-            if matches!(
-                self.tokens.last().map(|token| &token.kind),
-                Some(TokenKind::Colon)
-            ) {
+            if ends_block_header {
+                if !self.delimiters.is_empty() {
+                    self.grouped_layout_blocks.push(GroupedLayoutBlock {
+                        delimiter_depth: self.delimiters.len(),
+                        base_indent: self.active_statement_base.unwrap_or(indent),
+                    });
+                }
                 self.emit(
                     TokenKind::Newline,
                     newline_span.start as usize,

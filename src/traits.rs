@@ -727,8 +727,18 @@ fn match_type_pattern(
                 length: right_length,
             },
         ) => left_length == right_length && match_type_pattern(typed, *left, *right, bindings),
-        (TypeKind::Slice(left), TypeKind::Slice(right)) => {
-            match_type_pattern(typed, *left, *right, bindings)
+        (
+            TypeKind::Slice {
+                mutability: left_mutability,
+                element: left,
+            },
+            TypeKind::Slice {
+                mutability: right_mutability,
+                element: right,
+            },
+        ) => {
+            left_mutability == right_mutability
+                && match_type_pattern(typed, *left, *right, bindings)
         }
         (
             TypeKind::Reference {
@@ -871,9 +881,16 @@ fn type_patterns_overlap(typed: &TypedProgram, left: TypeId, right: TypeId) -> b
                 length: right_length,
             },
         ) => left_length == right_length && type_patterns_overlap(typed, *left, *right),
-        (TypeKind::Slice(left), TypeKind::Slice(right)) => {
-            type_patterns_overlap(typed, *left, *right)
-        }
+        (
+            TypeKind::Slice {
+                mutability: left_mutability,
+                element: left,
+            },
+            TypeKind::Slice {
+                mutability: right_mutability,
+                element: right,
+            },
+        ) => left_mutability == right_mutability && type_patterns_overlap(typed, *left, *right),
         (
             TypeKind::Reference {
                 mutability: left_mutability,
@@ -1615,7 +1632,7 @@ fn provides_inner(
         | TypeKind::GenericParameter(_)
         | TypeKind::Alias { .. }
         | TypeKind::Error
-        | TypeKind::Slice(_)
+        | TypeKind::Slice { .. }
         | TypeKind::Foreign { .. }
         | TypeKind::SelfType(_)
         | TypeKind::InferenceVariable(_) => false,

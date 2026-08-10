@@ -66,7 +66,7 @@ their owning migration milestone turns them into ordinary conformance tests.
 
 | Specification rule | Implementation pass | Runtime | Required evidence |
 | --- | --- | --- | --- |
-| 0.11 is the accepted target while one complete 0.10 path remains as temporary migration scaffolding | **Migration seam and accepted surface** | — | package-revision integration, compatibility guard |
+| 0.11 is the accepted target while one complete 0.10 path remains as temporary migration scaffolding | **Migration seam and accepted surface** (done) | — | `semantic_revision` package/phase integration, dependency-skew diagnostic, single pre-check boundary |
 | Non-`Copy` consuming contexts move; `Copy` values remain available; no hidden clone | **Ownership facts and explicit use IR**, **Move and initialization checking** | — | compile-pass/fail, typed/CFG dumps |
 | `Clone.clone(&self)` is explicit and may allocate; last-use analysis never changes source semantics | **Ownership facts and explicit use IR**, **Owned core values and collections** | allocator where documented | compile-pass/fail, cost workload |
 | Moved, uninitialized, partially moved, and reinitialized places are tracked through branches, loops, patterns, and early exits | **Move and initialization checking** | — | compile-fail spans, CFG properties |
@@ -78,14 +78,14 @@ their owning migration milestone turns them into ordinary conformance tests.
 | Returned provenance selects `self` or one unambiguous borrow-bearing input; locals, temporaries, by-value storage, and ambiguous sources cannot escape | **Structural borrow provenance** | package metadata | compile-pass/fail, dependency integration |
 | Reference formation, receiver adaptation, slice coercion, closures, and iterator state do not allocate | **Structural borrow provenance**, **Promotion and tracing-GC removal** | — | IR/generated-C assertions, cost workloads |
 | Safe reference and raw-pointer field/method access automatically dereference; raw access retains `unsafe`, null, alignment, provenance, and extent rules | **Structural borrow provenance** plus completed raw-pointer baseline | trap runtime | compile-pass/fail, run-pass, trap, C harness |
-| `[T]` is a shared slice, `[var T]` an exclusive slice, and `[T; N]` an owning fixed array | **Migration seam and accepted surface**, **Owned core values and collections** | — | parse, compile-pass/fail, target widths |
+| `[T]` is a shared slice, `[var T]` an exclusive slice, and `[T; N]` an owning fixed array | **Migration seam and accepted surface** (surface/lowering done), **Owned core values and collections** | — | `source_type_lowering_distinguishes_shared_mutable_and_owning_sequences`; later ownership/runtime cases |
 | `String`, `Vec`, `Map`, and `Set` have unique ownership, constant-size moves, explicit content clones, and exact destruction | **Owned core values and collections**, **Deterministic destruction** | allocator | run-pass, ASan/LSan, cost workloads |
 | Collection indexing cannot move a dynamic non-`Copy` element; removal/take APIs transfer ownership and borrows block relocation | **Move and initialization checking**, **Structural borrow provenance**, **Owned core values and collections** | bounds traps | compile-pass/fail, run-pass, trap |
 | Owned iteration consumes and moves elements; borrowed iteration yields references whose provenance prevents invalidation | **Owned core values and collections**, **Structural borrow provenance** | — | compile-pass/fail, run-pass |
 | Plain `self: Self` consumes; `&Self` and `&var Self` borrow; references cannot supply owned receivers without explicit clone | **Move and initialization checking**, **Structural borrow provenance** | — | compile-pass/fail, method matrix |
 | `Copy`, `Send`, and `Sync` are structural capabilities; `Clone` and `Drop` are coherent traits with specified compiler hooks | **Ownership facts and explicit use IR**, **Deterministic destruction**, **Race-safe concurrency** | — | trait/capability compile-pass/fail |
 | Borrowed and `Box` trait objects retain provenance or explicit ownership and never allocate implicitly during erasure | **Structural borrow provenance**, **Explicit shared and graph ownership** | allocator only for explicit `Box` | compile-pass/fail, run-pass |
-| `fn[captures](args):` creates an inline nominal first-class closure object; `fn[]` is capture-free; captures are exhaustive and evaluate left-to-right | **Migration seam and accepted surface**, **Inline first-class closures** | — | parse, resolution, run-pass |
+| `fn[captures](args):` creates an inline nominal first-class closure object; `fn[]` is capture-free; captures are exhaustive and evaluate left-to-right | **Migration seam and accepted surface** (surface done), **Inline first-class closures** | — | `owned_surface_parses_closures_slices_arrays_and_borrows_without_legacy_leakage`; later semantic/run-pass cases |
 | Plain closure captures move or `Copy`; `&`/`&var` capture provenance; construction and ordinary call allocate nothing | **Inline first-class closures**, **Structural borrow provenance** | — | compile-pass/fail, IR/generated-C, cost workload |
 | One `Callable[Args, Return]` shared-call contract covers repeated calls; mutable state is explicit through captured `&var` or synchronized types | **Inline first-class closures** | — | generic/erased run-pass, compile-fail |
 | Capture-free closures may explicitly become exact function references; capturing closures use a raw context for C callbacks | **Inline first-class closures**, **Owned-model C interoperability** | — | compile-pass/fail, C harness |
@@ -110,7 +110,7 @@ their owning migration milestone turns them into ordinary conformance tests.
 
 ### Owned-model demonstration coverage
 
-| `examples/owned_spec_demo.elx` region | Normative ownership |
+| `owned_spec_demo.elx` region | Normative ownership |
 | --- | --- |
 | `Point`, consuming and borrowing receivers | §§3.1–3.2, 4.2 |
 | `Document`, `Clone`, `publish`, `first_line` | §§3.1–3.2, 4.1, 6 |

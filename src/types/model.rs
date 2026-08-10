@@ -48,6 +48,7 @@ pub struct TraitObligation {
 
 /// Canonical type data derived from a resolved program.
 pub struct TypedProgram {
+    pub semantic_revision: crate::config::SemanticRevision,
     pub types: TypeContext,
     /// Canonical type selected for every accepted source `Type` node,
     /// including annotations inside function bodies.
@@ -73,6 +74,7 @@ pub struct TypedProgram {
 impl Default for TypedProgram {
     fn default() -> Self {
         Self {
+            semantic_revision: crate::config::SemanticRevision::default(),
             types: TypeContext::new(),
             annotation_types: BTreeMap::new(),
             annotation_diagnostics: BTreeMap::new(),
@@ -320,7 +322,7 @@ impl TypedProgram {
                 };
                 *length <= max && self.layout_inner(*element, pointer_bits, substitution, visiting)
             }
-            TypeKind::Slice(element) => {
+            TypeKind::Slice { element, .. } => {
                 self.layout_inner(*element, pointer_bits, substitution, visiting)
             }
             TypeKind::Nominal {

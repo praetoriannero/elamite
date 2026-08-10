@@ -2,9 +2,10 @@
 
 use std::collections::BTreeSet;
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::package::{PackageGraph, PackageId};
-use crate::parser::{FragmentKind, parse_fragment};
+use crate::parser::{FragmentKind, parse_fragment_for_revision};
 use crate::source::Span;
 use crate::syntax::{Keyword, SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 
@@ -302,7 +303,12 @@ impl Engine<'_> {
         }
         let mut arguments = vec![Value::syntax(role, target.clone())];
         let explicit = &program.parameters[1..];
-        match parse_arguments(&call.arguments, explicit, attachment.span) {
+        match parse_arguments(
+            &call.arguments,
+            explicit,
+            attachment.span,
+            self.graph.semantic_revision(),
+        ) {
             Ok(values) => arguments.extend(values),
             Err(diagnostic) => {
                 self.diagnostics.push(diagnostic);
@@ -444,8 +450,12 @@ impl Engine<'_> {
             );
             return vec![recovery_node(invocation.span)];
         }
-        let arguments = match parse_arguments(&call.arguments, &program.parameters, invocation.span)
-        {
+        let arguments = match parse_arguments(
+            &call.arguments,
+            &program.parameters,
+            invocation.span,
+            self.graph.semantic_revision(),
+        ) {
             Ok(arguments) => arguments,
             Err(diagnostic) => {
                 self.diagnostics.push(diagnostic);
@@ -569,6 +579,7 @@ impl Engine<'_> {
                 program,
                 arguments.take().expect("scheduled once"),
                 resources,
+                self.graph.semantic_revision(),
             ) {
                 Ok(value) => {
                     let nodes = match &value {
@@ -788,6 +799,7 @@ fn parse_arguments(
     tokens: &[Token],
     parameters: &[super::interpreter::CompileTimeParameter],
     span: Span,
+    revision: SemanticRevision,
 ) -> Result<Vec<Value>, Diagnostic> {
     let parts = split_arguments(tokens);
     let fixed = parameters
@@ -823,12 +835,17 @@ fn parse_arguments(
         } else {
             &parameter.ty
         };
-        values.push(parse_argument(&part, ty, span)?);
+        values.push(parse_argument(&part, ty, span, revision)?);
     }
     Ok(values)
 }
 
-fn parse_argument(tokens: &[Token], ty: &CompileTimeType, span: Span) -> Result<Value, Diagnostic> {
+fn parse_argument(
+    tokens: &[Token],
+    ty: &CompileTimeType,
+    span: Span,
+    revision: SemanticRevision,
+) -> Result<Value, Diagnostic> {
     match ty {
         CompileTimeType::Ast(role) => {
             let kind = match role {
@@ -851,7 +868,7 @@ fn parse_argument(tokens: &[Token], ty: &CompileTimeType, span: Span) -> Result<
                     .with_primary(span));
                 }
             };
-            let output = parse_tokens(tokens, kind, span);
+            let output = parse_tokens(tokens, kind, span, revision);
             if let Some(diagnostic) = output.diagnostics.into_iter().next() {
                 return Err(Diagnostic::new(
                     Category::CompileTime,
@@ -929,14 +946,19 @@ fn parse_argument(tokens: &[Token], ty: &CompileTimeType, span: Span) -> Result<
     }
 }
 
-fn parse_tokens(tokens: &[Token], kind: FragmentKind, span: Span) -> crate::parser::ParseOutput {
+fn parse_tokens(
+    tokens: &[Token],
+    kind: FragmentKind,
+    span: Span,
+    revision: SemanticRevision,
+) -> crate::parser::ParseOutput {
     let mut tokens = tokens.to_vec();
     let boundary = tokens.last().map_or(span, |token| token.span);
     tokens.push(Token {
         kind: TokenKind::Eof,
         span: Span::new(boundary.file, boundary.end, boundary.end),
     });
-    parse_fragment(&tokens, kind)
+    parse_fragment_for_revision(&tokens, kind, revision)
 }
 
 fn split_arguments(tokens: &[Token]) -> Vec<Vec<Token>> {

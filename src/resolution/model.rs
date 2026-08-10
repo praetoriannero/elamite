@@ -301,6 +301,7 @@ pub struct ResolutionOutput {
 
 /// All identities and resolution results for one package graph.
 pub struct ResolvedProgram {
+    pub semantic_revision: crate::config::SemanticRevision,
     pub(super) symbols: Rodeo<Spur>,
     pub modules: Vec<Module>,
     pub declarations: Vec<Declaration>,

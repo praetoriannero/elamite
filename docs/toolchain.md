@@ -4,6 +4,11 @@
 > remain required by 0.10 programs that engage managed storage. The accepted
 > 0.11 target removes them in **Promotion and tracing-GC removal**.
 
+The temporary 0.11 frontend revision is selectable only through the compiler
+library and test harness. It deliberately stops after source-type lowering;
+there is no CLI flag or manifest field promising executable 0.11 packages
+during the ordered migration.
+
 Elamite's current toolchain supports Linux on x86-64 and x86 (32-bit). The
 compiler itself may run on either architecture; `--target=x86` and
 `--target=x86_64` select the generated C and native-artifact architecture.

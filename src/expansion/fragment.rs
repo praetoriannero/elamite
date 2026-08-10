@@ -13,6 +13,7 @@
 
 use std::fmt;
 
+use crate::config::SemanticRevision;
 use crate::expansion::provenance::{OriginId, ProvenanceTable};
 use crate::expansion::token_tree::{TokenTree, flatten_token_trees};
 use crate::parser::{FragmentKind, ParseOutput};
@@ -49,6 +50,22 @@ pub fn parse_fragment(
     kind: FragmentKind,
     provenance: &ProvenanceTable,
 ) -> Result<ParseOutput, GeneratedFragmentOrigin> {
+    parse_fragment_for_revision(
+        trees,
+        boundary,
+        kind,
+        provenance,
+        SemanticRevision::default(),
+    )
+}
+
+pub fn parse_fragment_for_revision(
+    trees: &[TokenTree],
+    boundary: OriginId,
+    kind: FragmentKind,
+    provenance: &ProvenanceTable,
+    revision: SemanticRevision,
+) -> Result<ParseOutput, GeneratedFragmentOrigin> {
     let mut tokens = flatten_token_trees(trees)
         .into_iter()
         .map(|token| {
@@ -70,5 +87,7 @@ pub fn parse_fragment(
         kind: TokenKind::Eof,
         span: Span::new(boundary_span.file, boundary_span.start, boundary_span.start),
     });
-    Ok(crate::parser::parse_fragment(&tokens, kind))
+    Ok(crate::parser::parse_fragment_for_revision(
+        &tokens, kind, revision,
+    ))
 }

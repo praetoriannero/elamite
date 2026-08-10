@@ -133,7 +133,10 @@ pub enum TypeKind {
         element: TypeId,
         length: u128,
     },
-    Slice(TypeId),
+    Slice {
+        mutability: Mutability,
+        element: TypeId,
+    },
     Reference {
         mutability: Mutability,
         target: TypeId,
@@ -715,7 +718,7 @@ fn same_outer_shape(left: &TypeKind, right: &TypeKind) -> bool {
         | (TypeKind::Builtin { .. }, TypeKind::Builtin { .. })
         | (TypeKind::Tuple(_), TypeKind::Tuple(_))
         | (TypeKind::Array { .. }, TypeKind::Array { .. })
-        | (TypeKind::Slice(_), TypeKind::Slice(_))
+        | (TypeKind::Slice { .. }, TypeKind::Slice { .. })
         | (TypeKind::Reference { .. }, TypeKind::Reference { .. })
         | (TypeKind::RawPointer { .. }, TypeKind::RawPointer { .. })
         | (TypeKind::Function { .. }, TypeKind::Function { .. })
@@ -747,8 +750,15 @@ fn type_discriminants_equal(left: &TypeKind, right: &TypeKind) -> bool {
         (TypeKind::Array { length: left, .. }, TypeKind::Array { length: right, .. }) => {
             left == right
         }
-        (TypeKind::Slice(_), TypeKind::Slice(_))
-        | (TypeKind::TraitObject { .. }, TypeKind::TraitObject { .. })
+        (
+            TypeKind::Slice {
+                mutability: left, ..
+            },
+            TypeKind::Slice {
+                mutability: right, ..
+            },
+        ) => left == right,
+        (TypeKind::TraitObject { .. }, TypeKind::TraitObject { .. })
         | (TypeKind::Error, TypeKind::Error)
         | (TypeKind::Never, TypeKind::Never) => true,
         (
@@ -836,7 +846,7 @@ fn type_children(kind: &TypeKind) -> Vec<TypeId> {
             children
         }
         TypeKind::Array { element, .. }
-        | TypeKind::Slice(element)
+        | TypeKind::Slice { element, .. }
         | TypeKind::TraitObject {
             trait_type: element,
         } => vec![*element],
@@ -883,7 +893,7 @@ fn map_type_children(mut kind: TypeKind, mut map: impl FnMut(TypeId) -> TypeId) 
             }
         }
         TypeKind::Array { element, .. }
-        | TypeKind::Slice(element)
+        | TypeKind::Slice { element, .. }
         | TypeKind::TraitObject {
             trait_type: element,
         } => *element = map(*element),

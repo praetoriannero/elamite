@@ -6,8 +6,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
-use crate::parser::{QuoteFragmentKind, parse_quote_fragment};
+use crate::parser::{QuoteFragmentKind, parse_quote_fragment_for_revision};
 use crate::source::Span;
 use crate::syntax::{
     FormattedSegmentKind, Keyword, SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind,
@@ -429,11 +430,13 @@ pub fn execute(
     declaration: &LoweredDeclaration,
     arguments: Vec<Value>,
     resources: &mut ExecutionResources,
+    revision: SemanticRevision,
 ) -> Result<Value, ExecutionFailure> {
     let mut evaluator = Evaluator {
         declaration,
         resources,
         scopes: vec![BTreeMap::new()],
+        revision,
     };
     evaluator.bind_arguments(arguments)?;
     let result = match evaluator.execute_block(&declaration.body)? {
@@ -462,6 +465,7 @@ struct Evaluator<'a> {
     declaration: &'a LoweredDeclaration,
     resources: &'a mut ExecutionResources,
     scopes: Vec<BTreeMap<String, Value>>,
+    revision: SemanticRevision,
 }
 
 #[derive(Debug)]
@@ -1186,7 +1190,8 @@ impl Evaluator<'_> {
             kind: TokenKind::Eof,
             span: Span::new(boundary.file, boundary.end, boundary.end),
         });
-        let output = parse_quote_fragment(&tokens, quote_fragment(role));
+        let output =
+            parse_quote_fragment_for_revision(&tokens, quote_fragment(role), self.revision);
         if let Some(diagnostic) = output.diagnostics.first() {
             return self.fail(
                 diagnostic.primary.unwrap_or(node.span),

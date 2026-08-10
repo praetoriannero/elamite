@@ -7,8 +7,9 @@
 //! grammar. It never converts a compiler `SyntaxNode` into the public AST
 //! façade; that conversion belongs to interpreter lowering.
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
-use crate::parser::{ParseOutput, QuoteFragmentKind, parse_quote_fragment};
+use crate::parser::{ParseOutput, QuoteFragmentKind, parse_quote_fragment_for_revision};
 use crate::source::Span;
 use crate::syntax::{Keyword, SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 
@@ -113,6 +114,15 @@ pub fn role_from_type(node: &SyntaxNode) -> Option<QuoteRole> {
 /// Validates one parsed quote template in an explicit role.
 #[must_use]
 pub fn validate_quote(node: &SyntaxNode, role: QuoteRole) -> ParseOutput {
+    validate_quote_for_revision(node, role, SemanticRevision::default())
+}
+
+#[must_use]
+pub fn validate_quote_for_revision(
+    node: &SyntaxNode,
+    role: QuoteRole,
+    revision: SemanticRevision,
+) -> ParseOutput {
     assert_eq!(
         node.kind,
         SyntaxKind::QuoteExpression,
@@ -122,7 +132,7 @@ pub fn validate_quote(node: &SyntaxNode, role: QuoteRole) -> ParseOutput {
         .direct_child(SyntaxKind::QuoteBody)
         .expect("the parser always attaches a quote body");
     let tokens = adapted_body_tokens(body, role);
-    let mut output = parse_quote_fragment(&tokens, role.fragment());
+    let mut output = parse_quote_fragment_for_revision(&tokens, role.fragment(), revision);
     if output.diagnostics.is_empty()
         && let Some(expected) = role.expected_syntax_kind()
         && output.tree.kind != expected
@@ -284,9 +294,13 @@ fn element_token_kind(element: &SyntaxElement) -> Option<&TokenKind> {
     }
 }
 
-pub(super) fn validate(units: &[ExpandedUnit], diagnostics: &mut Vec<Diagnostic>) {
+pub(super) fn validate(
+    units: &[ExpandedUnit],
+    revision: SemanticRevision,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for unit in units.iter().filter(|unit| !unit.is_standard()) {
-        validate_node(&unit.tree, None, false, diagnostics);
+        validate_node(&unit.tree, None, false, revision, diagnostics);
     }
 }
 
@@ -294,6 +308,7 @@ fn validate_node(
     node: &SyntaxNode,
     return_role: Option<QuoteRole>,
     in_compile_time: bool,
+    revision: SemanticRevision,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if node.kind == SyntaxKind::ClosureExpression {
@@ -304,7 +319,13 @@ fn validate_node(
             .and_then(role_from_type);
         for child in node.direct_nodes() {
             if child.kind == SyntaxKind::Block {
-                validate_node(child, closure_return, in_compile_time, diagnostics);
+                validate_node(
+                    child,
+                    closure_return,
+                    in_compile_time,
+                    revision,
+                    diagnostics,
+                );
             }
         }
         return;
@@ -324,7 +345,7 @@ fn validate_node(
             .and_then(role_from_type);
         for child in node.direct_nodes() {
             if child.kind == SyntaxKind::Block {
-                validate_node(child, declared_role, true, diagnostics);
+                validate_node(child, declared_role, true, revision, diagnostics);
             }
         }
         return;
@@ -338,7 +359,8 @@ fn validate_node(
                 return;
             }
             match annotation.and_then(role_from_type) {
-                Some(role) => diagnostics.extend(validate_quote(quote, role).diagnostics),
+                Some(role) => diagnostics
+                    .extend(validate_quote_for_revision(quote, role, revision).diagnostics),
                 None if annotation.is_some() => diagnostics.push(
                     Diagnostic::new(
                         Category::CompileTime,
@@ -354,7 +376,13 @@ fn validate_node(
                     .with_primary(quote.span),
                 ),
             }
-            validate_interpolation_expressions(quote, return_role, in_compile_time, diagnostics);
+            validate_interpolation_expressions(
+                quote,
+                return_role,
+                in_compile_time,
+                revision,
+                diagnostics,
+            );
             return;
         }
     }
@@ -367,7 +395,9 @@ fn validate_node(
             return;
         }
         match return_role {
-            Some(role) => diagnostics.extend(validate_quote(quote, role).diagnostics),
+            Some(role) => {
+                diagnostics.extend(validate_quote_for_revision(quote, role, revision).diagnostics)
+            }
             None => diagnostics.push(
                 Diagnostic::new(
                     Category::CompileTime,
@@ -376,7 +406,13 @@ fn validate_node(
                 .with_primary(quote.span),
             ),
         }
-        validate_interpolation_expressions(quote, return_role, in_compile_time, diagnostics);
+        validate_interpolation_expressions(
+            quote,
+            return_role,
+            in_compile_time,
+            revision,
+            diagnostics,
+        );
         return;
     }
 
@@ -388,9 +424,15 @@ fn validate_node(
             }
             // Parameter-driven expected roles require compile-time signature
             // checking. Preserve the template without guessing here.
-            validate_interpolation_expressions(child, return_role, in_compile_time, diagnostics);
+            validate_interpolation_expressions(
+                child,
+                return_role,
+                in_compile_time,
+                revision,
+                diagnostics,
+            );
         } else {
-            validate_node(child, return_role, in_compile_time, diagnostics);
+            validate_node(child, return_role, in_compile_time, revision, diagnostics);
         }
     }
 }
@@ -407,6 +449,7 @@ fn validate_interpolation_expressions(
     quote: &SyntaxNode,
     return_role: Option<QuoteRole>,
     in_compile_time: bool,
+    revision: SemanticRevision,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(body) = quote.direct_child(SyntaxKind::QuoteBody) else {
@@ -414,7 +457,13 @@ fn validate_interpolation_expressions(
     };
     for interpolation in body.direct_children(SyntaxKind::QuoteInterpolation) {
         for expression in interpolation.direct_nodes() {
-            validate_node(expression, return_role, in_compile_time, diagnostics);
+            validate_node(
+                expression,
+                return_role,
+                in_compile_time,
+                revision,
+                diagnostics,
+            );
         }
     }
 }

@@ -155,6 +155,24 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
+/// The single temporary boundary between accepted 0.11 syntax/types and the
+/// still-0.10 ownership-dependent checker. Keeping this test here prevents
+/// embedders from bypassing the driver and accidentally applying shallow-copy
+/// semantics to an owned-model package.
+#[must_use]
+pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
+    resolved
+        .semantic_revision
+        .supports_owned_surface()
+        .then(|| {
+            Diagnostic::new(
+                Category::SemanticRevision,
+                "semantic revision 0.11.0-draft is accepted through source-type lowering, but \
+                 ownership-dependent body checking is not implemented yet",
+            )
+        })
+}
+
 /// Checks with the selected target's pointer width for contextual
 /// `isize`/`usize` literal materialization.
 #[must_use]
@@ -163,6 +181,12 @@ pub fn check_for_target(
     typed: &mut TypedProgram,
     pointer_bits: u8,
 ) -> CheckOutput {
+    if let Some(diagnostic) = semantic_revision_boundary(resolved) {
+        return CheckOutput {
+            program: CheckedProgram::default(),
+            diagnostics: vec![diagnostic],
+        };
+    }
     Checker::new(resolved, typed, pointer_bits).run()
 }
 
@@ -323,7 +347,10 @@ impl<'a> Checker<'a> {
                 } else {
                     ordinary_parameters.next().map(|parameter| {
                         if parameter.variadic {
-                            self.typed.types.intern(TypeKind::Slice(parameter.ty))
+                            self.typed.types.intern(TypeKind::Slice {
+                                mutability: Mutability::Shared,
+                                element: parameter.ty,
+                            })
                         } else {
                             parameter.ty
                         }
@@ -677,7 +704,7 @@ impl<'a> Checker<'a> {
                     .kind(self.typed.types.resolve_inference(iterable_type))
                     .clone()
                 {
-                    TypeKind::Slice(element) => Some(element),
+                    TypeKind::Slice { element, .. } => Some(element),
                     TypeKind::Array { element, .. } => Some(element),
                     TypeKind::Builtin { builtin, arguments } => {
                         match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
@@ -2511,7 +2538,7 @@ impl<'a> Checker<'a> {
             TypeKind::Array { element, length } => {
                 length != 0 && self.type_has_nonzero_size(element, visiting)
             }
-            TypeKind::Slice(_)
+            TypeKind::Slice { .. }
             | TypeKind::Reference { .. }
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }
@@ -3060,7 +3087,7 @@ impl<'a> Checker<'a> {
                 .types
                 .kind(self.typed.types.resolve_inference(ty))
             {
-                TypeKind::Array { element, .. } | TypeKind::Slice(element) => Some(*element),
+                TypeKind::Array { element, .. } | TypeKind::Slice { element, .. } => Some(*element),
                 _ => None,
             },
             ExpectedType::None => None,
@@ -3384,7 +3411,7 @@ impl<'a> Checker<'a> {
                 }
                 Some(element)
             }
-            TypeKind::Slice(element) => {
+            TypeKind::Slice { element, .. } => {
                 self.check_expr(index, ExpectedType::Exact(usize_type));
                 Some(element)
             }
@@ -3433,13 +3460,14 @@ impl<'a> Checker<'a> {
         };
         match result {
             Some(element_type) => {
-                let place = if matches!(self.typed.types.kind(resolved_base), TypeKind::Slice(_)) {
-                    PlaceKind::Value
-                } else if base_place.is_mutable() {
-                    PlaceKind::CollectionInterior
-                } else {
-                    PlaceKind::Value
-                };
+                let place =
+                    if matches!(self.typed.types.kind(resolved_base), TypeKind::Slice { .. }) {
+                        PlaceKind::Value
+                    } else if base_place.is_mutable() {
+                        PlaceKind::CollectionInterior
+                    } else {
+                        PlaceKind::Value
+                    };
                 (element_type, place)
             }
             None => (self.typed.types.error(), PlaceKind::Value),
@@ -3868,7 +3896,7 @@ impl<'a> Checker<'a> {
                     self.collect_transparent_nominals(element, out, visiting);
                 }
             }
-            TypeKind::Array { element, .. } | TypeKind::Slice(element) => {
+            TypeKind::Array { element, .. } | TypeKind::Slice { element, .. } => {
                 self.collect_transparent_nominals(element, out, visiting);
             }
             TypeKind::Alias { target, .. } => {

@@ -3,7 +3,8 @@
 Milestone 20 established explicit, owned boundaries without changing Elamite
 language behavior or the public compiler commands.
 
-The descriptions below reflect the compiler targeting Specification 0.10.
+The descriptions below reflect the executable compiler targeting Specification
+0.10 plus the temporary 0.11 frontend seam.
 Ordinary shallow-copy lowering and collection representations are implemented;
 direct collection state snapshots its shallow iterable and bound once, while a
 user-defined iterator is selected statically and promoted into managed hidden
@@ -44,6 +45,16 @@ their established public paths. Compatibility re-exports for `Target` from
 `backend` and `Optimization` from `driver` are retained because integration
 users already import them there; new compiler code should use `config`
 directly.
+
+`src/config.rs::SemanticRevision` is chosen once while the package graph is
+constructed. Every package on a dependency edge must carry the same revision;
+parsed, expanded, resolved, and typed results retain it explicitly. The 0.11
+path admits the accepted slice, array, closure-capture, and borrow syntax and
+canonicalizes its source types, then stops at
+`check::semantic_revision_boundary`. No owned-model value reaches traits, body
+checking, IR, or the backend until the later ownership milestones replace that
+boundary. Consequently the backend has no revision switch and cannot infer a
+semantic model from syntax.
 
 Logical-copy intent is selected before backend lowering. Checking records the
 copy kind and source and destination lifetime classes; typed IR adds the
@@ -103,7 +114,8 @@ must remain outside compiler-private parsed, resolved, and typed data models and
 must not gain ambient host or target capabilities.
 
 `src/expansion/ast.rs` owns that façade. Expanded packages carry an exact
-`std.ast` 2.0 interface handshake and a stable intrinsic
+`std.ast` 2.0 interface handshake for 0.10 or the selected 3.0 owned-surface
+handshake for 0.11, plus a stable intrinsic
 type inventory. Its opaque, immutable values cover definitions, items,
 expressions, statements, patterns, written types, metadata, fields, variants,
 parameters, and implementations; persistent typed lists and `with_` methods

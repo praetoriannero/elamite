@@ -7,7 +7,7 @@
 > This document is the accepted 0.11 language design. The current compiler
 > still implements the 0.10 baseline demonstrated by
 > [`examples/spec_demo.elx`](../examples/spec_demo.elx); the authoritative 0.11
-> target is the [owned-model demonstration](../examples/owned_spec_demo.elx).
+> target is the [owned-model demonstration](../owned_spec_demo.elx).
 > Implementation status is mapped separately in [ledger.md](ledger.md), and
 > unresolved questions are listed in [issues.md](issues.md).
 
@@ -2119,7 +2119,7 @@ fn main() -> Result[(), String]:
 ~~~
 
 The complete normative surface is demonstrated by
-[`examples/owned_spec_demo.elx`](../examples/owned_spec_demo.elx). The currently
+[`owned_spec_demo.elx`](../owned_spec_demo.elx). The currently
 implemented 0.10 compiler demonstration remains
 [`examples/spec_demo.elx`](../examples/spec_demo.elx) until the final migration
 milestone.

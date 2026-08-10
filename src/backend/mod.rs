@@ -559,7 +559,7 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             TypeKind::Primitive(PrimitiveType::Unit)
             | TypeKind::Tuple(_)
             | TypeKind::Array { .. }
-            | TypeKind::Slice(_)
+            | TypeKind::Slice { .. }
             | TypeKind::Nominal { .. }
             | TypeKind::Builtin { .. }
             | TypeKind::Foreign { .. } => return "{0}".to_string(),

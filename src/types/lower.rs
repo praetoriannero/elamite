@@ -177,6 +177,7 @@ impl<'a> TypeBuilder<'a> {
 
     fn from_program(resolved: &'a ResolvedProgram, program: TypedProgram) -> Self {
         let TypedProgram {
+            semantic_revision,
             types,
             annotation_types,
             annotation_diagnostics,
@@ -193,6 +194,7 @@ impl<'a> TypeBuilder<'a> {
             layout_nominals,
             builtin_layout,
         } = program;
+        debug_assert_eq!(semantic_revision, resolved.semantic_revision);
         Self {
             resolved,
             types,
@@ -218,6 +220,7 @@ impl<'a> TypeBuilder<'a> {
 
     fn into_program(self) -> TypedProgram {
         TypedProgram {
+            semantic_revision: self.resolved.semantic_revision,
             types: self.types,
             annotation_types: self.annotation_types,
             annotation_diagnostics: self.annotation_diagnostics,
@@ -509,7 +512,18 @@ impl<'a> TypeBuilder<'a> {
                     });
                 return self.types.intern(TypeKind::Array { element, length });
             }
-            return self.types.intern(TypeKind::Slice(element));
+            let mutable = tokens
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::Keyword(Keyword::Var)));
+            let mutability = if mutable {
+                Mutability::Mutable
+            } else {
+                Mutability::Shared
+            };
+            return self.types.intern(TypeKind::Slice {
+                mutability,
+                element,
+            });
         }
         if matches!(first, Some(TokenKind::LParen)) {
             let elements = direct_children(node, SyntaxKind::Type)

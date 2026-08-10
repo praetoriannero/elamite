@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Migration seam and accepted surface**
+> Next planned milestone: **Ownership facts and explicit use IR**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -19,8 +19,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
 | [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | Complete baseline | Shallow values, systems concurrency, unsafe pointer traversal, final cost evidence, release identity, and the authoritative 0.10 demonstration define the implementation from which the owned model migrates. |
 | [Owned-model semantic contract](#owned-model-semantic-contract) | Complete | Move, borrow, cleanup, closure, sharing, concurrency, FFI, demonstration, ledger, and split design-corpus rules are accepted as 0.11.0-draft. |
-| [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Planned — next | Add temporary compatibility scaffolding and represent the accepted slice, closure, borrow, and ownership surface without partially enabling it. |
-| [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Planned | Make move, copy, clone, borrow, reborrow, and drop operations explicit across checking and IR. |
+| [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Complete | Package revision selection, owned slice/closure/borrow syntax, `std.ast` 3.0 selection, canonical mutable slices, and the pre-check compatibility boundary are implemented. |
+| [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Planned — next | Make move, copy, clone, borrow, reborrow, and drop operations explicit across checking and IR. |
 | [Move and initialization checking](#move-and-initialization-checking) | Planned | Enforce move-by-default use, definite initialization, partial moves, reinitialization, and branch merging. |
 | [Structural borrow provenance](#structural-borrow-provenance) | Planned | Infer hidden provenance, enforce shared/exclusive access, and carry borrows structurally through values. |
 | [Deterministic destruction](#deterministic-destruction) | Planned | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
@@ -347,7 +347,10 @@ concurrency, and foreign-boundary operation unambiguous before implementation.
 
 ### Migration seam and accepted surface
 
-> Status: Planned; this is the next milestone.
+> Status: Complete. `SemanticRevision` is selected once while constructing the
+> package graph and is retained by parsed, expanded, resolved, and typed
+> programs. The 0.11 path stops at one diagnostic boundary before body
+> checking; `tests/semantic_revision.rs` owns the focused acceptance matrix.
 >
 > Blocked by: **Owned-model semantic contract**.
 
@@ -357,15 +360,15 @@ models.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Internal revision selection** | Add one immutable package-level semantic revision used by the test harness and phase entry points; keep 0.10 behavior available only while migration evidence needs it. | A package cannot mix revisions, dependency compatibility is diagnosed, and no backend operation consults source syntax to guess the active model. |
-| **Slice and array surface** | Parse and preserve `[T]`, `[var T]`, and `[T; N]` distinctly through syntax traversal, expansion, resolution, and source-type lowering. | Snapshots and focused diagnostics cover nested, generic, malformed, mutable, and constant-length forms without conflating slices with arrays. |
-| **Closure and borrow surface** | Normalize closure expressions around `fn[captures](parameters):`, preserve explicit value, `&`, and `&var` captures, and represent ordinary borrow expressions without trailing-closure or scope-keyword syntax. | Closures are expression objects passed through ordinary arguments; capture order, aliases if retained, parameter types, and body spans survive parsing and expansion exactly. |
-| **Expansion and editor synchronization** | Teach `std.ast`, quotation adaptation, formatting, and the TextMate inventories about every accepted syntax form, with a planned AST interface-version transition. | Handwritten and generated syntax have identical trees and diagnostics, and editor-grammar synchronization tests pass. |
-| **Compatibility guard** | Add tests proving that the seam changes neither the 0.10 path nor macro provenance while later owned-model phases are incomplete. | Both paths build deterministically and an unsupported owned-model construct stops at one explicit boundary rather than falling through to shallow semantics. |
+| **Internal revision selection (done)** | Add one immutable package-level semantic revision used by the test harness and phase entry points; keep 0.10 behavior available only while migration evidence needs it. | A package cannot mix revisions, dependency compatibility is diagnosed, and no backend operation consults source syntax to guess the active model. |
+| **Slice and array surface (done)** | Parse and preserve `[T]`, `[var T]`, and `[T; N]` distinctly through syntax traversal, expansion, resolution, and source-type lowering. | Snapshots and focused diagnostics cover nested, generic, malformed, mutable, and constant-length forms without conflating slices with arrays. |
+| **Closure and borrow surface (done)** | Normalize closure expressions around `fn[captures](parameters):`, preserve explicit value, `&`, and `&var` captures, and represent ordinary borrow expressions without trailing-closure or scope-keyword syntax. | Closures are expression objects passed through ordinary arguments; capture order, aliases if retained, parameter types, and body spans survive parsing and expansion exactly. |
+| **Expansion and editor synchronization (done)** | Teach `std.ast`, quotation adaptation, formatting, and the TextMate inventories about every accepted syntax form, with a planned AST interface-version transition. | Handwritten and generated syntax have identical trees and diagnostics, and editor-grammar synchronization tests pass. |
+| **Compatibility guard (done)** | Add tests proving that the seam changes neither the 0.10 path nor macro provenance while later owned-model phases are incomplete. | Both paths build deterministically and an unsupported owned-model construct stops at one explicit boundary rather than falling through to shallow semantics. |
 
 ### Ownership facts and explicit use IR
 
-> Status: Planned.
+> Status: Planned; this is the next milestone.
 >
 > Blocked by: **Migration seam and accepted surface**.
 

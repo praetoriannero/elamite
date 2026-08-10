@@ -131,7 +131,7 @@ struct Node:
 
 fn graph_demo() -> usize:
     var nodes = Store[Node].new()
-    let root = nodes.insert(Node {
+    let root_handle = nodes.insert(Node {
         name: String.from("root"),
         edges: Vec.new(),
     })
@@ -140,7 +140,7 @@ fn graph_demo() -> usize:
         edges: Vec.new(),
     })
 
-    let root_node = nodes.get_var(root)
+    let root_node = nodes.get_var(root_handle)
     root_node.edges.append(leaf)
     return nodes.len()
 

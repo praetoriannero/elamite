@@ -8,6 +8,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::expansion::provenance::{OriginRange, ProvenanceTable};
 use crate::ident::is_valid_identifier;
@@ -24,10 +25,41 @@ pub struct AstInterfaceVersion {
 }
 
 pub const INTERFACE_VERSION: AstInterfaceVersion = AstInterfaceVersion { major: 2, minor: 0 };
+/// Interface selected by the accepted owned-model surface. It remains behind
+/// the semantic-revision seam until final owned-model conformance.
+pub const OWNED_INTERFACE_VERSION: AstInterfaceVersion = AstInterfaceVersion { major: 3, minor: 0 };
 
 /// Stable public type inventory admitted by the initial façade.
 pub const TYPE_NAMES: &[&str] = &[
     "std.ast.Attribute",
+    "std.ast.EnumDefinition",
+    "std.ast.EnumVariant",
+    "std.ast.Expression",
+    "std.ast.FieldDefinition",
+    "std.ast.FunctionDefinition",
+    "std.ast.GenericParameter",
+    "std.ast.Identifier",
+    "std.ast.Implementation",
+    "std.ast.InherentImplementation",
+    "std.ast.Item",
+    "std.ast.ItemList",
+    "std.ast.Member",
+    "std.ast.MemberList",
+    "std.ast.Origin",
+    "std.ast.Parameter",
+    "std.ast.Pattern",
+    "std.ast.Statement",
+    "std.ast.StatementList",
+    "std.ast.StructDefinition",
+    "std.ast.TypeSyntax",
+];
+
+/// Exact type inventory selected by the 3.0 owned-surface interface.
+pub const OWNED_TYPE_NAMES: &[&str] = &[
+    "std.ast.Attribute",
+    "std.ast.ClosureCapture",
+    "std.ast.ClosureCaptureMode",
+    "std.ast.ClosureExpression",
     "std.ast.EnumDefinition",
     "std.ast.EnumVariant",
     "std.ast.Expression",
@@ -64,15 +96,33 @@ impl AstInterface {
         }
     }
 
+    #[must_use]
+    pub const fn for_semantic_revision(revision: SemanticRevision) -> Self {
+        Self {
+            version: match revision {
+                SemanticRevision::V0_10 => INTERFACE_VERSION,
+                SemanticRevision::V0_11 => OWNED_INTERFACE_VERSION,
+            },
+        }
+    }
+
     /// Requires an exact version match. This is the same check used when a
     /// future compiled package imports public compile-time metadata.
     pub fn negotiate(required: AstInterfaceVersion) -> Result<Self, AstError> {
-        if required == INTERFACE_VERSION {
-            Ok(Self::current())
+        Self::negotiate_for_semantic_revision(required, SemanticRevision::default())
+    }
+
+    pub fn negotiate_for_semantic_revision(
+        required: AstInterfaceVersion,
+        revision: SemanticRevision,
+    ) -> Result<Self, AstError> {
+        let provided = Self::for_semantic_revision(revision);
+        if required == provided.version() {
+            Ok(provided)
         } else {
             Err(AstError::VersionMismatch {
                 required,
-                provided: INTERFACE_VERSION,
+                provided: provided.version(),
             })
         }
     }
@@ -80,6 +130,15 @@ impl AstInterface {
     #[must_use]
     pub const fn version(self) -> AstInterfaceVersion {
         self.version
+    }
+
+    #[must_use]
+    pub const fn type_names(self) -> &'static [&'static str] {
+        if self.version.major == OWNED_INTERFACE_VERSION.major {
+            OWNED_TYPE_NAMES
+        } else {
+            TYPE_NAMES
+        }
     }
 
     /// Creates the intrinsic builder used by one interpreter execution.
@@ -460,6 +519,87 @@ ast_list!(AttributeList, Attribute);
 
 /// Readable expression variants. Payloads remain façade values rather than
 /// compiler syntax nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClosureCaptureMode {
+    Value,
+    SharedBorrow,
+    MutableBorrow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClosureCapture(Arc<ClosureCaptureData>);
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ClosureCaptureData {
+    mode: ClosureCaptureMode,
+    source: Identifier,
+    alias: Option<Identifier>,
+    origin: OriginHandle,
+}
+
+impl ClosureCapture {
+    #[must_use]
+    pub fn mode(&self) -> ClosureCaptureMode {
+        self.0.mode
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &Identifier {
+        &self.0.source
+    }
+
+    #[must_use]
+    pub fn alias(&self) -> Option<&Identifier> {
+        self.0.alias.as_ref()
+    }
+}
+
+impl HasOrigin for ClosureCapture {
+    fn origin(&self) -> OriginHandle {
+        self.0.origin
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClosureExpression(Arc<ClosureExpressionData>);
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ClosureExpressionData {
+    captures: Arc<[ClosureCapture]>,
+    parameters: ParameterList,
+    return_type: TypeSyntax,
+    body: StatementList,
+    origin: OriginHandle,
+}
+
+impl ClosureExpression {
+    #[must_use]
+    pub fn captures(&self) -> &[ClosureCapture] {
+        &self.0.captures
+    }
+
+    #[must_use]
+    pub fn parameters(&self) -> &ParameterList {
+        &self.0.parameters
+    }
+
+    #[must_use]
+    pub fn return_type(&self) -> &TypeSyntax {
+        &self.0.return_type
+    }
+
+    #[must_use]
+    pub fn body(&self) -> &StatementList {
+        &self.0.body
+    }
+}
+
+impl HasOrigin for ClosureExpression {
+    fn origin(&self) -> OriginHandle {
+        self.0.origin
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExpressionVariant {
     Identifier(Identifier),
@@ -467,6 +607,8 @@ pub enum ExpressionVariant {
     Call(CallExpression),
     Member(MemberExpression),
     Tuple(ExpressionList),
+    Borrow { mutable: bool, value: Expression },
+    Closure(ClosureExpression),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -496,6 +638,27 @@ impl Expression {
             ExpressionVariant::Tuple(elements) => {
                 let values = elements.iter().map(Self::display).collect::<Vec<_>>();
                 format!("({})", values.join(", "))
+            }
+            ExpressionVariant::Borrow { mutable, value } => {
+                format!("&{}{}", if *mutable { "var " } else { "" }, value.display())
+            }
+            ExpressionVariant::Closure(closure) => {
+                let captures = closure
+                    .captures()
+                    .iter()
+                    .map(|capture| {
+                        let prefix = match capture.mode() {
+                            ClosureCaptureMode::Value => "",
+                            ClosureCaptureMode::SharedBorrow => "&",
+                            ClosureCaptureMode::MutableBorrow => "&var ",
+                        };
+                        let alias = capture
+                            .alias()
+                            .map_or_else(String::new, |alias| format!(" as {}", alias.text()));
+                        format!("{prefix}{}{alias}", capture.source().text())
+                    })
+                    .collect::<Vec<_>>();
+                format!("fn[{}](...): ...", captures.join(", "))
             }
         }
     }
@@ -652,6 +815,18 @@ pub enum TypeSyntaxVariant {
         arguments: TypeSyntaxList,
     },
     Tuple(TypeSyntaxList),
+    Reference {
+        mutable: bool,
+        target: TypeSyntax,
+    },
+    Slice {
+        mutable: bool,
+        element: TypeSyntax,
+    },
+    Array {
+        element: TypeSyntax,
+        length: Expression,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -683,6 +858,23 @@ impl TypeSyntax {
             TypeSyntaxVariant::Tuple(elements) => {
                 let values = elements.iter().map(Self::display).collect::<Vec<_>>();
                 format!("({})", values.join(", "))
+            }
+            TypeSyntaxVariant::Reference { mutable, target } => {
+                format!(
+                    "&{}{}",
+                    if *mutable { "var " } else { "" },
+                    target.display()
+                )
+            }
+            TypeSyntaxVariant::Slice { mutable, element } => {
+                format!(
+                    "[{}{}]",
+                    if *mutable { "var " } else { "" },
+                    element.display()
+                )
+            }
+            TypeSyntaxVariant::Array { element, length } => {
+                format!("[{}; {}]", element.display(), length.display())
             }
         }
     }
@@ -1601,6 +1793,55 @@ impl AstBuilder {
         }))
     }
 
+    pub fn borrow_expression(
+        self,
+        mutable: bool,
+        value: Expression,
+    ) -> Result<Expression, AstError> {
+        self.require_owned_surface()?;
+        Ok(Expression(Arc::new(ExpressionData {
+            variant: ExpressionVariant::Borrow { mutable, value },
+            origin: self.origin,
+        })))
+    }
+
+    pub fn closure_capture(
+        self,
+        mode: ClosureCaptureMode,
+        source: Identifier,
+        alias: Option<Identifier>,
+    ) -> Result<ClosureCapture, AstError> {
+        self.require_owned_surface()?;
+        Ok(ClosureCapture(Arc::new(ClosureCaptureData {
+            mode,
+            source,
+            alias,
+            origin: self.origin,
+        })))
+    }
+
+    pub fn closure_expression(
+        self,
+        captures: Vec<ClosureCapture>,
+        parameters: ParameterList,
+        return_type: TypeSyntax,
+        body: StatementList,
+    ) -> Result<Expression, AstError> {
+        self.require_owned_surface()?;
+        Ok(Expression(Arc::new(ExpressionData {
+            variant: ExpressionVariant::Closure(ClosureExpression(Arc::new(
+                ClosureExpressionData {
+                    captures: Arc::from(captures),
+                    parameters,
+                    return_type,
+                    body,
+                    origin: self.origin,
+                },
+            ))),
+            origin: self.origin,
+        })))
+    }
+
     #[must_use]
     pub fn wildcard_pattern(self) -> Pattern {
         Pattern(Arc::new(PatternData {
@@ -1655,6 +1896,45 @@ impl AstBuilder {
             variant: TypeSyntaxVariant::Tuple(elements),
             origin: self.origin,
         }))
+    }
+
+    fn require_owned_surface(self) -> Result<(), AstError> {
+        if self.interface.version() == OWNED_INTERFACE_VERSION {
+            Ok(())
+        } else {
+            Err(AstError::InvalidConstruction {
+                message: "this AST form requires the owned-model std.ast interface".to_string(),
+                origin: self.origin,
+            })
+        }
+    }
+
+    pub fn reference_type(self, mutable: bool, target: TypeSyntax) -> Result<TypeSyntax, AstError> {
+        self.require_owned_surface()?;
+        Ok(TypeSyntax(Arc::new(TypeSyntaxData {
+            variant: TypeSyntaxVariant::Reference { mutable, target },
+            origin: self.origin,
+        })))
+    }
+
+    pub fn slice_type(self, mutable: bool, element: TypeSyntax) -> Result<TypeSyntax, AstError> {
+        self.require_owned_surface()?;
+        Ok(TypeSyntax(Arc::new(TypeSyntaxData {
+            variant: TypeSyntaxVariant::Slice { mutable, element },
+            origin: self.origin,
+        })))
+    }
+
+    pub fn array_type(
+        self,
+        element: TypeSyntax,
+        length: Expression,
+    ) -> Result<TypeSyntax, AstError> {
+        self.require_owned_surface()?;
+        Ok(TypeSyntax(Arc::new(TypeSyntaxData {
+            variant: TypeSyntaxVariant::Array { element, length },
+            origin: self.origin,
+        })))
     }
 
     #[must_use]
@@ -1847,6 +2127,14 @@ mod tests {
         (AstInterface::current().builder(handle), provenance)
     }
 
+    fn owned_fixture() -> (AstBuilder, ProvenanceTable) {
+        let (builder, provenance) = fixture();
+        (
+            AstInterface::for_semantic_revision(SemanticRevision::V0_11).builder(builder.origin),
+            provenance,
+        )
+    }
+
     fn named_type(builder: AstBuilder, name: &str) -> TypeSyntax {
         let identifier = builder.identifier(name).unwrap();
         let path = builder.path(vec![identifier]).unwrap();
@@ -1856,6 +2144,17 @@ mod tests {
     #[test]
     fn interface_versions_are_exact_and_inventory_is_stable() {
         assert_eq!(AstInterface::current().version(), INTERFACE_VERSION);
+        assert_eq!(
+            AstInterface::for_semantic_revision(SemanticRevision::V0_11).version(),
+            OWNED_INTERFACE_VERSION
+        );
+        assert!(
+            AstInterface::negotiate_for_semantic_revision(
+                OWNED_INTERFACE_VERSION,
+                SemanticRevision::V0_11,
+            )
+            .is_ok()
+        );
         assert!(AstInterface::negotiate(INTERFACE_VERSION).is_ok());
         assert!(matches!(
             AstInterface::negotiate(AstInterfaceVersion { major: 1, minor: 1 }),
@@ -1869,6 +2168,13 @@ mod tests {
         );
         assert_eq!(TYPE_NAMES.len(), 21);
         assert!(TYPE_NAMES.windows(2).all(|names| names[0] < names[1]));
+        assert_eq!(
+            AstInterface::for_semantic_revision(SemanticRevision::V0_11)
+                .type_names()
+                .len(),
+            24
+        );
+        assert!(OWNED_TYPE_NAMES.windows(2).all(|names| names[0] < names[1]));
     }
 
     #[test]
@@ -1933,6 +2239,27 @@ mod tests {
         assert!(matches!(member.variant(), ExpressionVariant::Member(_)));
         assert!(matches!(tuple.variant(), ExpressionVariant::Tuple(_)));
 
+        let (owned, _) = owned_fixture();
+        let borrowed = owned
+            .borrow_expression(false, identifier.clone())
+            .expect("owned borrow expression");
+        let capture = owned
+            .closure_capture(ClosureCaptureMode::Value, name.clone(), None)
+            .expect("owned closure capture");
+        let closure = owned
+            .closure_expression(
+                vec![capture],
+                ParameterList::empty(),
+                owned.tuple_type(TypeSyntaxList::empty()),
+                StatementList::empty(),
+            )
+            .expect("owned closure expression");
+        assert!(matches!(
+            borrowed.variant(),
+            ExpressionVariant::Borrow { .. }
+        ));
+        assert!(matches!(closure.variant(), ExpressionVariant::Closure(_)));
+
         let wildcard = builder.wildcard_pattern();
         let binding = builder.binding_pattern(name.clone());
         let literal_pattern = builder.literal_pattern(LiteralValue::Bool(true));
@@ -1954,6 +2281,24 @@ mod tests {
         let tuple_type = builder.tuple_type(TypeSyntaxList::single(named.clone()));
         assert!(matches!(named.variant(), TypeSyntaxVariant::Named { .. }));
         assert!(matches!(tuple_type.variant(), TypeSyntaxVariant::Tuple(_)));
+        let shared_reference = owned
+            .reference_type(false, named.clone())
+            .expect("owned reference type");
+        let mutable_slice = owned
+            .slice_type(true, named.clone())
+            .expect("owned slice type");
+        let array = owned
+            .array_type(named.clone(), owned.literal(4_u64))
+            .expect("owned array type");
+        assert!(matches!(
+            shared_reference.variant(),
+            TypeSyntaxVariant::Reference { mutable: false, .. }
+        ));
+        assert!(matches!(
+            mutable_slice.variant(),
+            TypeSyntaxVariant::Slice { mutable: true, .. }
+        ));
+        assert!(matches!(array.variant(), TypeSyntaxVariant::Array { .. }));
 
         let expression_statement = builder.expression_statement(literal.clone());
         let return_statement = builder.return_statement(None);

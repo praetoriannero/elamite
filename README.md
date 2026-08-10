@@ -7,9 +7,12 @@ or graph ownership, and race-safe native concurrency without a tracing garbage
 collector. Raw data pointers retain direct C-like traversal behind `unsafe`.
 
 The current compiler still implements the 0.10 shallow-copy, Boehm-GC baseline.
-The ordered migration in `docs/roadmap.md` keeps that implementation testable
-while replacing one semantic layer at a time; version output continues to
-report the implemented revision rather than claiming 0.11 conformance.
+An internal package revision seam now parses, expands, resolves, and lowers the
+accepted 0.11 surface through canonical source types, then deliberately stops
+before ownership-dependent body checking. The ordered migration in
+`docs/roadmap.md` keeps 0.10 executable while replacing one semantic layer at a
+time; version output continues to report the implemented revision rather than
+claiming 0.11 conformance.
 
 The shipped `std` package includes filesystem, environment, process, time,
 deterministic randomness, stable ordering/search, and UTF-8 text utilities in
@@ -36,7 +39,7 @@ addition to collections, formatting, FFI, testing, and concurrency support.
   non-normative design history and review.
 
 The authoritative 0.11 target is
-[`examples/owned_spec_demo.elx`](examples/owned_spec_demo.elx); the executable
+[`owned_spec_demo.elx`](owned_spec_demo.elx); the executable
 0.10 baseline remains [`examples/spec_demo.elx`](examples/spec_demo.elx).
 Focused packages currently cover
 [`closures`](examples/closures), [`macros`](examples/macros),

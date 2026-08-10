@@ -8,6 +8,7 @@
 
 use std::mem::discriminant;
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::source::Span;
 use crate::syntax::{FormattedSegmentKind, Keyword, Token, TokenKind};
@@ -58,7 +59,13 @@ impl FragmentKind {
 /// Parses a complete token stream produced by [`crate::lexer::lex`].
 #[must_use]
 pub fn parse(tokens: &[Token]) -> ParseOutput {
-    Parser::new(tokens).parse_file()
+    parse_for_revision(tokens, SemanticRevision::default())
+}
+
+/// Parses a complete token stream under one package semantic revision.
+#[must_use]
+pub fn parse_for_revision(tokens: &[Token], revision: SemanticRevision) -> ParseOutput {
+    Parser::new(tokens, revision).parse_file()
 }
 
 /// Parses exactly one complete fragment from an EOF-terminated token stream.
@@ -67,7 +74,16 @@ pub fn parse(tokens: &[Token]) -> ParseOutput {
 /// before EOF produces a syntax diagnostic instead of being silently ignored.
 #[must_use]
 pub fn parse_fragment(tokens: &[Token], kind: FragmentKind) -> ParseOutput {
-    Parser::new(tokens).parse_complete_fragment(kind)
+    parse_fragment_for_revision(tokens, kind, SemanticRevision::default())
+}
+
+#[must_use]
+pub fn parse_fragment_for_revision(
+    tokens: &[Token],
+    kind: FragmentKind,
+    revision: SemanticRevision,
+) -> ParseOutput {
+    Parser::new(tokens, revision).parse_complete_fragment(kind)
 }
 
 /// Parses a quote body after interpolation sites have been adapted to parser
@@ -75,13 +91,23 @@ pub fn parse_fragment(tokens: &[Token], kind: FragmentKind) -> ParseOutput {
 /// sole owner of every admitted structural grammar.
 #[must_use]
 pub fn parse_quote_fragment(tokens: &[Token], kind: QuoteFragmentKind) -> ParseOutput {
-    Parser::new(tokens).parse_complete_quote_fragment(kind)
+    parse_quote_fragment_for_revision(tokens, kind, SemanticRevision::default())
+}
+
+#[must_use]
+pub fn parse_quote_fragment_for_revision(
+    tokens: &[Token],
+    kind: QuoteFragmentKind,
+    revision: SemanticRevision,
+) -> ParseOutput {
+    Parser::new(tokens, revision).parse_complete_quote_fragment(kind)
 }
 
 struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
     diagnostics: Vec<Diagnostic>,
+    revision: SemanticRevision,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,11 +129,12 @@ enum ItemHead {
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token]) -> Self {
+    fn new(tokens: &'a [Token], revision: SemanticRevision) -> Self {
         Self {
             tokens,
             position: 0,
             diagnostics: Vec::new(),
+            revision,
         }
     }
 
@@ -672,8 +699,19 @@ impl<'a> Parser<'a> {
         }
         if self.at_simple(&TokenKind::LBracket) {
             children.push(self.bump());
+            let mutable_slice = self.revision.supports_owned_surface()
+                && self.eat_keyword(Keyword::Var, &mut children);
             children.push(node(self.parse_type()));
             if self.at_simple(&TokenKind::Semicolon) {
+                if mutable_slice {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            Category::Syntax,
+                            "an owning array is `[T; N]`; `var` is valid only in `[var T]`",
+                        )
+                        .with_primary(fallback),
+                    );
+                }
                 children.push(self.bump());
                 children.push(node(self.parse_expression()));
             }
@@ -1289,6 +1327,10 @@ impl<'a> Parser<'a> {
         let mut children = vec![self.bump()];
         if self.at_simple(&TokenKind::LBracket) {
             children.push(node(self.parse_closure_captures()));
+        } else if self.revision.supports_owned_surface() {
+            self.error_here(
+                "an owned-model closure requires an explicit capture list such as `fn[]`",
+            );
         }
         children.push(node(self.parse_closure_parameters()));
         if self.at_simple(&TokenKind::Arrow) {
@@ -1393,13 +1435,21 @@ impl<'a> Parser<'a> {
     fn parse_closure_captures(&mut self) -> SyntaxNode {
         let fallback = self.current_span();
         let mut children = vec![self.bump()];
-        if self.at_simple(&TokenKind::RBracket) {
+        if self.at_simple(&TokenKind::RBracket) && !self.revision.supports_owned_surface() {
             self.error_here("a closure capture list cannot be empty; omit `[]`");
         }
         while !self.at_eof() && !self.at_simple(&TokenKind::RBracket) {
             let capture_fallback = self.current_span();
             let mut capture = Vec::new();
-            if self.at_simple(&TokenKind::Amp) || self.at_simple(&TokenKind::Star) {
+            if self.at_simple(&TokenKind::Amp)
+                || (!self.revision.supports_owned_surface() && self.at_simple(&TokenKind::Star))
+            {
+                capture.push(self.bump());
+                self.eat_keyword(Keyword::Var, &mut capture);
+            } else if self.revision.supports_owned_surface() && self.at_simple(&TokenKind::Star) {
+                self.error_here(
+                    "owned-model closure captures use a value, `&`, or `&var`, not `*`",
+                );
                 capture.push(self.bump());
                 self.eat_keyword(Keyword::Var, &mut capture);
             }
@@ -1469,7 +1519,7 @@ impl<'a> Parser<'a> {
                         );
                         continue;
                     }
-                    let mut nested = Parser::new(&tokens);
+                    let mut nested = Parser::new(&tokens, self.revision);
                     let expression = nested.parse_expression();
                     if nested.position < tokens.len() {
                         nested.error_here("unexpected token in formatted-string interpolation");

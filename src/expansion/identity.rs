@@ -1,9 +1,10 @@
 //! Stable dependency identities for compile-time artifacts and expanded input.
 
+use crate::config::SemanticRevision;
 use crate::syntax::{SyntaxElement, SyntaxNode, TokenKind};
 
 use super::ExpandedUnit;
-use super::ast::INTERFACE_VERSION;
+use super::ast::AstInterfaceVersion;
 use super::namespace::CompileTimeEnvironment;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -24,6 +25,8 @@ pub struct ExpansionIdentities {
 
 #[must_use]
 pub fn calculate(
+    semantic_revision: SemanticRevision,
+    interface_version: AstInterfaceVersion,
     units: &[ExpandedUnit],
     environment: &CompileTimeEnvironment,
 ) -> ExpansionIdentities {
@@ -31,9 +34,9 @@ pub fn calculate(
         format!(
             "elamite:{};spec:{};ast:{}.{}",
             crate::version(),
-            crate::spec_revision(),
-            INTERFACE_VERSION.major,
-            INTERFACE_VERSION.minor
+            semantic_revision.as_str(),
+            interface_version.major,
+            interface_version.minor
         )
         .as_bytes(),
     );

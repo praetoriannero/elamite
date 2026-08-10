@@ -2931,7 +2931,7 @@ impl<'a> Checker<'a> {
             ));
         }
         match self.typed.types.kind(receiver).clone() {
-            TypeKind::Slice(_) if name == "len" => Some((
+            TypeKind::Slice { .. } if name == "len" => Some((
                 StandardCall::SliceLen {
                     collection: receiver,
                 },
@@ -2983,7 +2983,10 @@ impl<'a> Checker<'a> {
                     }
                     ("File", "write_all", []) => {
                         let u8_type = self.typed.types.primitive(PrimitiveType::U8);
-                        let bytes = self.typed.types.intern(TypeKind::Slice(u8_type));
+                        let bytes = self.typed.types.intern(TypeKind::Slice {
+                            mutability: Mutability::Shared,
+                            element: u8_type,
+                        });
                         let result = self.standard_result_type(span, unit_type, "IoError");
                         Some((
                             StandardCall::System {

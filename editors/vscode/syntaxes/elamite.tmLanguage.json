@@ -12,6 +12,8 @@
     "expression": {
       "comment": "Everything legal inside an expression position. Reused verbatim inside formatted-string interpolation, which is why it excludes comments and declarations.",
       "patterns": [
+        { "include": "#owned-closure-captures" },
+        { "include": "#owned-mutable-slice" },
         { "include": "#macros" },
         { "include": "#quote-interpolation" },
         { "include": "#formatted-string" },
@@ -34,6 +36,35 @@
         { "include": "#operators" },
         { "include": "#punctuation" }
       ]
+    },
+
+    "owned-closure-captures": {
+      "comment": "Accepted 0.11 explicit capture lists. The compiler's semantic-revision seam decides whether an empty list is admitted.",
+      "begin": "\\b(fn)\\s*(\\[)",
+      "end": "(\\])",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.declaration.elx" },
+        "2": { "name": "punctuation.section.brackets.begin.elx" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.section.brackets.end.elx" }
+      },
+      "patterns": [
+        { "name": "keyword.operator.borrow.elx", "match": "&" },
+        { "name": "keyword.control.modifier.elx", "match": "\\b(var)\\b" },
+        { "name": "keyword.operator.word.elx", "match": "\\b(as)\\b" },
+        { "name": "variable.other.readwrite.elx", "match": "\\b[a-z_][A-Za-z0-9_]*\\b" },
+        { "name": "punctuation.separator.comma.elx", "match": "," }
+      ]
+    },
+
+    "owned-mutable-slice": {
+      "comment": "Accepted 0.11 exclusive slice spelling `[var T]`.",
+      "match": "(\\[)\\s*(var)\\b",
+      "captures": {
+        "1": { "name": "punctuation.section.brackets.begin.elx" },
+        "2": { "name": "keyword.control.modifier.elx" }
+      }
     },
 
     "comments": {

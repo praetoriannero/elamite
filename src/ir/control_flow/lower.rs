@@ -67,7 +67,7 @@ fn type_contains_runtime_managed(types: &TypeContext, ty: TypeId, depth: u32) ->
         TypeKind::Tuple(elements) => elements
             .iter()
             .any(|element| type_contains_runtime_managed(types, *element, depth - 1)),
-        TypeKind::Array { element, .. } | TypeKind::Slice(element) => {
+        TypeKind::Array { element, .. } | TypeKind::Slice { element, .. } => {
             type_contains_runtime_managed(types, *element, depth - 1)
         }
         TypeKind::Nominal { arguments, .. } | TypeKind::Alias { arguments, .. } => arguments
@@ -1294,7 +1294,7 @@ impl<'a> FunctionLowerer<'a> {
                         IndexKind::Array { length: *length },
                         TrapKind::IndexOutOfBounds,
                     ),
-                    TypeKind::Slice(_) => (IndexKind::Slice, TrapKind::IndexOutOfBounds),
+                    TypeKind::Slice { .. } => (IndexKind::Slice, TrapKind::IndexOutOfBounds),
                     TypeKind::Builtin { arguments, .. } => {
                         // Of the initial builtin collections only `Vec[T]`
                         // (one argument) and `Map[K, V]` (two arguments) are
@@ -1360,7 +1360,7 @@ impl<'a> FunctionLowerer<'a> {
             }),
             TypedExpressionKind::VariadicSlice(elements) => {
                 let element_type = match expanded_kind(&self.types.types, expression.ty) {
-                    TypeKind::Slice(element) => *element,
+                    TypeKind::Slice { element, .. } => *element,
                     _ => self.types.types.error(),
                 };
                 Rvalue::VariadicSlice {
@@ -1758,7 +1758,7 @@ impl<'a> FunctionLowerer<'a> {
                         IndexKind::Array { length: *length },
                         TrapKind::IndexOutOfBounds,
                     ),
-                    TypeKind::Slice(_) => (IndexKind::Slice, TrapKind::IndexOutOfBounds),
+                    TypeKind::Slice { .. } => (IndexKind::Slice, TrapKind::IndexOutOfBounds),
                     TypeKind::Builtin { arguments, .. } if arguments.len() == 1 => (
                         IndexKind::Vec {
                             collection: base_expression_type(&expression.kind),

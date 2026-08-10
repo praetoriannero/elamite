@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::ident::is_valid_identifier;
 use crate::manifest::Manifest;
@@ -57,6 +58,8 @@ fn canonical_dir(dir: &Path) -> PathBuf {
 #[derive(Debug)]
 pub struct Package {
     pub id: PackageId,
+    /// Complete language model selected before this package enters parsing.
+    semantic_revision: SemanticRevision,
     pub manifest: Manifest,
     /// Directory containing the manifest.
     pub manifest_dir: PathBuf,
@@ -71,6 +74,11 @@ pub struct Package {
 }
 
 impl Package {
+    #[must_use]
+    pub fn semantic_revision(&self) -> SemanticRevision {
+        self.semantic_revision
+    }
+
     /// Loads and validates the package rooted at `manifest_path` (an
     /// `elamite.toml` file), discovering every file-backed module beneath its
     /// source directory. Manifest source text is registered with `sources` so
@@ -78,6 +86,15 @@ impl Package {
     pub fn load(
         manifest_path: &Path,
         sources: &mut SourceManager,
+    ) -> Result<Package, Vec<Diagnostic>> {
+        Self::load_with_revision(manifest_path, sources, SemanticRevision::default())
+    }
+
+    /// Loads a package for one compiler-selected semantic revision.
+    pub fn load_with_revision(
+        manifest_path: &Path,
+        sources: &mut SourceManager,
+        semantic_revision: SemanticRevision,
     ) -> Result<Package, Vec<Diagnostic>> {
         let manifest = Manifest::load(manifest_path, sources)?;
         let manifest_dir = manifest_path
@@ -103,6 +120,7 @@ impl Package {
 
         Ok(Package {
             id,
+            semantic_revision,
             manifest,
             manifest_dir,
             source_dir,
@@ -247,6 +265,14 @@ impl PackageGraph {
     /// file. The file is the package root; no sibling modules, dependencies,
     /// or native link inputs are inferred without a manifest.
     pub fn single_file(source_path: &Path) -> Result<PackageGraph, Vec<Diagnostic>> {
+        Self::single_file_with_revision(source_path, SemanticRevision::default())
+    }
+
+    /// Constructs an implicit package for a compiler-selected semantic model.
+    pub fn single_file_with_revision(
+        source_path: &Path,
+        semantic_revision: SemanticRevision,
+    ) -> Result<PackageGraph, Vec<Diagnostic>> {
         if source_path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -296,6 +322,7 @@ impl PackageGraph {
         let id = PackageId(source_path);
         let package = Package {
             id: id.clone(),
+            semantic_revision,
             manifest: Manifest {
                 name,
                 version: "0.0.0".to_string(),
@@ -325,12 +352,21 @@ impl PackageGraph {
         input: &Path,
         sources: &mut SourceManager,
     ) -> Result<PackageGraph, Vec<Diagnostic>> {
+        Self::resolve_input_with_revision(input, sources, SemanticRevision::default())
+    }
+
+    /// Resolves a package input under one compiler-selected semantic model.
+    pub fn resolve_input_with_revision(
+        input: &Path,
+        sources: &mut SourceManager,
+        semantic_revision: SemanticRevision,
+    ) -> Result<PackageGraph, Vec<Diagnostic>> {
         if input.is_file()
             || input.extension().and_then(|extension| extension.to_str()) == Some("elx")
         {
-            Self::single_file(input)
+            Self::single_file_with_revision(input, semantic_revision)
         } else {
-            Self::resolve(&input.join("elamite.toml"), sources)
+            Self::resolve_with_revision(&input.join("elamite.toml"), sources, semantic_revision)
         }
     }
 
@@ -349,6 +385,15 @@ impl PackageGraph {
         manifest_path: &Path,
         sources: &mut SourceManager,
     ) -> Result<PackageGraph, Vec<Diagnostic>> {
+        Self::resolve_with_revision(manifest_path, sources, SemanticRevision::default())
+    }
+
+    /// Resolves a complete graph under one immutable semantic revision.
+    pub fn resolve_with_revision(
+        manifest_path: &Path,
+        sources: &mut SourceManager,
+        semantic_revision: SemanticRevision,
+    ) -> Result<PackageGraph, Vec<Diagnostic>> {
         let mut packages = BTreeMap::new();
         let mut dependency_edges = BTreeMap::new();
         let mut stack = Vec::new();
@@ -358,12 +403,53 @@ impl PackageGraph {
             &mut dependency_edges,
             &mut stack,
             sources,
+            semantic_revision,
         )?;
-        Ok(PackageGraph {
+        let graph = PackageGraph {
             root,
             packages,
             dependency_edges,
-        })
+        };
+        graph.validate_semantic_revisions()?;
+        Ok(graph)
+    }
+
+    /// Returns the root package's selected semantic revision.
+    #[must_use]
+    pub fn semantic_revision(&self) -> SemanticRevision {
+        self.packages[&self.root].semantic_revision()
+    }
+
+    /// Rejects an edge whose two packages were constructed under different
+    /// complete semantic models. Normal resolution assigns one revision to the
+    /// whole graph; keeping this check at the graph boundary also protects
+    /// embedding and test-harness construction.
+    pub fn validate_semantic_revisions(&self) -> Result<(), Vec<Diagnostic>> {
+        let mut diagnostics = Vec::new();
+        for (source, edges) in &self.dependency_edges {
+            let source_package = &self.packages[source];
+            for (alias, target) in edges {
+                let target_package = &self.packages[target];
+                if source_package.semantic_revision() != target_package.semantic_revision() {
+                    diagnostics.push(Diagnostic::new(
+                        Category::PackageGraphInvalid,
+                        format!(
+                            "package `{}` uses semantic revision {}, but dependency `{alias}` \
+                             (`{}`) uses incompatible revision {}",
+                            source_package.manifest.name,
+                            source_package.semantic_revision().as_str(),
+                            target_package.manifest.name,
+                            target_package.semantic_revision().as_str(),
+                        ),
+                    ));
+                }
+            }
+        }
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(diagnostics)
+        }
     }
 
     /// Returns the package selected by `alias` from `package`.
@@ -406,6 +492,7 @@ fn resolve_recursive(
     dependency_edges: &mut BTreeMap<PackageId, BTreeMap<String, PackageId>>,
     stack: &mut Vec<PackageId>,
     sources: &mut SourceManager,
+    semantic_revision: SemanticRevision,
 ) -> Result<PackageId, Vec<Diagnostic>> {
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     let probe_id = PackageId(canonical_dir(manifest_dir));
@@ -425,7 +512,7 @@ fn resolve_recursive(
         return Ok(probe_id);
     }
 
-    let package = Package::load(manifest_path, sources)?;
+    let package = Package::load_with_revision(manifest_path, sources, semantic_revision)?;
     let id = package.id.clone();
     let dependency_decls = package.manifest.dependencies.clone();
 
@@ -441,6 +528,7 @@ fn resolve_recursive(
             dependency_edges,
             stack,
             sources,
+            semantic_revision,
         )?;
         resolved_dependencies.insert(dependency.alias, dependency_id);
     }
@@ -474,5 +562,59 @@ mod tests {
     #[test]
     fn rejects_invalid_directory_component() {
         assert!(module_path_for(Path::new("2bad/models.elx")).is_err());
+    }
+
+    #[test]
+    fn rejects_dependency_semantic_revision_skew() {
+        fn package(id: PackageId, name: &str, revision: SemanticRevision) -> Package {
+            Package {
+                id,
+                semantic_revision: revision,
+                manifest: Manifest {
+                    name: name.to_string(),
+                    version: "0.1.0".to_string(),
+                    target_kind: crate::manifest::TargetKind::Library,
+                    root: PathBuf::from("src/lib.elx"),
+                    dependencies: Vec::new(),
+                    include_paths: Vec::new(),
+                    library_paths: Vec::new(),
+                    native_libraries: Vec::new(),
+                    link_options: Vec::new(),
+                    format_line_length: crate::formatter::DEFAULT_LINE_LENGTH,
+                },
+                manifest_dir: PathBuf::new(),
+                source_dir: PathBuf::new(),
+                modules: BTreeMap::new(),
+            }
+        }
+
+        let root = PackageId(PathBuf::from("root"));
+        let dependency = PackageId(PathBuf::from("dependency"));
+        let graph = PackageGraph {
+            root: root.clone(),
+            packages: BTreeMap::from([
+                (
+                    root.clone(),
+                    package(root.clone(), "root", SemanticRevision::V0_10),
+                ),
+                (
+                    dependency.clone(),
+                    package(dependency.clone(), "dependency", SemanticRevision::V0_11),
+                ),
+            ]),
+            dependency_edges: BTreeMap::from([
+                (
+                    root,
+                    BTreeMap::from([("dependency".to_string(), dependency.clone())]),
+                ),
+                (dependency, BTreeMap::new()),
+            ]),
+        };
+        let diagnostics = graph
+            .validate_semantic_revisions()
+            .expect_err("revision skew must fail");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].category, Category::PackageGraphInvalid);
+        assert!(diagnostics[0].message.contains("incompatible revision"));
     }
 }

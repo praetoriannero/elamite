@@ -4,9 +4,10 @@
 //! preserves every significant token and comment, and never runs resolution or
 //! type checking.
 
+use crate::config::SemanticRevision;
 use crate::diagnostics::{Category, Diagnostic};
 use crate::lexer::lex;
-use crate::parser::parse;
+use crate::parser::parse_for_revision;
 use crate::source::FileId;
 use crate::syntax::{FormattedSegmentKind, Keyword, Token, TokenKind};
 
@@ -74,6 +75,16 @@ pub fn format_source(
     source: &str,
     options: FormatOptions,
 ) -> Result<String, Vec<Diagnostic>> {
+    format_source_for_revision(file, source, options, SemanticRevision::default())
+}
+
+/// Formats source under the complete grammar selected for its package.
+pub fn format_source_for_revision(
+    file: FileId,
+    source: &str,
+    options: FormatOptions,
+    revision: SemanticRevision,
+) -> Result<String, Vec<Diagnostic>> {
     if options.line_length == 0 {
         return Err(vec![Diagnostic::new(
             Category::Formatting,
@@ -85,7 +96,7 @@ pub fn format_source(
     if !original.diagnostics.is_empty() {
         return Err(original.diagnostics);
     }
-    let parsed = parse(&original.tokens);
+    let parsed = parse_for_revision(&original.tokens, revision);
     if !parsed.diagnostics.is_empty() {
         return Err(parsed.diagnostics);
     }
@@ -161,7 +172,7 @@ pub fn format_source(
             "formatter produced lexically invalid output",
         )]);
     }
-    let reparsed = parse(&reformatted.tokens);
+    let reparsed = parse_for_revision(&reformatted.tokens, revision);
     if !reparsed.diagnostics.is_empty() {
         return Err(vec![Diagnostic::new(
             Category::Formatting,

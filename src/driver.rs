@@ -131,6 +131,9 @@ pub fn check_frontend_with_features(
     if !type_output.diagnostics.is_empty() {
         return Err(type_output.diagnostics);
     }
+    if let Some(diagnostic) = crate::check::semantic_revision_boundary(&resolved) {
+        return Err(vec![diagnostic]);
+    }
     let trait_output = crate::traits::check_traits(&resolved, &mut type_output.program);
     if !trait_output.diagnostics.is_empty() {
         return Err(trait_output.diagnostics);
@@ -640,10 +643,20 @@ fn materialize_package_metadata(
         // drift and ensures native inputs come from the same public artifact a
         // downstream compiler invocation would read, rather than a parallel
         // manifest-only path.
-        consumed.push(
-            crate::artifact::PackageMetadata::read(&path)
-                .map_err(|error| vec![Diagnostic::new(Category::Toolchain, error)])?,
-        );
+        let loaded = crate::artifact::PackageMetadata::read(&path)
+            .map_err(|error| vec![Diagnostic::new(Category::Toolchain, error)])?;
+        if loaded.semantic_revision != graph.semantic_revision().as_str() {
+            return Err(vec![Diagnostic::new(
+                Category::PackageGraphInvalid,
+                format!(
+                    "package metadata for `{}` uses semantic revision {}, expected {}",
+                    loaded.package_name,
+                    loaded.semantic_revision,
+                    graph.semantic_revision().as_str(),
+                ),
+            )]);
+        }
+        consumed.push(loaded);
     }
     Ok((consumed, root_path, dependency_paths))
 }

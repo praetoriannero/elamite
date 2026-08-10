@@ -21,6 +21,7 @@ pub mod token_tree;
 use std::path::PathBuf;
 
 use crate::config::CompilerFeatures;
+use crate::config::SemanticRevision;
 use crate::package::PackageGraph;
 use crate::package::{ModulePath, PackageId};
 use crate::parsed::StandardModule;
@@ -77,6 +78,7 @@ impl ExpandedUnit {
 
 #[derive(Debug)]
 pub struct ExpandedPackage {
+    pub semantic_revision: SemanticRevision,
     pub units: Vec<ExpandedUnit>,
     pub provenance: ProvenanceTable,
     /// Versioned, compile-time-only structural syntax interface. The value is
@@ -180,7 +182,11 @@ pub fn expand_with_limits(
     output.package.schedule = scheduler::ExpansionScheduler::with_limits(limits);
     output.package.compile_time =
         namespace::collect(graph, &output.package.units, &mut output.diagnostics);
-    quote::validate(&output.package.units, &mut output.diagnostics);
+    quote::validate(
+        &output.package.units,
+        output.package.semantic_revision,
+        &mut output.diagnostics,
+    );
     engine::execute_package(
         graph,
         &mut output.package.units,
@@ -189,14 +195,21 @@ pub fn expand_with_limits(
         &mut output.package.provenance,
         &mut output.diagnostics,
     );
-    output.package.identities =
-        identity::calculate(&output.package.units, &output.package.compile_time);
+    output.package.identities = identity::calculate(
+        output.package.semantic_revision,
+        output.package.ast.version(),
+        &output.package.units,
+        &output.package.compile_time,
+    );
     output
 }
 
 fn expand_units(parsed: ParsedPackageOutput) -> ExpansionOutput {
     let ParsedPackageOutput {
-        package: ParsedPackage { units },
+        package: ParsedPackage {
+            semantic_revision,
+            units,
+        },
         diagnostics,
     } = parsed;
     let mut provenance = ProvenanceTable::new();
@@ -206,9 +219,10 @@ fn expand_units(parsed: ParsedPackageOutput) -> ExpansionOutput {
         .collect();
     ExpansionOutput {
         package: ExpandedPackage {
+            semantic_revision,
             units,
             provenance,
-            ast: ast::AstInterface::current(),
+            ast: ast::AstInterface::for_semantic_revision(semantic_revision),
             compile_time: namespace::CompileTimeEnvironment::default(),
             schedule: scheduler::ExpansionScheduler::new(),
             identities: identity::ExpansionIdentities::default(),
@@ -260,6 +274,7 @@ mod tests {
 
         expand_units(ParsedPackageOutput {
             package: ParsedPackage {
+                semantic_revision: SemanticRevision::default(),
                 units: vec![ParsedUnit {
                     identity: ParsedUnitIdentity::Standard(StandardModule::Root),
                     path,
@@ -290,6 +305,7 @@ mod tests {
 
         let output = expand_units(ParsedPackageOutput {
             package: ParsedPackage {
+                semantic_revision: SemanticRevision::default(),
                 units: vec![ParsedUnit {
                     identity: ParsedUnitIdentity::Standard(StandardModule::Root),
                     path,

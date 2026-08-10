@@ -4,6 +4,7 @@ use super::super::*;
 use crate::check::CheckedClosureCapture;
 use crate::operations::SystemOperation;
 use crate::resolution::ClosureCaptureKind;
+use crate::types::Mutability;
 
 /// Monomorphizes and lowers checked syntax into typed high-level IR.
 #[must_use]
@@ -578,7 +579,10 @@ impl<'a> TypedLowerer<'a> {
                         if parameter.variadic {
                             self.typed
                                 .types
-                                .id_for_kind(&TypeKind::Slice(parameter.ty))
+                                .id_for_kind(&TypeKind::Slice {
+                                    mutability: Mutability::Shared,
+                                    element: parameter.ty,
+                                })
                                 .expect("checking interns every variadic binding's slice type")
                         } else {
                             parameter.ty
@@ -804,7 +808,7 @@ impl<'a> TypedLowerer<'a> {
                     })?
                     .id;
                 let (kind, binding_type) = match self.expanded_kind(iterable.ty) {
-                    TypeKind::Slice(element) => (
+                    TypeKind::Slice { element, .. } => (
                         IterationKind::Slice {
                             collection: iterable.ty,
                             element: *element,
@@ -2167,7 +2171,10 @@ impl<'a> TypedLowerer<'a> {
             .map(|argument| self.lower_expression(argument))
             .collect::<Option<Vec<_>>>()?;
         let element = parameters.last()?.ty;
-        let ty = self.typed.types.id_for_kind(&TypeKind::Slice(element))?;
+        let ty = self.typed.types.id_for_kind(&TypeKind::Slice {
+            mutability: Mutability::Shared,
+            element,
+        })?;
         let values = arguments[arguments.len().min(fixed)..]
             .iter()
             .map(|argument| self.lower_expression(argument))
@@ -2468,7 +2475,7 @@ impl<'a> TypedLowerer<'a> {
                 let index = self.lower_expression(*nodes.get(1)?)?;
                 let kind = match self.expanded_kind(base_type) {
                     TypeKind::Array { length, .. } => IndexKind::Array { length: *length },
-                    TypeKind::Slice(_) => IndexKind::Slice,
+                    TypeKind::Slice { .. } => IndexKind::Slice,
                     TypeKind::Builtin { builtin, .. }
                         if self.resolved.builtin_name(*builtin) == "Vec" =>
                     {

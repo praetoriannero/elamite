@@ -137,6 +137,7 @@ impl<'a> Resolver<'a> {
         let std_symbol = Symbol(symbols.get_or_intern("std"));
         let std_root = ModuleId(0);
         let program = ResolvedProgram {
+            semantic_revision: expanded.semantic_revision,
             symbols,
             modules: vec![Module {
                 id: std_root,
