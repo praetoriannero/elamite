@@ -1,0 +1,12 @@
+struct Node:
+    value: usize
+
+fn main() -> ():
+    var nodes = Store[Node].new()
+    let handle = nodes.insert(Node { value: usize.max() })
+    let node = nodes.get(handle)
+    println(node.value)
+
+    // The observable contract is store identity + slot + generation and stale
+    // detection. It deliberately does not assume a 64-bit pointer or one exact
+    // physical Handle layout.

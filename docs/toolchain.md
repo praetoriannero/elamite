@@ -1,5 +1,9 @@
 # Elamite toolchain
 
+> Current implementation baseline: Boehm and the related native prerequisites
+> remain required by 0.10 programs that engage managed storage. The accepted
+> 0.11 target removes them in **Promotion and tracing-GC removal**.
+
 Elamite's current toolchain supports Linux on x86-64 and x86 (32-bit). The
 compiler itself may run on either architecture; `--target=x86` and
 `--target=x86_64` select the generated C and native-artifact architecture.
@@ -92,8 +96,9 @@ spelling.
 
 ## Compiler interfaces
 
-The Elamite source language described by `spec.md` is the compatibility
-boundary. The compiler reports and implements 0.10.0-draft: ordinary copies,
+The revision reported by the compiler is its current compatibility boundary;
+`spec.md` describes the accepted migration target. The compiler reports and
+implements 0.10.0-draft: ordinary copies,
 collection descriptors, direct iteration snapshots, user-defined `Iterator`
 loops, thread/channel/mutex publication, and the unsafe raw-data-pointer
 surface all follow that revision. The following developer interfaces remain
@@ -107,16 +112,17 @@ implementation-private and may change between compiler revisions:
 - the Rust compiler-library API.
 
 Do not treat a library package's relocatable object as a stable C ABI. Exported
-C entry points require the explicit FFI forms in `spec.md`.
+C entry points currently use the implemented 0.10 subset of the explicit FFI
+forms in `spec.md`.
 
 ## Current limitations
 
 - Package dependencies are local paths. There is no registry, Git resolver,
   version solver, or lockfile workflow.
-- Cooperative tasks, executors, futures, and async/await are unsupported.
-  Threads, channels, and mutexes use shallow values with programmer-managed
-  race safety; a mutex serializes its own storage but does not protect access
-  through external aliases to shared backing.
+- Cooperative tasks, executors, futures, and async/await are unsupported. In
+  the current 0.10 compiler, threads, channels, and mutexes use shallow values
+  with programmer-managed race safety; 0.11 race-safe concurrency is not yet
+  implemented.
 - Raw data-pointer arithmetic, indexing, subtraction, compound offsets, and
   null-low relational ordering are implemented. Ordering two non-null pointers
   from different live extents remains undefined behavior.

@@ -133,81 +133,70 @@ milestone exit criteria in `docs/roadmap.md`.
 
 ## Design, Commits, and Pull Requests
 
-Treat `docs/spec.md` as the normative design input. During the ordered 0.10
-migration, `examples/spec_demo.elx` remains the implemented 0.9 demonstration
-and must be updated before the compiler claims 0.10 conformance.
-Append new entries to `docs/issues.md`; use `I-X.Y` for a sub-issue related to
-`I-X`. Do not implement or change surface grammar while its design review is
-active.
+Treat `docs/spec.md` 0.11.0-draft as the normative design target and follow the
+strict implementation order in `docs/roadmap.md`. The current compiler remains
+the 0.10 shallow/GC implementation baseline in `examples/spec_demo.elx`;
+`examples/owned_spec_demo.elx` is the target-only 0.11 demonstration and must
+not be added to current compile-pass tests prematurely. The inactive split
+target corpus lives under `tests/fixtures/owned_model_design/`.
 
-The currently implemented language uses a **minimal function model**: safe
-function values are references (`&fn(P) -> R` or `&unsafe fn(P) -> R`), and
-their general raw counterparts are `*fn(P) -> R` and
-`*unsafe fn(P) -> R`. Both are directly callable; every raw-function call
-requires `unsafe:` and a runtime null check. Exact function references may
-explicitly convert to matching raw function pointers, but function and data
-pointer domains never cast between each other.
+During migration, select one complete semantic revision per package. Preserve
+0.10 behavior unless the active work package explicitly introduces its 0.11
+replacement, and stop unsupported 0.11 constructs at the declared migration
+boundary rather than lowering them with shallow semantics. Do not implement a
+later ownership milestone around a missing earlier checker or IR fact.
 
-`docs/spec.md` §5.1 owns explicit-capture safe closures. Keep capture lists
-nonempty when present, aliases explicit with `as`, parameter types explicit,
-and each closure expression nominally distinct. There are no implicit
-captures, `move`, generic or variadic closure literals, unsafe closures,
-anonymous recursion, or closure-to-function-pointer conversion. Ordinary
-stateful callbacks may use a closure or `&Trait`; C callbacks continue to carry
-registered state through a separate raw context pointer, and recursion uses
-named functions.
+The function-pointer model remains exact: safe named functions use
+`&fn(P) -> R` or `&unsafe fn(P) -> R`, raw counterparts use `*fn(P) -> R` or
+`*unsafe fn(P) -> R`, raw calls require `unsafe:` plus a null check, and function
+and data pointer domains never cast between each other.
 
-`docs/spec.md` §3.1 owns shallow ordinary copying. Inline scalar and aggregate
-slots copy, while descriptors, references, pointers, callables, collections,
-trait objects, and resource handles preserve contained identities. `Vec` uses
-Go-like pointer/length/capacity descriptors; `Map` and `Set` preserve complete
-table identity; mutable `String` backing is shared. Do not reintroduce deep
-ordinary copies or COW detachment as observable semantics.
+The accepted closure target is `fn[captures](parameters):`, including `fn[]`
+for capture-free closures. Capture lists are exhaustive; plain captures move or
+`Copy`, `&` captures shared provenance, and `&var` captures exclusive
+provenance. Environments are nominal inline first-class objects with one shared
+`Callable[Arguments, Return]` call contract. There are no implicit captures,
+generic or variadic closure literals, unsafe closures, trailing-closure syntax,
+or anonymous recursion. Only capture-free closures explicitly convert to exact
+function references; stateful C callbacks use a separate owned raw context.
 
-`docs/spec.md` §10.4 owns the normative concurrency contract. It adds no
-concurrency syntax: native threads are created through `std.thread`, and
-channels, mutex handles, and sequentially consistent atomic cells live in
-`std.sync`. There is no `Transfer` capability or cross-thread detachment;
-spawn environments, channel messages, join results, and mutex values copy
-shallowly. Ordinary shared access needs no `unsafe`; conflicting unordered
-cross-thread access is undefined behavior under the C99 memory model, and the
-programmer owns synchronization. Retain the registered-thread callback
-restriction, GC thread registration, documented happens-before edges, and
-process-fatal trap contract.
+`docs/spec.md` §§3–9 own move-by-default values, explicit `Clone`, structural
+`Copy`, inferred borrow provenance, deterministic `Drop`, uniquely owned
+collections, explicit `Box`/`Shared`/`Weak`/`Store`/`Handle` ownership, and
+collector removal. Ordinary borrow formation must not allocate. `&var` is
+exclusive and move-only. Do not insert hidden clones, retain shallow mutable
+backing aliases, or use promotion/GC to legalize a reference escape in the
+0.11 path.
 
-`docs/spec.md` §3.3 owns raw data-pointer traversal. Element-scaled `+`, `-`,
-`+=`, `-=`, same-extent subtraction to `isize`, indexing, and relational
-ordering require `unsafe` and complete nonzero-sized data pointees. Indexing
-performs the existing null/alignment checks but no bounds check. Null orders
-below every non-null pointer; ordering two non-null pointers requires one live
+`docs/spec.md` §10.4 owns race-safe concurrency. It adds no syntax:
+`std.thread.spawn` consumes an owned `Send` closure, `std.thread.scope` admits
+inferred scoped borrows, channels move messages, mutexes expose guarded
+borrows, and atomic cells are non-`Copy` and sequentially consistent. `Send`
+and `Sync` are structural capabilities; raw pointers receive neither
+automatically. Safe code must not retain the 0.10 programmer-managed data-race
+contract.
+
+`docs/spec.md` §3.3 continues to own raw data-pointer traversal.
+Element-scaled `+`, `-`, `+=`, `-=`, same-extent subtraction to `isize`,
+indexing, and relational ordering require `unsafe` and complete nonzero-sized
+data pointees. Indexing performs null/alignment checks but no bounds check.
+Null orders below non-null; two non-null pointers order only within one live
 extent. Equality remains safe, raw pointers implement neither `PartialOrd` nor
 `Ord`, and integer-pointer conversion and function-pointer arithmetic remain
-absent.
+absent. Raw pointers never own or retain storage.
 
-`docs/spec.md` §3.1 and §4.1 define local tuple destructuring and positional
-fields. Keep local binding patterns irrefutable and limited to nested tuples,
-identifiers, and `_`; do not generalize parameters, loop headers, assignment, or
-refutable binding forms. Numeric postfix selectors are canonical,
-unsuffixed, in-range decimal tuple indices and follow ordinary value-copy,
-place, receiver-adaptation, raw-pointer safety, and promotion rules.
+Local tuple patterns remain irrefutable and limited to nested tuples,
+identifiers, and `_`. Numeric postfix selectors remain canonical unsuffixed
+in-range decimal indices. In the 0.11 path, a consuming projection moves a
+non-`Copy` field, copies a `Copy` field, and participates in partial-move and
+borrow-place checking.
 
-Deterministic cleanup uses a lexical, block-scoped `defer` statement in two
-forms: `defer call` defers one safe unit-returning call, and `defer:` defers an
-indented block of statements as a single registration. The language has no
-`with` and no `errdefer`. Deferred code is evaluated at scope exit and is not a
-closure or first-class value.
-
-There is no compiler-known cleanup trait or protocol. Resource types expose
-ordinary safe unit-returning methods such as `close` or `release`, and each
-type's API defines its own idempotence, sharing, and error behavior. `defer`
-does not privilege any method name or trait.
-
-Because a deferred block runs while its scope is already exiting, it cannot
-redirect control: `return`, `break`, `continue`, postfix `?`, and a nested
-`defer` are all invalid inside it. A `defer` statement is invalid inside an
-`unsafe` block, and an `unsafe` block is invalid inside a `defer:` block. When
-this direction changes, update this rule.
-
+`Drop.drop(&var self)` is the sole compiler-invoked user destruction hook and is
+not directly callable. `Drop` types are non-`Copy` and cannot be partially
+moved. `defer call` and `defer:` remain lexical non-closure registrations; in
+one scope they run LIFO before automatic reverse-initialization destruction.
+Deferred code cannot use `return`, `break`, `continue`, postfix `?`, nested
+`defer`, or `unsafe`, and traps remain non-unwinding.
 The C backend targets **C99**. Generated C and foreign declarations must not
 rely on C11-only features (`_Static_assert`, `_Generic`, anonymous
 struct/union members); lower tagged unions (enums) with an explicit

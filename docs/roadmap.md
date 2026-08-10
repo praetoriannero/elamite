@@ -3,10 +3,12 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Source-level debugging**
+> Next planned milestone: **Migration seam and accepted surface**
 >
-> Basis: implemented `spec.md` version 0.10.0-draft and the authoritative
-> `examples/spec_demo.elx` demonstration
+> Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
+> baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
+> ordered migration below. The compiler remains a 0.10 implementation until
+> each planned semantic layer reaches its exit criteria.
 
 ## Milestone summary
 
@@ -15,39 +17,52 @@ Keep this table synchronized with the detailed status blocks below.
 | Milestone | Status | Current state or next action |
 | --- | --- | --- |
 | [Memory cost model documentation](#memory-cost-model-documentation) | Complete | The versioned cost model, instrumentation, fixed workloads, baseline, and maintenance contract are in place. |
-| [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | Complete | Shallow values, systems concurrency, unsafe pointer traversal, final cost evidence, release identity, and the authoritative 0.10 demonstration are complete. |
-| [Post-conformance optimization](#post-conformance-optimization) | Candidate | Optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
+| [Shallow-copy and systems-concurrency migration](#shallow-copy-and-systems-concurrency-migration) | Complete baseline | Shallow values, systems concurrency, unsafe pointer traversal, final cost evidence, release identity, and the authoritative 0.10 demonstration define the implementation from which the owned model migrates. |
+| [Owned-model semantic contract](#owned-model-semantic-contract) | Complete | Move, borrow, cleanup, closure, sharing, concurrency, FFI, demonstration, ledger, and split design-corpus rules are accepted as 0.11.0-draft. |
+| [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Planned — next | Add temporary compatibility scaffolding and represent the accepted slice, closure, borrow, and ownership surface without partially enabling it. |
+| [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Planned | Make move, copy, clone, borrow, reborrow, and drop operations explicit across checking and IR. |
+| [Move and initialization checking](#move-and-initialization-checking) | Planned | Enforce move-by-default use, definite initialization, partial moves, reinitialization, and branch merging. |
+| [Structural borrow provenance](#structural-borrow-provenance) | Planned | Infer hidden provenance, enforce shared/exclusive access, and carry borrows structurally through values. |
+| [Deterministic destruction](#deterministic-destruction) | Planned | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
+| [Owned core values and collections](#owned-core-values-and-collections) | Planned | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
+| [Inline first-class closures](#inline-first-class-closures) | Planned | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
+| [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
+| [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
+| [Race-safe concurrency](#race-safe-concurrency) | Planned | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
+| [Owned-model C interoperability](#owned-model-c-interoperability) | Planned | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
+| [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
+| [Post-conformance optimization](#post-conformance-optimization) | Candidate | After owned-model conformance, optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
 | [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The versioned `std.ast` façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete; inherent blocks advance its exact ABI to 2.0. |
 | [Interpreter-backed macros, attributes, and derives](#interpreter-backed-macros-attributes-and-derives) | Complete | All three stable compile-time declaration forms expand through the ordinary semantic pipeline. |
 | [Compile-time diagnostics, tooling, and stabilization](#compile-time-diagnostics-tooling-and-stabilization) | Complete | Expansion diagnostics, recovery, inspection, reproducibility, robustness, compatibility, and stabilization are complete. |
-| [Explicit-capture closures](#explicit-capture-closures) | Complete | Closure syntax, typing, capture semantics, IR/backend lowering, cross-feature behavior, and conformance are complete. |
-| [Standard-library concurrency](#standard-library-concurrency) | Complete | The 0.10 shallow shared-memory contract, ordering edges, runtime lifecycle, and sanitizer-backed conformance matrix are implemented. |
-| [User-defined iteration](#user-defined-iteration) | Complete | The ordinary `Iterator[Element]` protocol, static checking/lowering, managed hidden state, and unchanged direct collection behavior are implemented. |
+| [Explicit-capture closures](#explicit-capture-closures) | Complete baseline | Closure syntax, typing, managed capture semantics, IR/backend lowering, cross-feature behavior, and 0.10 conformance are complete; inline environments replace them in the ordered migration. |
+| [Standard-library concurrency](#standard-library-concurrency) | Complete baseline | The 0.10 shallow shared-memory contract, ordering edges, runtime lifecycle, and sanitizer-backed conformance matrix are implemented; race-safe concurrency replaces it. |
+| [User-defined iteration](#user-defined-iteration) | Complete baseline | The ordinary `Iterator[Element]` protocol, static checking/lowering, managed hidden state, and 0.10 collection behavior are implemented; owned iterators replace their storage and alias rules. |
 | [Inherent implementation blocks](#inherent-implementation-blocks) | Complete | Field-only structs, local coherent generic inherent blocks, selection/lowering, `std.ast` 2.0, and repository migration are complete. |
-| [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers, wildcard and grouped imports, and the foreign ABI surface. |
-| [Standard-library expansion](#standard-library-expansion) | Complete | The accepted filesystem, process/environment, time, ordering/search, text, and deterministic-randomness surfaces are implemented and documented; source hosting is the follow-up milestone below. |
-| [Source-hosted standard library](#source-hosted-standard-library) | Complete | An exact native inventory, explicit intrinsic declarations, a minimal UTF-8 kernel, source-hosted text/path algorithms, and demand-driven standard reachability are implemented. |
-| [Source-level debugging](#source-level-debugging) | Planned | Map generated C back to `.elx` locations and preserve source-level names so native debuggers are usable. |
-| [Language server](#language-server) | Candidate | Requires a scope decision and the **Incremental queries** package before implementation. |
-| [API documentation generation](#api-documentation-generation) | Planned | The `doc` command exists but does not yet render API content, cross-links, or a distributable format. |
-| [Additional platform targets](#additional-platform-targets) | Candidate | Begin with C-toolchain portability, then 64-bit ARM, then a non-ELF platform. |
+| [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers and wildcard/grouped imports; coordinate additional foreign ABIs with the owned-model C milestone. |
+| [Standard-library expansion](#standard-library-expansion) | Complete baseline | The accepted filesystem, process/environment, time, ordering/search, text, and deterministic-randomness surfaces are implemented and documented; owned signatures migrate in the release-critical path. |
+| [Source-hosted standard library](#source-hosted-standard-library) | Complete baseline | An exact native inventory, explicit intrinsic declarations, a minimal UTF-8 kernel, source-hosted text/path algorithms, and demand-driven standard reachability are implemented; collector and ownership hooks are migrated later. |
+| [Source-level debugging](#source-level-debugging) | Planned | After owned-model conformance, map generated C and ownership cleanup back to `.elx` locations and preserve usable names. |
+| [Language server](#language-server) | Candidate | Requires owned-model conformance, a scope decision, and the **Incremental queries** package. |
+| [API documentation generation](#api-documentation-generation) | Planned | After signature semantics stabilize, render API content, ownership-aware signatures, cross-links, and a distributable format. |
+| [Additional platform targets](#additional-platform-targets) | Candidate | After owned-model conformance, begin with C-toolchain portability, then 64-bit ARM, then a non-ELF platform. |
 | [Package distribution](#package-distribution) | Candidate | Requires an accepted distribution model before a resolver or lockfile is implemented. |
 | [Distribution and installation](#distribution-and-installation) | Planned | Produce release artifacts, a tested installation path, and a maintained changelog. |
-| [Learning material](#learning-material) | Planned | Write an introductory guide and tested worked examples separate from the specification. |
+| [Learning material](#learning-material) | Planned | After owned-model conformance, write an introductory guide and tested worked examples separate from the specification. |
 | [Project governance and contribution](#project-governance-and-contribution) | Planned | Add contribution, conduct, and security infrastructure, a design-change process, and a stability policy. |
 
-This document organizes current compiler work, candidate optimizations,
-recently completed language extensions, and the remaining language-surface,
-standard-library, toolchain, and distribution work into implementation
-milestones. Each milestone carries its own status note; the header above
-records the next required package. Elamite compiles to C, as required by the
-specification.
+This document organizes the migration from the implemented 0.10 shallow,
+GC-backed model to an owned, borrow-checked model, followed by candidate
+optimizations and the remaining language-surface, standard-library, toolchain,
+and distribution work. Each milestone carries its own status note; the header
+above records the next required package. Elamite compiles to C, as required by
+the specification.
 
-Sections 7 through 10 record work that is planned or candidate rather than
-started. They exist so that no known gap is tracked only informally; their
-ordering within a section is significant, but the sections themselves are not
-ordered against each other and do not define a release gate.
+The owned-model milestones form one ordered release gate. Later tooling,
+distribution, and candidate sections are not ordered against one another, but
+work that would encode unstable value, callable, concurrency, ABI, or source
+mapping semantics waits for **Owned-model tooling and final conformance**.
 
 Detailed plans are removed from this file once every work package in a
 milestone is complete. Normative behavior remains in `spec.md`, rule coverage
@@ -65,10 +80,11 @@ document defines an implementation order, not new language semantics. When it
 conflicts with the specification, the specification wins and this plan must be
 updated.
 
-Concurrency is a post-closure extension to the initial implementation plan.
-The **Standard-library concurrency** milestone records the implemented 0.9
-runtime baseline; the completed migration milestone records its replacement by
-the normative 0.10 shallow shared-memory revision.
+The completed closure and concurrency milestones record the implemented 0.10
+baseline. **Inline first-class closures** and **Race-safe concurrency** replace
+their managed-environment, shallow-publication, and programmer-managed-race
+semantics in the new model; the historical sections remain as implementation
+evidence rather than the destination.
 
 ## 1. Implementation strategy
 
@@ -98,20 +114,24 @@ Each representation should have one clear responsibility:
 - Resolution assigns stable identities to packages, modules, declarations,
   fields, variants, traits, and lexical bindings.
 - Typed high-level IR records types, selected declarations, implicit receiver
-  adaptations, value-versus-place classification, and required copies.
+  adaptations, value-versus-place classification, provenance, and explicit
+  move, copy, clone, borrow, reborrow, and drop requirements.
 - Control-flow IR makes evaluation order, branches, traps, returns, propagated
-  errors, and deferred cleanup explicit.
+  errors, moves, initialization state, destruction, and deferred cleanup
+  explicit.
 - Monomorphization replaces valid generic instantiations with concrete
   functions, types, and trait implementations.
 - The C backend selects representations and emits strictly sequenced C.
 
-The 0.9 implementation favored correctness and inspectability through deep
-copying and conservative promotion. Specification 0.10 deliberately changes
-ordinary copying to shallow representation copying and adopts programmer-managed
-shared-memory concurrency. The completed migration preserves explicit IR facts
-while every ordinary, thread, channel, mutex, closure, pattern, and collection
-copy site follows the revised contract; precise escape analysis, incremental
-compilation, and aggressive C output optimization remain later work.
+The 0.10 implementation uses shallow representation copying, conservative
+managed promotion, identity-sharing closure environments, and
+programmer-managed shared-memory concurrency. The next semantic revision
+replaces that model with move-by-default owned values, explicit cloning,
+structurally inferred borrows, inline closure environments, explicit shared or
+graph ownership, deterministic destruction, and race-safe concurrency. The
+compiler may retain a temporary compatibility seam while the new path is
+built, but each checked program must use one coherent semantic model and the
+seam is deleted at final conformance.
 
 ## 2. Cross-cutting engineering rules
 
@@ -209,7 +229,7 @@ may proceed in parallel. A work package is not a new language-design authority:
 `spec.md` remains normative, and splitting work must not create observable
 intermediate semantics that contradict it.
 
-## 3. Current implementation roadmap
+## 3. Implemented 0.10 baseline
 
 ### Memory cost model documentation
 
@@ -276,23 +296,288 @@ cost model, release evidence, and demonstration now identify the implemented
 | **Concurrent memory-model conformance (done)** | Test thread-start, mutex, channel, join, and sequentially consistent atomic ordering; document that ordinary shared access needs no `unsafe` and that conflicting unordered C99 accesses are UB. | Correctly synchronized stress remains TSan-clean, race-producing samples are never run as conformance programs, and no documentation claims safe code is data-race-free. |
 | **Cost-model and release migration (done)** | Run comparable before/after memory baselines once lowering changes, replace the current 0.9 cost tables with achieved shallow-copy costs, and record the semantic break in release documentation and version output. | `elamc --version`, README, demo, cost model, fixtures, x86/x86-64 matrices, and release evidence all identify one implemented specification revision. |
 
+## 4. Ordered owned-model migration
+
+This section is the release-critical path from the implemented 0.10 model to
+the next semantic revision. Milestones are ordered: a later milestone may
+prototype against an earlier internal representation, but it must not expose
+source behavior that depends on an unfinished prerequisite.
+
+The migration follows four rules:
+
+- a consuming use of a non-`Copy` value moves it; retaining the original
+  requires a borrow or an explicit `clone`, and last-use analysis must never
+  synthesize a hidden clone;
+- programmers do not write lifetime parameters, but the compiler carries
+  inferred provenance through every borrow-bearing type and public interface;
+- heap allocation and shared identity arise only from an owning type or an
+  explicit sharing, graph, or foreign-memory abstraction, never merely because
+  an address is taken; and
+- safe code has no dangling references, conflicting exclusive access, double
+  destruction, or data-race undefined behavior. Raw pointer and foreign
+  contracts remain the responsibility of explicit `unsafe` code.
+
+The temporary migration seam is an implementation device, not a commitment to
+permanent editions. It must select one complete semantic model per checked
+package, must not scatter mode-dependent representation guesses through the C
+backend, and must be removed by the final milestone unless a separate
+compatibility review accepts it as public policy.
+
+### Owned-model semantic contract
+
+> Status: Complete. `spec.md` 0.11.0-draft owns the accepted model,
+> `ledger.md` maps it to implementation passes, `issues.md` records no open
+> semantic question, and the target demonstration plus inactive split design
+> corpus cover the required evidence layers without claiming compiler support.
+>
+> Blocked by: **None**. No owned-model grammar or behavior is enabled before
+> this milestone is accepted into `spec.md`.
+
+**Goal:** Make every ownership, provenance, cleanup, callable, sharing,
+concurrency, and foreign-boundary operation unambiguous before implementation.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Ownership vocabulary (done)** | Specify consuming contexts, `Copy`, explicit `Clone`, moves, reinitialization, partial moves, and whether or how user types participate in deterministic destruction. | Assignment, argument, return, field extraction, pattern binding, and collection removal each state whether they move, copy, borrow, clone, or reject; no rule permits an implicit proportional clone. |
+| **Borrow and provenance contract (done)** | Specify `&`, `&var`, reborrowing, exclusivity, returned-borrow source inference, structural propagation through aggregates and generic types, and the limits of omitted lifetime syntax. | Every accepted reference has an inferable source and every rejected escape or overlap has one static reason; no `scoped` language keyword or written lifetime parameter is required. |
+| **Callable and cleanup contract (done)** | Specify `fn[captures](parameters):` objects, capture modes, the uniform shared-call contract, capture-free conversion, closure erasure, `Drop`, cleanup ordering, `defer` interaction, and non-unwinding traps. | Higher-order, moved-capture, borrowed-capture, explicit external mutation, repeated-call, early-return, and resource-cleanup examples have one outcome without importing Rust's three-trait callable surface. |
+| **Sharing, graph, and concurrency contract (done)** | Specify `Shared`/`Weak`, `Store`/`Handle`, stale-handle behavior, structural `Send`/`Sync`, unscoped spawn, `thread.scope`, channels, mutex guards, atomics, and safe-code race freedom. | Every cross-thread or graph edge names its ownership mechanism, synchronization edge, and failure behavior; ordinary unsynchronized races are rejected rather than documented as safe-code UB. |
+| **Foreign ownership contract (done)** | Specify C-layout eligibility, raw data and function pointers, ownership transfer, retained borrows, output initialization, callbacks with context, cleanup, and trap behavior across C. | Every FFI example identifies the owner before and after the call and states which obligations require `unsafe`. |
+| **Normative migration corpus (done)** | Rewrite the authoritative demonstration and split it into compile-pass, compile-fail, run-pass, trap, C-harness, and target-width cases; map all accepted rules in `ledger.md` and unresolved choices in `issues.md`. | The corpus covers each normative rule independently and the demonstration contains no construct whose behavior is explained only by roadmap prose. |
+
+### Migration seam and accepted surface
+
+> Status: Planned; this is the next milestone.
+>
+> Blocked by: **Owned-model semantic contract**.
+
+**Goal:** Represent the accepted source forms and let the compiler construct
+the new semantic pipeline without exposing a package to mixed ownership
+models.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Internal revision selection** | Add one immutable package-level semantic revision used by the test harness and phase entry points; keep 0.10 behavior available only while migration evidence needs it. | A package cannot mix revisions, dependency compatibility is diagnosed, and no backend operation consults source syntax to guess the active model. |
+| **Slice and array surface** | Parse and preserve `[T]`, `[var T]`, and `[T; N]` distinctly through syntax traversal, expansion, resolution, and source-type lowering. | Snapshots and focused diagnostics cover nested, generic, malformed, mutable, and constant-length forms without conflating slices with arrays. |
+| **Closure and borrow surface** | Normalize closure expressions around `fn[captures](parameters):`, preserve explicit value, `&`, and `&var` captures, and represent ordinary borrow expressions without trailing-closure or scope-keyword syntax. | Closures are expression objects passed through ordinary arguments; capture order, aliases if retained, parameter types, and body spans survive parsing and expansion exactly. |
+| **Expansion and editor synchronization** | Teach `std.ast`, quotation adaptation, formatting, and the TextMate inventories about every accepted syntax form, with a planned AST interface-version transition. | Handwritten and generated syntax have identical trees and diagnostics, and editor-grammar synchronization tests pass. |
+| **Compatibility guard** | Add tests proving that the seam changes neither the 0.10 path nor macro provenance while later owned-model phases are incomplete. | Both paths build deterministically and an unsupported owned-model construct stops at one explicit boundary rather than falling through to shallow semantics. |
+
+### Ownership facts and explicit use IR
+
+> Status: Planned.
+>
+> Blocked by: **Migration seam and accepted surface**.
+
+**Goal:** Remove implicit shallow-copy assumptions from semantic analysis and
+give later dataflow passes an exact ownership vocabulary.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Canonical ownership facts** | Compute canonical `Copy`, clone availability, destruction need, borrow containment, and provisional `Send`/`Sync` facts through primitives, aggregates, substitutions, trait objects, and errors. | Recursive and generic types terminate deterministically, error recovery does not grant capabilities, and facts do not depend on backend layout accidents. |
+| **Ownership-aware places** | Extend place facts with stable roots and projections for fields, tuple positions, indexing, dereference, and receiver adaptation. | Later analysis can conservatively decide whether two paths are disjoint, equal, or potentially overlapping without re-walking syntax. |
+| **Explicit typed operations** | Record move, bitwise `Copy`, explicit clone call, shared borrow, exclusive borrow, reborrow, and drop requirements in typed IR and shared operation vocabulary. | Every value-producing or consuming expression reaches lowering with one operation kind; an ordinary source use cannot silently become recursive transfer or clone. |
+| **Control-flow preservation** | Carry ownership operations and originating spans into control-flow IR with strict left-to-right evaluation and explicit branch edges. | Dumps expose operation order and all existing trap, postfix `?`, return, and `defer` sequencing remains testable. |
+| **Backend representation seam** | Lower explicit operations without introducing destruction yet, preserving 0.10 shallow copies only when the legacy frontend emitted an explicit copy. | Generated C follows IR operations rather than semantic mode tests, giving move and destruction work one backend path. |
+
+### Move and initialization checking
+
+> Status: Planned.
+>
+> Blocked by: **Ownership facts and explicit use IR**.
+
+**Goal:** Enforce move-by-default ownership and definite initialization across
+ordinary control flow before owned resources depend on it.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Place-state dataflow** | Track uninitialized, initialized, moved, and partially moved states through blocks, branches, loops, `match`, early exits, and unreachable code. | Join behavior is conservative and deterministic; use-before-initialization and use-after-move diagnostics identify both the invalid use and the state-changing span. |
+| **Consuming operations** | Apply moves to assignment sources, by-value arguments, returns, captures, destructuring, field extraction, postfix propagation, and other accepted consuming contexts; retain bitwise reuse only for `Copy` types. | A non-`Copy` value has one owner after every operation, and using it again requires reinitialization, borrowing, or an explicit clone. |
+| **Partial moves and reinitialization** | Permit accepted disjoint-field moves and reinitialization while rejecting whole-value use or movement of unavailable projections. | Nested tuples and structs behave consistently across both target widths and generic instantiation. |
+| **Indexed ownership APIs** | Reject implicit moves from borrowed or ordinary indexed collection places and define ownership-taking operations such as `remove`, `pop`, or `take`. | Collection extraction is explicit, evaluates its receiver and index once, and cannot leave an invalid element observable through an alias. |
+| **Diagnostic and property suite** | Add compile-fail path explanations and property tests over small control-flow graphs and place projections. | The checker never panics, accepts only legal state transitions, and retains minimized regressions for every discovered merge or projection failure. |
+
+### Structural borrow provenance
+
+> Status: Planned.
+>
+> Blocked by: **Move and initialization checking**.
+
+**Goal:** Prove reference validity and exclusive access without exposing
+lifetime parameters in Elamite source.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Internal provenance model** | Add stable loan, provenance-variable, source, and constraint identities plus inference and region solving over control-flow locations. | Diagnostics retain source spans, inference terminates on recursive constraints, and generated syntax uses origin-aware locations rather than fabricated spans. |
+| **Shared and exclusive loans** | Enforce many shared or one exclusive access, movement and assignment restrictions while borrowed, reborrowing, and last-use loan termination. | Safe code cannot construct overlapping live `&var` access or mutate through an alias while a conflicting borrow is live. |
+| **Structural propagation** | Carry provenance through fields, tuples, slices, generic arguments, closure environments, iterators, returns, and trait objects. | Hiding a reference inside another value cannot extend its source lifetime or erase its exclusivity requirements. |
+| **Public-interface inference** | Infer and serialize the provenance relationships needed to check callers of functions, methods, traits, implementations, and dependencies without written lifetime parameters. | Separately checked packages agree on returned-borrow sources, ambiguous signatures receive a design-level diagnostic, and metadata identity includes the accepted semantic revision. |
+| **Receiver adaptation and dereference** | Implement Rust-style field and method autodereferencing for references and raw pointers, including mutable receiver selection; retain explicit `unsafe` requirements and runtime checks for raw traversal. | Safe-reference access is ergonomic, raw pointer access cannot leave `unsafe`, and method selection remains type-dependent rather than entering name resolution. |
+| **Borrow robustness suite** | Add compile-pass/fail matrices for branches, loops, aggregate replacement, nested generics, returned views, closures, iterators, methods, raw pointers, and macro-generated code. | Accepted programs have no dangling or conflicting access under sanitizers, and rejected cases produce bounded non-cascading diagnostics. |
+
+### Deterministic destruction
+
+> Status: Planned.
+>
+> Blocked by: **Structural borrow provenance**.
+
+**Goal:** Release owned resources exactly once on every ordinary exit while
+preserving Elamite's non-unwinding trap model.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Accepted cleanup protocol** | Implement structural drop glue and the coherent compiler-invoked `Drop` trait selected by the semantic milestone. | `Drop.drop` is not directly callable, `Drop` types are non-`Copy` and non-partially-movable, and generic obligations are checked once. |
+| **Drop-state elaboration** | Add conditional initialization flags and partial-move-aware drop facts after checking and before monomorphization. | Conditionally initialized, reassigned, moved, and partially moved aggregates release exactly the still-owned fields. |
+| **Control-flow cleanup** | Emit reverse-order cleanup for fallthrough, `return`, `break`, `continue`, and postfix `?`, with the specified ordering relative to `defer`; keep process-fatal traps non-unwinding. | Side-effect traces prove exact-once ordering through nested blocks and every ordinary exit in debug and release builds. |
+| **C99 cleanup lowering** | Lower cleanup edges and flags into explicit C99 control flow without C11 features, compiler-dependent destructor extensions, or unsequenced evaluation. | Generated C is warning-clean on x86 and x86-64 and sanitizer stress finds no leak, double destruction, or use after destruction. |
+| **Cleanup diagnostics and restrictions** | Enforce restrictions involving partially moved cleanup types, invalid cleanup implementations, `defer`, `unsafe`, and escaping borrows. | Each rejected form names the ownership or control-flow invariant it would violate and points to the related declaration or move. |
+
+### Owned core values and collections
+
+> Status: Planned.
+>
+> Blocked by: **Deterministic destruction**.
+
+**Goal:** Make ordinary standard values genuinely owned, cheap to move, and
+impossible to mutate through an accidental shallow alias.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Unique owned representations** | Replace mutable shared backing in `String`, `Vec`, `Map`, and `Set` with one-owner representations whose move is constant-size and whose explicit clone has the documented cost. | Assignment and by-value calls transfer ownership; explicit clones are independent; destruction releases backing exactly once. |
+| **Slices and views** | Implement `[T]` and `[var T]` values, array and collection coercions, bounds checks, mutation rules, and structural provenance. | Views cannot outlive or conflict with their owner, mutable views require exclusive access, and no slice operation owns or frees elements. |
+| **Allocation foundation** | Provide the minimal allocator hooks and `Box[T]` needed for deliberate heap ownership, including overflow and allocation-failure behavior. | Taking an address does not allocate; heap use is visible in the owning type; both pointer widths have layout and failure coverage. |
+| **Ownership-aware APIs** | Redesign mutation, insertion, removal, extension, iteration, formatting, and conversion APIs around moves, borrows, and explicit clones. | Common operations avoid unnecessary cloning, retain left-to-right evaluation, and make every ownership transfer visible in signatures and checked facts. |
+| **Iterator migration** | Replace managed hidden iterator state with owned or borrowed iterator values whose invalidation and provenance follow the collection contract. | Iteration allocates only when its explicit iterator type requires it and collection mutation cannot invalidate a live safe iterator unnoticed. |
+| **Cost and conformance evidence** | Update `cost_model.md`, run comparable memory workloads, and replace shallow-alias fixtures with move/clone/borrow cases. | Release evidence states constant-size moves, proportional clones, allocations, and retention without turning measurements into semantic thresholds. |
+
+### Inline first-class closures
+
+> Status: Planned.
+>
+> Blocked by: **Structural borrow provenance** and **Deterministic
+> destruction**. It may proceed alongside collection representation work.
+
+**Goal:** Make every closure a nominal, statically sized first-class object
+whose captures obey ordinary ownership and borrowing.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Capture construction** | Type and evaluate exhaustive captures left to right: plain captures move or `Copy`, `&` captures shared provenance, and `&var` captures exclusive provenance. | Missing, duplicate, invalid, self-initializing, and escaping captures diagnose at their source; no capture causes an implicit clone or allocation. |
+| **Nominal inline environments** | Replace managed environment identity with one anonymous nominal aggregate per closure expression and synthesize ordinary move, borrow, and drop behavior for its fields. | Moving a closure transfers captures, explicit cloning follows their capabilities, borrowed captures constrain escape, and closure construction is allocation-free. |
+| **Callable capability model** | Implement the single shared-call `Callable[Arguments, Return]` contract behind ordinary call syntax; mutable external state remains explicit through captured `&var` or synchronized values. | Repeated calls use one receiver rule, closure bodies cannot move captures out, and function values plus borrowed or boxed erased callables interoperate only through specified conversions. |
+| **Typed and control-flow lowering** | Lower closure construction and invocation through the ordinary typed IR, monomorphizer, and C backend with exact evaluation and cleanup order. | Passed, returned, stored, nested, generic, trait-erased, and macro-generated closures behave identically on x86 and x86-64. |
+| **Closure conformance replacement** | Replace 0.10 shallow environment-copy tests and documentation while retaining them as historical migration evidence where useful. | No current test relies on managed closure identity, implicit promotion, or capture sharing outside an explicit owned/shared type. |
+
+### Explicit shared and graph ownership
+
+> Status: Planned.
+>
+> Blocked by: **Owned core values and collections** and **Deterministic
+> destruction**.
+
+**Goal:** Provide deliberate, checked mechanisms for shared identity and
+cyclic or stable graph references without restoring implicit tracing ownership.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Shared and weak ownership** | Implement `Shared[T]` and the accepted `Weak[T]` behavior with explicit construction, clone, upgrade, identity, destruction, and overflow rules. | Reference-count changes are documented costs, cycles require an explicit strategy, and shared ownership alone does not grant unsynchronized mutation. |
+| **Checked stores and handles** | Implement homogeneous `Store[T]` ownership plus compact `Handle[T]` identity containing enough store, slot, and generation information for checked lookup. | Wrong-store and stale handles trap deterministically, slot reuse cannot resurrect an old handle, and handle copying does not retain unrelated object graphs. |
+| **Mutation and borrow integration** | Define lookup, insertion, removal, iteration, compaction, and mutation through the ordinary borrow checker and capability system. | A live borrowed element blocks invalid store mutation, and no safe operation yields a reference whose backing may move or disappear. |
+| **Representation and target audit** | Specify layouts, overflow limits, synchronization properties, and costs on x86 and x86-64 without exposing accidental C layout. | Pointer-width-sensitive tests and memory baselines agree with `cost_model.md`; only explicitly ABI-safe wrappers cross C. |
+
+### Promotion and tracing-GC removal
+
+> Status: Planned.
+>
+> Blocked by: **Owned core values and collections**, **Inline first-class
+> closures**, and **Explicit shared and graph ownership**.
+
+**Goal:** Remove implicit managed storage so address-taking, borrowing, and
+ordinary callable construction have no hidden allocation or collector cost.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Managed-root inventory** | Classify every remaining promotion, closure, iterator, vararg, collection, formatter, standard-library, thread, and runtime dependency on collector-managed storage. | An inventory test fails when an unclassified managed allocation or root-registration hook is added. |
+| **Stack reference lowering** | Keep locals and temporaries in their natural storage according to proven provenance and remove conservative address-taken promotion from ordinary reference formation. | Taking and passing a nonescaping reference performs no allocation, while every attempted escape is rejected by checking rather than made safe by promotion. |
+| **Runtime ownership migration** | Replace each remaining managed allocation with stack storage, unique ownership, `Box`, `Shared`, `Store`, or an explicitly justified process-lifetime allocation. | Every replacement has exact cleanup and cost behavior and preserves trap, evaluation, and identity rules. |
+| **Collector removal** | Delete collector initialization, root management, thread registration, backend paths, toolchain discovery, and the Boehm dependency; delete or narrow `src/promotion.rs` to any independently justified analysis. | Generated executables contain no tracing collector, the full suite runs under leak and address sanitizers, and documentation has no live GC guarantee or prerequisite. |
+| **Before-and-after evidence** | Run the fixed promotion, closure, collection, and cross-thread cost workloads and record the change in `cost_model.md` and `release.md`. | The evidence demonstrates which hidden allocations and retention sources disappeared on both supported targets. |
+
+### Race-safe concurrency
+
+> Status: Planned.
+>
+> Blocked by: **Promotion and tracing-GC removal** and **Explicit shared and
+> graph ownership**.
+
+**Goal:** Make cross-thread transfer and shared access safe by construction,
+with no concurrency-specific syntax and no safe-code data-race UB.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Structural thread capabilities** | Compute and validate `Send` and `Sync` through owned, borrowed, shared, raw, foreign, generic, trait-object, and closure types, with explicit negative or unsafe implementations where accepted. | Raw or unsafely mutable state does not gain capabilities accidentally, recursive generic solving terminates, and diagnostics identify the blocking field or bound. |
+| **Owned spawn and join** | Rebuild unscoped spawn around an owned `Send` closure and owned result, with deterministic join, thread creation failure, and process-fatal trap behavior. | Borrowed stack data cannot escape to an unscoped thread, captures move exactly once, and repeated or detached join behavior matches the accepted API. |
+| **Borrowing thread scopes** | Implement `thread.scope` as an ordinary library-controlled region that admits scoped borrowing closures without a `scoped` keyword. | All child threads finish before borrowed data becomes unavailable, scope results have valid provenance, and attempted escape is rejected statically. |
+| **Channels and guarded mutation** | Make channels move `Send` messages; make `Mutex[T]` expose `T` only through a guard; integrate `Shared[Mutex[T]]`, closure captures, and poisoning or trap policy. | A message has one post-send owner, unlocked aliases cannot access protected mutable data, and contention stress is sanitizer-clean. |
+| **Atomic and memory-model runtime** | Provide the accepted sequentially consistent atomic cells and documented happens-before edges through C99-compatible runtime or compiler-intrinsic wrappers. | Start, join, channel, mutex, and atomic publication tests pass on x86 and x86-64 without relying on C11 syntax. |
+| **Race conformance replacement** | Replace the 0.10 programmer-managed-race contract, fixtures, standard-library documentation, and cost evidence. | Every safe concurrency run-pass test is TSan-clean; deliberate races require `unsafe` and are never executed as ordinary conformance tests. |
+
+### Owned-model C interoperability
+
+> Status: Planned.
+>
+> Blocked by: **Promotion and tracing-GC removal** and **Race-safe
+> concurrency**.
+
+**Goal:** Preserve direct C power while making every safe wrapper's ownership,
+borrow, initialization, thread, and cleanup contract explicit.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **ABI-safe type audit** | Reclassify primitives, `repr(C)` aggregates, enums, arrays, slices, owning values, references, raw data pointers, and raw function pointers for foreign declarations. | No owning Elamite descriptor or safe reference crosses C under an accidental matching layout; generated declarations remain strictly C99. |
+| **Ownership and initialization boundary** | Implement accepted consuming, borrowed-for-call, retained-pointer, returned-owner, allocator-pairing, nullable, and output-parameter patterns, including explicit uninitialized storage where required. | Every safe wrapper proves initialization and lifetime locally; ownership transfer is visible and a C callee cannot retain a temporary safe borrow silently. |
+| **Callbacks and context** | Support named or accepted capture-free function callbacks and the ordinary raw-context pattern for stateful callbacks, including registration lifetime, thread entry, and teardown. | Capturing closure objects never masquerade as C function pointers, context destruction is exact once, and foreign threads satisfy runtime requirements without collector registration. |
+| **Unsafe boundary enforcement** | Keep raw traversal, pointer arithmetic, dereference, foreign contracts, and capability assertions inside explicit `unsafe`, with safe wrappers checked normally. | C power remains available, but safe callers cannot trigger dangling access, double ownership, data races, or uninitialized reads through an unchecked signature. |
+| **C harness matrix** | Extend native harnesses over ownership transfer, borrowed buffers, callbacks, C resources, target widths, optimization levels, and sanitizers. | Both Linux targets compile warning-clean C99 and exercise success, diagnosed misuse, and runtime trap boundaries. |
+
+### Owned-model tooling and final conformance
+
+> Status: Planned.
+>
+> Blocked by: every earlier milestone in this section.
+
+**Goal:** Make the owned model the only shipped model and align every compiler
+entry point, source artifact, tool, cost claim, and supported target with it.
+
+| Task | Deliverable | Focused acceptance |
+| --- | --- | --- |
+| **Expansion ABI migration** | Advance the versioned `std.ast` interface for changed types and syntax, migrate shipped macros, and prove generated output undergoes ordinary ownership and provenance checking. | Version skew diagnoses cleanly, macro provenance remains complete, and arbitrary generated ownership syntax cannot crash or bypass semantic phases. |
+| **Repository and standard-library migration** | Rewrite shipped sources, examples, fixtures, benchmarks, API documentation, editor support, and the authoritative demonstration for moves, borrows, owned collections, closures, sharing, and safe threads. | Searches and inventory tests find no live dependency on shallow mutable aliasing, managed promotion, collector behavior, or safe-code race UB. |
+| **Conformance and robustness campaign** | Run parse snapshots, compile-pass/fail, run-pass, traps, package tests, C harnesses, property/fuzz suites, ASan, UBSan, TSan, and x86/x86-64 matrices. | The complete matrix is deterministic, warning-clean, bounded on adversarial input, and contains directed coverage for every normative ledger rule. |
+| **Cost and release evidence** | Run comparable memory workloads and update `cost_model.md`, `release.md`, version output, README, toolchain documentation, and migration notes. | Documentation distinguishes semantic guarantees from measured costs and reports one implemented specification revision everywhere. |
+| **Compatibility-seam deletion** | Remove the 0.10 semantic path, obsolete transfer/copy helpers, mode branches, old runtime representations, and historical tests that no longer provide regression value. | One parser-to-backend path implements the owned model; no permanent edition or compatibility promise remains unless separately reviewed and specified. |
+| **Conformance declaration** | Mark the new `spec.md` revision implemented only after the ledger has implementation and test evidence for every rule. | `cargo fmt --check`, `cargo check --all-targets`, `cargo test --all-targets`, and `cargo clippy --all-targets -- -D warnings` pass together with both native target matrices. |
+
+## 5. Post-owned-model optimization
+
 ### Post-conformance optimization
 
 > Status: Candidate work; select a measured problem before implementation.
 >
-> Blocked by: **None**.
+> Blocked by: **Owned-model tooling and final conformance**.
 
 **Goal:** Improve implementation quality without changing language behavior.
 
-The memory-cost and value-copy packages above are planned work rather than
-members of this optional pool. The remaining candidate packages are independent
+The ownership, borrow, cleanup, representation, collector-removal, and
+concurrency packages above are semantic migration work rather than members of
+this optional pool. The remaining candidate packages are independent
 proposals, not a promise to implement all of them in table order:
 
 | Task | Candidate change | Required semantic guard |
 | --- | --- | --- |
 | **Optimization benchmark gate** | Choose a measured problem, record a reproducible before-state, and define the expected improvement before changing lowering. | The complete compiler-architecture refactor baseline remains available for comparison. |
-| **Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and copy semantics do not change. |
-| **Precise escape analysis** | Keep proven nonescaping address-taken locals and referenced temporaries on the stack while retaining conservative managed promotion for returned, stored, captured, deferred, foreign, or otherwise uncertain references. | Root lifetime and identity match the managed-lifetime contract while measured nonescaping cases allocate no managed cell. |
+| **Representation specialization** | Specialize concrete generic layouts/helpers where measurement justifies it. | Canonical type identity, ABI exclusion, deterministic symbols, and move, clone, borrow, and drop semantics do not change. |
+| **Ownership-aware escape optimization** | Stack-allocate an explicitly owning heap abstraction only when its identity, address stability, destruction, and observable allocation behavior permit it. | The optimization does not reintroduce implicit promotion, change provenance, or remove an allocation whose observability is part of the owning type's contract. |
 | **Devirtualization** | Replace a trait-object call with static dispatch only when the concrete target is proven and evaluation is unchanged. | Vtable-visible behavior, target identity, object safety, and source-order evaluation remain intact. |
 | **Incremental queries** | Introduce stable query boundaries for parsing, resolution, typing, and lowering. | Cache keys include all semantic inputs and clean/incremental outputs are byte-identical. |
 | **Dependency artifact cache** | Reuse built package artifacts by deterministic package identity, target, options, compiler/spec revision, and dependency keys. | Stale artifacts cannot cross package instances or target widths. |
@@ -301,15 +586,16 @@ proposals, not a promise to implement all of them in table order:
 | **Optional analyses** | Add warnings for locally provable resource leaks and suspicious raw-pointer contracts. | Warnings are conservative, independently suppressible, and never become required compile errors. |
 
 Every selected package requires before-and-after measurements, a full
-conformance run, and targeted tests that would expose a change in copy
-independence, evaluation order, identity, root lifetime, trap behavior, or
+conformance run, and targeted tests that would expose a change in move, clone,
+borrow, destruction, evaluation order, identity, allocation, trap behavior, or
 deterministic output.
 
-**Post-conformance optimization** is optional work rather than a gate for the
-test and macro programs below. Individual packages, especially source-map
-infrastructure, may be pulled forward when a later milestone needs them.
+**Post-conformance optimization** is optional work rather than a gate for
+distribution or documentation. An individual package may be pulled forward
+only when an owned-model milestone needs it and can preserve that milestone's
+semantic and measurement boundaries.
 
-## 4. Post-conformance compile-time syntax generation
+## 6. Completed compile-time syntax generation baseline
 
 The compile-time syntax-generation milestone is complete. `spec.md` §12 owns
 the stable interpreter-backed `macro`, `attr`, and `derive` declarations, the
@@ -332,8 +618,8 @@ The implementation must preserve these boundaries throughout the transition:
 
 ### Macro expansion foundations
 
-> Status: Complete. The compile-time surface is unchanged by `spec.md`
-> 0.10.0-draft.
+> Status: Complete 0.10 baseline. The expansion ABI migration for accepted
+> 0.11 syntax belongs to **Owned-model tooling and final conformance**.
 >
 > Blocked by: **None**. It is independent of **Package tests, typed traps, and
 > runner**.
@@ -419,18 +705,19 @@ stable without an experimental gate.
 | **Compatibility audit (done)** | Verify macro-free diagnostic, IR, runtime, and generated-C equivalence and built-in behavior on Linux x86 and x86-64. | Enabling the expansion pipeline changes only programs using the new surface. |
 | **Stabilization (done)** | Complete documentation and ledger coverage, freeze the initial `std.ast` ABI, retain compact built-in derives as compatibility syntax alongside attached `@derive(...)`, and remove `--unstable-macros`. | Local and cross-package conformance suites pass with the stable surface. |
 
-## 5. Closures
+## 7. Completed closure baseline
 
 ### Explicit-capture closures
 
-> Status: Complete; 0.10 shallow capture construction and closure-copy identity
-> are implemented, including cross-thread closure publication through the
-> completed **Shallow-copy and systems-concurrency migration**.
+> Status: Complete 0.10 baseline; shallow capture construction and
+> closure-copy identity are implemented, including cross-thread closure
+> publication through the completed **Shallow-copy and systems-concurrency
+> migration**. **Inline first-class closures** owns their replacement.
 >
 > Blocked by: **None**. **Standard-library concurrency** is blocked by this
 > milestone because spawned thread bodies rely on closures.
 
-**Goal:** Add locally defined, state-carrying safe callables with explicit
+**Historical goal:** Add locally defined, state-carrying safe callables with explicit
 capture boundaries, ordinary Elamite copy and alias semantics, and no implicit
 capture or caller-visible unsafe contract.
 
@@ -511,16 +798,17 @@ Private evolving captured state, implicit or default capture, arbitrary
 initialized captures, generic closure literals, unsafe closures, variadic
 closures, recursive anonymous closures, callable equality or hashing,
 `CallableMut`/`CallableOnce`, captureless conversion to `&fn` or `*fn`, and C
-callback conversion are outside this milestone. A later proposal must define
-their interaction with logical copying, erasure, cleanup, and concurrency
-before adding any of them.
+callback conversion were outside this baseline. **Owned-model semantic
+contract** now owns the decisions needed for inline closure objects, erasure,
+cleanup, and concurrency.
 
-## 6. Native threads and synchronization
+## 8. Completed threads and synchronization baseline
 
 ### Standard-library concurrency
 
-> Status: Complete. The 0.9 structural-transfer baseline and its replacement by
-> the 0.10 shallow shared-memory contract are both implemented and recorded.
+> Status: Complete baseline. The 0.9 structural-transfer baseline and its
+> replacement by the 0.10 shallow shared-memory contract are both implemented
+> and recorded. **Race-safe concurrency** owns their replacement.
 > The historical bullets below explain the superseded baseline; current
 > authority remains `spec.md` Section 10.4 and the migration table above.
 >
@@ -640,20 +928,21 @@ guards exposing protected references, scoped reference transfer, parallel
 iterators, scheduling or fairness guarantees, automatic deadlock detection,
 and foreign-thread attachment are outside this milestone.
 
-## 7. Language surface completion
+## 9. Language surface completion
 
 ### User-defined iteration
 
-> Status: Complete. `spec.md` 7.1 defines the ordinary source-backed
+> Status: Complete 0.10 baseline. `spec.md` 7.1 defines the ordinary source-backed
 > `Iterator[Element]` protocol. Static concrete and generic-bound selection,
 > managed hidden state, shallow yielded values, diagnostics, both target
-> widths, closure interaction, and cost evidence are implemented.
+> widths, closure interaction, and cost evidence are implemented. **Owned core
+> values and collections** owns the iterator storage and ownership migration.
 >
 > Blocked by: **None**. Should precede **Standard-library expansion**,
 > because every collection API added before it is either compiler-privileged
 > or unusable with `for`.
 
-**Goal:** Let an ordinary user type participate in `for` through a normal
+**Historical goal:** Let an ordinary user type participate in `for` through a normal
 trait while preserving the 0.10 shallow iterable copy, yielded-element copy,
 and mutation-invalidation rules.
 
@@ -734,17 +1023,18 @@ remains silently unimplemented.
 | --- | --- | --- |
 | **128-bit integer lowering** | Implement `i128`/`u128` constants, arithmetic, conversion, and display in the C backend, or move the exclusion into `spec.md` as a permanent restriction. | `docs/toolchain.md` and the `int128_support.elx` regression fixture agree with the implementation, and the fixture's pinned phase behavior is updated with it. |
 | **Wildcard and grouped imports** | Implement the unsupported `use` forms, or record their absence as a deliberate permanent restriction. | Accepted forms follow the ordinary Section 2.3 visibility, reachability, and duplicate-binding rules; rejected forms keep a diagnostic naming the restriction. |
-| **Foreign ABI surface** | Decide whether C variadic functions and non-`C` foreign ABIs enter the language, and implement or permanently document the result. | The ABI-type rules in `spec.md` 10.1 and the foreign declaration checking agree with the shipped surface. |
+| **Foreign ABI surface** | During **Owned-model C interoperability**, decide whether C variadic functions and non-`C` foreign ABIs enter the language, and implement or permanently document the result. | The accepted ABI-type, ownership, initialization, and foreign declaration rules agree with the shipped surface. |
 
-## 8. Standard library
+## 10. Standard library
 
 ### Standard-library expansion
 
-> Status: Complete as a public-surface and behavior milestone. The shipped
+> Status: Complete as a 0.10 public-surface and behavior baseline. The shipped
 > modules provide the accepted filesystem, environment, process, time,
 > ordering, text, and deterministic-randomness APIs. The follow-up
 > **Source-hosted standard library** milestone owns the current overuse of
-> native hooks and placeholder bodies without reopening these reviewed APIs.
+> native hooks and placeholder bodies without reopening these reviewed APIs;
+> the ordered migration owns signatures whose ownership behavior changes.
 >
 > Blocked by: **None**. Nominal APIs use the completed **Inherent implementation
 > blocks**, and iterable APIs use the completed **User-defined iteration** protocol.
@@ -772,10 +1062,12 @@ change. Every module records its allocation and copying behavior in
 
 ### Source-hosted standard library
 
-> Status: Complete. Public text algorithms, lexical path behavior, and portable
-> host wrappers are ordinary Elamite. Exact bodyless intrinsic declarations now
-> expose only representation, allocation, host, resource, synchronization, and
-> caller-location capabilities that source cannot implement.
+> Status: Complete 0.10 baseline. Public text algorithms, lexical path behavior,
+> and portable host wrappers are ordinary Elamite. Exact bodyless intrinsic
+> declarations now expose only representation, allocation, host, resource,
+> synchronization, and caller-location capabilities that source cannot
+> implement; the owned migration removes collector hooks and revises affected
+> representations without moving policy back into the compiler.
 >
 > Blocked by: **None**. It builds on the completed **Inherent implementation
 > blocks** and **User-defined iteration** milestones and preserves the public
@@ -812,15 +1104,16 @@ are implementation details rather than stable user APIs.
 | **Wider source migration (done)** | Move lexical path manipulation, portable host wrappers, validation, and all other expressible standard-library policy into Elamite. Retain only actual file/process/environment/clock, resource-handle, collection-representation, trap, thread, synchronization, GC, formatter, and caller-location capabilities that require native access. | Every public standard function either has an ordinary checked Elamite body or is documented by the exact inventory as inseparable from a native capability. `Path` operations and other host-independent helpers lower as ordinary Elamite calls. Runtime and compiler tests prove that shadowing or copying a standard name grants no privilege. |
 | **Cost, conformance, and cleanup (done)** | Remove superseded checker, IR, naming, and backend special cases; update the cost model and release evidence for changed allocation or copying; and compare the source-hosted implementation on both supported targets. | Formatting, check, test, and clippy pass; x86 and x86-64 generated-C and run-pass matrices agree; standard-library behavior is unchanged; comparable memory-cost baselines accompany material cost changes; an exact test proves that no source-migration candidate remains native. |
 
-## 9. Toolchain and developer experience
+## 11. Toolchain and developer experience
 
 ### Source-level debugging
 
 > Status: Planned. Because the compiler emits C, a native debugger currently
 > shows generated identifiers and temporaries rather than Elamite source.
 >
-> Blocked by: **None**. Shares its span infrastructure with
-> **Language server**.
+> Blocked by: **Owned-model tooling and final conformance**, so debug-visible
+> ownership temporaries and cleanup paths are not designed around transitional
+> IR. Shares its span infrastructure with **Language server**.
 
 **Goal:** Let a programmer debug an Elamite program in Elamite terms, using
 ordinary native tooling.
@@ -837,8 +1130,9 @@ ordinary native tooling.
 > before implementation. The shipped editor support is a TextMate grammar,
 > which cannot resolve names.
 >
-> Blocked by: **Incremental queries** in **Post-conformance optimization**,
-> which owns the stable query boundaries a responsive server needs.
+> Blocked by: **Owned-model tooling and final conformance** and **Incremental
+> queries** in **Post-conformance optimization**, which owns the stable query
+> boundaries a responsive server needs.
 
 **Goal:** Provide name resolution, diagnostics, and navigation over the real
 compiler rather than a heuristic grammar, without a language-server dependency
@@ -856,7 +1150,8 @@ entering the semantic layers.
 > Status: Planned. The `doc` command exists but currently emits a heading
 > without rendered API content.
 >
-> Blocked by: **None**.
+> Blocked by: **Owned-model tooling and final conformance**, so published
+> signatures describe the final ownership and provenance model.
 
 **Goal:** Generate readable, navigable reference documentation from
 documentation comments and public signatures.
@@ -873,8 +1168,9 @@ documentation comments and public signatures.
 > Status: Candidate work; target selection requires a decision. Supported
 > targets are currently Linux x86 and x86-64.
 >
-> Blocked by: **None**. The C-toolchain portability tasks may proceed in
-> parallel with target selection.
+> Blocked by: **Owned-model tooling and final conformance**. C-toolchain
+> portability experiments may proceed earlier, but a new supported target must
+> carry the final destruction, atomics, and FFI model.
 
 **Goal:** Widen the set of hosts and targets the compiler supports, without
 weakening the deterministic-output or target-width guarantees.
@@ -883,9 +1179,9 @@ weakening the deterministic-output or target-width guarantees.
 | --- | --- | --- |
 | **C-toolchain portability** | Run the full suite under a second C compiler, and review the driver's fixed flag set — including `-Werror` on generated code — for portability across compilers and versions. | The suite passes under both compilers, and any flag whose failure mode depends on the C compiler's version is documented or removed from shipped builds. |
 | **64-bit ARM target** | Add an `aarch64` target with its pointer width, C flag selection, and layout behavior, and extend the conformance matrix to it. | The full matrix passes on 64-bit ARM, including the concurrency stress suites, whose weaker hardware memory model exercises the sequential-consistency contract that x86 cannot. |
-| **Non-ELF platform support** | Decide the next operating-system target and implement its object format, linking, collector discovery, and prerequisite documentation. | Library and executable packages link on the new platform, and `docs/toolchain.md` records its prerequisites. |
+| **Non-ELF platform support** | Decide the next operating-system target and implement its object format, linking, runtime dependency discovery, and prerequisite documentation. | Library and executable packages link on the new platform, and `docs/toolchain.md` records its prerequisites. |
 
-## 10. Distribution and project infrastructure
+## 12. Distribution and project infrastructure
 
 ### Package distribution
 
@@ -915,15 +1211,15 @@ reproducible resolution.
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
 | **Release artifacts** | Produce versioned toolchain archives per supported platform from a reproducible release process. | Artifacts report a compiler version and `spec.md` revision matching their source revision. |
-| **Installation path** | Document and test installation, including the C-toolchain and collector prerequisites. | A programmer can install and compile a package following documented steps on a clean supported system. |
+| **Installation path** | Document and test installation, including the C-toolchain and remaining native runtime prerequisites. | A programmer can install and compile a package following documented steps on a clean supported system. |
 | **Release notes and changelog** | Add a maintained changelog covering language, library, and toolchain changes per release. | Every release records its behavior changes, and a cost-affecting change references its `cost_model.md` update. |
 
 ### Learning material
 
 > Status: Planned. `spec.md` is a reference and is not a tutorial.
 >
-> Blocked by: **None**, though examples should follow **Standard-library
-> expansion** to avoid teaching around missing capability.
+> Blocked by: **Owned-model tooling and final conformance**; introductory
+> material must not teach the transitional shallow or collector-backed model.
 
 **Goal:** Give a newcomer a path from installation to a working program that
 does not require reading the specification.
@@ -932,7 +1228,7 @@ does not require reading the specification.
 | --- | --- | --- |
 | **Introductory guide** | Write a task-ordered guide covering installation, packages, values and references, errors and cleanup, generics and traits, and concurrency. | A programmer unfamiliar with the language can build a nontrivial program using the guide alone. |
 | **Worked examples** | Maintain example programs that are compiled and run by the ordinary test layers. | Every example in published material is covered by an automated test, so documentation cannot drift from behavior. |
-| **Migration and comparison notes** | Explain the shallow-copy, alias, pointer, and shared-memory model to readers arriving from Go, Rust, or C. | The notes state where intuition from each language transfers and where it does not, particularly for descriptor aliasing, data-race UB, and the absence of borrow checking. |
+| **Migration and comparison notes** | Explain move-by-default ownership, inferred structural borrowing, explicit sharing, raw pointers, and race-safe concurrency to readers arriving from Python, Nim, Rust, Go, or C. | The notes state where intuition from each language transfers and where it does not, particularly for explicit cloning, omitted lifetime syntax, deterministic destruction, closure objects, and the `unsafe` boundary. |
 
 ### Project governance and contribution
 
@@ -950,9 +1246,9 @@ contribute, and give maintainers a defined way to decide.
 | **Design change process** | Document how a language change is proposed, reviewed, accepted, and recorded across `issues.md`, `proposals.md`, `spec.md`, and `ledger.md`. | An outside proposal has a defined entry point and a defined outcome, and the existing document ownership rules are preserved. |
 | **Stability and versioning policy** | Define what a released language version guarantees, how a breaking change is introduced, and whether an edition or epoch mechanism is adopted. | The policy states its compatibility promise explicitly, and the specification revision reported by `elamc --version` is tied to it. |
 
-## 11. Delivery checkpoints
+## 13. Delivery checkpoints
 
-Delivery checkpoints are:
+Completed baseline checkpoints are:
 
 - **Initial conformance:** unsafe code, C interoperability, the standard
   library, and the authoritative demonstration satisfy the full initial test
@@ -983,6 +1279,27 @@ Delivery checkpoints are:
 - **Tuple destructuring and positional fields:** local tuple bindings and
   positional fields preserve exact tuple shape, logical-copy, place,
   reference, and evaluation-order semantics on both targets.
+
+The next semantic revision has these ordered release checkpoints:
+
+- **Owned-model contract:** `spec.md`, `ledger.md`, the demonstration, and the
+  split conformance corpus agree on moves, borrows, cleanup, closures, sharing,
+  threads, and C ownership before new behavior is enabled.
+- **Static ownership core:** the accepted surface, explicit ownership IR, move
+  checker, structural provenance solver, and destruction elaboration operate
+  end to end without hidden clones or mixed semantic modes.
+- **Owned runtime:** collections and strings have unique ownership, closures
+  use inline environments, explicit shared and graph types cover deliberate
+  identity, and ordinary address-taking no longer promotes storage.
+- **Collector-free runtime:** all managed roots and thread-registration hooks
+  have migrated to explicit ownership and generated executables contain no
+  tracing collector.
+- **Safe systems boundary:** unscoped and scoped threads, channels, mutexes,
+  atomics, raw pointers, callbacks, and C wrappers enforce the accepted
+  ownership and race-safety boundaries on x86 and x86-64.
+- **Owned-model conformance:** expansion, tooling, shipped sources, tests,
+  sanitizer matrices, cost evidence, release identity, and documentation agree
+  on one implementation, and the temporary 0.10 compatibility path is gone.
 
 These checkpoints are reporting boundaries, not substitutes for the exit
 criteria of the individual milestones.

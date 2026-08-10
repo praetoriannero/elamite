@@ -1,0 +1,25 @@
+struct Pair:
+    name: String
+    count: i32
+
+fn read_name(pair: &Pair) -> &String:
+    return &pair.name
+
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+fn main() -> ():
+    var pair = Pair { name: String.from("pair"), count: 1 }
+    let name = read_name(&pair)
+    println(name)
+
+    // The shared borrow ended after its last use.
+    pair.count += 1
+
+    let offset = 40
+    let add = fn[offset](value: i32) -> i32:
+        return value + offset
+    println(apply(add, 2))
+
+    let moved = pair
+    println(moved.count)

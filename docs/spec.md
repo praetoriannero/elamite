@@ -2,28 +2,34 @@
 
 > Status: Draft
 >
-> Version: 0.10.0-draft
+> Version: 0.11.0-draft
 >
-> This document is the normative 0.10 design targeted by the compiler and the
-> authoritative [specification demonstration](../examples/spec_demo.elx).
-> Ambiguities and internal inconsistencies that still need decisions are listed
-> in [issues.md](issues.md).
+> This document is the accepted 0.11 language design. The current compiler
+> still implements the 0.10 baseline demonstrated by
+> [`examples/spec_demo.elx`](../examples/spec_demo.elx); the authoritative 0.11
+> target is the [owned-model demonstration](../examples/owned_spec_demo.elx).
+> Implementation status is mapped separately in [ledger.md](ledger.md), and
+> unresolved questions are listed in [issues.md](issues.md).
 
 ## 1. Overview
 
-Elamite is a statically typed, garbage-collected language that compiles to C.
-It provides value types, explicit references, traits, generic types, algebraic
-data types, recoverable errors, raw pointers behind an unsafe boundary, and
-indentation-delimited control flow.
+Elamite is a statically typed, memory-safe language that compiles to C. It
+combines indentation-delimited control flow and type inference with owned
+values, explicit references, deterministic destruction, traits, generic types,
+algebraic data types, recoverable errors, and raw pointers behind an `unsafe`
+boundary.
 
-Ordinary values are passed and assigned by shallow value copy. Inline scalar
-and aggregate storage is copied, while references, pointers, functions,
-collection descriptors, mutable text backing, trait-object references, and
-resource handles preserve the identities they contain. Passing
-`&value` explicitly passes a shared reference; passing `&var value` explicitly
-passes a mutable reference. Elamite has no source lifetime parameters. Managed
-memory uses Boehm GC;
-programs should not use collection timing for resource cleanup.
+Non-`Copy` values move through assignment, arguments, returns, captures, and
+patterns. Retaining an independent value requires an explicit `clone`; taking
+`&value` creates a shared borrow and taking `&var value` creates an exclusive
+borrow. Elamite has no source lifetime parameters: the compiler infers and
+propagates provenance structurally through fields, generic arguments, slices,
+closures, and public signatures. Ordinary reference formation never allocates.
+Shared identity and graph identity use explicit library types rather than
+shallow mutable aliases or a tracing garbage collector. Safe code cannot create
+a dangling reference, conflicting exclusive access, double destruction, or a
+data race; operations whose contracts cannot be checked remain explicit
+`unsafe` code.
 
 ## 2. Program layout
 
@@ -237,217 +243,172 @@ pub use root.codec as codec
 
 ## 3. Values, mutability, and references
 
-### 3.1 Copying values
+### 3.1 Ownership, moves, and cloning
 
-`let` creates a non-rebindable binding that is not itself a mutable place. `var`
-creates a rebindable mutable place. A field selected through an ordinary `let`
-aggregate cannot be assigned through that path, and that path cannot be used to
-form `&var`. This restriction applies through nested ordinary values. It does
-not remove mutation capabilities carried by explicit aliases: a non-rebindable
-binding whose value is an `&var T`, or whose value contains one, cannot replace
-that reference but may still mutate its target.
+`let` creates a non-rebindable binding. `var` creates a rebindable place. Both
+bindings own their initialized value unless its type is a borrow, raw pointer,
+function reference, or another explicitly non-owning type. A field reached
+through a `let` aggregate cannot be assigned through that path and cannot form
+`&var`; mutation capability carried by an explicit `&var` field remains usable
+without rebinding that field.
 
-A local `let` or `var` may bind either one identifier or an irrefutable tuple
-binding pattern. Tuple binding patterns may nest and may contain identifiers or
-`_`; `()` and `(name,)` are the empty and one-element forms. Literals,
-alternatives, enum variants, record patterns, dereference patterns, guards,
-rest patterns, and tuple patterns in parameters or loop headers are not local
-binding patterns. An optional annotation applies to the complete pattern:
-`let (number, name): (i32, String) = value`.
+A local binding may name one identifier or an irrefutable tuple pattern.
+Patterns may nest and contain identifiers or `_`; `()` and `(name,)` are the
+empty and one-element forms. An optional annotation applies to the complete
+pattern. The initializer evaluates once before any new binding enters scope,
+and every identifier is unique.
 
-The initializer is evaluated exactly once before any new binding enters scope
-and must have the exact tuple shape and arity of the pattern. Every identifier
-in one pattern must be unique. All of its bindings enter scope together after
-the initializer; `_` creates no binding. Each `let` component receives a
-shallow copy and is non-rebindable. Each `var` component receives a shallow
-copy in its own rebindable local place. The initializer and any source value
-remain usable under the ordinary copy rules.
+Assignment, by-value argument passing, return, plain closure capture, pattern
+binding, and extraction of an owned field are *consuming contexts*. A
+non-`Copy` value moves into the destination and its source place becomes
+uninitialized. Using, borrowing, dropping, or moving that unavailable place is
+a compile-time error until a `var` place is reinitialized. Moving a value does
+not run its cleanup and does not change the address of separately allocated
+storage it owns.
 
-Assignment, ordinary argument passing, and ordinary returns copy the source
-value; using the source after that operation is valid. Copying is a core
-property of every value and is not controlled by a trait.
+A type has the compiler-recognized `Copy` capability exactly when duplicating
+its immediate representation creates another independently valid value with no
+destruction obligation or exclusive access. Integers, floating-point values,
+`bool`, `char`, `()`, shared references, raw pointers, function references, and
+aggregates whose fields are all `Copy` are `Copy`. `&var T`, `String`,
+collections, owning or shared-ownership handles, and every type with custom
+destruction are not `Copy`. A consuming context copies a `Copy` value and leaves
+its source initialized.
 
-An ordinary copy is shallow and fieldwise. Scalars and inline aggregate slots
-are copied into the destination, while every copied descriptor, reference,
-pointer, callable, collection handle, and resource handle preserves the backing
-or target identity stored in that field. Copying a nested aggregate repeats
-this rule for its immediate fields; it does not recursively duplicate reachable
-managed backing.
-
-Consequently, rebinding an inline field in one struct copy does not rebind the
-corresponding field in another copy, but mutating storage reached through a
-copied descriptor is visible through every descriptor that still reaches that
-storage. `Vec` uses Go-like pointer/length/capacity descriptor copies, while
-`Map` and `Set` copies preserve the identity of their complete mutable table.
-The exact built-in behaviors are specified in Section 4.1.
+`Clone` is the ordinary safe prelude trait:
 
 ~~~elx
-struct User:
-    name: String
-    tags: Vec[String]
-
-let original = User {
-    name: String.from("Ari"),
-    tags: @vec[String.from("first")],
-}
-var changed = original
-changed.name = String.from("Bea")
-changed.tags[0] = String.from("changed")
-
-println(original.name)    // "Ari": only changed.name was rebound
-println(original.tags[0]) // "changed": vector backing is shared
-
-var counter = 0
-let alias = &var counter
-let copied_alias = alias
-*copied_alias = 1
-println(*alias) // 1: references retain their explicit aliasing
+trait Clone:
+    fn clone(self: &Self) -> Self
 ~~~
 
-### 3.2 References
+Calling `value.clone()` is the only general operation that creates another
+independently owned non-`Copy` value. A clone may allocate or take time
+proportional to reachable owned data; the type's API documents that cost.
+`Copy` types implement `Clone` with their ordinary constant-size copy.
+The compiler never inserts a `clone` call. Last-use analysis may reuse storage
+or improve a move diagnostic, but it cannot change whether source code moves,
+copies, borrows, or explicitly clones a value.
 
-`&T` is a shared reference to `T`. `&var T` is a mutable reference to `T`.
-The expression `&value` forms a shared reference, and `&var value` forms a
-mutable reference to a mutable place. Reference field and method access
-automatically dereferences the reference.
+A struct or tuple may be partially moved through a statically known field.
+Afterward, unaffected fields remain usable through their projections, but the
+complete aggregate remains unavailable until every moved field of a `var` place
+is reinitialized. A type with custom destruction cannot be partially moved.
+Moving through a dynamic array index or ordinary collection index is invalid;
+an ownership-taking API such as `remove`, `pop`, or `take` performs that
+operation without leaving an uninitialized element.
 
-Reference formation is explicit except for the receiver of a bound method call.
-Any other context that expects `&T` or `&var T` never implicitly converts a `T`
-place; the source expression must use `&value` or `&var value`.
+Tuple destructuring applies the same rule independently to each component:
+non-`Copy` components move, `Copy` components copy, and `_` consumes and then
+drops an owned component unless the implementation can prove the drop has no
+observable effect.
+
+~~~elx
+let first = String.from("first")
+let moved = first
+// println(first)             // invalid: `first` was moved
+let duplicated = moved.clone()
+println(duplicated)
+
+var pair = (String.from("left"), String.from("right"))
+let left = pair.0
+println(pair.1)               // the other field remains available
+pair.0 = String.from("new")
+println(pair.0)               // the complete pair is initialized again
+~~~
+
+### 3.2 References, borrows, and provenance
+
+`&T` is a shared reference and `&var T` is an exclusive mutable reference.
+`&place` forms a shared borrow; `&var place` forms an exclusive borrow and
+requires a mutable place. References are non-null. Field, tuple-field, method,
+and call access automatically dereference references as required by the
+selected operation.
+
+Reference formation is explicit except for bound-method receiver adaptation and
+the slice coercions in Section 4.1. A context expecting an ordinary `&T` or
+`&var T` never silently borrows an argument or stored value.
+
+While a shared borrow is live, the borrowed place may be read but cannot be
+mutated, moved, dropped, or exclusively borrowed. While an exclusive borrow is
+live, no overlapping shared or exclusive borrow and no other access to the
+borrowed place is permitted. Access through the exclusive reference is the
+only permitted access. A borrow ends after its last possible use, which may be
+before the end of its lexical block.
+
+A shared reference is `Copy`. An exclusive reference is move-only; using
+`&var existing_reference` creates an exclusive reborrow for a shorter inferred
+provenance rather than duplicating exclusive access. Converting `&var T` to
+`&T` likewise creates a shared reborrow and does not consume the original
+reference beyond the reborrow's live region.
+
+Borrow checking operates on places. Disjoint struct and tuple fields may be
+borrowed independently. Dynamic indices conservatively overlap; distinct
+compile-time array indices may be treated as disjoint. Replacing an aggregate
+overlaps every field within it, so an aggregate cannot be replaced while a
+field borrow is live.
 
 ~~~elx
 var point = Point { x: 0.0, y: 0.0 }
-let view: &Point = &point
-let edit: &var Point = &var point
-
+let view = &point
 println(view.x)
-edit.x = 1.0
+// point.x = 1.0              // invalid while `view` remains live
+println(view.y)
+
+var left = Point { x: 0.0, y: 0.0 }
+let edit = &var left.x
+*edit = 1.0
+// println(left.x)            // invalid before the last use of `edit`
+println(*edit)
 ~~~
 
-An `&var T` reference may update fields of its target. A mutable reference
-parameter expresses caller-visible mutation. References are not exclusive: any
-number of shared and mutable references may name the same storage. Their reads
-and writes follow ordinary sequential execution; later writes replace earlier
-ones. Elamite performs no borrow or alias checking.
+A reference operand must be an addressable place. Bindings, fields of
+addressable values, array elements, and `Vec` elements are addressable.
+Function results and computed expressions are not; code binds such a value
+before borrowing it. Borrowing a `Vec` element prevents operations that may
+move its backing storage. Map values are borrowed only through the standard
+`get`/`get_var` APIs so lookup, table mutation, and absence remain explicit.
+Map keys and set elements cannot be mutably borrowed.
+
+References may occur in fields, enum payloads, tuples, slices, generic
+arguments, associated types, closure environments, parameters, and returns.
+Their inferred provenance is part of the checked type even though it has no
+source spelling. Constructing an aggregate propagates every contained
+provenance into the aggregate; projection recovers the corresponding
+provenance. Moving, wrapping, erasing behind a trait object, or substituting a
+generic type never erases a borrow.
+
+A value containing a borrow cannot outlive any source represented by its
+provenance. A function cannot return a borrow of a local, temporary, by-value
+parameter storage, or value destroyed before return. A returned borrow is tied
+to `self` when the return may borrow from `self`. Without such a receiver, it
+is tied to the sole borrow-bearing input from which the result can be derived.
+If more than one input could supply the returned provenance, the signature is
+ambiguous and is rejected; the function must return an owned value or use a
+wrapper whose API selects one source structurally. The compiler records these
+relationships in package metadata so separately checked callers enforce the
+same rule.
 
 ~~~elx
-var count = 0
-let first: &var i32 = &var count
-let second: &var i32 = &var count
+fn first(values: [i32]) -> &i32:
+    return &values[0]         // result provenance comes from `values`
 
-*first = 1
-*second = *second + 1
-println(count) // 2
-~~~
-
-Following Go-style addressability, a reference operand must be an addressable
-place, such as a binding or a field of an addressable value. Function results
-and computed expressions are not addressable, so references to them are
-invalid. A composite literal is the explicit exception:
-`&Point { x: 0.0, y: 0.0 }` is a referenced composite literal. It creates a
-GC-managed target without a separate source-level binding and returns a
-reference to that target.
-
-~~~elx
-let point: &Point = &Point { x: 0.0, y: 0.0 } // valid
-let from_call: &Point = &make_point()         // invalid
-let from_sum: &i32 = &(left + right)          // invalid
-~~~
-
-Collection interiors are never addressable for safe-reference formation.
-Neither shared nor mutable references may be formed to array or `Vec` elements,
-`Map` keys or values, or `Set` elements. Collection access in value context
-instead returns an ordinary shallow copy.
-
-An array or `Vec` element and a `Map` value may still be an assignable place
-when reached through a mutable collection path. Replacement, compound
-assignment, and direct nested-field mutation update the backing reached through
-that descriptor, but no safe reference to the selected interior may escape.
-`Map` keys and `Set` elements are never mutable places; changing one requires
-removing it and inserting a new value. Raw-pointer APIs may expose backing
-explicitly under their own unsafe contracts.
-
-~~~elx
-var points = @vec[Point { x: 0.0, y: 0.0 }]
-let original_points = points
-var first = points[0]
-
-first.x = 0.5
-points[0].x = 1.0
-
-println(first.x)              // 0.5
-println(points[0].x)          // 1.0
-println(original_points[0].x) // 1.0: both descriptors reach the same backing
-
-// Invalid: collection interiors cannot be referenced.
-// let first_ref = &var points[0]
-~~~
-
-References are valid struct fields, enum payloads, collection elements,
-parameter types, and return types. A reference formed through safe
-code remains valid while the reference is reachable. If such a reference to a
-local binding or field may escape its scope, the compiler promotes the required
-storage to GC-managed storage. Escape analysis may retain nonescaping storage
-on the stack as an unobservable optimization.
-
-Returning a reference to a local binding from safe code is therefore valid. A
-safe reference to language-managed storage keeps its target reachable through
-the garbage collector, including referenced composite literals.
-
-A reference formed directly from a binding points to that binding's storage.
-It observes later assignments to the binding. Promotion preserves this behavior
-when the reference escapes.
-
-~~~elx
-var point = Point { x: 0.0, y: 0.0 }
-let view: &Point = &point
-
-point = Point { x: 1.0, y: 1.0 }
-println(view.x) // 1.0
-
-fn answer() -> &i32:
+fn invalid() -> &i32:
     let value = 42
-    return &value // valid: `value` is promoted because the reference escapes
+    return &value             // invalid: local storage cannot escape
 ~~~
 
-A reference path that enters a nested aggregate points to the storage of that
-subvalue within its container. Replacing the container writes through that
-storage, so the reference observes the new value. This is the same single rule
-as a binding reference: a reference names storage, and every assignment that
-overwrites that storage is observable through it.
+Ordinary reference formation never promotes or allocates storage. A safe
+reference to owned heap data keeps no independent ownership: the owning
+`Box`, collection, `Shared`, store, or foreign wrapper must remain valid for
+the complete borrow. Explicit ownership abstractions are specified in Section
+9.
 
-~~~elx
-var user = User {
-    name: "Ari",
-    address: Address { city: "Aster" },
-}
-let city: &String = &user.address.city
-println(city) // "Aster"
-
-user = User {
-    name: "Bea",
-    address: Address { city: "Beacon" },
-}
-println(city) // "Beacon"
-~~~
-
-Mutation through a reference into an aggregate is likewise visible in the
-container, because both name the same storage.
-
-~~~elx
-var located = User {
-    name: "Cyd",
-    address: Address { city: "Calder" },
-}
-let relocate: &var String = &var located.address.city
-
-*relocate = "Cove"
-println(located.address.city) // "Cove"
-~~~
-
-A reference into an aggregate keeps its whole container reachable, not only
-the selected subvalue.
-
+Raw pointers do not participate in borrow tracking after conversion. Creating a
+raw pointer from a reference preserves its provenance and access rights, but a
+raw pointer does not keep its source alive. Converting a raw pointer back to a
+reference requires `unsafe` and asserts that the resulting borrow remains valid
+for every safe use, as specified in Section 3.3.
 ### 3.3 Raw pointers and null
 
 Raw pointer types are `*T` and `*var T`. A raw pointer can be `null`; `&T` and
@@ -536,11 +497,10 @@ instance is alive, its current position identifies an initialized pointee
 element rather than the one-past position, and the requested access remains
 within its designated extent. A write additionally requires writable storage.
 The pointer's provenance and these obligations apply even if another storage
-instance later occupies the same address. For
-language-managed storage, retaining a separate strong language path is part of
-the liveness obligation because a raw pointer is not a root. For foreign or
-manually managed storage, the foreign contract determines its lifetime and
-access rights.
+instance later occupies the same address. For Elamite-owned storage, retaining
+its `Box`, collection, `Shared`, store, or other owner for the complete access
+is part of the liveness obligation. For foreign storage, the foreign contract
+determines its lifetime and access rights.
 
 Every executed raw dereference, pointer index, and raw-to-reference conversion
 checks for null and correct alignment before accessing the target and traps if
@@ -555,26 +515,23 @@ not make an otherwise accepted operation a compile-time error.
 The remaining obligations cannot in general be checked by the implementation.
 Violating provenance, liveness, arithmetic extent, subtraction/ordering
 compatibility, bounds, initialization, pointee-type, write-permission, or
-concurrent-access requirements is undefined behavior. In particular,
-accidental retention by the conservative collector and later address reuse
+concurrent-access requirements is undefined behavior. Later address reuse
 cannot make a dangling raw pointer valid. An implementation may diagnose or
 trap additional violations, but a program cannot rely on it doing so.
 
 Converting a raw pointer to a safe reference asserts that all of the raw
-pointer obligations will remain satisfied for every use while the resulting
-reference is reachable. Once constructed validly, a reference to
-language-managed storage becomes a strong path as described in Section 9. A
-reference to foreign or manually managed storage does not extend that storage's
-lifetime, so unsafe code that constructs such a reference is responsible for
-preventing it from outliving the foreign storage. Safe code alone cannot create
-undefined behavior through a raw pointer because it cannot dereference one or
-convert one to a reference. If a later safe reference use observes a violated
-foreign lifetime contract, the undefined behavior is attributable to the
-earlier unsafe construction of that reference.
+pointer obligations will remain satisfied for every use of the resulting
+reference. The reference receives inferred provenance but does not acquire
+ownership or extend either Elamite or foreign storage. Unsafe code that
+constructs it is responsible for choosing a region no longer than the owner's
+actual validity. Safe code alone cannot create undefined behavior through a
+raw pointer because it cannot dereference one or convert one to a reference. If
+a later safe reference use observes a violated foreign lifetime contract, the
+undefined behavior is attributable to the earlier unsafe construction.
 
 ## 4. Types
 
-### 4.1 Primitive, tuple, and string types
+### 4.1 Primitive, tuple, string, slice, and collection types
 
 Elamite provides `bool`, `char`, `()`, signed and unsigned fixed-width integer
 types, `f32`, and `f64`.
@@ -588,179 +545,145 @@ types, `f32`, and `f64`.
 
 Integer literals support decimal notation and `0b`, `0o`, and `0x` prefixes.
 Integer and floating literals may contain `_` separators and may carry a numeric
-type suffix. A separator must occur between two digits of the same digit run;
-it cannot begin or end the run or appear twice consecutively. An unsuffixed
-integer literal materializes as an expected integer or floating type when
-representable and otherwise defaults to `i32`. A floating literal contains a
-decimal point or exponent, accepts an `f32` or `f64` suffix, uses an expected
-floating type when present, and otherwise defaults to `f64`. Unary `-` is an
-operator rather than part of a literal token, but literal range checking
-includes an immediately applied minus so each signed type's minimum value is
+type suffix. A separator occurs only between two digits of one run. An
+unsuffixed integer materializes as an expected numeric type when representable
+and otherwise defaults to `i32`. A floating literal uses an expected floating
+type and otherwise defaults to `f64`. Unary `-` is an operator, but range
+checking includes an immediately applied minus so each signed minimum is
 expressible.
 
-Concrete numeric types never convert implicitly, and arithmetic operands must
-have compatible concrete types after literal materialization. `value as Type`
-performs an explicit numeric conversion. Integer-to-integer conversion traps
-when the value is out of range. Float-to-integer conversion truncates toward
-zero and traps for NaN, infinity, or an out-of-range result. Integer-to-float
-and float-to-float conversion use IEEE rounding. Boolean, character, and enum
-values do not participate in numeric casts.
+Concrete numeric types never convert implicitly. `value as Type` performs an
+explicit conversion. Integer narrowing and float-to-integer conversion trap
+when invalid; float-to-integer truncates toward zero. Integer-to-float and
+float-to-float conversion use IEEE rounding. The standard library supplies
+`try_from`, `wrapping_from`, and `saturating_from` where meaningful.
 
-The standard library provides `Type.try_from(value)` for a nontrapping checked
-conversion and `Type.wrapping_from(value)` and
-`Type.saturating_from(value)` where those behaviors are meaningful. Checked
-conversion returns `Result[Type, NumericError]`.
+Integer arithmetic traps on overflow, division by zero, signed-minimum division
+by `-1`, and invalid shifts in every build. Explicit checked, wrapping, and
+saturating operations provide alternatives. Floating arithmetic follows IEEE
+754. `isize` and `usize` use the selected target's pointer width.
 
-Integer arithmetic traps on overflow, division by zero, division of a signed
-minimum by `-1`, and invalid shift counts in every build. Standard operations
-such as `checked_add`, `wrapping_add`, and `saturating_add` provide explicit
-alternatives; corresponding operations exist for the other arithmetic
-operators where meaningful. Checked arithmetic returns `Option[T]`.
-Floating-point arithmetic follows IEEE 754. A statically evident invalid
-literal, conversion, or arithmetic operation is a compile-time error. `isize`
-and `usize` use the selected C target's pointer width.
+Tuples use parentheses. `()` is unit and the empty tuple, `(value)` groups, and
+`(value,)` is a one-element tuple. A zero-based positional selector such as
+`pair.0` is an unsuffixed canonical decimal index statically within the tuple's
+arity. It composes with other postfix operations and evaluates its receiver
+once.
 
-Tuples use parentheses, for example `(bool, String)`. `()` is both the unit
-value and the empty tuple. `(value)` is a grouped expression, while `(value,)`
-is a one-element tuple.
+A tuple projection is a place when rooted in a place. In a consuming context it
+moves a non-`Copy` component or copies a `Copy` component. It may be assigned,
+borrowed, or exclusively borrowed when its root permits that operation.
+Reference and raw-pointer receivers use the automatic dereference rules from
+Sections 3.2 and 3.3.
 
-A zero-based positional selector accesses a tuple component with ordinary
-postfix precedence: `pair.0`, `pair.1`, and so on. The selector is a canonical
-unsuffixed decimal integer with no sign, radix prefix, separator, or leading
-zero except `.0`, and it must be statically within the receiver tuple's arity.
-Numeric selectors do not name struct fields or tuple-like enum payloads and
-are never dynamic indices or method names. Existing floating-point literal
-tokenization is unchanged.
+`str` is an immutable UTF-8 view. A string literal has static provenance and
+defaults to `str`; it materializes as an owned `String` when an expected
+`String` type exists. `String` is the move-only, uniquely owned, growable UTF-8
+string type. Moving a `String` transfers its buffer, `clone()` duplicates its
+contents, and dropping it releases its buffer. Mutating one `String` can never
+mutate another except through an explicit reference to the same owner.
 
-Positional access composes left-to-right with every other postfix operation;
-the receiver in `callback().0`, `value.0.name`, or `values.1[index]` is
-evaluated exactly once. In value context, access produces an ordinary shallow
-copy of the component. When rooted in an addressable tuple path, it is an
-addressable place; when that path is mutable it is also assignable, supporting
-replacement, compound assignment, nested mutation, `&pair.0`, and
-`&var pair.0` under the ordinary place and promotion rules. A safe-reference
-receiver is automatically dereferenced as for a named field. A raw-pointer
-tuple receiver may be selected directly only in an `unsafe` context; selection
-performs the same mandatory null and alignment checks as explicit
-dereferencing, and only `*var Tuple` produces an assignable raw target. A
-reference stored as a tuple component receives no special dereference behavior.
+An existing `str` does not implicitly allocate a `String`; use
+`String.from(text)`. Borrowing a `String` as `str` produces a view whose
+provenance is tied to that `String`. Operations that may reallocate the string
+are invalid while such a view is live. `str` qualifies for `StableHash`;
+`String` does not because its contents are mutable.
 
-`str` is an immutable UTF-8 character sequence.
-`String` is the standard-library mutable UTF-8 sequence type. Copying a
-`String` copies its backing descriptor shallowly; content mutation is visible
-through every descriptor that still reaches the same bytes, while replacing
-one descriptor does not replace another. `str` qualifies for `StableHash`;
-`String` does not.
+Ordinary string and character literals use double and single quotes. They may
+contain Unicode scalar values directly. The supported escapes are `\\`, `\"`,
+`\'`, `\n`, `\r`, `\t`, `\0`, and `\u{HEX}`, where `HEX` contains one through
+six hexadecimal digits and denotes a valid Unicode scalar. A character literal
+decodes to exactly one scalar. Invalid escapes, physical newlines, invalid
+scalars, and unterminated literals are compile-time errors.
 
-A string literal materializes as `str` or `String` when an expected type is
-available from a binding annotation, field, argument, or return position. With
-no expected type, its type defaults to `str`. Contextual literal materialization
-does not create a general implicit conversion: an existing `str` value must use
-an explicit operation such as `String.from(text)` to produce a `String`.
-Replacing a `str`-typed field through a mutable aggregate path is valid, but the
-contents of an existing `str` value cannot be mutated. Formatting is defined in
-Section 7.
+A fixed array type is `[T; N]`, where `N` is a compile-time nonnegative `usize`.
+`[first, second]` constructs an array. An array owns its elements inline. It is
+`Copy` exactly when `T` is `Copy`, and is `Clone` exactly when `T` is `Clone`.
+A statically selected element may be partially moved under Section 3.1;
+movement through a dynamic index is invalid unless the element is `Copy`.
 
-Ordinary string literals use double quotes, and character literals use single
-quotes. They may contain Unicode scalar values directly. The supported escapes
-are `\\`, `\"`, `\'`, `\n`, `\r`, `\t`, `\0`, and `\u{HEX}`, where `HEX`
-contains one through six hexadecimal digits and denotes a valid Unicode scalar
-value. `\"` is primarily useful in strings and `\'` in characters, but both
-are accepted in either literal. A character literal must decode to exactly one
-Unicode scalar value. A physical newline cannot occur inside either literal.
-Other escapes, invalid Unicode scalar values, and unterminated literals are
-compile-time errors.
+A shared slice is `[T]`; an exclusive mutable slice is `[var T]`. Slices do not
+own their elements. A shared slice is `Copy`; a mutable slice is move-only and
+may be reborrowed. Both carry structural provenance and provide `len`, checked
+indexing, and index-order iteration. In a context expecting `[T]`, an explicit
+`&array` or `&vector` coerces to a shared slice. In a context expecting
+`[var T]`, `&var array` or `&var vector` coerces to a mutable slice. A mutable
+slice may reborrow as a shared slice. No coercion allocates.
 
-A fixed array type is `[T; N]`, where `N` is a compile-time nonnegative `usize`
-value. `[first, second]` constructs an array. The compiler-handled built-in
-macro forms `@vec[first, second]`, `@map{key: value, ...}`, and
-`@set{value, ...}` construct a `Vec`, `Map`, and `Set`, respectively. The
-`@name` namespace is reserved for macro invocation. These three built-ins
-share the stable macro namespace described in Section 12.
-Their lowercase macro names are distinct from the `Vec[T]`, `Map[K, V]`, and
-`Set[T]` type names.
+The compiler-handled forms `@vec[...]`, `@map{key: value, ...}`, and
+`@set{value, ...}` construct `Vec`, `Map`, and `Set`. Their elements evaluate
+left-to-right. An empty literal needs an expected collection type. A later
+duplicate map key replaces and drops the earlier value; duplicate set elements
+collapse to one owned element.
 
-Literal elements and map entries are evaluated left-to-right. Their types must
-produce one exact element, key, or value type after contextual literal
-materialization. An empty array, vector, map, or set literal requires an
-expected collection type. Multiline collection literals permit trailing
-commas. A later duplicate map key replaces the earlier value, while duplicate
-set elements collapse to one element.
+`Vec[T]`, `Map[K, V]`, and `Set[T]` are move-only owning values. Each owns one
+backing allocation or table identity. Moving transfers that ownership.
+`clone()` creates an independent collection by cloning its contents and exists
+only when the required element, key, and value types implement `Clone`.
+Dropping a collection drops its contained values and releases its storage.
+There is no copy-on-write or shallow mutable backing alias.
 
-Arrays are ordinary fixed-size aggregates and shallow-copy their inline element
-slots. An element that contains a descriptor or handle preserves its backing
-identity. Arrays qualify for `StableHash` when their element type does.
-`Vec.new()`, `Map.new()`, and `Set.new()` are the ordinary associated functions
-for empty collections; populated construction uses the corresponding literal
-form.
+`Map[K, V]` keys and `Set[T]` elements require the compiler-controlled
+`StableHash` capability. It is inferred structurally for immutable equality and
+hashing: integral primitives, `bool`, `char`, `str`, `()`, and aggregates whose
+participating fields qualify. `String`, collections, floating-point values, and
+ordinary references do not qualify. `Identity[&T]` explicitly hashes target
+identity when such keys are required.
 
-The standard-library growable sequence type is `Vec[T]`. `Vector` is not an
-alternative name for this type.
+Array, slice, and `Vec` indices have type `usize`; out-of-bounds access traps,
+and a statically invalid array index is a compile-time error. Indexing produces
+a place. Reading a `Copy` element copies it. A non-`Copy` element must be
+borrowed, cloned explicitly, replaced, or removed through an ownership-taking
+API. Assigning an element moves in the replacement and drops the previous
+owned value.
 
-Copying a `Vec[T]` copies its backing pointer, length, and capacity. Element
-writes through any copy are visible through every descriptor whose range
-contains that element. Length and capacity belong to each descriptor: an
-append changes only the receiver descriptor's length, reuses shared backing
-when capacity permits, and otherwise gives that descriptor newly allocated
-backing. Whether two vector descriptors continue sharing after growth may
-therefore depend on allocation history.
+Arrays provide `len`, `get(index) -> Option[&T]`, and
+`get_var(index) -> Option[&var T]`. Slices provide the corresponding operations
+permitted by their mutability. `Vec` provides:
 
-Copying a `Map[K, V]` or `Set[T]` preserves the identity of the complete table,
-including its current length. Insert, replacement, removal, and `clear` through
-one copy are visible through every copy. Copying an aggregate containing any of
-these collections follows the same shallow rule for its collection fields.
+~~~elx
+fn len(self: &Self) -> usize
+fn get(self: &Self, index: usize) -> Option[&T]
+fn get_var(self: &var Self, index: usize) -> Option[&var T]
+fn append(self: &var Self, value: T) -> ()
+fn insert(self: &var Self, index: usize, value: T) -> ()
+fn remove(self: &var Self, index: usize) -> T
+fn pop(self: &var Self) -> Option[T]
+fn clear(self: &var Self) -> ()
+~~~
 
-`Map[K, V]` keys and `Set[T]` elements must have the compiler-controlled
-`StableHash` capability. `StableHash` guarantees that equality and hashing do
-not change while a value is stored in a hashed collection. It is inferred
-structurally rather than implemented with an ordinary `impl`: integral
-primitives, `bool`, `char`, `str`, and `()` qualify, and tuples, structs, and
-enums qualify when every field participating in equality and hashing qualifies.
-Mutable aggregate types such as `String`, `Vec`, `Map`, and `Set` do not
-qualify. Neither `&T` nor `&var T` qualifies for content-based hashing because
-another alias may mutate the target. Floating-point types do not qualify.
+Insertion accepts zero through `len`, and removal requires an existing index.
+Operations that may change a vector's length or capacity require exclusive
+access to the vector and therefore cannot execute while any element or slice
+borrow is live.
 
-`Map` values have no `StableHash` requirement. No collection API exposes a safe
-reference to any collection interior. The standard-library
-`Identity[&T]` and `Identity[&var T]` wrappers compare and hash target identity
-rather than target contents and are compiler-known exceptions that qualify for
-`StableHash`. They are formed explicitly with
-`Identity[ReferenceType].from(reference)`; the argument's safe-reference type
-must exactly match `ReferenceType`.
+Map indexing is not an ownership-taking operation. It may copy a `Copy` value
+and otherwise must be borrowed through `get` or `get_var`. Missing indexed
+access traps. `Map` provides:
 
-Array and `Vec` indices have type `usize`. Indexing either in value context
-produces an ordinary shallow copy of the selected element. An out-of-bounds
-index traps; an index that is statically known to be out of bounds for an array
-is a compile-time error. Through a mutable collection path, indexing may select
-an assignable element for replacement, compound assignment, or direct
-nested-field mutation, but never for safe-reference formation. Arrays provide
-`len() -> usize` and `get(index) -> Option[T]`. Their length never changes, and
-they have no structural mutation operations.
+~~~elx
+fn len(self: &Self) -> usize
+fn contains_key(self: &Self, key: &K) -> bool
+fn get(self: &Self, key: &K) -> Option[&V]
+fn get_var(self: &var Self, key: &K) -> Option[&var V]
+fn insert(self: &var Self, key: K, value: V) -> Option[V]
+fn remove(self: &var Self, key: &K) -> Option[V]
+fn clear(self: &var Self) -> ()
+~~~
 
-`Vec` provides `len() -> usize`, `is_empty() -> bool`,
-`get(index) -> Option[T]`, `append(value) -> ()`,
-`insert(index, value) -> ()`, `remove(index) -> T`, and `clear() -> ()`.
-Insertion accepts an index from zero through the current length, inclusive;
-removal requires an index below the current length. An invalid index traps, and
-`remove` returns a shallow copy of the removed element.
+`Set` has no indexing operation. `contains` and `remove` borrow their query,
+while `insert` consumes the inserted value:
 
-Indexing a `Map[K, V]` with a `K` in value context shallow-copies the stored
-value and traps when the key is absent. Through a mutable map path, an
-indexed value may be replaced or directly mutated as an assignable place, but
-it is not addressable for reference formation. An indexed mutable place requires
-an existing key and traps if the key is absent; insertion uses `insert`. Map key
-arguments are passed by the language's ordinary copy semantics. `Map` provides `len() -> usize`,
-`is_empty() -> bool`, `contains_key(key) -> bool`,
-`get(key) -> Option[V]`, `insert(key, value) -> Option[V]`,
-`remove(key) -> Option[V]`, and `clear() -> ()`. `insert` returns a shallow copy
-of the replaced value, if any; `remove` similarly returns the removed value.
+~~~elx
+fn len(self: &Self) -> usize
+fn contains(self: &Self, value: &T) -> bool
+fn insert(self: &var Self, value: T) -> bool
+fn remove(self: &var Self, value: &T) -> bool
+fn clear(self: &var Self) -> ()
+~~~
 
-`Set` has no indexing operation. It provides `len() -> usize`,
-`is_empty() -> bool`, `contains(value) -> bool`, `insert(value) -> bool`,
-`remove(value) -> bool`, and `clear() -> ()`. Its value arguments use ordinary
-copy semantics. `insert` returns whether the value was newly added, and
-`remove` returns whether a value was present.
-
+Collection mutation, borrowing, and iteration are governed entirely by the
+ordinary ownership and borrow rules. Safe code therefore has no iterator
+invalidation undefined behavior.
 ### 4.2 Structs
 
 `struct` declares an aggregate value type. Its body contains fields only.
@@ -783,7 +706,8 @@ impl Session:
 
 Within a struct body, `Self` denotes the enclosing struct in field types.
 Within an inherent implementation, `Self` denotes its complete target type. A plain
-`self: Self` parameter receives a copied receiver. `self: &Self` and
+`self: Self` parameter consumes its receiver, moving it unless `Self` is
+`Copy`. `self: &Self` and
 `self: &var Self` receive shared and mutable references respectively.
 `self: *Self` and `self: *var Self` receive const and mutable raw pointers
 respectively. These five forms are the only permitted types for a parameter
@@ -793,10 +717,9 @@ methods.
 
 A bound call such as `value.method()` adapts only its receiver. If the method
 expects `self: Self`, the receiver expression is evaluated exactly once and
-copied into `self` using ordinary value semantics. The receiver need not be
-addressable, and its source remains valid after the call. A receiver of type
-`&Self` or `&var Self` is automatically dereferenced and its target is copied,
-consistent with ordinary reference method access.
+consumed into `self`. The receiver need not be addressable. A reference receiver
+cannot supply an owned `self: Self`; code explicitly clones the target when
+that is intended.
 
 If the method expects `self: &Self`, an addressable value receiver is
 automatically borrowed as `&value`. If it expects `self: &var Self`, an
@@ -828,13 +751,12 @@ order but every field must appear exactly once. `Type { field }` abbreviates
 `Type { field: field }`. Multiline comma-separated forms permit a trailing
 comma. Elamite initially has no record-update or spread expression.
 
-Every cycle in the value-containment graph of structs and enums must cross an
-explicit indirection type: `&T`,
-`&var T`, `*T`, or `*var T`. Generic wrappers such as `Option[T]` and `Vec[T]`
-and transparent type aliases do not break a containment cycle. This rule makes
-recursive identity, aliasing, and mutability visible in source types. Hidden
-managed backing used to implement a descriptor-bearing standard type does not
-count as explicit indirection.
+Every cycle in the inline value-containment graph of structs and enums must
+cross an explicit indirection type: a reference, raw pointer, `Box`, `Shared`,
+`Weak`, `Store`/`Handle` edge, or owning collection such as `Vec`. Transparent
+aliases and inline wrappers such as `Option[T]` do not break a cycle. The rule
+makes recursive storage and identity visible in source types while permitting
+ordinary owned trees such as `Vec[Node]`.
 
 ~~~elx
 struct Chain[T]:
@@ -979,9 +901,10 @@ structural equality terminates for recursive values.
 
 `StableHash` requires a compiler-proven stable structure together with built-in
 or compiler-derived `Eq` and `Hash`. Types using manually implemented equality
-or hashing do not qualify initially. `Identity[&T]` and `Identity[&var T]`
-provide `Eq`, `Hash`, and `StableHash` using the referenced target's stable
-managed address, allowing explicit identity-keyed maps and sets.
+or hashing do not qualify initially. `Identity[&T]` provides `Eq`, `Hash`, and
+`StableHash` using the referenced target's address for the borrow's valid
+region, allowing identity-keyed maps and sets whose inferred provenance cannot
+outlive their targets.
 
 ## 5. Functions and function references
 
@@ -1032,13 +955,12 @@ A final parameter may use the variadic form `name: ...T`. It accepts zero or
 more trailing arguments, each of type `T`, and binds `name` inside the function
 to the slice type `[T]`. Variadics are homogeneous and may appear only once,
 as the final parameter. A variadic function value preserves the marker, for
-example `&fn(i32, ...String) -> ()`. Elamite lowers this form as a slice
-argument rather than as C's untyped variadic calling convention. The packed
-arguments use managed backing storage, so the slice remains valid if it is
-returned, stored, or captured after the call. A slice is immutable: indexing
-and iteration produce shallow copies rather than mutable interior places.
-It provides `len() -> usize`, checked indexing, and `for` iteration in index
-order.
+example `&fn(i32, ...String) -> ()`. Elamite lowers this form as a shared slice
+argument rather than C's untyped variadic calling convention. The caller owns
+the packed temporary for the complete call. The slice may be reborrowed within
+the callee but cannot escape through a return, stored value, or closure; code
+that needs to retain the arguments explicitly clones them into an owned
+collection.
 
 ~~~elx
 fn apply_offset(callback: &fn(i32) -> i32, value: i32) -> i32:
@@ -1118,91 +1040,84 @@ unsafe:
     let session = recover(pointer)
 ~~~
 
-### 5.1 Explicit-capture closures
+### 5.1 Explicit-capture closure objects
 
-A closure is a safe anonymous callable with its own function boundary. A
-captureless closure is written `fn(parameters):` or
-`fn(parameters) -> Return:`. A capturing closure places a nonempty capture list
-before the parameter list:
+A closure expression creates a safe, first-class object with its own function
+boundary and one anonymous nominal type. Every closure uses capture brackets;
+a capture-free closure is `fn[](parameters):`, and captures precede the
+parameter list:
 
 ~~~elx
-let offset: i32 = 4
-let add = fn[offset](value: i32):
+let offset = 4
+let add = fn[offset](value: i32) -> i32:
     return value + offset
 
-var total: i32 = 0
+var total = 0
 let accumulate = fn[&var total as state](value: i32) -> i32:
     *state += value
     return *state
 ~~~
 
-Closure parameters always have explicit types and cannot be variadic. A closure
-literal introduces no generic parameters, cannot be declared `unsafe`, and
-cannot capture implicitly. It may occur within a generic declaration; ordinary
-substitution then makes the anonymous closure type concrete.
+Closure parameters have explicit types and cannot be variadic. A closure has no
+generic parameter list, cannot be declared `unsafe`, and never captures
+implicitly. It may appear inside a generic declaration, after which ordinary
+substitution makes its anonymous type concrete.
 
-Every enclosing local used by a closure body must occur exactly once in its
-capture list. Module declarations, imports, types, and named functions require
-no capture. A capture may be renamed with `source as alias`; the alias is the
-only binding visible in the closure. Capture aliases and parameters share one
-local namespace and cannot collide. The binding receiving a closure is not in
-scope while its initializer is resolved, so a closure cannot capture itself or
-perform anonymous recursion.
+Every enclosing local used by the body occurs exactly once in the capture list.
+Module declarations, imports, types, and named functions require no capture.
+A capture may use `source as alias`; the alias is its only name in the body.
+Aliases and parameters share one local namespace. The binding initialized by a
+closure is not in scope within that initializer, so anonymous recursion is
+invalid.
 
-Captures are evaluated exactly once from left to right when execution reaches
-the closure expression:
+Captures evaluate once from left to right when execution reaches the closure:
 
-- `value` stores an ordinary shallow copy;
-- `&value` forms a shared reference to addressable storage;
-- `&var value` forms a mutable reference and requires mutable storage;
-- `*pointer` copies a raw pointer, downgrading `*var T` to `*T` when needed;
-- `*var pointer` requires and preserves `*var T`.
+- `value` copies a `Copy` value and otherwise moves it into the closure;
+- `&value` captures a shared borrow;
+- `&var value` captures an exclusive borrow and requires a mutable place.
 
-A raw-pointer local cannot use the plain capture form. Raw-pointer captures do
-not dereference the pointer or keep its pointee alive. Their later dereference,
-automatic field access, or conversion to a safe reference follows Section 3.3
-and requires an explicit `unsafe:` block. Merely copying, storing, passing, or
-testing equality on a captured raw pointer remains safe; arithmetic, indexing,
-and relational ordering retain their unsafe requirement.
+Raw pointers use the plain form because their value is already explicit and
+`Copy`; capture does not dereference or retain the pointee. Later raw access
+retains every `unsafe` requirement from Section 3.3.
 
-A capture alias cannot be rebound. Mutation through a captured `&var T` or
-`*var T` changes the referenced storage. A plain capture owns its copied inline
-environment slot, but descriptors and handles in that slot retain their shallow
-backing identity. Constructing the closure creates that environment once;
-copying the closure value copies its callable descriptor and preserves the
-environment identity rather than allocating or copying the environment again.
-Closure environments and address-taken captured storage are managed, so a safe
-reference may outlive the source stack frame. A raw pointer alone never roots
-its pointee.
+The environment is stored inline in the closure object. Constructing a closure
+does not allocate. Moving it moves its captured fields; it is `Copy` only when
+every capture is `Copy`, implements `Clone` only when every capture can be
+cloned without violating exclusivity, and runs ordinary field destruction.
+Borrow captures propagate their provenance through the closure, so a closure
+cannot escape any captured source.
+
+Capture bindings cannot be rebound or moved out by the body. Mutation of
+external state is explicit through a captured `&var` or another type whose API
+provides interior synchronization. This permits one uniform call contract:
+every closure implements `Callable[Arguments, Return]` and invocation borrows
+the closure shared for the call. `Arguments` is the exact argument tuple.
+Ordinary call syntax invokes the object repeatedly without consuming it.
 
 The return annotation is optional. Explicit `return` expressions and an
-expected callable result constrain one exact inferred type; every returned
-value must agree. Reachable fallthrough and bare `return` contribute `()`.
-There is no implicit tail-expression return. An annotated non-unit result
-requires a value on every normally completing path, and `-> !` follows the
-ordinary never-return rules.
+expected callable result constrain one exact inferred type; reachable
+fallthrough contributes `()`. There is no implicit tail-expression return.
+An annotated non-unit closure returns on every normally completing path, and
+`-> !` follows the ordinary never-return rules.
 
-Each closure expression has a distinct anonymous nominal type and implements
-the standard user-implementable `Callable[Arguments, Return]` trait, where
-`Arguments` is the exact argument tuple. Ordinary call syntax invokes a
-closure. Generic code may call a type parameter through a matching `Callable`
-bound, and a callable may be erased behind
-`&Callable[Arguments, Return]`. Named safe function references participate in
-the same callable contract for direct calls and static `Callable` bounds, but
-do not convert directly to `&Callable`. Trait-object erasure requires a safe
-reference to nominal storage implementing the trait, such as a referenced
-closure value. This keeps function and data pointer domains separate and does
-not introduce an implicit allocation or a new storage identity merely to erase
-a function address. Closures, including captureless closures, never convert to
-`&fn`, `*fn`, or a C callback.
+A generic function accepts a closure through a `Callable[Arguments, Return]`
+bound. Borrowed erasure uses `&Callable[Arguments, Return]`; owning erasure uses
+an explicit `Box[Callable[Arguments, Return]]`. Erasure never occurs
+implicitly and allocation occurs only for the explicit owning box.
 
-A closure does not inherit an enclosing `unsafe:`, loop, `defer`, or function
-return context. Its body begins safe and uses its own `return`, postfix `?`,
-never-return, and cleanup rules. It cannot `break` or `continue` an enclosing
-loop. Private evolving captures, implicit/default capture, initialized capture
-expressions, generic closure literals, unsafe closures, variadic closures,
-anonymous recursion, callable equality or hashing, `CallableMut`,
-`CallableOnce`, and closure-to-function-pointer conversion are not supported.
+A capture-free `fn[]` closure may explicitly convert to an exact safe function
+reference because it has no environment. That reference may then explicitly
+convert to the corresponding raw function pointer under the ordinary function
+rules. A capturing closure never converts to a function reference or C
+callback; stateful C callbacks use a named or capture-free callback plus a
+separate raw context pointer.
+
+A closure does not inherit an enclosing `unsafe:`, loop, `defer`, or return
+context. Its body starts safe and has its own `return`, postfix `?`,
+never-return, and cleanup behavior. It cannot redirect an enclosing loop.
+Initialized capture expressions, generic or variadic closure literals, unsafe
+closures, implicit captures, trailing-closure statement syntax, anonymous
+recursion, and callable equality or hashing are not supported.
 
 A function reference is an ordinary storable value. It may appear in a binding,
 field, enum payload, collection element, parameter, or return value. Named
@@ -1214,17 +1129,15 @@ unsafe function reference never converts to a safe one. Function types have no
 variance or implicit signature adaptation, and collections of them are
 homogeneous by complete function type.
 
-A named function has a stable address for the whole program, so its safe or
-unsafe function reference is always valid and never requires escape promotion.
-A function reference carries no captured environment, so returning or storing
-one carries no enclosing-scope state.
+A named function has a stable address for the whole program. Its safe or unsafe
+function reference is `Copy`, has no inferred provenance, and carries no
+captured environment.
 
 A generic function becomes a function reference only after all of its type
 arguments are determined explicitly or by an expected function type. Elamite
-initially has no erased any-callable type, dynamically erased call-operator,
-runtime signature inspection, or heterogeneous function-value collection.
-Ordinary trait-object method dispatch is defined separately and does not make a
-trait object directly callable with `object(args)`.
+has no runtime signature inspection or implicit signature erasure. A function
+reference participates in exact `Callable` bounds, and explicit borrowed or
+boxed `Callable` erasure follows Section 5.1.
 
 Selecting a method from a type produces its unbound function reference. Selecting
 a method from an instance does not produce a function reference; an instance
@@ -1240,9 +1153,9 @@ let stop: &fn(&var Session) -> () = Session.stop // unbound method
 stop(&var session)
 ~~~
 
-Because a function reference carries no state, a callback that must carry data
-uses a trait object instead. The data lives in a struct, and a `&Trait`
-reference dispatches to its method (Section 6).
+Because a function reference carries no state, a callback that carries data
+uses an explicit-capture closure or a trait object. A trait-object callback
+stores the state in a struct and dispatches through `&Trait` (Section 6).
 
 ~~~elx
 trait Transform:
@@ -1296,9 +1209,12 @@ println(first == third)  // false: different function
 Generic declarations use square brackets. A parameter may have inline trait or
 compiler-capability bounds, and `+` separates multiple bounds, as in
 `fn inspect[T: PartialEq + Toggle](value: &T)`. `StableHash` is permitted in a
-bound position even though users cannot implement it. Elamite initially has no
-`where` clauses, default type arguments, const generics, or higher-kinded type
-parameters.
+bound position even though users cannot implement it. `Copy`, `Send`, and
+`Sync` are likewise compiler-controlled structural capabilities. `Clone` and
+`Drop` are ordinary coherent traits with the special invocation rules in
+Sections 3.1 and 8. A type cannot be both `Copy` and `Drop`. Elamite initially
+has no `where` clauses, default type arguments, const generics, associated
+types, or higher-kinded type parameters.
 
 A call may infer all generic arguments from its ordinary argument types and
 expected result type. The solution must be unique. Otherwise the caller writes
@@ -1322,14 +1238,14 @@ methods absent from the trait. Traits initially contain methods only, with no
 associated types or constants.
 
 Calls through concrete types and monomorphized generics use static dispatch.
-Trait objects provide dynamic dispatch. A trait object is written as a safe
-reference to the trait itself, `&Trait` or `&var Trait`, and initially appears
-only in that form. The object is a fat reference containing the managed target
-reference and a static vtable.
+Trait objects provide dynamic dispatch. A borrowed trait object is `&Trait` or
+`&var Trait` and carries the target borrow's provenance plus a static vtable.
+An owning trait object is `Box[Trait]` and stores one concrete implementation in
+an explicit heap allocation with the same vtable metadata.
 
 A trait has no value representation, so a trait name denotes a type only as the
-target of a safe reference, as a generic or implementation bound, or as the
-trait of an `impl Trait for Type`. A bare trait name in any other type
+target of a safe reference or `Box`, as a generic or implementation bound, or
+as the trait of an `impl Trait for Type`. A bare trait name in any other type
 position — a field, parameter, return, local annotation, type alias, or generic
 argument — is an error, as is a raw pointer to a trait object.
 
@@ -1352,6 +1268,11 @@ return values, call arguments, and aggregate field or element values. The
 equivalent explicit conversion, `reference as &Trait` or
 `reference as &var Trait`, remains valid.
 
+An owned `Box[T]` explicitly converts to `Box[Trait]` when `T` implements the
+object-safe trait. The conversion consumes the source box, preserves its
+allocation, and installs the vtable; it never clones the target or allocates a
+second object.
+
 This is a targeted trait-object conversion, not a subtype or variance relation:
 an uncontextualized concrete reference keeps its concrete type, reference
 mutability is never upgraded or weakened by the conversion, and other reference
@@ -1368,15 +1289,15 @@ A trait is object-safe when every method available through the object has an
 `&Self` or `&var Self` receiver, has no method-level generic parameters, and
 does not otherwise mention `Self` in its parameter or return types. A trait that
 fails these rules remains usable with static dispatch but cannot form a
-trait-object reference. A generic trait can form an object only after all of its
+borrowed or owning trait object. A generic trait can form an object only after all of its
 trait type arguments are concrete. Default methods participate in the vtable.
 
 Trait-object calls dispatch through the vtable, and different concrete target
-types may coexist in a homogeneous collection such as `Vec[&Trait]`, whose
-elements are converted against the collection's expected element type.
+types may coexist in a homogeneous collection such as `Vec[&Trait]` or
+`Vec[Box[Trait]]`, using explicit borrowed or owning erasure.
 Trait objects initially provide no downcasting, runtime concrete-type
-inspection, or multi-trait object composition. Safe-reference reachability and
-escape promotion apply to their concrete targets.
+inspection, or multi-trait object composition. Borrowed objects retain
+structural provenance; owning objects retain ordinary `Box` ownership.
 
 A `pub trait` exposes all of its methods wherever the trait is accessible.
 Trait method declarations and implementation methods cannot carry separate
@@ -1468,8 +1389,8 @@ same types.
 
 A guarded arm uses `Pattern if condition:`. Its bindings are in scope in the
 boolean guard. A failed guard proceeds to the next arm, and guarded arms do not
-contribute to exhaustiveness. Pattern bindings receive ordinary shallow copies
-and behave as `let` bindings. Matching a reference does not
+contribute to exhaustiveness. Pattern bindings move non-`Copy` payloads and
+copy `Copy` payloads under Section 3.1. Matching a reference does not
 implicitly dereference it; code matches `*reference` when content matching is
 intended.
 
@@ -1497,10 +1418,11 @@ operations in Section 3.3.
 be smaller than the bit width of the left operand. Chained comparisons such as
 `a < b < c` are invalid.
 
-Binary `++` concatenates two values of the same concatenable type. It supports
-`str`, `String`, and sequence-like standard-library values, including the
-compile-time AST list types in Section 12.2. It creates a new logical value and
-evaluates its left operand before its right operand. It is distinct from
+Binary `++` concatenates values left-to-right. Text operands may be `str` or
+`String` in either combination and produce an owned `String`; owned `String`
+operands are consumed and their storage may be reused. Sequence-like owning
+standard-library values are consumed and produce the same owning type.
+Compile-time AST list concatenation follows Section 12.2. `++` is distinct from
 numeric `+` and is not a general operation on two `std.ast.Expression` values;
 an expression tree is composed with `quote:` and interpolation instead.
 
@@ -1523,44 +1445,37 @@ Operator precedence from highest to lowest is:
 
 ### 7.1 Iteration
 
-The standard user-implementable `Iterator[Element]` trait declares
-`fn next(self: &var Self) -> Option[Element]`. A `for` iterable may be a value
-whose concrete type implements exactly one instantiation of that trait, or a
-slice, array, `Vec`, `Map`, or `Set`, which retain the direct collection
-behavior below. A generic parameter with an `Iterator[Element]` bound is an
-iterable with that `Element` type. There is no implicit conversion from a
-collection-like value to a separate iterator and no overloaded or
-most-specific iterator implementation.
+The standard `Iterator[Element]` trait declares
+`fn next(self: &var Self) -> Option[Element]`. A user iterator expression is
+evaluated once and moved into mutable hidden loop state. Each iteration
+exclusively borrows that state for `next`; `Some(value)` moves the returned
+element into the non-rebindable loop binding and `None` exits. `continue`
+requests another element, and `break` exits without another call.
 
-The iterable expression is evaluated exactly once and copied into hidden loop
-state using ordinary shallow value semantics. For a user iterator, the hidden
-state is mutable and the loop repeatedly calls `next` through static trait
-selection. `Option.Some(value)` shallow-copies `value` into the loop's
-non-rebindable binding and executes the body; `Option.None` exits the loop.
-`continue` requests the next value and `break` exits without another call.
-The hidden state has managed lifetime because `next` receives `&var Self`; a
-safe reference returned inside an element may therefore outlive the loop.
-Iteration through an `&Iterator` or `&var Iterator` trait-object reference is
-not initially supported.
+Hidden iterator state uses ordinary stack or inline storage and does not
+allocate merely because `next` borrows it. If an iterator contains a borrow or
+returns an element borrowing from itself, structural provenance prevents the
+state or yielded value from escaping its source. A yielded borrow remains live
+for its uses in that iteration and must end before the next exclusive `next`
+call.
 
-For a vector, the hidden descriptor fixes the loop length while element
-replacement through another descriptor remains visible when both still share
-backing. Length-changing vector mutation through any alias while that vector is
-being iterated is undefined behavior. Inserting, removing, or clearing a map
-or set during active iteration through any alias is likewise undefined
-behavior; replacing an existing map value may be observed by a later iteration
-step. A user iterator defines its own mutation and invalidation contract; the
-`Iterator` trait adds no undefined behavior beyond operations performed by its
-`next` implementation.
+Arrays, slices, `Vec`, `Map`, and `Set` also support direct iteration:
 
-Slices, arrays, and vectors iterate in index order. Maps yield `(K, V)` pairs,
-and sets yield their elements; map and set iteration order is unspecified and
-may vary between executions. Each yielded element, key, or value is
-shallow-copied into the loop's non-rebindable binding. Direct collection
-iteration exposes no safe references to collection interiors. It visits only
-direct elements and does not recursively traverse targets reached through
-descriptors or references.
+- iterating an owned array or `Vec` consumes it and moves out elements in index
+  order;
+- iterating `[T]` yields `&T`, and iterating `[var T]` yields sequential
+  `&var T` reborrows;
+- iterating an owned map consumes it and yields owned `(K, V)` pairs; a shared
+  map borrow yields `(&K, &V)`, and an exclusive map borrow yields
+  `(&K, &var V)`;
+- iterating an owned set consumes it and yields owned elements; a shared set
+  borrow yields `&T`.
 
+Map and set order is unspecified. Ownership and borrowing make invalidation a
+static question: structural mutation cannot occur while an iterator or yielded
+borrow conflicts with it. Direct iteration therefore introduces no safe-code
+undefined behavior. Trait-object iteration and an implicit `IntoIterator`
+conversion are not part of the initial owned model.
 ### 7.2 Formatted strings and display
 
 `Display` is a compiler-recognized prelude trait with a formatting method that
@@ -1570,11 +1485,11 @@ values, and standard collections of displayable values provide implementations.
 Its required method is
 `fn fmt(self: &Self, formatter: &var Formatter) -> ()`. The initial formatter
 surface provides `formatter.write(text: str) -> ()`; implementations compose
-other values by writing a formatted string. Formatter growth uses the managed
-runtime allocation boundary.
+other values by writing a formatted string. A formatter uniquely owns its
+buffer and releases it through ordinary destruction.
 
 A formatted string literal uses the prefix `f`, as in
-`f"point: {point.x}, {point.y}"`, and produces an immutable `str`. Each
+`f"point: {point.x}, {point.y}"`, and produces an owned `String`. Each
 `{expression}` is evaluated exactly once in left-to-right order and its value
 must implement `Display`. `{{` and `}}` produce literal braces. Unmatched braces
 are compile-time errors. Elamite initially has no width, precision, positional,
@@ -1582,7 +1497,9 @@ or debug-format specifiers. Braces in an ordinary string literal have no
 formatting behavior.
 
 The prelude `print` and `println` functions each take one generic `Display`
-value. They are ordinary homogeneous generic functions rather than special
+value. Passing a non-`Copy` value consumes it; passing `&value` displays it
+without consumption because references to displayable values implement
+`Display`. They are ordinary generic functions rather than special
 heterogeneous variadics. A formatted literal combines multiple differently
 typed values before it is passed to either function.
 
@@ -1608,9 +1525,9 @@ for value in @vec[1, 2, 3]:
 Recoverable errors use `Result[T, E]`. Applying postfix `?` to a
 `Result[T, E]` is valid only inside a function returning `Result[U, E]` with
 the exact same error type. The operand is evaluated exactly once. `Ok(value)`
-shallow-copies `value` into the value of the postfix expression. `Err(error)`
-shallow-copies `error` and immediately returns `Result.Err(error)` from the
-enclosing function.
+moves its payload into the postfix expression unless it is `Copy`.
+`Err(error)` moves the error into `Result.Err(error)` and immediately returns
+from the enclosing function after ordinary cleanup of every exited scope.
 
 `?` is the explicit exception to the general requirement that returning from a
 function uses `return`. It performs no implicit error conversion. A caller must
@@ -1638,7 +1555,7 @@ or executed for the selected package.
 A test has an implicit unit result. Reaching the end or executing bare `return`
 passes. Returning a value and applying postfix `?` are compile-time errors.
 Except for the `expect` construct below, its body follows every ordinary
-lexical, typing, trait, safety, FFI, control-flow, copying, and cleanup rule.
+lexical, typing, trait, safety, FFI, control-flow, ownership, and cleanup rule.
 Normal `check`, `build`, and `run` parse and collect tests so namespace
 conflicts are diagnosed, but do not resolve, type-check, lower, or emit their
 bodies. Adding tests therefore does not alter a production artifact.
@@ -1661,6 +1578,8 @@ pub enum BuiltinTrap:
     NullPointer
     MisalignedPointer
     ClosedHandle
+    WrongStore
+    StaleHandle
 
 pub fn assert(condition: bool) -> ()
 pub fn fail[T: Display](message: T) -> !
@@ -1677,8 +1596,9 @@ guaranteeing pending `defer` execution.
 
 `BuiltinTrap` implements `RuntimeTrap`. Its variants represent
 `E-RUN-PANIC`, `E-RUN-OVERFLOW`, `E-RUN-DIVZERO`, `E-RUN-SHIFT`,
-`E-RUN-INDEX`, `E-RUN-KEY`, `E-RUN-CAST`, `E-RUN-NULL`, `E-RUN-ALIGN`, and
-`E-RUN-CLOSED`, respectively. Allocation failure is deliberately absent:
+`E-RUN-INDEX`, `E-RUN-KEY`, `E-RUN-CAST`, `E-RUN-NULL`, `E-RUN-ALIGN`,
+`E-RUN-CLOSED`, `E-RUN-STORE`, and `E-RUN-STALE`, respectively. Allocation
+failure is deliberately absent:
 out-of-memory termination is not an observable runtime trap. Every built-in
 runtime check raises the corresponding `BuiltinTrap` identity. `std.panic`
 raises `BuiltinTrap.Panic` while retaining its supplied message.
@@ -1730,145 +1650,137 @@ fn increment_result[E](result: Result[i32, E]) -> Result[i32, E]:
     return Result.Ok(value + 1)
 ~~~
 
-Elamite has no implicit destruction protocol. Garbage collection manages memory
-only. Deterministic external-resource cleanup uses the lexical `defer`
-statement.
+Owned values are destroyed deterministically. `Drop` is the one
+compiler-recognized cleanup trait:
 
-There is no compiler-known cleanup trait or privileged cleanup method name.
-Resource types expose ordinary safe unit-returning methods such as `close`,
-`release`, or `unlock`, and `defer` may register any such call. Each resource
-API defines whether its cleanup is idempotent and whether copied handles share
-state. Shared identity must be represented explicitly by the handle's value,
-such as through a safe reference, rather than being introduced by a trait
-implementation.
+~~~elx
+trait Drop:
+    fn drop(self: &var Self) -> ()
+~~~
 
-A resource that needs fallible flushing, committing, or finalization provides a
-separate explicit operation returning `Result`. Callers perform that operation
-before scope exit when they need to handle its error; an infallible release
-method may still be deferred.
+A user may implement `Drop` for a local nominal type under the ordinary
+coherence rules. Its method is safe, non-generic, unit-returning, and cannot be
+called directly. The compiler invokes it exactly once for each initialized
+owned value that is not moved away. A `Drop` type is never `Copy` and cannot be
+partially moved.
 
-`defer call` registers one safe function or method call to execute when control
-leaves the current lexical block. The call must return unit. A `defer`
-statement is permitted only in an executable body, and registration occurs only
-when control reaches it. It is not a function value or closure, creates no
-captured environment, and cannot escape its block. The `defer:` block form
-below defers several statements under the same rules.
+On ordinary scope exit, initialized locals are destroyed in reverse successful
+initialization order. For a value with a `Drop` implementation, its `drop`
+method runs first and then its still-initialized fields are destroyed in reverse
+declaration order. Types without custom `Drop` use structural field
+destruction. Replacing an initialized `var` evaluates the new value first,
+destroys the old value, and then installs the replacement. The prelude
+`drop(value)` consumes a value and ends its ownership at that call.
 
-The deferred call is evaluated when the block exits, using the values its
-callee, receiver, and argument expressions have at that time. The bindings
-referenced by those expressions remain alive until the call finishes. Reassigning
-a `var` after registration therefore affects the later call; a `let` is the
-usual choice when deferring cleanup of one particular resource.
+Cleanup runs on fallthrough, `return`, postfix `?`, `break`, and `continue`.
+The returned or propagated value is evaluated and moved to caller-owned result
+storage before cleanup begins. Process-fatal panic, typed traps, foreign
+crashes, signals, and OOM do not unwind and do not guarantee any remaining
+cleanup.
 
-Deferred calls execute when their block falls through or is exited by
-`return`, `?` propagation, `break`, or `continue`. Calls registered in one block
-execute in reverse registration order, and an inner block's calls execute before
-those of an enclosing block. A return expression or propagated error is
-evaluated and its result copied before deferred calls begin. Consequently,
-unconditionally deferring `close()` on a resource that is returned from the
-same block closes the returned handle as well; conditional error-only deferral
-is not part of the initial language.
+`Drop.drop` cannot report a recoverable error. A resource that needs fallible
+flush, commit, or close behavior exposes a separate explicit method returning
+`Result`; callers handle that operation before scope exit. Its `Drop`
+implementation provides only the documented infallible fallback release.
 
-A `defer` statement has two forms. `defer call` registers a single call, as
-above. `defer:` introduces an indented block whose statements are all deferred
-together, for cleanup that needs more than one call.
+`defer` remains the explicit mechanism for actions that are not ownership
+destruction. `defer call` registers one safe unit-returning function or method
+call. `defer:` registers one indented statement block. Registration occurs only
+when execution reaches the statement. A deferred action is not a closure or
+first-class value and cannot escape its block.
+
+A deferred call is evaluated at scope exit, not registration. Its referenced
+bindings must therefore remain initialized and valid until then; a later move,
+conflicting borrow, or destruction that would invalidate the call is rejected.
+Reassigning an otherwise available `var` changes the value observed by the
+deferred call.
+
+For one scope, deferred actions execute first in reverse registration order,
+then automatic local destruction executes in reverse initialization order.
+Inner scopes finish all deferred actions and destruction before an outer scope
+continues cleanup. This fixed ordering keeps every binding used by a deferred
+action alive until the action completes.
 
 ~~~elx
 let file = File.open("report.txt", "w")?
-defer file.close()
+defer file.flush_report()
 
 let left = Buffer.new()
 let right = Buffer.new()
 defer:
-    left.release()
-    right.release()
+    left.record_metrics()
+    right.record_metrics()
 
 file.write("Elamite report")?
 ~~~
 
-A `defer:` block is one registration, not one per statement. It registers when
-control reaches it and executes as a unit at scope exit, in reverse
-registration order with respect to other `defer` statements in the same block.
-Its body is an ordinary lexical scope: a binding declared inside it is local to
-the deferred block.
+A deferred block is an ordinary lexical scope but cannot redirect control while
+its enclosing scope is exiting. `return`, `break`, `continue`, postfix `?`, and
+nested `defer` are invalid inside it. A `defer` statement is invalid inside an
+`unsafe:` block, an `unsafe:` block is invalid inside `defer:`, and a direct
+unsafe or foreign call cannot be deferred. A safe wrapper may establish and
+encapsulate any native cleanup contract.
 
-Because a deferred block runs while its enclosing scope is already exiting, it
-cannot itself change where control goes. `return`, `break`, `continue`, and
-postfix `?` are invalid inside a `defer:` block, as is a nested `defer`
-statement. A `defer` statement is also invalid inside an `unsafe` block, and an
-`unsafe` block is invalid inside a `defer:` block: deferred cleanup is safe
-code, and unsafe scopes stay straight-line.
+Elamite has no `errdefer`. Conditional cleanup uses ordinary state in a
+deferred safe wrapper or explicit control flow. Automatic destruction is not
+conditional on success versus error propagation.
+## 9. Explicit memory ownership
 
-The initial language has no `errdefer` and no conditional error-only deferral. A
-direct unsafe or foreign call cannot be deferred; native cleanup is wrapped in
-a safe unit-returning method. An explicit panic, an unrecoverable trap
-including one during deferred execution, and out-of-memory termination do not
-guarantee that that block's remaining deferred statements will run.
+Elamite has no tracing garbage collector and no implicit promotion of
+address-taken storage. Ordinary locals, temporaries, aggregates, and closure
+environments use inline or stack storage according to their lexical ownership.
+Heap storage is introduced only by an owning type or an operation whose API
+documents allocation.
 
-Leaving a scope does not implicitly call a resource-cleanup method; only an
-explicitly registered deferred call runs. Garbage collection likewise never
-calls resource-cleanup methods. A resource that is neither explicitly released
-nor registered with `defer` may therefore leak its external resource. An
-implementation may warn about leaks it can prove locally, but such diagnostics
-are not required to be complete.
+`Box[T]` uniquely owns one address-stable heap allocation. Moving a box moves
+the owning handle without moving `T`; borrowing a box borrows its pointee;
+dropping it drops `T` and releases the allocation. `Box[&Trait]` is unnecessary:
+owning trait erasure is represented by `Box[Trait]`, whose allocation stores the
+concrete value and its dispatch metadata.
 
-## 9. Garbage collection
+`Shared[T]` provides explicit shared ownership through an atomic strong count.
+Cloning a `Shared` increments the count; dropping one decrements it; the last
+strong owner destroys `T`. `Shared` exposes shared borrowing only and does not
+make mutation safe. Shared mutable state uses an API that enforces its access
+contract, normally `Shared[Mutex[T]]` or an atomic type.
 
-Elamite's initial runtime uses the non-moving Boehm garbage collector for
-managed memory. The compiler accesses it through a collector-neutral runtime
-interface so a future implementation may select another strategy, including
-reference counting with cycle detection, provided every semantic guarantee in
-this section remains unchanged. Stack versus managed-heap placement is
-unobservable in safe code. Escape promotion preserves safe-reference behavior
-and `Identity` identity. Once created, a managed allocation does not move
-during its lifetime.
+`Weak[T]` is a non-owning companion to `Shared[T]`. Downgrading does not change
+the strong count; `upgrade() -> Option[Shared[T]]` succeeds only while a strong
+owner exists. Weak bookkeeping storage may remain until the last weak value is
+dropped. A cycle made entirely of `Shared` strong edges is not reclaimed; code
+uses `Weak` for back edges or a checked store for graph ownership.
 
-Managed storage remains alive while it is reachable through a strong language
-path. Strong roots include every local binding until its lexical scope ends,
-function parameters for the complete call, temporaries until their full
-expression finishes, module-level values, safe references, and managed handles
-stored inside structs, enums, collections, and hidden loop state.
-Assigning a new value to a `var` removes the binding's strong path to its
-previous value. Any other strong path to the previous value remains effective.
+`Store[T]` owns a homogeneous table and returns opaque `Handle[T]` identities.
+A handle is `Copy` and logically contains a store identity, slot, and generation
+even when the implementation packs them differently by target. Looking up a
+handle requires the corresponding `&Store[T]` or `&var Store[T]`. A wrong-store
+or stale-generation lookup traps; removal increments the generation before a
+slot can be reused. A handle neither owns nor borrows an element and cannot be
+dereferenced without its store.
 
-Reachable safe references are roots for language-managed targets. A reference
-constructed from a raw pointer roots the target only when that target is
-language-managed. It does not extend the lifetime of foreign, manually
-managed, or otherwise external storage; maintaining that storage's validity is
-part of the unsafe conversion's obligation.
+Shared store lookup returns `&T`; exclusive lookup returns `&var T`. Invalid
+handles trap rather than encoding programmer-controlled absence. Insertion,
+removal, compaction, and any operation that may
+relocate elements require exclusive store access and conflict with live element
+borrows. Dropping a store destroys every remaining element regardless of cycles
+formed by handles. This makes `Store` the standard ownership model for mutable
+graphs whose identity should not retain nodes individually.
 
-Raw pointers are not language-level roots. Code retaining a raw pointer to
-managed storage is responsible for keeping the target alive through another
-managed path. An in-scope binding provides such a path because bindings remain
-roots until lexical scope exit. Boehm may conservatively retain an otherwise
-unreachable allocation because a bit pattern resembles its address, but a
-program cannot rely on that accidental retention.
+Owned collections, `String`, boxes, shared allocations, stores, formatting, and
+explicit owning erasure may allocate. Borrow formation, receiver adaptation,
+slice coercion, closure construction, and iterator hidden state do not allocate
+by themselves. The non-normative `cost_model.md` records current implementation
+costs without weakening these semantic boundaries.
 
-Cycles without a path from a strong root are unreachable and eligible for
-collection. Collection may occur at any implementation-selected point, and no
-collection is guaranteed before process exit. Unreachable storage may be
-retained indefinitely, particularly because the collector is conservative.
-Collection timing and memory usage are not deterministic program behavior.
+Allocation failure is process-fatal. OOM is not a `Result`, cannot be caught,
+and does not unwind or guarantee cleanup. A successful safe allocation is
+properly aligned and never yields `null`.
 
-The initial language has no `Weak` type or other weak-reference facility. It
-also has no GC finalizers, implicit destruction protocol, or user-defined
-collection callbacks. Garbage collection never invokes resource-cleanup
-methods. The runtime may perform internal reclamation work only when it invokes
-no user code and creates no observable external-resource cleanup behavior.
-
-Managed allocation failure is unrecoverable because construction, collection
-growth, formatting, user-iterator hidden state, and escape promotion may
-allocate implicitly.
-Before reporting out-of-memory, the runtime must attempt a full collection. If
-allocation still fails, it terminates the process with an out-of-memory
-diagnostic. OOM is not represented by `Result`, cannot be caught, and does not
-run resource cleanup. A safe allocation never produces `null`.
-
-The initial standard library exposes no portable collection-control or
-heap-statistics API. Implementations may offer nonportable diagnostic flags for
-collection tracing, leak investigation, approximate heap statistics, and
-best-effort forced collection. Such tooling cannot establish stronger
-reclamation guarantees or change language-visible values.
+Moving an owning handle cannot invalidate borrows into its separately allocated
+pointee, but destroying that owner or performing an operation documented to
+relocate backing storage conflicts with those borrows and is rejected. Raw
+pointers never retain an owner. Safe references carry provenance but no
+ownership of their own.
 
 ## 10. Unsafe operations and C interoperability
 
@@ -1898,19 +1810,24 @@ valid. The author of the block asserts that every operation's documented
 preconditions and the raw-pointer obligations in Section 3.3 hold.
 
 ~~~elx
-unsafe pub fn from_pointer(pointer: *Session) -> &Session:
+unsafe pub fn from_pointer(owner: &Session, pointer: *Session) -> &Session:
     unsafe:
         return pointer as &Session
 ~~~
+
+The returned reference above receives its public provenance from `owner`; the
+unsafe implementation promises that `pointer` identifies storage valid for no
+less than that borrow. A function cannot return an unbounded safe reference
+from only a raw pointer.
 
 Using an unsafe-only operation outside the unsafe context required by Section
 3.3 is a compile-time error. The expression-local constant rule in Section 3.3
 is the only mandatory value analysis for raw-pointer access. A compiler may
 warn when broader analysis indicates a violation of provenance, liveness,
 bounds, initialization, pointee-type, or write-permission obligations, but
-inability to prove valid foreign input is not itself an error. These diagnostics
-do not apply merely because a safely formed reference to a local binding
-escapes; such storage is promoted.
+inability to prove valid foreign input is not itself an error. Safe-reference
+escape remains governed by inferred provenance and is never repaired by hidden
+allocation.
 
 The consequences of violations not established statically, including the
 required null and alignment traps and otherwise undefined behavior, are
@@ -1964,11 +1881,11 @@ link_options = ["-pthread"]
 An opaque foreign type has unknown size and alignment and may be used only
 behind a raw pointer. A foreign struct has the field order, alignment, padding,
 and by-value calling convention of the corresponding C struct for the selected
-target. It is an ordinary copyable Elamite value, but its fields must themselves
-be ABI-safe and it cannot be generic, derive traits, contain methods, or contain
-an incomplete opaque type directly. The declaration author is responsible for
-matching the C header exactly. A mismatched foreign declaration is an unsafe
-contract violation and causes undefined behavior when used across the boundary.
+target. It follows ordinary ownership rules and is `Copy` only when every field
+is `Copy`; its fields must themselves be ABI-safe and it cannot be generic,
+derive traits, contain methods, implement `Drop`, or contain an incomplete
+opaque type directly. The declaration author is responsible for matching the C
+header exactly. A mismatched declaration is an unsafe contract violation.
 
 The ABI-safe scalar types are `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`,
 `u64`, `isize`, `usize`, `f32`, and `f64`. Raw data pointers, foreign structs
@@ -1990,8 +1907,8 @@ arrays, ordinary structs and enums, trait objects, and standard collections are
 not ABI-safe. Neither are `i128` and `u128`, whose C ABI is not portable. There is
 no implicit string, collection, nullable-value, or aggregate marshalling.
 Wrappers must explicitly encode text into a documented byte representation,
-add any required terminator, pass a raw pointer and length, and keep or register
-the backing storage for as long as foreign code may access it.
+add any required terminator, pass a raw pointer and length, and retain the
+owning storage for as long as foreign code may access it.
 
 Every imported foreign function is unsafe to call, including one whose
 signature contains only scalars. Its declaration has no body, cannot use
@@ -2001,212 +1918,211 @@ in the initial interface. Each raw-pointer parameter and result must have a
 documented foreign contract covering nullability, readable or writable extent,
 alignment, pointee initialization and type, whether the pointer is retained,
 and what event ends its validity. The compiler does not infer those facts from
-a C header.
+a C header. C output parameters use explicit `std.ffi.MaybeUninit[T]` storage;
+unsafe wrapper code verifies successful initialization before converting it to
+an owned `T`. Reading uninitialized storage is undefined behavior.
 
-### 10.2 Ownership, retention, and managed roots
+### 10.2 Ownership, retention, and foreign resources
 
-A raw pointer never owns its target. Receiving an owning native handle through
-a raw pointer does not schedule cleanup, and passing a raw pointer never
-transfers ownership by itself. An owning C API is wrapped in an ordinary
-Elamite handle type whose methods enforce the API's state rules. Such a wrapper
-may provide an idempotent `close()` method that invokes the native release
-operation. If wrapper copies share one resource state, the wrapper represents
-that identity explicitly, such as with a safe reference. Borrowed foreign
-pointers remain valid only for the duration promised by their foreign contract.
+A raw pointer never owns its target and does not transfer ownership by itself.
+Every owning C contract is represented by an Elamite wrapper that is move-only
+and implements `Drop` with the matching native release operation. If the C API
+permits an explicit fallible close, the wrapper exposes that operation
+separately and leaves `Drop` as an infallible fallback. Shared native identity
+uses an explicit `Shared` wrapper rather than copying an owning raw handle.
 
-Safe references are not ABI-safe and cannot cross the C boundary directly.
-Code explicitly converts one to a raw pointer. When a foreign call does not
-retain that pointer, the source binding or reference remains a strong root for
-the complete call. If foreign code may retain a pointer to language-managed
-storage after the call returns, the storage must first be registered with the
-runtime through `std.ffi.ForeignRoot[T]` or
-`std.ffi.ForeignRootMut[T]`.
+Safe references, slices, owning Elamite values, and closure objects are not
+ABI-safe. A wrapper explicitly converts a borrow to a raw pointer. For a
+non-retaining call, the borrow remains live for the complete call and prevents
+conflicting movement or mutation.
 
-`ForeignRoot.retain(&value)` and `ForeignRootMut.retain(&var value)` promote the
-target when necessary and create a runtime root registration. Their `pointer`
-methods return `*T` and `*var T`, respectively. Copies of a foreign-root handle
-share one registration, represented by explicit shared state. Their `close()`
-method is idempotent, and closing any copy unregisters the root. Calling
-`pointer()` on a closed handle traps with `E-RUN-CLOSED`. If every handle
-becomes unreachable without being closed, the registration and target may
-leak; garbage collection never unregisters it.
+When C retains a pointer after return, the pointed-to value must have
+address-stable explicit ownership, normally `Box[T]` or `Shared[T]`. The wrapper
+that registered the pointer keeps that owner until the foreign API confirms
+unregistration. Moving the owner handle is permitted because the allocation
+does not move; dropping it, mutating through conflicting aliases, or allowing a
+collection to reallocate before unregistration violates the unsafe contract.
 
-Closing a registration is valid only after the foreign contract says that no
-later access will occur. Once it is closed, some other strong path may happen
-to keep the target alive, but foreign code cannot rely on that fact. A later
-foreign access through the retained pointer violates the earlier unsafe call's
-contract and has the consequences specified in Section 3.3. A raw pointer
-returned by foreign code does not root foreign storage, and converting it to a
-safe reference does not extend a foreign lifetime.
+When C transfers an allocation to Elamite, its wrapper stores the raw pointer
+and exact allocator-compatible deleter. When Elamite transfers ownership to C,
+the consuming wrapper operation suppresses Elamite destruction only after C has
+accepted ownership. Allocator pairing is part of the unsafe contract; Elamite
+never assumes that C `free`, an Elamite allocator, and a library-specific
+release function are interchangeable.
 
+A raw pointer returned by C does not retain foreign storage. Converting it to a
+safe reference requires an inferred provenance source that is no longer than
+the foreign contract, typically an owner or session borrow passed alongside the
+pointer. Returning a safe reference with no such source is invalid even inside
+`unsafe`.
 ### 10.3 Callbacks and foreign control flow
 
-A module-level function definition may use `@exportc("c_name")` to emit its
-definition under that exact unmangled C symbol. Its signature must be ABI-safe
-and its address is stable for the process lifetime. `@exportc` changes only
-external naming and ABI validation: the declaration remains an ordinary safe
-or unsafe named Elamite function, and an unsafe function body still requires
-explicit `unsafe:` blocks for unsafe-only operations.
+A module-level function may use `@exportc("c_name")` to emit one exact unmangled
+C symbol. Its signature must be ABI-safe. The declaration remains an ordinary
+safe or unsafe Elamite function, and unsafe-only operations in its body still
+require explicit `unsafe:` blocks.
 
 ~~~elx
 @exportc("visit_value")
 unsafe fn visit_value(context: *var i32) -> i32:
     unsafe:
-        let value: &var i32 = context as &var i32
-        *value = *value + 1
+        let value = context as &var i32
+        *value += 1
         return *value
 ~~~
 
-Any named function with an ABI-safe signature can serve as a C callback by
-explicitly converting its exact `&fn` or `&unsafe fn` reference to a matching
-raw function pointer. `@exportc` is needed only when C must link to a stable
-symbol by name. Foreign code may retain either address for the process lifetime.
-Retained managed callback state is passed separately through a raw context
-pointer backed by an open foreign-root registration. The callback function is
-responsible for recovering a reference only within an `unsafe:` block, and the
-registration must remain open until both callback and context pointer have
-been released under the foreign API's contract.
+A named function or capture-free `fn[]` closure with an ABI-safe signature may
+explicitly convert to a matching raw function pointer. `@exportc` is required
+only when C links to a symbol by name. Capturing closure objects never cross as
+function pointers.
 
-C may invoke an Elamite callback synchronously on the same registered runtime
-thread that entered C. This includes the initializer thread and any
-Elamite-created thread. Direct and nested reentry and later same-thread calls
-are allowed. A foreign-created thread is not registered and cannot enter
-Elamite; asynchronous or concurrent callbacks originating on such a thread are
-undefined behavior. This restriction is a foreign contract and is not
-generally detectable by the compiler.
+Stateful callbacks use a raw context pointer. A registration wrapper owns the
+address-stable `Box` or `Shared` state, passes its raw pointee address, and keeps
+the owner until C has released both callback and context. The callback recovers
+a reference only inside `unsafe` and only for the region justified by that
+owner. Destruction unregisters before releasing the context.
 
-Recoverable Elamite errors do not cross the ABI automatically; a wrapper must
-translate them to an ABI-safe result such as a status code and out-parameters.
-Likewise, `errno` and other foreign error channels are observed only through
-explicit wrapper operations. A trap reached while executing foreign code or an
-Elamite callback terminates the process and never unwinds through C frames.
-C++ exceptions, `longjmp`, or any other foreign unwinding across an Elamite
-frame are forbidden and cause undefined behavior. Foreign code must catch or
-contain them and translate them before returning through the C boundary.
+Foreign-created threads may enter Elamite only through an exported function or
+registered callback address. The runtime establishes its per-thread execution
+state on entry; no garbage-collector attachment exists. The unsafe registration
+contract must guarantee that concurrently accessed context satisfies the same
+`Send`, `Sync`, synchronization, and lifetime obligations as an
+Elamite-created thread. A wrapper cannot make unsynchronized foreign mutation
+safe merely by hiding it.
 
-### 10.4 Native threads, shared memory, and synchronization
+Recoverable Elamite errors do not cross the ABI automatically. A wrapper
+translates them to status codes, initialized out-parameters, or another
+documented C representation. `errno` and foreign error channels are observed
+only explicitly. An Elamite trap during a foreign call or callback terminates
+the process and never unwinds through C. C++ exceptions, `longjmp`, or any
+foreign unwinding across an Elamite frame are forbidden; foreign code contains
+and translates them before returning.
+### 10.4 Native threads and race-safe synchronization
 
-Elamite exposes native parallelism through ordinary declarations in
-`std.thread` and `std.sync`. It adds no thread, task, `concurrent`, `async`, or
-`await` grammar. `std.thread.spawn` accepts one safe zero-argument callable,
-evaluates it exactly once, shallow-copies its environment, starts one native
-thread eagerly, and returns
-`Result[std.thread.Thread[R], std.thread.SpawnError]`. Operating-system thread
-creation failure is recoverable; allocation failure retains the process-fatal
-out-of-memory behavior.
+Elamite exposes native threads through ordinary `std.thread` and `std.sync`
+declarations. It adds no concurrency syntax, `async`, or implicit task runtime.
 
-There is no `Transfer` capability and no automatic detachment at a thread
-boundary. References, raw pointers, slices, trait objects, strings, collections,
-closures, and aggregates preserve the same shallow identities they preserve in
-ordinary single-threaded copies. A safe reference remains a managed strong path
-when reachable from a registered thread. A raw pointer remains non-rooting, and
-its unsafe provenance, lifetime, bounds, alignment, initialization, write, and
-synchronization obligations are unchanged when it crosses a thread boundary.
+`Send` and `Sync` are compiler-controlled capabilities. `Send` means an owned
+value may move to another thread; `Sync` means shared references to a value may
+be used from multiple threads. They are derived structurally. `&T` is `Send`
+when `T` is `Sync`; an exclusive borrow may enter a scoped thread when its target
+is `Send`. Raw pointers are neither capability automatically. An FFI wrapper
+may assert a capability only with an explicit unsafe implementation whose
+author owns the complete synchronization contract.
 
-`std.thread.Thread[R]` is a copyable identity handle. Every copy names the same
-native thread and cached result. The runtime performs the operating-system join
-at most once, and each successful `join()` returns a shallow copy of the cached
-`R`; mutable backing in repeated join results may therefore be shared. Joining
-the current thread traps. Cyclic joins may deadlock and need not be detected.
-Threads are joinable and never implicitly detached; losing every source handle
-neither stops nor detaches a thread. After the program entry function returns
-normally and its deferred cleanup completes, runtime shutdown waits for every
-remaining Elamite-created thread. There is no initial cancellation,
-interruption, or detach operation.
+`std.thread.spawn` evaluates and consumes one zero-argument closure object. The
+closure and result must be `Send`, and its environment may contain no
+non-static borrow. Creation starts one native thread eagerly and returns
+`Result[Thread[R], SpawnError]`; OS creation failure is recoverable and OOM is
+fatal. The thread calls its moved inline closure without copying or detaching
+captured state.
 
-A thread body is a safe function boundary only in the lexical sense: it begins
-outside `unsafe`, owns its `return` and postfix-`?` context, and runs its `defer`
-registrations on ordinary exit. This does not imply data-race freedom. Returning
-`Result[T, E]` produces `Thread[Result[T, E]]`; it is not a thread-failure
-channel. A runtime trap, `std.panic`, or out-of-memory failure on any thread
-terminates the complete process and is never converted to a join result or
-unwound through another thread or C frame.
+`Thread[R]` is move-only. `join(self: Self) -> R` consumes the handle, waits
+once, and moves out the result. Dropping an unjoined handle detaches that handle
+but does not cancel the thread; a normally exiting process waits for all
+Elamite-created threads and drops unclaimed results. Self-join traps and general
+join cycles may deadlock. There is initially no cancellation or interruption.
 
-`std.sync.channel[T](capacity: usize)` creates a bounded multi-producer,
-multi-consumer channel and returns `(Sender[T], Receiver[T])`. Capacity zero is
-a rendezvous channel. `std.sync.unbounded_channel[T]()` creates an unbounded
-channel. Sending evaluates its argument once, shallow-copies it into the
-message, and reports closure recoverably. Blocking receive returns `Option[T]`,
-with `None` only after closure and draining. Nonblocking operations distinguish
-full, empty, and closed states. Copies of an endpoint share synchronized
-identity. Channel synchronization safely publishes the copied descriptor and
-all writes sequenced before the send; it does not synchronize later access to
-mutable backing shared by sender and receiver. Closure is explicit and
-idempotent; garbage collection or loss of the last visible endpoint never
-closes a channel.
+Borrowing parallelism uses the ordinary function `std.thread.scope`. It accepts
+a closure whose `Scope` argument can spawn child closures borrowing from the
+scope's inferred region. A scoped child cannot outlive the call, and neither its
+handle nor a result containing a scoped borrow may escape. Explicit joins
+consume scoped handles; scope exit joins any remaining children before
+returning. No `scoped` keyword or alternate closure syntax exists.
 
-`std.sync.Mutex[T]` remains a copyable synchronized identity handle with
-`new`, `read`, `replace`, and atomic `update` operations, but shallow copying
-makes it a synchronization tool rather than an alias-isolation boundary.
-`new`, `read`, `replace`, and the value passed to and returned from `update`
-all use ordinary shallow copying. An alias retained outside the mutex may reach
-the same backing as its stored value, and the programmer must ensure that every
-conflicting access uses a consistent synchronization protocol. Operations on
-the mutex serialize only callers using that same handle; the compiler does not
-associate a backing allocation with a particular mutex. Recursive locking and
-general lock cycles may deadlock. Mutex poisoning is unnecessary because an
-unrecoverable thread failure terminates the process.
+~~~elx
+var values = [1, 2, 3]
+std.thread.scope(fn[&var values](scope: &var std.thread.Scope) -> ():
+    let worker = scope.spawn(fn[&var values]() -> ():
+        values[0] = 4
+    )
+    worker.join()
+)
+println(values[0])
+~~~
 
-`std.sync.AtomicBool`, `std.sync.AtomicI32`, and `std.sync.AtomicUsize` are
-copyable handles to shared atomic cells. They provide load, store, exchange,
-compare-exchange, and the applicable integer read-modify-write operations.
-Their operations are sequentially consistent. The C99 backend implements them
-through runtime/compiler hooks rather than C11 `_Atomic`, including target-width
-`usize` behavior on x86.
+Channels move messages. `channel[T: Send]` returns move-only endpoint values;
+cloning an endpoint explicitly creates another synchronized endpoint identity.
+`send(value: T)` consumes `value`, returning it inside the failure value if the
+channel is closed. Receive moves one queued message to the receiver. Dropping
+the final sender closes the channel deterministically; buffered messages remain
+receivable before `None`. Capacity zero is rendezvous, bounded capacity applies
+backpressure, and an explicitly named unbounded constructor may allocate.
 
-Two evaluations conflict when they access the same scalar object or overlapping
-bytes and at least one writes. Conflicting evaluations on different threads
-that are not ordered by a synchronization edge constitute a data race and make
-program behavior undefined. Ordinary collection access needs no `unsafe`
-syntax merely because backing is shared: synchronization is the programmer's
-responsibility. Bounds checks, managed lifetime, and ordinary type checks remain
-in force for executions without undefined behavior, but they do not repair a
-data race in the generated C99 program.
+`Mutex[T]` owns one `T`. `lock(self: &Self)` returns a move-only guard that
+borrows the mutex; `guard.get()` returns `&T` and `guard.get_var()` returns
+`&var T`. Destroying the guard unlocks.
+Protected data cannot be accessed without a live guard, and the guard cannot
+outlive the mutex. Shared mutable state is normally
+`Shared[Mutex[T]]`. Process-fatal traps do not unwind and therefore do not
+promise guard destruction; the runtime terminates rather than exposing a
+poisoned surviving process.
 
-Thread creation orders prior evaluations before the new thread begins. A mutex
-unlock within an operation orders prior evaluations before a later successful
-lock of the same mutex. A successful channel send orders message initialization
-and earlier evaluations before the matching receive. Thread completion orders
-prior evaluations before a successful `join()` returns. Sequentially consistent
-atomic operations participate in one total order. These edges may be composed;
-no other ordinary shallow copy creates synchronization.
+`AtomicBool`, `AtomicI32`, and `AtomicUsize` are non-`Copy` atomic cells.
+Their operations borrow the cell and are sequentially consistent. Sharing an
+atomic uses a shared reference or `Shared`; copying an atomic scalar value does
+not copy the cell identity. The C99 backend implements atomics through
+runtime/compiler hooks rather than C11 `_Atomic`, including target-width
+`usize` operations on x86.
 
-Scheduling, fairness, relative completion, and cross-thread output-call order
-are unspecified. Each complete standard-output call is internally synchronized
-so concurrent calls cannot corrupt one another. Blocking synchronization may
-deadlock; self-join is the only initially required deadlock trap.
+Safe code cannot create two conflicting unsynchronized cross-thread accesses:
+ownership, borrow provenance, and `Send`/`Sync` prevent the shared mutable
+alias. Data races remain possible only after an unsafe capability assertion,
+raw-pointer operation, or violated foreign contract, and then constitute
+undefined behavior under the raw/foreign contract rather than ordinary safe
+semantics.
 
-Every runtime-created thread registers with the garbage collector before it
-executes Elamite code. Its stack, shallow environment, synchronized queues and
-cells, and unpublished or published result remain visible roots. It unregisters
-only after publishing its result. Completed thread state becomes reclaimable
-after all managed roots to its handles and result disappear.
+Thread start orders prior initialization before the child begins. Mutex unlock
+orders guarded writes before a later successful lock. A successful send orders
+message initialization and prior evaluations before the matching receive.
+Thread completion orders prior evaluations before `join` returns.
+Sequentially-consistent atomics participate in one total order. These edges
+compose; moving or cloning an ordinary value creates no synchronization edge.
 
-Cooperative tasks, executors, futures, `async`/`await`, detached execution,
-cancellation, interruption, timeouts, thread-local storage, relaxed atomics,
-parallel iterators, fairness guarantees, general deadlock detection, automatic
-race prevention, and foreign-thread attachment are outside this contract.
+A thread body is its own safe function boundary with ordinary `return`, `?`,
+`defer`, and destruction on normal exit. A panic, typed trap, foreign crash, or
+OOM on any thread terminates the process and is never converted to a join
+result. Scheduling, fairness, relative completion, and output-call order are
+unspecified; complete standard output calls are internally synchronized.
 
+Executors, futures, `async`/`await`, detached-process lifetime guarantees,
+cancellation, interruption, timeouts, relaxed atomics, parallel iterators,
+fairness guarantees, and general deadlock detection are outside this contract.
 ## 11. Conformance example
 
 ~~~elx
 struct Counter:
     value: i32
 
+impl Counter:
     fn increment(self: &var Self) -> ():
-        self.value = self.value + 1
+        self.value += 1
 
 fn main() -> Result[(), String]:
     var counter = Counter { value: 0 }
-    let copied = counter
-    let counter_ref: &var Counter = &var counter
+    let counter_ref = &var counter
     counter_ref.increment()
+    println(counter_ref.value)
 
-    println(copied.value)
-    println(counter.value)
+    // The exclusive borrow ended after its last use.
+    let moved_counter = counter
+    println(moved_counter.value)
+
+    let name = String.from("Elamite")
+    let independent = name.clone()
+    let describe = fn[name]() -> String:
+        return f"hello {&name}"
+
+    println(describe())
+    println(independent)
     return Result.Ok(())
 ~~~
 
+The complete normative surface is demonstrated by
+[`examples/owned_spec_demo.elx`](../examples/owned_spec_demo.elx). The currently
+implemented 0.10 compiler demonstration remains
+[`examples/spec_demo.elx`](../examples/spec_demo.elx) until the final migration
+milestone.
 ## 12. Compile-time syntax generation
 
 Elamite has three user-defined compile-time declarations: `macro` produces

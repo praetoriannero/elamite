@@ -1,0 +1,18 @@
+struct Notice:
+    text: String
+
+impl Drop for Notice:
+    fn drop(self: &var Self) -> ():
+        println(&self.text)
+
+fn main() -> ():
+    let original = @vec[String.from("a"), String.from("b")]
+    let duplicate = original.clone()
+    let moved = original
+
+    println(moved.len())
+    println(duplicate.len())
+
+    let notice = Notice { text: String.from("drop") }
+    defer println("defer")
+    // Expected output ends with `defer`, then `drop`.

@@ -1,0 +1,7 @@
+fn consume(value: String) -> ():
+    println(value)
+
+fn main() -> ():
+    let value = String.from("one owner")
+    consume(value)
+    println(value) // E-OWN-MOVED: related span is the consuming call

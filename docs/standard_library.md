@@ -1,5 +1,10 @@
 # Standard library
 
+> Current implementation baseline: the APIs below describe the shipped 0.10
+> shallow/GC library. Owned signatures and representations migrate through
+> **Owned core values and collections**, **Promotion and tracing-GC removal**,
+> and **Race-safe concurrency** before 0.11 conformance.
+
 The compiler ships the `std` package from `stdlib/src/`. These files pass
 through ordinary parsing, resolution, checking, and monomorphization. The
 intrinsic inventory in `src/standard.rs` is limited to representations and

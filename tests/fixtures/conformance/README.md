@@ -1,5 +1,10 @@
 # Initial conformance fixtures
 
+> These are the executable 0.10 baseline fixtures. The accepted but not yet
+> implemented 0.11 ownership cases live separately in
+> `tests/fixtures/owned_model_design/` and become active only through their
+> ordered roadmap milestones.
+
 Each numbered directory owns the positive run-pass fixture for the matching
 top-level `docs/spec.md` section. The broader test suite supplies the associated
 negative, trap, and interaction layers listed below; names are stable evidence

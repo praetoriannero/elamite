@@ -1,0 +1,6 @@
+@exportc("owned_model_callback")
+unsafe fn callback(context: *var i32) -> i32:
+    unsafe:
+        let value = context as &var i32
+        *value += 1
+        return *value

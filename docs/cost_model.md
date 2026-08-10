@@ -14,10 +14,10 @@
 > allocation. Standard text and lexical path algorithms now execute as
 > ordinary Elamite over a minimal UTF-8/runtime kernel.
 
-This document explains where the current compiler copies values, allocates
-storage, retains memory, and synchronizes. `spec.md` defines the 0.10 observable
-behavior, while this document describes the implemented compiler and its
-measurements. Nothing here creates an allocation,
+This document explains where the current 0.10 compiler copies values, allocates
+storage, retains memory, and synchronizes. `spec.md` now defines the accepted
+0.11 target; this cost model remains the measured migration baseline until each
+representation milestone updates it. Nothing here creates an allocation,
 timing, collector, address, or complexity guarantee.
 
 Ordinary assignment, argument, return, capture, pattern, indexing, propagation,

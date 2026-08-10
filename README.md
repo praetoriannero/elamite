@@ -1,14 +1,15 @@
 # Elamite documentation
 
-Elamite is a statically typed, garbage-collected language that compiles to C99.
-The compiler targets and implements the normative 0.10.0-draft design. Ordinary
-values copy shallowly, collections use the accepted mutable-sharing contract,
-direct collection iteration snapshots the shallow descriptor and bound once,
-and user types participate in `for` through `Iterator[Element]`. Threads,
-channels, and mutexes publish those same shallow values under
-programmer-managed synchronization. Raw data pointers support the accepted
-unsafe arithmetic, indexing, subtraction, and null-low relational ordering
-surface.
+Elamite is a statically typed, memory-safe language that compiles to C99. The
+accepted 0.11.0-draft design uses move-by-default ownership, inferred structural
+borrowing, deterministic destruction, inline closure objects, explicit shared
+or graph ownership, and race-safe native concurrency without a tracing garbage
+collector. Raw data pointers retain direct C-like traversal behind `unsafe`.
+
+The current compiler still implements the 0.10 shallow-copy, Boehm-GC baseline.
+The ordered migration in `docs/roadmap.md` keeps that implementation testable
+while replacing one semantic layer at a time; version output continues to
+report the implemented revision rather than claiming 0.11 conformance.
 
 The shipped `std` package includes filesystem, environment, process, time,
 deterministic randomness, stable ordering/search, and UTF-8 text utilities in
@@ -34,8 +35,10 @@ addition to collections, formatting, FFI, testing, and concurrency support.
 - [`docs/proposals.md`](docs/proposals.md) and [`docs/critiques.md`](docs/critiques.md) preserve
   non-normative design history and review.
 
-The authoritative 0.10 behavior example is
-[`examples/spec_demo.elx`](examples/spec_demo.elx). Focused packages cover
+The authoritative 0.11 target is
+[`examples/owned_spec_demo.elx`](examples/owned_spec_demo.elx); the executable
+0.10 baseline remains [`examples/spec_demo.elx`](examples/spec_demo.elx).
+Focused packages currently cover
 [`closures`](examples/closures), [`macros`](examples/macros),
 [`concurrency`](examples/concurrency), [C FFI](examples/c_ffi),
 [`raylib`](examples/raylib), [`SDL2`](examples/sdl), and the
@@ -147,11 +150,11 @@ The runner supports fixture filtering, target and optimization matrices,
 isolated build directories, stable expected output/status files, and retained
 artifacts after failure.
 
-Managed allocation runs behind `ManagedMemoryStrategy`: Boehm is the default,
-while future non-moving, cycle-reclaiming strategies can implement the same
-contract without changing language lowering. A program that needs no managed
-storage links no collector at all. Building one that does requires a Boehm
-development package (`libgc-dev` on Debian- and Ubuntu-family systems).
+In the current 0.10 compiler, managed allocation runs behind
+`ManagedMemoryStrategy` and uses Boehm. A program that needs no managed storage
+links no collector; building one that does requires a Boehm development package
+(`libgc-dev` on Debian- and Ubuntu-family systems). The 0.11 migration removes
+this boundary after replacing every managed use with explicit ownership.
 The non-normative [memory cost model](docs/cost_model.md) documents current copy,
 allocation, retention, promotion, and synchronization costs and links the
 reproducible release-mode baseline.

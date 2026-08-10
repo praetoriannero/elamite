@@ -1,12 +1,17 @@
 # Elamite Design Issues
 
-> This document records only unresolved design questions for Elamite's managed,
-> shallow-copy direction. Resolved decisions belong in `spec.md` and
-> the authoritative `examples/spec_demo.elx` demonstration. Implementation
-> rationale that remains useful belongs in `ledger.md`.
+> This document records only unresolved language-design questions. Accepted
+> behavior belongs in `spec.md`; implementation sequencing belongs in
+> `roadmap.md`; historical rationale belongs in `proposals.md` and
+> `critiques.md`.
 
-Specification 0.10 has settled shallow ordinary copies, programmer-managed
-shared-memory concurrency, data-race undefined behavior, and unsafe raw-pointer
-arithmetic, indexing, subtraction, and null-low relational ordering.
-Implementation work is tracked in `roadmap.md`; any further surface change
-requires a new issue entry.
+The 0.11 owned-model contract currently has no unresolved semantic question.
+It settles move-by-default values, explicit cloning, inferred structural
+provenance, deterministic destruction, inline closure objects, owned
+collections, explicit shared and graph ownership, collector-free memory,
+race-safe concurrency, and ownership-aware C interoperability.
+
+Implementation gaps are intentionally not duplicated here. They are the
+planned milestones and acceptance criteria under **Ordered owned-model
+migration** in `roadmap.md`. Add a numbered issue here before changing an
+accepted surface or reopening one of those semantic decisions.

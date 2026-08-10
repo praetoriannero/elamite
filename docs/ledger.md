@@ -1,14 +1,14 @@
 # Elamite Feature Ledger
 
-> Status: Active — Milestone 0 deliverable, maintained as milestones complete
+> Status: Active — 0.11 semantic contract accepted; implementation planned
 >
-> Basis: `spec.md` version 0.10.0-draft. The compiler version identity and
-> authoritative demonstration target the same implemented revision.
+> Basis: `spec.md` version 0.11.0-draft. The current compiler remains the 0.10
+> implementation baseline until the ordered migration reaches final
+> conformance.
 >
-> Purpose: turn the specification into an implementable checklist, per the
-> completed [`roadmap.md`](roadmap.md) Milestone 0. This document assigns no new
-> semantics. When it conflicts with `spec.md`, the specification wins and this
-> ledger must be corrected.
+> Purpose: map the accepted specification to the descriptive migration
+> milestones in [`roadmap.md`](roadmap.md). This document assigns no semantics.
+> When it conflicts with `spec.md`, the specification wins.
 
 ## 0. How to read this ledger
 
@@ -57,7 +57,85 @@ numbers. The initial-conformance closure evidence is indexed by
 `tests/fixtures/conformance/README.md`; the compiler-architecture ownership map
 and behavior-neutral baseline are recorded in `docs/architecture.md`.
 
-## 0.1 Legacy artifact inventory
+## 0.1 Owned-model implementation map
+
+Rows in this section map the accepted 0.11 contract. `Accepted` means the rule
+is normative, not that the current compiler implements it. Design fixtures
+under `tests/fixtures/owned_model_design/` are intentionally inactive until
+their owning migration milestone turns them into ordinary conformance tests.
+
+| Specification rule | Implementation pass | Runtime | Required evidence |
+| --- | --- | --- | --- |
+| 0.11 is the accepted target while one complete 0.10 path remains as temporary migration scaffolding | **Migration seam and accepted surface** | — | package-revision integration, compatibility guard |
+| Non-`Copy` consuming contexts move; `Copy` values remain available; no hidden clone | **Ownership facts and explicit use IR**, **Move and initialization checking** | — | compile-pass/fail, typed/CFG dumps |
+| `Clone.clone(&self)` is explicit and may allocate; last-use analysis never changes source semantics | **Ownership facts and explicit use IR**, **Owned core values and collections** | allocator where documented | compile-pass/fail, cost workload |
+| Moved, uninitialized, partially moved, and reinitialized places are tracked through branches, loops, patterns, and early exits | **Move and initialization checking** | — | compile-fail spans, CFG properties |
+| Custom-destruction types are non-`Copy` and cannot be partially moved | **Move and initialization checking**, **Deterministic destruction** | — | compile-fail, drop trace |
+| `&T` is shared, `&var T` exclusive; shared borrows block mutation/move and exclusive borrows block every overlapping access | **Structural borrow provenance** | — | compile-pass/fail, place-overlap properties |
+| Shared references are `Copy`; exclusive references are move-only and support shorter reborrows | **Ownership facts and explicit use IR**, **Structural borrow provenance** | — | compile-pass/fail |
+| Borrows end after last use and disjoint projections may coexist; aggregate replacement overlaps its fields | **Structural borrow provenance** | — | compile-pass/fail over branches and projections |
+| Provenance propagates through fields, tuples, slices, generics, trait objects, closures, iterators, and returns without source lifetime syntax | **Structural borrow provenance** | package metadata | cross-package compile-pass/fail |
+| Returned provenance selects `self` or one unambiguous borrow-bearing input; locals, temporaries, by-value storage, and ambiguous sources cannot escape | **Structural borrow provenance** | package metadata | compile-pass/fail, dependency integration |
+| Reference formation, receiver adaptation, slice coercion, closures, and iterator state do not allocate | **Structural borrow provenance**, **Promotion and tracing-GC removal** | — | IR/generated-C assertions, cost workloads |
+| Safe reference and raw-pointer field/method access automatically dereference; raw access retains `unsafe`, null, alignment, provenance, and extent rules | **Structural borrow provenance** plus completed raw-pointer baseline | trap runtime | compile-pass/fail, run-pass, trap, C harness |
+| `[T]` is a shared slice, `[var T]` an exclusive slice, and `[T; N]` an owning fixed array | **Migration seam and accepted surface**, **Owned core values and collections** | — | parse, compile-pass/fail, target widths |
+| `String`, `Vec`, `Map`, and `Set` have unique ownership, constant-size moves, explicit content clones, and exact destruction | **Owned core values and collections**, **Deterministic destruction** | allocator | run-pass, ASan/LSan, cost workloads |
+| Collection indexing cannot move a dynamic non-`Copy` element; removal/take APIs transfer ownership and borrows block relocation | **Move and initialization checking**, **Structural borrow provenance**, **Owned core values and collections** | bounds traps | compile-pass/fail, run-pass, trap |
+| Owned iteration consumes and moves elements; borrowed iteration yields references whose provenance prevents invalidation | **Owned core values and collections**, **Structural borrow provenance** | — | compile-pass/fail, run-pass |
+| Plain `self: Self` consumes; `&Self` and `&var Self` borrow; references cannot supply owned receivers without explicit clone | **Move and initialization checking**, **Structural borrow provenance** | — | compile-pass/fail, method matrix |
+| `Copy`, `Send`, and `Sync` are structural capabilities; `Clone` and `Drop` are coherent traits with specified compiler hooks | **Ownership facts and explicit use IR**, **Deterministic destruction**, **Race-safe concurrency** | — | trait/capability compile-pass/fail |
+| Borrowed and `Box` trait objects retain provenance or explicit ownership and never allocate implicitly during erasure | **Structural borrow provenance**, **Explicit shared and graph ownership** | allocator only for explicit `Box` | compile-pass/fail, run-pass |
+| `fn[captures](args):` creates an inline nominal first-class closure object; `fn[]` is capture-free; captures are exhaustive and evaluate left-to-right | **Migration seam and accepted surface**, **Inline first-class closures** | — | parse, resolution, run-pass |
+| Plain closure captures move or `Copy`; `&`/`&var` capture provenance; construction and ordinary call allocate nothing | **Inline first-class closures**, **Structural borrow provenance** | — | compile-pass/fail, IR/generated-C, cost workload |
+| One `Callable[Args, Return]` shared-call contract covers repeated calls; mutable state is explicit through captured `&var` or synchronized types | **Inline first-class closures** | — | generic/erased run-pass, compile-fail |
+| Capture-free closures may explicitly become exact function references; capturing closures use a raw context for C callbacks | **Inline first-class closures**, **Owned-model C interoperability** | — | compile-pass/fail, C harness |
+| `Drop.drop(&var self)` is compiler-invoked exactly once; fields then drop in reverse declaration order | **Deterministic destruction** | cleanup CFG | run-pass traces, ASan/LSan |
+| Ordinary exits clean up; process-fatal traps do not unwind; replacement evaluates new, drops old, then installs | **Deterministic destruction** | cleanup CFG, trap runtime | run-pass, trap process |
+| Defers execute LIFO before reverse-initialization local drops and keep referenced bindings valid until execution | **Deterministic destruction** | cleanup CFG | run-pass traces, compile-fail conflicts |
+| `Box` uniquely owns address-stable storage; `Shared`/`Weak` explicitly reference-count sharing; strong cycles require `Weak` or a store | **Explicit shared and graph ownership** | allocator, atomic refcounts | run-pass, stress, cost workload |
+| `Store[T]` owns homogeneous graph nodes; `Handle[T]` is copyable store/slot/generation identity; wrong or stale lookup traps | **Explicit shared and graph ownership** | store runtime | run-pass, trap, target widths |
+| No tracing collector, promotion, collector rooting, or thread registration remains | **Promotion and tracing-GC removal** | allocator only | inventory, link/generated-C assertions, ASan/LSan |
+| Allocation sites are explicit in owning APIs; OOM is fatal and non-unwinding | **Owned core values and collections**, **Promotion and tracing-GC removal** | allocator, OOM terminator | cost model, trap-process harness |
+| `Send`/`Sync` prevent safe cross-thread alias races; raw pointers receive neither automatically | **Race-safe concurrency** | capability metadata | compile-pass/fail |
+| Unscoped spawn consumes an owned `Send` closure and returns a move-only join handle; join moves the result | **Race-safe concurrency** | native threads | run-pass, lifecycle stress |
+| `thread.scope` is an ordinary function admitting scoped borrowing closures; children finish before the inferred region ends | **Race-safe concurrency**, **Structural borrow provenance** | native threads | compile-pass/fail, run-pass |
+| Channels move messages, mutexes expose data through guards, and atomics are non-`Copy` sequentially-consistent cells | **Race-safe concurrency** | thread/sync runtime | run-pass, TSan, target widths |
+| Safe code has no data-race UB; races require a violated unsafe/raw/foreign contract | **Race-safe concurrency** | C99 synchronization hooks | compile-fail, TSan, unsafe contract harness |
+| C declarations accept only explicit ABI-safe types; owning Elamite values, safe references, slices, and closure objects never cross accidentally | **Owned-model C interoperability** | C ABI | compile-pass/fail, C harness |
+| Retained C pointers require address-stable `Box`/`Shared` ownership; owning transfers pair exact allocators and deleters | **Owned-model C interoperability** | foreign libraries | C harness, ASan/LSan |
+| C output parameters use `MaybeUninit`; wrappers prove initialization before producing owned values | **Owned-model C interoperability** | C ABI | compile-pass/fail, C harness, UBSan |
+| Foreign callbacks use named or capture-free functions plus optional owned raw context; foreign threads enter through exported/callback boundaries under `Send`/`Sync` obligations | **Owned-model C interoperability**, **Race-safe concurrency** | callback runtime | C thread harness, TSan |
+| Compile-time syntax generation preserves provenance, uses the 0.11 AST interface, and generated code enters ordinary ownership checking | **Owned-model tooling and final conformance** | bounded interpreter | expansion properties, version-skew integration |
+| The owned demonstration and split design corpus cover every rule on x86 and x86-64 before the 0.10 seam is deleted | **Owned-model tooling and final conformance** | complete runtime | full conformance and sanitizer matrix |
+
+### Owned-model demonstration coverage
+
+| `examples/owned_spec_demo.elx` region | Normative ownership |
+| --- | --- |
+| `Point`, consuming and borrowing receivers | §§3.1–3.2, 4.2 |
+| `Document`, `Clone`, `publish`, `first_line` | §§3.1–3.2, 4.1, 6 |
+| `sum`, `clear`, slice coercions | §§3.2, 4.1, 7.1 |
+| `Trace`, `cleanup_demo` | §8 deterministic destruction and `defer` ordering |
+| `closure_demo`, `apply` | §5.1 inline first-class closure objects |
+| `scoped_threads`, `owned_thread` | §10.4 scoped borrows, owned spawn, and join |
+| `synchronized_counter`, `channel_demo` | §§9–10.4 explicit sharing, guards, and moved messages |
+| `Node`, `graph_demo` | §9 checked store/handle graph ownership |
+| `OwnedCFile`, `visit`, `pointer_demo` | §§3.3 and 10 ownership-aware C/raw boundaries |
+| `main` | Moves, explicit clone, last-use borrows, owned collections, formatted strings, `Result`, and cleanup integration |
+
+The split design fixtures map the same rules to compile-pass, compile-fail,
+run-pass, trap, C-harness, and target-width layers. No target-only construct is
+silently treated as implemented merely because it appears in this table.
+
+## 0.2 Historical 0.10 implementation evidence
+
+The remaining numbered sections record the currently implemented 0.10
+baseline and its completed legacy milestones. Their shallow-copy, promotion,
+collector, closure-environment, and concurrency rows are historical evidence,
+not authority for 0.11. They remain until final conformance decides which
+fixtures still provide useful regression coverage.
+
+### Legacy artifact inventory
 
 `roadmap.md` Milestone 0 calls for inventorying legacy grammar, compiler
 components, examples, and fixtures, preserving useful test cases. As of this

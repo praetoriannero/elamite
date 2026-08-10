@@ -1,5 +1,9 @@
 # Conformance release audit
 
+> Historical implemented baseline: this evidence audits compiler conformance
+> to 0.10. It remains valid during the ordered 0.11 ownership migration and is
+> replaced only by **Owned-model tooling and final conformance**.
+
 This file is the evidence index for `roadmap.md` Milestone 19. The initial release
 is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 

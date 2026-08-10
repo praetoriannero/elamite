@@ -1,0 +1,3 @@
+E-OWN-BORROW-CONFLICT
+primary: mutation of `point.x`
+related: shared borrow `view` remains live at its later use
