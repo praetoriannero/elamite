@@ -39,6 +39,19 @@ The x86 cells require a working 32-bit libc, C compiler, and Boehm development
 library. CI owns that installed environment; a local machine without multilib
 cannot claim those cells from a frontend-only run.
 
+## 0.11 migration progress
+
+Deterministic destruction now follows move and borrow checking on the owned
+revision path. Typed IR carries ordered custom and structural drop actions;
+control-flow IR uses conditional per-action flags for moves, partial moves,
+reinitialization, and replacement; and ordinary exits run defers before
+reverse-order automatic cleanup. `Drop.drop` is compiler-only, while the
+prelude `drop(value)` function provides explicit early destruction. Focused
+generated-C tests compile warning-clean C99 and verify the same exact-once trace
+at `-O0` and `-O2`. The temporary 0.11 boundary has advanced to owned core
+values and collections, so this change does not alter the shipped 0.10 value
+representation or its measured cost baseline.
+
 ## Language surface changes
 
 Struct declarations are now field-only. Inherent methods use module-level

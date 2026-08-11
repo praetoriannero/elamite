@@ -492,15 +492,42 @@ pub struct TypedParameter {
     pub passing: ValuePassingMode,
 }
 
-/// A local whose initialized value requires destruction. This is an analysis
-/// requirement, not an already-scheduled cleanup edge; deterministic
-/// destruction consumes it after move-state checking is available.
+/// A local whose initialized value requires destruction. Control-flow lowering
+/// consumes this analysis requirement after move-state checking and elaborates
+/// one conditional flag per ordered action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DropRequirement {
     pub binding: LocalBindingId,
     pub ty: TypeId,
     pub span: Span,
     pub operation: OwnershipUse,
+    /// Custom hooks and structural leaves in their required execution order:
+    /// custom hook first, then fields/elements in reverse declaration order.
+    pub actions: Vec<DropAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DropProjection {
+    Field(FieldId),
+    TupleField(usize),
+    ArrayIndex(usize),
+    VariantField { variant: VariantId, field: FieldId },
+    ClosureCapture(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DropActionKind {
+    /// A leaf whose owned representation supplies its release hook in the
+    /// owning representation milestone. The flag transition is already exact.
+    StructuralLeaf,
+    Custom(FunctionInstance),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropAction {
+    pub ty: TypeId,
+    pub projections: Vec<DropProjection>,
+    pub kind: DropActionKind,
 }
 
 #[derive(Debug, Clone)]

@@ -159,6 +159,7 @@ pub fn check_frontend_with_features(
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
+        let _control_flow = lower_control_flow(&high_level.program, &type_output.program);
         if let Some(diagnostic) = semantic_revision_boundary(&resolved) {
             return Err(vec![diagnostic]);
         }
@@ -405,6 +406,7 @@ pub fn compile_tests_with_features(
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
+        let _control_flow = lower_control_flow(&high_level.program, &typed);
         if let Some(diagnostic) = semantic_revision_boundary(&resolved) {
             return Err(vec![diagnostic]);
         }

@@ -478,6 +478,17 @@ impl<'a> Checker<'a> {
         include_receiver: bool,
     ) -> (TypeId, PlaceKind) {
         let selected_self_type = self.pending_self_type.take();
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && self.is_drop_method(declaration)
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "`Drop.drop` is compiler-invoked and cannot be called directly",
+                )
+                .with_primary(call_span),
+            );
+        }
         if self.resolved.is_standard_declaration(declaration, "panic")
             || self.resolved.is_standard_declaration(declaration, "assert")
         {
@@ -2518,6 +2529,24 @@ impl<'a> Checker<'a> {
         } else {
             self.inherent_method(self_type, &member_name, member_token.span)
         };
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && member_name == "drop"
+            && declared_member.is_none()
+            && inherent.is_none()
+            && crate::traits::provides(self.resolved, self.typed, self_type, "Drop")
+        {
+            for argument in arguments {
+                self.check_expr(argument, ExpectedType::None);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "`Drop.drop` is compiler-invoked and cannot be called directly",
+                )
+                .with_primary(call_span),
+            );
+            return Some((self.typed.types.error(), PlaceKind::Value));
+        }
         let member = match declared_member {
             Some(MemberId::Field(field)) => Some(MemberId::Field(field)),
             Some(MemberId::Method(method)) => Some(MemberId::Method(method)),

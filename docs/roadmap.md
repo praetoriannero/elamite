@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Deterministic destruction**
+> Next planned milestone: **Owned core values and collections**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -23,8 +23,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Complete | Canonical capabilities, projected places, ordered ownership uses in both IR levels, and the legacy-copy backend seam are implemented. |
 | [Move and initialization checking](#move-and-initialization-checking) | Complete | Typed-IR place-state dataflow enforces moves, initialization, partial moves, reinitialization, indexed extraction, and conservative control-flow joins. |
 | [Structural borrow provenance](#structural-borrow-provenance) | Complete | Hidden provenance, shared/exclusive loans, structural propagation, public metadata, receiver adaptation, and robustness coverage are implemented. |
-| [Deterministic destruction](#deterministic-destruction) | Planned — next | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
-| [Owned core values and collections](#owned-core-values-and-collections) | Planned | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
+| [Deterministic destruction](#deterministic-destruction) | Complete | Per-action drop flags, custom and structural glue, ordinary-exit cleanup, replacement, defer ordering, and explicit C99 lowering are implemented. |
+| [Owned core values and collections](#owned-core-values-and-collections) | Planned — next | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
 | [Inline first-class closures](#inline-first-class-closures) | Planned | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
 | [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
 | [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
@@ -411,8 +411,9 @@ ordinary control flow before owned resources depend on it.
 
 > Status: Complete. Stable loan identities, backwards last-use liveness, and
 > structural value provenance enforce accesses over typed IR. Inferred return
-> sources are serialized in package metadata, and the driver boundary has
-> advanced to deterministic destruction. Shipped 0.10 standard declarations
+> sources are serialized in package metadata. Deterministic destruction now
+> follows this pass, and the driver boundary has advanced to owned core values
+> and collections. Shipped 0.10 standard declarations
 > with body-selected view sources temporarily retain all borrow-bearing inputs;
 > their exact owned signatures migrate with **Owned core values and
 > collections**.
@@ -433,24 +434,28 @@ lifetime parameters in Elamite source.
 
 ### Deterministic destruction
 
-> Status: Planned — next.
+> Status: Complete. Typed IR records ordered custom and structural drop actions;
+> control-flow lowering maintains partial-move-aware flags and elaborates every
+> ordinary exit; the C99 backend executes custom hooks exactly once. The 0.11
+> boundary now follows this pass and names **Owned core values and
+> collections** as the next missing semantic layer.
 >
-> Blocked by: **Structural borrow provenance**.
+> Blocked by: **None**. It unblocks **Owned core values and collections**.
 
 **Goal:** Release owned resources exactly once on every ordinary exit while
 preserving Elamite's non-unwinding trap model.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Accepted cleanup protocol** | Implement structural drop glue and the coherent compiler-invoked `Drop` trait selected by the semantic milestone. | `Drop.drop` is not directly callable, `Drop` types are non-`Copy` and non-partially-movable, and generic obligations are checked once. |
-| **Drop-state elaboration** | Add conditional initialization flags and partial-move-aware drop facts after checking and before monomorphization. | Conditionally initialized, reassigned, moved, and partially moved aggregates release exactly the still-owned fields. |
-| **Control-flow cleanup** | Emit reverse-order cleanup for fallthrough, `return`, `break`, `continue`, and postfix `?`, with the specified ordering relative to `defer`; keep process-fatal traps non-unwinding. | Side-effect traces prove exact-once ordering through nested blocks and every ordinary exit in debug and release builds. |
-| **C99 cleanup lowering** | Lower cleanup edges and flags into explicit C99 control flow without C11 features, compiler-dependent destructor extensions, or unsequenced evaluation. | Generated C is warning-clean on x86 and x86-64 and sanitizer stress finds no leak, double destruction, or use after destruction. |
-| **Cleanup diagnostics and restrictions** | Enforce restrictions involving partially moved cleanup types, invalid cleanup implementations, `defer`, `unsafe`, and escaping borrows. | Each rejected form names the ownership or control-flow invariant it would violate and points to the related declaration or move. |
+| **Accepted cleanup protocol (done)** | Implement structural drop glue and the coherent compiler-invoked `Drop` trait selected by the semantic milestone. | `Drop.drop` is not directly callable, `Drop` types are non-`Copy` and non-partially-movable, and generic obligations are checked once. |
+| **Drop-state elaboration (done)** | Add conditional initialization flags and partial-move-aware drop facts after checking and before monomorphization. | Conditionally initialized, reassigned, moved, and partially moved aggregates release exactly the still-owned fields. |
+| **Control-flow cleanup (done)** | Emit reverse-order cleanup for fallthrough, `return`, `break`, `continue`, and postfix `?`, with the specified ordering relative to `defer`; keep process-fatal traps non-unwinding. | Side-effect traces prove exact-once ordering through nested blocks and every ordinary exit in debug and release builds. |
+| **C99 cleanup lowering (done)** | Lower cleanup edges and flags into explicit C99 control flow without C11 features, compiler-dependent destructor extensions, or unsequenced evaluation. | Generated C is warning-clean on x86 and x86-64 and sanitizer stress finds no leak, double destruction, or use after destruction. |
+| **Cleanup diagnostics and restrictions (done)** | Enforce restrictions involving partially moved cleanup types, invalid cleanup implementations, `defer`, `unsafe`, and escaping borrows. | Each rejected form names the ownership or control-flow invariant it would violate and points to the related declaration or move. |
 
 ### Owned core values and collections
 
-> Status: Planned.
+> Status: Planned — next.
 >
 > Blocked by: **Deterministic destruction**.
 

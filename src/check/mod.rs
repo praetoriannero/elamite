@@ -159,9 +159,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after structural borrow provenance. Deterministic
-/// destruction is deliberately the next pass rather than being approximated
-/// by ownership or loan analysis.
+/// The temporary boundary after deterministic destruction. Owned standard
+/// representations are deliberately the next pass rather than allowing the
+/// 0.11 surface to reuse the shallow 0.10 collection model.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -170,8 +170,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has structural borrow provenance, but \
-                 deterministic destruction is not implemented yet",
+                "semantic revision 0.11.0-draft has deterministic destruction, but owned core \
+                 values and collections are not implemented yet",
             )
         })
 }
@@ -383,6 +383,32 @@ impl<'a> Checker<'a> {
                         if self.resolved.symbol_text(
                             self.resolved.declarations[identity.declaration.index()].name
                         ) == "Clone"
+                )
+            })
+    }
+
+    fn is_drop_method(&self, declaration: DeclarationId) -> bool {
+        let data = &self.resolved.declarations[declaration.index()];
+        if self.resolved.symbol_text(data.name) != "drop" {
+            return false;
+        }
+        if data
+            .parent_declaration
+            .is_some_and(|parent| self.resolved.is_standard_declaration(parent, "Drop"))
+        {
+            return true;
+        }
+        data.parent_impl
+            .and_then(|implementation| self.typed.impl_trait_types.get(&implementation))
+            .is_some_and(|trait_type| {
+                let mut trait_type = *trait_type;
+                while let TypeKind::Alias { target, .. } = self.typed.types.kind(trait_type) {
+                    trait_type = *target;
+                }
+                matches!(
+                    self.typed.types.kind(trait_type),
+                    TypeKind::Nominal { identity, .. }
+                        if self.resolved.is_standard_declaration(identity.declaration, "Drop")
                 )
             })
     }

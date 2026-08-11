@@ -46,6 +46,10 @@ pub(super) fn apply_read_only_call_borrowing(
                     .filter_map(|(index, parameter)| {
                         (copy_is_costly(types, parameter.ty)
                             && !function.promoted_locals.contains(&parameter.binding)
+                            && !function
+                                .drop_requirements
+                                .iter()
+                                .any(|requirement| requirement.binding == parameter.binding)
                             && statements_are_read_only(&function.body, parameter.binding))
                         .then_some(index)
                     })

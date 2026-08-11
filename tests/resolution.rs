@@ -972,6 +972,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
             "Vec",
             "bool",
             "char",
+            "drop",
             "f32",
             "f64",
             "i128",

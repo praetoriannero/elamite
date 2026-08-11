@@ -225,6 +225,17 @@ pub enum Instruction {
         value: TemporaryId,
         span: Span,
     },
+    SetDropFlag {
+        flag: DropFlagId,
+        initialized: bool,
+        span: Span,
+    },
+    DropValue {
+        flag: DropFlagId,
+        binding: LocalBindingId,
+        action: DropAction,
+        span: Span,
+    },
     PrintValue {
         value: TemporaryId,
         ty: TypeId,
@@ -317,8 +328,9 @@ pub struct ControlFlowFunction {
     pub parameters: Vec<TypedParameter>,
     pub return_type: TypeId,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
-    /// Destruction requirements retained for later cleanup-edge elaboration.
+    /// Source destruction requirements retained beside their elaborated flags.
     pub drop_requirements: Vec<DropRequirement>,
+    pub drop_flags: Vec<DropFlag>,
     /// Locals promoted to managed storage; see [`TypedFunction::promoted_locals`].
     pub promoted_locals: BTreeSet<LocalBindingId>,
     /// See [`TypedFunction::allocates_managed`].
@@ -327,6 +339,23 @@ pub struct ControlFlowFunction {
     pub temporary_types: Vec<TypeId>,
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DropFlagId(pub u32);
+
+impl DropFlagId {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropFlag {
+    pub id: DropFlagId,
+    pub binding: LocalBindingId,
+    pub action: DropAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

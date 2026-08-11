@@ -94,7 +94,11 @@ struct OpenBlock {
 /// which also gives deferred expressions their execution-time values
 /// (Milestone 15.10): the bodies read their bindings when the edge runs, not
 /// when the registration was reached.
-type CleanupScope = Vec<Vec<TypedStatement>>;
+#[derive(Clone, Default)]
+struct CleanupScope {
+    deferred: Vec<Vec<TypedStatement>>,
+    bindings: Vec<LocalBindingId>,
+}
 
 struct FunctionLowerer<'a> {
     types: &'a TypedProgram,
@@ -110,10 +114,30 @@ struct FunctionLowerer<'a> {
     loops: Vec<(BlockId, BlockId, usize)>,
     /// Open lexical scopes, outermost first; the function body is index 0.
     scopes: Vec<CleanupScope>,
+    drop_flags: Vec<DropFlag>,
+    binding_drop_flags: BTreeMap<LocalBindingId, Vec<DropFlagId>>,
 }
 
 impl<'a> FunctionLowerer<'a> {
     fn new(types: &'a TypedProgram, function: &'a TypedFunction) -> Self {
+        let mut drop_flags = Vec::new();
+        let mut binding_drop_flags = BTreeMap::<LocalBindingId, Vec<DropFlagId>>::new();
+        for requirement in &function.drop_requirements {
+            for action in &requirement.actions {
+                let id = DropFlagId(
+                    u32::try_from(drop_flags.len()).expect("too many drop flags in one function"),
+                );
+                drop_flags.push(DropFlag {
+                    id,
+                    binding: requirement.binding,
+                    action: action.clone(),
+                });
+                binding_drop_flags
+                    .entry(requirement.binding)
+                    .or_default()
+                    .push(id);
+            }
+        }
         Self {
             types,
             function,
@@ -127,6 +151,8 @@ impl<'a> FunctionLowerer<'a> {
             next_ownership_use: 0,
             loops: Vec::new(),
             scopes: Vec::new(),
+            drop_flags,
+            binding_drop_flags,
         }
     }
 
@@ -173,6 +199,7 @@ impl<'a> FunctionLowerer<'a> {
             return_type: self.function.return_type,
             local_types: self.function.local_types.clone(),
             drop_requirements: self.function.drop_requirements.clone(),
+            drop_flags: self.drop_flags,
             promoted_locals: self.function.promoted_locals.clone(),
             allocates_managed: self.function.allocates_managed,
             closure: self.function.closure.clone(),
@@ -195,7 +222,33 @@ impl<'a> FunctionLowerer<'a> {
     /// normal fallthrough runs that scope's deferred registrations before
     /// control continues past the block (Milestone 15.7).
     fn lower_scope(&mut self, statements: &[TypedStatement]) {
-        self.scopes.push(CleanupScope::new());
+        self.lower_scope_with_bindings(statements, Vec::new());
+    }
+
+    fn lower_scope_with_bindings(
+        &mut self,
+        statements: &[TypedStatement],
+        mut extra_bindings: Vec<LocalBindingId>,
+    ) {
+        if self.scopes.is_empty() {
+            extra_bindings.extend(
+                self.function
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.binding),
+            );
+        }
+        extra_bindings.extend(scope_bindings(statements));
+        deduplicate_bindings(&mut extra_bindings);
+        self.scopes.push(CleanupScope {
+            deferred: Vec::new(),
+            bindings: extra_bindings.clone(),
+        });
+        if self.scopes.len() == 1 {
+            for parameter in &self.function.parameters {
+                self.set_binding_drop_flags(parameter.binding, true, parameter.span);
+            }
+        }
         self.lower_statements(statements);
         if self.is_open(self.current) {
             self.emit_cleanup(self.scopes.len() - 1);
@@ -212,13 +265,14 @@ impl<'a> FunctionLowerer<'a> {
     /// deferred body may itself open nested (necessarily registration-free)
     /// scopes while it is lowered.
     fn emit_cleanup(&mut self, from: usize) {
-        let pending: Vec<Vec<TypedStatement>> = self.scopes[from..]
-            .iter()
-            .rev()
-            .flat_map(|scope| scope.iter().rev().cloned())
-            .collect();
-        for registration in &pending {
-            self.lower_statements(registration);
+        let pending = self.scopes[from..].to_vec();
+        for scope in pending.iter().rev() {
+            for registration in scope.deferred.iter().rev() {
+                self.lower_scope(registration);
+            }
+            for binding in scope.bindings.iter().rev() {
+                self.emit_binding_drop(*binding, self.function.span);
+            }
         }
     }
 
@@ -231,6 +285,7 @@ impl<'a> FunctionLowerer<'a> {
                     value,
                     span: statement.span,
                 });
+                self.set_binding_drop_flags(*binding, true, statement.span);
             }
             TypedStatementKind::Destructure {
                 bindings, value, ..
@@ -267,6 +322,7 @@ impl<'a> FunctionLowerer<'a> {
                         value: copied,
                         span: statement.span,
                     });
+                    self.set_binding_drop_flags(binding.binding, true, statement.span);
                 }
             }
             TypedStatementKind::Assign {
@@ -276,14 +332,17 @@ impl<'a> FunctionLowerer<'a> {
             } => {
                 let place_type = place.ty();
                 let source_span = place.span();
+                let ownership_place = normalized_ownership_place(place.ownership_place());
                 let place = self.lower_place(place);
                 if *operator == AssignmentOperator::Assign {
                     let value = self.lower_expression(value);
+                    self.emit_place_drop(&ownership_place, statement.span);
                     self.emit(Instruction::Store {
                         place,
                         value,
                         span: statement.span,
                     });
+                    self.set_place_drop_flags(&ownership_place, true, statement.span);
                 } else {
                     let old = self.temp(place_type);
                     self.emit(Instruction::Assign {
@@ -309,6 +368,7 @@ impl<'a> FunctionLowerer<'a> {
                         value: result,
                         span: statement.span,
                     });
+                    self.set_place_drop_flags(&ownership_place, true, statement.span);
                 }
             }
             TypedStatementKind::Expression(expression) => {
@@ -345,7 +405,7 @@ impl<'a> FunctionLowerer<'a> {
                 // body to the innermost scope's cleanup plan and evaluates
                 // nothing (Milestone 15.4).
                 if let Some(scope) = self.scopes.last_mut() {
-                    scope.push(body.clone());
+                    scope.deferred.push(body.clone());
                 }
             }
             TypedStatementKind::Expect {
@@ -556,9 +616,10 @@ impl<'a> FunctionLowerer<'a> {
             value: element,
             span,
         });
+        self.set_binding_drop_flags(binding, true, span);
         self.loops
             .push((exit_block, increment_block, self.scopes.len()));
-        self.lower_scope(body);
+        self.lower_scope_with_bindings(body, vec![binding]);
         self.loops.pop();
         if self.is_open(self.current) {
             self.terminate(Terminator::Goto(increment_block));
@@ -695,9 +756,10 @@ impl<'a> FunctionLowerer<'a> {
             value: element,
             span,
         });
+        self.set_binding_drop_flags(binding, true, span);
         self.loops
             .push((exit_block, condition_block, self.scopes.len()));
-        self.lower_scope(body);
+        self.lower_scope_with_bindings(body, vec![binding]);
         self.loops.pop();
         if self.is_open(self.current) {
             self.terminate(Terminator::Goto(condition_block));
@@ -711,7 +773,11 @@ impl<'a> FunctionLowerer<'a> {
         for arm in arms {
             let matched_block = self.new_block();
             let next_arm = self.new_block();
-            self.lower_pattern(&arm.pattern, value, matched_block, next_arm);
+            let failed_cleanup = self.new_block();
+            let mut bindings = Vec::new();
+            pattern_bindings(&arm.pattern, &mut bindings);
+            deduplicate_bindings(&mut bindings);
+            self.lower_pattern(&arm.pattern, value, matched_block, failed_cleanup);
             self.current = matched_block;
             let body_block = if let Some(guard) = &arm.guard {
                 let guard_value = self.lower_expression(guard);
@@ -719,17 +785,26 @@ impl<'a> FunctionLowerer<'a> {
                 self.terminate(Terminator::Branch {
                     condition: guard_value,
                     then_block: body_block,
-                    else_block: next_arm,
+                    else_block: failed_cleanup,
                 });
                 body_block
             } else {
                 matched_block
             };
             self.current = body_block;
-            self.lower_scope(&arm.body);
+            self.lower_scope_with_bindings(&arm.body, bindings.clone());
             if self.is_open(self.current) {
                 self.terminate(Terminator::Goto(exit_block));
             }
+            self.current = failed_cleanup;
+            for binding in &bindings {
+                // A failed guard or refutable subpattern rolls tentative
+                // pattern moves back into the scrutinee before the next arm.
+                // No user destructor runs for a binding that was never
+                // committed to an arm body.
+                self.set_binding_drop_flags(*binding, false, arm.span);
+            }
+            self.terminate(Terminator::Goto(next_arm));
             self.current = next_arm;
         }
         if self.is_open(self.current) {
@@ -763,6 +838,7 @@ impl<'a> FunctionLowerer<'a> {
                     value: copied,
                     span: pattern.span,
                 });
+                self.set_binding_drop_flags(*binding, true, pattern.span);
                 self.terminate(Terminator::Goto(success));
             }
             TypedPatternKind::Literal(constant) => {
@@ -786,14 +862,21 @@ impl<'a> FunctionLowerer<'a> {
                     return;
                 }
                 for (index, alternative) in alternatives.iter().enumerate() {
-                    let alternative_failure = if index + 1 == alternatives.len() {
-                        failure
+                    let cleanup = self.new_block();
+                    self.lower_pattern(alternative, value, success, cleanup);
+                    self.current = cleanup;
+                    let mut bindings = Vec::new();
+                    pattern_bindings(alternative, &mut bindings);
+                    deduplicate_bindings(&mut bindings);
+                    for binding in &bindings {
+                        self.set_binding_drop_flags(*binding, false, alternative.span);
+                    }
+                    if index + 1 == alternatives.len() {
+                        self.terminate(Terminator::Goto(failure));
                     } else {
-                        self.new_block()
-                    };
-                    self.lower_pattern(alternative, value, success, alternative_failure);
-                    if alternative_failure != failure {
-                        self.current = alternative_failure;
+                        let next = self.new_block();
+                        self.terminate(Terminator::Goto(next));
+                        self.current = next;
                     }
                 }
             }
@@ -1399,6 +1482,16 @@ impl<'a> FunctionLowerer<'a> {
             span: expression.span,
         });
         let mut result = raw;
+        let transfers_borrow_result = matches!(expression.kind, TypedExpressionKind::AddressOf(_))
+            && expression.ownership.iter().any(|operation| {
+                matches!(
+                    operation.kind,
+                    OwnershipUseKind::BorrowShared
+                        | OwnershipUseKind::BorrowExclusive
+                        | OwnershipUseKind::ReborrowShared
+                        | OwnershipUseKind::ReborrowExclusive
+                )
+            });
         for operation in &expression.ownership {
             result = match operation.kind {
                 OwnershipUseKind::Produce => result,
@@ -1410,6 +1503,11 @@ impl<'a> FunctionLowerer<'a> {
                     expression.ty,
                     operation.clone(),
                     expression.span,
+                    !(transfers_borrow_result
+                        && matches!(
+                            operation.kind,
+                            OwnershipUseKind::Move | OwnershipUseKind::Copy
+                        )),
                 ),
             };
         }
@@ -1853,7 +1951,15 @@ impl<'a> FunctionLowerer<'a> {
         ty: TypeId,
         operation: OwnershipUse,
         span: Span,
+        update_drop_state: bool,
     ) -> TemporaryId {
+        let moved_place = (update_drop_state
+            && matches!(
+                operation.kind,
+                OwnershipUseKind::Move | OwnershipUseKind::Drop
+            ))
+        .then(|| operation.place.clone())
+        .flatten();
         let destination = self.temp(ty);
         let id = self.take_ownership_use_id();
         self.emit(Instruction::Assign {
@@ -1865,7 +1971,85 @@ impl<'a> FunctionLowerer<'a> {
             },
             span,
         });
+        if let Some(place) = moved_place {
+            self.set_place_drop_flags(&normalized_ownership_place(place), false, span);
+        }
         destination
+    }
+
+    fn matching_drop_flags(&self, place: &OwnershipPlace) -> Vec<DropFlagId> {
+        let OwnershipPlaceRoot::Local(binding) = place.root else {
+            return Vec::new();
+        };
+        self.binding_drop_flags
+            .get(&binding)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|flag| {
+                drop_paths_overlap(
+                    &place.projections,
+                    &self.drop_flags[flag.index()].action.projections,
+                )
+            })
+            .collect()
+    }
+
+    fn set_binding_drop_flags(&mut self, binding: LocalBindingId, initialized: bool, span: Span) {
+        let flags = self
+            .binding_drop_flags
+            .get(&binding)
+            .cloned()
+            .unwrap_or_default();
+        for flag in flags {
+            self.emit(Instruction::SetDropFlag {
+                flag,
+                initialized,
+                span,
+            });
+        }
+    }
+
+    fn set_place_drop_flags(&mut self, place: &OwnershipPlace, initialized: bool, span: Span) {
+        for flag in self.matching_drop_flags(place) {
+            self.emit(Instruction::SetDropFlag {
+                flag,
+                initialized,
+                span,
+            });
+        }
+    }
+
+    fn emit_binding_drop(&mut self, binding: LocalBindingId, span: Span) {
+        let flags = self
+            .binding_drop_flags
+            .get(&binding)
+            .cloned()
+            .unwrap_or_default();
+        for flag in flags {
+            let action = self.drop_flags[flag.index()].action.clone();
+            self.emit(Instruction::DropValue {
+                flag,
+                binding,
+                action,
+                span,
+            });
+        }
+    }
+
+    fn emit_place_drop(&mut self, place: &OwnershipPlace, span: Span) {
+        let OwnershipPlaceRoot::Local(binding) = place.root else {
+            return;
+        };
+        for flag in self.matching_drop_flags(place) {
+            let action = self.drop_flags[flag.index()].action.clone();
+            self.emit(Instruction::DropValue {
+                flag,
+                binding,
+                action,
+                span,
+            });
+        }
     }
 
     fn emit_logical_copy(
@@ -1918,6 +2102,82 @@ impl<'a> FunctionLowerer<'a> {
     fn is_open(&self, block: BlockId) -> bool {
         self.blocks[block.index()].terminator.is_none()
     }
+}
+
+fn scope_bindings(statements: &[TypedStatement]) -> Vec<LocalBindingId> {
+    let mut bindings = Vec::new();
+    for statement in statements {
+        match &statement.kind {
+            TypedStatementKind::Let { binding, .. } => bindings.push(*binding),
+            TypedStatementKind::Destructure {
+                bindings: tuple_bindings,
+                ..
+            } => bindings.extend(tuple_bindings.iter().map(|binding| binding.binding)),
+            _ => {}
+        }
+    }
+    bindings
+}
+
+fn pattern_bindings(pattern: &TypedPattern, bindings: &mut Vec<LocalBindingId>) {
+    match &pattern.kind {
+        TypedPatternKind::Binding(binding) => bindings.push(*binding),
+        TypedPatternKind::Alternative(patterns) | TypedPatternKind::Tuple(patterns) => {
+            for pattern in patterns {
+                pattern_bindings(pattern, bindings);
+            }
+        }
+        TypedPatternKind::Dereference(pattern) => pattern_bindings(pattern, bindings),
+        TypedPatternKind::Struct { fields, .. } | TypedPatternKind::Variant { fields, .. } => {
+            for (_, pattern) in fields {
+                pattern_bindings(pattern, bindings);
+            }
+        }
+        TypedPatternKind::Wildcard | TypedPatternKind::Literal(_) => {}
+    }
+}
+
+fn deduplicate_bindings(bindings: &mut Vec<LocalBindingId>) {
+    let mut seen = BTreeSet::new();
+    bindings.retain(|binding| seen.insert(*binding));
+}
+
+fn normalized_ownership_place(mut place: OwnershipPlace) -> OwnershipPlace {
+    place
+        .projections
+        .retain(|projection| *projection != OwnershipProjection::ReceiverAdaptation);
+    place
+}
+
+/// A source projection initializes or invalidates every leaf below it. A
+/// dynamic index conservatively overlaps every element. A dereference cannot
+/// name storage owned by the root local, so it never reaches a local action.
+fn drop_paths_overlap(source: &[OwnershipProjection], action: &[DropProjection]) -> bool {
+    for (source, action) in source.iter().zip(action) {
+        let overlaps = match (source, action) {
+            (OwnershipProjection::Field(left), DropProjection::Field(right)) => left == right,
+            (
+                OwnershipProjection::Field(left),
+                DropProjection::VariantField { field: right, .. },
+            ) => left == right,
+            (OwnershipProjection::TupleField(left), DropProjection::TupleField(right)) => {
+                left == right
+            }
+            (OwnershipProjection::ConstantIndex(left), DropProjection::ArrayIndex(right)) => {
+                usize::try_from(*left).is_ok_and(|left| left == *right)
+            }
+            (OwnershipProjection::DynamicIndex, DropProjection::ArrayIndex(_)) => true,
+            (OwnershipProjection::Dereference, _) => false,
+            (OwnershipProjection::ReceiverAdaptation, _) => unreachable!(
+                "receiver adaptations are removed before matching deterministic drop paths"
+            ),
+            _ => false,
+        };
+        if !overlaps {
+            return false;
+        }
+    }
+    source.len() <= action.len()
 }
 
 #[cfg(debug_assertions)]
@@ -2092,8 +2352,11 @@ fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogicalCopyStrategy, logical_copy_allocation, logical_copy_strategy};
-    use crate::operations::LogicalCopyAllocation;
+    use super::{
+        DropProjection, LogicalCopyStrategy, drop_paths_overlap, logical_copy_allocation,
+        logical_copy_strategy,
+    };
+    use crate::operations::{LogicalCopyAllocation, OwnershipProjection};
     use crate::types::{Mutability, PrimitiveType, TypeContext, TypeKind};
 
     #[test]
@@ -2144,5 +2407,23 @@ mod tests {
             logical_copy_allocation(&types, string),
             LogicalCopyAllocation::SharedBacking
         );
+    }
+
+    #[test]
+    fn drop_paths_distinguish_ancestor_replacement_from_descendant_replacement() {
+        let action = [DropProjection::TupleField(0)];
+
+        assert!(drop_paths_overlap(&[], &action));
+        assert!(drop_paths_overlap(
+            &[OwnershipProjection::TupleField(0)],
+            &action
+        ));
+        assert!(!drop_paths_overlap(
+            &[
+                OwnershipProjection::TupleField(0),
+                OwnershipProjection::TupleField(1),
+            ],
+            &action,
+        ));
     }
 }

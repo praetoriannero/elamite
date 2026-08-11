@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use elamite::backend::{COptions, emit_c};
 use elamite::check::{check_borrows, check_for_target, check_moves, infer_provenance_signatures};
 use elamite::config::{SemanticRevision, Target};
 use elamite::diagnostics::Category;
@@ -33,6 +35,14 @@ struct TestPackage {
 
 impl TestPackage {
     fn new(name: &str, source: &str) -> Self {
+        Self::with_target(name, source, "lib", "lib.elx")
+    }
+
+    fn executable(name: &str, source: &str) -> Self {
+        Self::with_target(name, source, "exe", "main.elx")
+    }
+
+    fn with_target(name: &str, source: &str, target_kind: &str, source_name: &str) -> Self {
         let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "elamite-semantic-revision-{}-{name}-{serial}",
@@ -41,10 +51,13 @@ impl TestPackage {
         fs::create_dir_all(root.join("src")).expect("create package source directory");
         fs::write(
             root.join("elamite.toml"),
-            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\ntarget_kind = \"lib\"\n"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\ntarget_kind = \
+                 \"{target_kind}\"\n"
+            ),
         )
         .expect("write package manifest");
-        fs::write(root.join("src/lib.elx"), source).expect("write package source");
+        fs::write(root.join("src").join(source_name), source).expect("write package source");
         Self { root }
     }
 
@@ -423,7 +436,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_borrow_checking() {
+fn owned_packages_stop_after_deterministic_destruction() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -440,7 +453,7 @@ fn owned_packages_stop_after_borrow_checking() {
         Category::SemanticRevision,
         "{diagnostics:#?}"
     );
-    assert!(diagnostics[0].message.contains("deterministic destruction"));
+    assert!(diagnostics[0].message.contains("owned core values"));
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
@@ -637,7 +650,7 @@ pub fn ownership_ops(value: String, number: i32) -> String:
             .drop_requirements
             .iter()
             .any(|requirement| requirement.operation.kind == OwnershipUseKind::Drop),
-        "owned locals retain explicit destruction requirements without scheduling cleanup yet"
+        "owned locals retain explicit destruction requirements for cleanup elaboration"
     );
     let control_flow = lower_control_flow(&typed_ir.program, &type_output.program);
     assert_eq!(control_flow.semantic_revision, SemanticRevision::V0_11);
@@ -1255,4 +1268,193 @@ fn borrow_provenance_flows_through_closure_environments_and_calls() {
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
     assert_eq!(diagnostics[0].category, Category::Borrow);
     assert!(diagnostics[0].message.contains("overlapping live borrow"));
+}
+
+#[test]
+fn direct_drop_hook_calls_are_rejected() {
+    let package = TestPackage::new(
+        "owned_direct_drop",
+        r#"struct Resource:
+    value: i32
+
+impl Drop for Resource:
+    fn drop(self: &var Self) -> ():
+        pass
+
+fn invalid(value: Resource) -> ():
+    var owned = value
+    owned.drop()
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
+        Ok(_) => panic!("a direct custom destruction call must be rejected"),
+        Err(diagnostics) => diagnostics,
+    };
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].category, Category::Call);
+    assert!(
+        diagnostics[0].message.contains("compiler-invoked"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn deterministic_cleanup_runs_exactly_once_in_specified_order_in_c99() {
+    let package = TestPackage::executable(
+        "owned_destruction",
+        r#"struct Notice:
+    value: i32
+
+struct Pair:
+    first: Notice
+    second: Notice
+
+impl Drop for Notice:
+    fn drop(self: &var Self) -> ():
+        println(self.value)
+
+fn main() -> ():
+    var slot = Notice { value: 5 }
+    let pair = Pair {
+        first: Notice { value: 2 },
+        second: Notice { value: 3 },
+    }
+    defer println(4)
+    slot = Notice { value: 6 }
+    let explicit = Notice { value: 7 }
+    drop(explicit)
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty(), "{:#?}", types.diagnostics);
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty(), "{:#?}", traits.diagnostics);
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    let provenance = infer_provenance_signatures(&resolved, &mut types.program);
+    assert!(provenance.is_empty(), "{provenance:#?}");
+    let typed_ir = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(
+        typed_ir.diagnostics.is_empty(),
+        "{:#?}",
+        typed_ir.diagnostics
+    );
+    let moves = check_moves(&resolved, &mut types.program, &typed_ir.program);
+    assert!(moves.is_empty(), "{moves:#?}");
+    let borrows = check_borrows(&resolved, &mut types.program, &typed_ir.program);
+    assert!(borrows.is_empty(), "{borrows:#?}");
+    let control_flow = lower_control_flow(&typed_ir.program, &types.program);
+    let main = control_flow
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main control-flow body");
+    assert_eq!(main.drop_flags.len(), 4);
+    assert!(
+        main.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                elamite::ir::Instruction::SetDropFlag {
+                    initialized: false,
+                    ..
+                }
+            ))
+    );
+    assert_eq!(
+        main.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| matches!(instruction, elamite::ir::Instruction::DropValue { .. }))
+            .count(),
+        5,
+        "replacement plus four final cleanup actions must be explicit"
+    );
+
+    let entry = resolved
+        .declarations
+        .iter()
+        .find(|declaration| resolved.symbol_text(declaration.name) == "main")
+        .map(|declaration| declaration.id)
+        .expect("resolved main declaration");
+    let output = emit_c(
+        &control_flow,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86_64,
+            entry: Some(entry),
+            test_entries: None,
+        },
+    );
+    assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+    assert!(output.source.contains("int el_drop_"));
+    assert!(output.source.contains("if (el_drop_"));
+    assert!(!output.source.contains("_Static_assert"));
+    let x86_output = emit_c(
+        &control_flow,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86,
+            entry: Some(entry),
+            test_entries: None,
+        },
+    );
+    assert!(
+        x86_output.diagnostics.is_empty(),
+        "{:#?}",
+        x86_output.diagnostics
+    );
+    assert!(x86_output.source.contains("int el_drop_"));
+    assert!(!x86_output.source.contains("_Static_assert"));
+
+    let c_path = package.root.join("destruction.c");
+    fs::write(&c_path, output.source).expect("write generated C");
+    for optimization in ["-O0", "-O2"] {
+        let executable = package
+            .root
+            .join(format!("destruction-{}", &optimization[1..]));
+        let compiled = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+            .args([
+                "-std=c99",
+                "-pedantic-errors",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                optimization,
+            ])
+            .arg(&c_path)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .expect("invoke C99 compiler");
+        assert!(
+            compiled.status.success(),
+            "generated C failed under {optimization}: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let run = Command::new(&executable)
+            .output()
+            .expect("run generated program");
+        assert!(run.status.success(), "program failed under {optimization}");
+        assert_eq!(
+            String::from_utf8(run.stdout).expect("UTF-8 output"),
+            "5\n7\n4\n3\n2\n6\n"
+        );
+    }
 }

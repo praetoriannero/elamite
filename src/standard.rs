@@ -142,6 +142,7 @@ pub const SOURCE_DECLARATIONS: &[&str] = &[
     "std.Clone",
     "std.Display",
     "std.Drop",
+    "std.drop",
     "std.Iterator",
     "std.NumericError",
     "std.Option",

@@ -1,6 +1,12 @@
 //! Function and explicit-control-flow emission.
 
 use super::*;
+use crate::ir::{DropAction, DropActionKind, DropFlagId, DropProjection};
+use crate::resolution::LocalBindingId;
+
+fn drop_flag_name(flag: DropFlagId) -> String {
+    format!("el_drop_{}", flag.index())
+}
 
 impl<'a> CEmitter<'a> {
     pub(super) fn emit_prototypes(&mut self) {
@@ -134,6 +140,10 @@ impl<'a> CEmitter<'a> {
                 );
             }
         }
+        for flag in &function.drop_flags {
+            let name = drop_flag_name(flag.id);
+            let _ = writeln!(self.output, "    int {name} = 0;\n    (void){name};");
+        }
         let _ = writeln!(self.output, "    goto b{};", function.entry.index());
         // Only blocks reachable from the entry are emitted. Reachability must
         // be transitive: a block reached solely from an unreachable block
@@ -254,6 +264,43 @@ impl<'a> CEmitter<'a> {
                     temporary_name(*value),
                 );
             }
+            Instruction::SetDropFlag {
+                flag, initialized, ..
+            } => {
+                let _ = writeln!(
+                    self.output,
+                    "    {} = {};",
+                    drop_flag_name(*flag),
+                    u8::from(*initialized)
+                );
+            }
+            Instruction::DropValue {
+                flag,
+                binding,
+                action,
+                ..
+            } => {
+                let flag = drop_flag_name(*flag);
+                let (expression, guards) = self.drop_action_target(*binding, action);
+                let _ = writeln!(self.output, "    if ({flag}) {{");
+                let _ = writeln!(self.output, "        {flag} = 0;");
+                if !guards.is_empty() {
+                    let _ = writeln!(self.output, "        if ({}) {{", guards.join(" && "));
+                }
+                if let DropActionKind::Custom(instance) = &action.kind {
+                    let symbol = self.function_symbol(instance);
+                    let indent = if guards.is_empty() {
+                        "        "
+                    } else {
+                        "            "
+                    };
+                    let _ = writeln!(self.output, "{indent}{symbol}(&{expression});");
+                }
+                if !guards.is_empty() {
+                    self.output.push_str("        }\n");
+                }
+                self.output.push_str("    }\n");
+            }
             Instruction::PrintValue {
                 value,
                 ty,
@@ -273,6 +320,40 @@ impl<'a> CEmitter<'a> {
                 );
             }
         }
+    }
+
+    fn drop_action_target(
+        &self,
+        binding: LocalBindingId,
+        action: &DropAction,
+    ) -> (String, Vec<String>) {
+        let mut expression = self.place_expression(&ControlFlowPlace::Local(binding));
+        let mut guards = Vec::new();
+        for projection in &action.projections {
+            match projection {
+                DropProjection::Field(field) => {
+                    expression = format!("{expression}.{}", self.c_field_name(*field));
+                }
+                DropProjection::TupleField(index) => {
+                    expression = format!("{expression}.v{index}");
+                }
+                DropProjection::ArrayIndex(index) => {
+                    expression = format!("{expression}.values[{index}]");
+                }
+                DropProjection::VariantField { variant, field } => {
+                    guards.push(format!("{expression}.tag == UINT32_C({})", variant.index()));
+                    expression = format!(
+                        "{expression}.payload.{}.{}",
+                        variant_member_name(*variant),
+                        field_name(*field)
+                    );
+                }
+                DropProjection::ClosureCapture(index) => {
+                    expression = format!("{expression}->v{index}");
+                }
+            }
+        }
+        (expression, guards)
     }
 
     pub(super) fn rvalue(

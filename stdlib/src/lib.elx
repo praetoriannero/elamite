@@ -29,6 +29,10 @@ pub trait Clone:
 pub trait Drop:
     fn drop(self: &var Self) -> ()
 
+/// Consumes a value and runs its deterministic cleanup before returning.
+pub fn drop[T](value: T) -> ():
+    pass
+
 /// Terminates the process with an unrecoverable diagnostic.
 @intrinsic()
 pub fn panic(message: str) -> !

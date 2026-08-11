@@ -517,6 +517,184 @@ impl<'a> TypedLowerer<'a> {
         visiting.remove(&ty);
     }
 
+    fn drop_actions(&mut self, ty: TypeId, span: Span) -> Vec<DropAction> {
+        let mut actions = Vec::new();
+        self.collect_drop_actions(
+            ty,
+            span,
+            &mut Vec::new(),
+            &mut BTreeSet::new(),
+            &mut actions,
+        );
+        actions
+    }
+
+    fn collect_drop_actions(
+        &mut self,
+        ty: TypeId,
+        span: Span,
+        path: &mut Vec<DropProjection>,
+        visiting: &mut BTreeSet<TypeId>,
+        actions: &mut Vec<DropAction>,
+    ) {
+        let ty = self.concrete_type(ty);
+        let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+        if matches!(
+            facts.needs_drop,
+            crate::operations::CapabilityState::Absent | crate::operations::CapabilityState::Error
+        ) || !visiting.insert(ty)
+        {
+            return;
+        }
+        let kind = self.typed.types.kind(ty).clone();
+        if let TypeKind::Alias { target, .. } = kind {
+            self.collect_drop_actions(target, span, path, visiting, actions);
+            visiting.remove(&ty);
+            return;
+        }
+
+        let custom =
+            crate::traits::select_trait_method(self.resolved, self.typed, ty, "drop", None)
+                .ok()
+                .flatten()
+                .filter(|selected| {
+                    selected.trait_declaration == self.resolved.standard_declaration("Drop")
+                })
+                .map(|selected| FunctionInstance {
+                    declaration: selected.declaration,
+                    arguments: selected.arguments,
+                    self_type: selected.self_type,
+                });
+        if let Some(instance) = custom.clone() {
+            self.enqueue_reachable(instance.clone(), span);
+            actions.push(DropAction {
+                ty,
+                projections: path.clone(),
+                kind: DropActionKind::Custom(instance),
+            });
+        }
+
+        match kind {
+            TypeKind::Tuple(elements) => {
+                for (index, element) in elements.into_iter().enumerate().rev() {
+                    path.push(DropProjection::TupleField(index));
+                    self.collect_drop_actions(element, span, path, visiting, actions);
+                    path.pop();
+                }
+            }
+            TypeKind::Array { element, length } => {
+                if let Ok(length) = usize::try_from(length) {
+                    for index in (0..length).rev() {
+                        path.push(DropProjection::ArrayIndex(index));
+                        self.collect_drop_actions(element, span, path, visiting, actions);
+                        path.pop();
+                    }
+                } else if custom.is_none() {
+                    actions.push(DropAction {
+                        ty,
+                        projections: path.clone(),
+                        kind: DropActionKind::StructuralLeaf,
+                    });
+                }
+            }
+            TypeKind::Nominal {
+                identity,
+                arguments,
+            } => {
+                let declaration = identity.declaration;
+                let variants = self
+                    .resolved
+                    .variants
+                    .iter()
+                    .filter(|variant| variant.parent == declaration)
+                    .map(|variant| variant.id)
+                    .collect::<Vec<_>>();
+                if variants.is_empty() {
+                    let fields = self
+                        .resolved
+                        .fields
+                        .iter()
+                        .filter(|field| {
+                            field.parent_declaration == declaration
+                                && field.parent_variant.is_none()
+                        })
+                        .map(|field| field.id)
+                        .collect::<Vec<_>>();
+                    for field in fields.into_iter().rev() {
+                        let field_ty = self
+                            .typed
+                            .instantiate_field_type(self.resolved, field, &arguments)
+                            .or_else(|| self.typed.field_types.get(&field).copied());
+                        if let Some(field_ty) = field_ty {
+                            path.push(DropProjection::Field(field));
+                            self.collect_drop_actions(field_ty, span, path, visiting, actions);
+                            path.pop();
+                        }
+                    }
+                } else {
+                    for variant in variants {
+                        let fields = self.resolved.variants[variant.index()].fields.clone();
+                        for field in fields.into_iter().rev() {
+                            if let Some(field_ty) =
+                                self.typed
+                                    .instantiate_field_type(self.resolved, field, &arguments)
+                            {
+                                path.push(DropProjection::VariantField { variant, field });
+                                self.collect_drop_actions(field_ty, span, path, visiting, actions);
+                                path.pop();
+                            }
+                        }
+                    }
+                }
+            }
+            TypeKind::Foreign {
+                identity,
+                complete: true,
+            } => {
+                let fields = self
+                    .resolved
+                    .fields
+                    .iter()
+                    .filter(|field| field.parent_declaration == identity.declaration)
+                    .map(|field| field.id)
+                    .collect::<Vec<_>>();
+                for field in fields.into_iter().rev() {
+                    if let Some(field_ty) = self.typed.field_types.get(&field).copied() {
+                        path.push(DropProjection::Field(field));
+                        self.collect_drop_actions(field_ty, span, path, visiting, actions);
+                        path.pop();
+                    }
+                }
+            }
+            TypeKind::Primitive(_)
+            | TypeKind::Builtin { .. }
+            | TypeKind::Closure { .. }
+            | TypeKind::GenericParameter(_)
+            | TypeKind::SelfType(_)
+            | TypeKind::TraitObject { .. }
+            | TypeKind::Foreign {
+                complete: false, ..
+            }
+            | TypeKind::InferenceVariable(_)
+            | TypeKind::Error
+            | TypeKind::Never
+            | TypeKind::Slice { .. }
+            | TypeKind::Reference { .. }
+            | TypeKind::RawPointer { .. }
+            | TypeKind::Function { .. } => {
+                if custom.is_none() {
+                    actions.push(DropAction {
+                        ty,
+                        projections: path.clone(),
+                        kind: DropActionKind::StructuralLeaf,
+                    });
+                }
+            }
+            TypeKind::Alias { .. } => unreachable!("aliases return before drop action matching"),
+        }
+        visiting.remove(&ty);
+    }
+
     fn collect_concrete_nominals(&mut self, program: &mut TypedIrProgram) {
         // Instantiating one nominal's fields can intern further concrete
         // nominals (for example `Chain[i32]` creates
@@ -681,31 +859,43 @@ impl<'a> TypedLowerer<'a> {
             .map(|block| self.lower_block(block, &mut local_types))
             .unwrap_or_default();
         let drop_requirements = if self.resolved.semantic_revision.supports_owned_surface() {
-            local_types
+            let capture_bindings = closure
+                .as_ref()
+                .map(|closure| closure.captures.keys().copied().collect::<BTreeSet<_>>())
+                .unwrap_or_default();
+            let candidates = local_types
                 .iter()
-                .filter_map(|(binding, ty)| {
-                    let facts = crate::types::ownership_facts(self.resolved, self.typed, *ty);
-                    matches!(
-                        facts.needs_drop,
-                        crate::operations::CapabilityState::Present
-                            | crate::operations::CapabilityState::Conditional
-                    )
-                    .then(|| DropRequirement {
-                        binding: *binding,
-                        ty: *ty,
+                .filter(|(binding, _)| !capture_bindings.contains(binding))
+                .map(|(binding, ty)| (*binding, *ty))
+                .collect::<Vec<_>>();
+            let mut requirements = Vec::new();
+            for (binding, ty) in candidates {
+                let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+                if matches!(
+                    facts.needs_drop,
+                    crate::operations::CapabilityState::Present
+                        | crate::operations::CapabilityState::Conditional
+                ) {
+                    let actions =
+                        self.drop_actions(ty, self.resolved.local_bindings[binding.index()].span);
+                    requirements.push(DropRequirement {
+                        binding,
+                        ty,
                         span: self.resolved.local_bindings[binding.index()].span,
                         operation: OwnershipUse {
                             kind: OwnershipUseKind::Drop,
                             facts,
                             place: Some(OwnershipPlace {
-                                root: OwnershipPlaceRoot::Local(*binding),
+                                root: OwnershipPlaceRoot::Local(binding),
                                 projections: Vec::new(),
                             }),
                             legacy_copy: None,
                         },
-                    })
-                })
-                .collect()
+                        actions,
+                    });
+                }
+            }
+            requirements
         } else {
             Vec::new()
         };
