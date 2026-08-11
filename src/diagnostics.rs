@@ -70,6 +70,10 @@ pub enum Category {
     /// An assignment, compound assignment, or reference formation targets a
     /// place that is not addressable or not mutable (Milestone 6).
     Place,
+    /// An owned place is used before initialization, after a move, through an
+    /// unsupported indexed extraction, or in another invalid move-state
+    /// transition.
+    Ownership,
     /// A struct or enum containment cycle does not cross an explicit safe
     /// reference or raw-pointer indirection (Milestone 6).
     Containment,

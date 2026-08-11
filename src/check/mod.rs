@@ -40,9 +40,11 @@ mod calls;
 mod containment;
 mod coverage;
 mod model;
+mod moves;
 mod patterns;
 
 pub use model::*;
+pub use moves::check_moves;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -155,9 +157,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after ownership-aware body checking and explicit-use
-/// construction. Move-state enforcement is deliberately the next pass rather
-/// than an accidental side effect of the legacy checker.
+/// The temporary boundary after move and initialization checking. Structural
+/// borrow provenance is deliberately the next pass rather than being
+/// approximated by move-state analysis.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -166,8 +168,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has explicit ownership facts and use IR, but \
-                 move and initialization checking is not implemented yet",
+                "semantic revision 0.11.0-draft has move and initialization checking, but \
+                 structural borrow provenance is not implemented yet",
             )
         })
 }
@@ -180,11 +182,7 @@ pub fn check_for_target(
     typed: &mut TypedProgram,
     pointer_bits: u8,
 ) -> CheckOutput {
-    let mut output = Checker::new(resolved, typed, pointer_bits).run();
-    if let Some(diagnostic) = semantic_revision_boundary(resolved) {
-        output.diagnostics.push(diagnostic);
-    }
-    output
+    Checker::new(resolved, typed, pointer_bits).run()
 }
 
 struct Checker<'a> {

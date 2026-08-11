@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use elamite::check::check_for_target;
+use elamite::check::{check_for_target, check_moves};
 use elamite::config::{SemanticRevision, Target};
 use elamite::diagnostics::Category;
 use elamite::driver::check_frontend;
@@ -64,6 +64,52 @@ fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/packages")
         .join(name)
+}
+
+fn owned_move_diagnostics(name: &str, source: &str) -> Vec<elamite::diagnostics::Diagnostic> {
+    owned_move_diagnostics_for_bits(name, source, 64)
+}
+
+fn owned_move_diagnostics_for_bits(
+    name: &str,
+    source: &str,
+    pointer_bits: u8,
+) -> Vec<elamite::diagnostics::Diagnostic> {
+    let package = TestPackage::new(name, source);
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "resolution failed: {:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(
+        types.diagnostics.is_empty(),
+        "type lowering failed: {:#?}",
+        types.diagnostics
+    );
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(
+        traits.diagnostics.is_empty(),
+        "trait checking failed: {:#?}",
+        traits.diagnostics
+    );
+    let checked = check_for_target(&resolved, &mut types.program, pointer_bits);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "body checking failed: {:#?}",
+        checked.diagnostics
+    );
+    let lowered = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(
+        lowered.diagnostics.is_empty(),
+        "typed lowering failed: {:#?}",
+        lowered.diagnostics
+    );
+    check_moves(&resolved, &mut types.program, &lowered.program)
 }
 
 #[test]
@@ -349,7 +395,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_explicit_ownership_ir() {
+fn owned_packages_stop_after_move_checking() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -362,7 +408,11 @@ fn owned_packages_stop_after_explicit_ownership_ir() {
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
     assert_eq!(diagnostics[0].category, Category::SemanticRevision);
-    assert!(diagnostics[0].message.contains("explicit ownership facts"));
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("structural borrow provenance")
+    );
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
@@ -520,8 +570,7 @@ pub fn ownership_ops(value: String, number: i32) -> String:
     );
 
     let checked = check_for_target(&resolved, &mut type_output.program, 64);
-    assert_eq!(checked.diagnostics.len(), 1, "{:#?}", checked.diagnostics);
-    assert_eq!(checked.diagnostics[0].category, Category::SemanticRevision);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
     assert_eq!(
         checked.program.expression_types.len(),
         checked.program.ownership_uses.len(),
@@ -630,4 +679,239 @@ pub fn ownership_ops(value: String, number: i32) -> String:
     };
     assert_eq!(left.overlap(&right), PlaceOverlap::Disjoint);
     assert_eq!(left.overlap(&dynamic), PlaceOverlap::MayOverlap);
+}
+
+#[test]
+fn move_checking_rejects_second_uses_and_conservative_branch_merges() {
+    let diagnostics = owned_move_diagnostics(
+        "owned_use_after_move",
+        r#"fn consume(value: String) -> ():
+    pass
+
+fn direct(value: String) -> ():
+    consume(value)
+    println(value)
+
+fn conditional(value: String, take: bool) -> ():
+    if take:
+        consume(value)
+    println(value)
+
+fn unreachable(value: String) -> String:
+    return value
+    println(value)
+"#,
+    );
+    let ownership = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.category == Category::Ownership)
+        .collect::<Vec<_>>();
+    assert_eq!(ownership.len(), 3, "{diagnostics:#?}");
+    assert!(ownership.iter().all(|diagnostic| {
+        diagnostic.message.contains("moved") && diagnostic.related.len() == 1
+    }));
+}
+
+#[test]
+fn owned_move_design_fixtures_are_active_at_the_move_layer() {
+    let pass = include_str!("fixtures/owned_model_design/pass/ownership.elx");
+    let diagnostics = owned_move_diagnostics("owned_move_fixture_pass", pass);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+
+    let fail = include_str!("fixtures/owned_model_design/fail/use_after_move.elx");
+    let diagnostics = owned_move_diagnostics("owned_move_fixture_fail", fail);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].category, Category::Ownership);
+    assert!(diagnostics[0].message.contains("moved"));
+    assert_eq!(diagnostics[0].related.len(), 1);
+
+    let package = TestPackage::new("owned_move_driver_fixture", fail);
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let driver_diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
+        Ok(_) => panic!("the invalid move must stop before the provenance boundary"),
+        Err(diagnostics) => diagnostics,
+    };
+    assert_eq!(driver_diagnostics.len(), 1, "{driver_diagnostics:#?}");
+    assert_eq!(driver_diagnostics[0].category, Category::Ownership);
+}
+
+#[test]
+fn move_checking_accepts_copy_reuse_reinitialization_and_disjoint_fields() {
+    let diagnostics = owned_move_diagnostics(
+        "owned_reinitialization",
+        r#"struct Pair:
+    left: String
+    right: String
+
+fn consume(value: String) -> ():
+    pass
+
+fn consume_pair(value: Pair) -> ():
+    pass
+
+fn valid(value: String, replacement: String, number: i32) -> ():
+    var slot = value
+    consume(slot)
+    slot = replacement
+    consume(slot)
+    println(number)
+    println(number)
+
+    var pair = Pair {
+        left: String.from("left"),
+        right: String.from("right"),
+    }
+    let left = pair.left
+    let right_view = &pair.right
+    let _ = right_view
+    pair.left = left
+    consume_pair(pair)
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
+
+#[test]
+fn move_checking_tracks_loops_and_rejects_indexed_collection_moves() {
+    let diagnostics = owned_move_diagnostics(
+        "owned_loops_and_indices",
+        r#"fn consume(value: String) -> ():
+    pass
+
+fn loop_move(value: String, run: bool) -> ():
+    while run:
+        consume(value)
+        break
+    println(value)
+
+fn indexed(values: Vec[String]) -> ():
+    consume(values[0])
+
+fn static_array(values: [String; 2]) -> ():
+    consume(values[0])
+    consume(values[1])
+
+fn dynamic_array(values: [String; 2], index: usize) -> ():
+    consume(values[index])
+"#,
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("moved or partially moved")),
+        "{diagnostics:#?}"
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("ownership-taking operation"))
+            .count(),
+        2,
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn move_checking_tracks_destructuring_and_match_arm_bindings() {
+    let diagnostics = owned_move_diagnostics(
+        "owned_move_patterns",
+        r#"fn consume(value: String) -> ():
+    pass
+
+fn consume_option(value: Option[String]) -> ():
+    pass
+
+fn destructure(pair: (String, i32)) -> ():
+    let (text, number) = pair
+    println(pair.1)
+    consume(text)
+    println(number)
+
+fn match_payload(value: Option[String]) -> ():
+    match value:
+        Option.Some(text):
+            consume(text)
+        Option.None:
+            pass
+    consume_option(value)
+"#,
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Ownership)
+            .count(),
+        2,
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn move_checking_rejects_partial_moves_from_custom_drop_types() {
+    let diagnostics = owned_move_diagnostics(
+        "owned_drop_partial_move",
+        r#"struct Resource:
+    name: String
+    code: i32
+
+struct Wrapper:
+    resource: Resource
+
+impl Drop for Resource:
+    fn drop(self: &var Self) -> ():
+        pass
+
+fn invalid(value: Resource) -> String:
+    return value.name
+
+fn invalid_nested(value: Wrapper) -> String:
+    return value.resource.name
+"#,
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("custom `Drop` implementation"))
+            .count(),
+        2,
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn move_checking_is_identical_across_target_widths_and_generic_instances() {
+    let source = r#"fn identity[T](value: T) -> T:
+    return value
+
+fn valid(value: String) -> ():
+    var nested = ((value, 1), 2)
+    let moved = nested.0.0
+    nested.0.0 = moved
+    let whole = nested
+    let _ = whole
+
+fn invalid(value: String) -> ():
+    let moved = identity(value)
+    println(value)
+    let _ = moved
+"#;
+    let x86 = owned_move_diagnostics_for_bits("owned_moves_x86", source, 32);
+    let x86_64 = owned_move_diagnostics_for_bits("owned_moves_x86_64", source, 64);
+    let signature = |diagnostics: &[elamite::diagnostics::Diagnostic]| {
+        diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.category,
+                    diagnostic.message.clone(),
+                    diagnostic.primary.map(|span| (span.start, span.end)),
+                    diagnostic.related.len(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(signature(&x86), signature(&x86_64));
+    assert_eq!(x86.len(), 1, "{x86:#?}");
+    assert_eq!(x86[0].category, Category::Ownership);
 }

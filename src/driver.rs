@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::backend::{COptions, emit_c};
-use crate::check::check_for_target;
+use crate::check::{check_for_target, check_moves, semantic_revision_boundary};
 pub use crate::config::Optimization;
 use crate::config::{CompilerFeatures, Target};
 use crate::diagnostics::{Category, Diagnostic};
@@ -138,6 +138,19 @@ pub fn check_frontend_with_features(
     let checked = check_for_target(&resolved, &mut type_output.program, target.pointer_bits());
     if !checked.diagnostics.is_empty() {
         return Err(checked.diagnostics);
+    }
+    if resolved.semantic_revision.supports_owned_surface() {
+        let high_level = lower_typed_ir(&resolved, &mut type_output.program, &checked.program);
+        if !high_level.diagnostics.is_empty() {
+            return Err(high_level.diagnostics);
+        }
+        let diagnostics = check_moves(&resolved, &mut type_output.program, &high_level.program);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+        if let Some(diagnostic) = semantic_revision_boundary(&resolved) {
+            return Err(vec![diagnostic]);
+        }
     }
     Ok(FrontendOutput {
         resolved,
@@ -365,6 +378,15 @@ pub fn compile_tests_with_features(
     let high_level = lower_typed_ir(&resolved, &mut typed, &checked.program);
     if !high_level.diagnostics.is_empty() {
         return Err(high_level.diagnostics);
+    }
+    if resolved.semantic_revision.supports_owned_surface() {
+        let diagnostics = check_moves(&resolved, &mut typed, &high_level.program);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+        if let Some(diagnostic) = semantic_revision_boundary(&resolved) {
+            return Err(vec![diagnostic]);
+        }
     }
     let control_flow = lower_control_flow(&high_level.program, &typed);
     let mut cases = resolved

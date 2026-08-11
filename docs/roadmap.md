@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Move and initialization checking**
+> Next planned milestone: **Structural borrow provenance**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -21,8 +21,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Owned-model semantic contract](#owned-model-semantic-contract) | Complete | Move, borrow, cleanup, closure, sharing, concurrency, FFI, demonstration, ledger, and split design-corpus rules are accepted as 0.11.0-draft. |
 | [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Complete | Package revision selection, owned slice/closure/borrow syntax, `std.ast` 3.0 selection, canonical mutable slices, and the compatibility boundary are implemented. |
 | [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Complete | Canonical capabilities, projected places, ordered ownership uses in both IR levels, and the legacy-copy backend seam are implemented. |
-| [Move and initialization checking](#move-and-initialization-checking) | Planned — next | Enforce move-by-default use, definite initialization, partial moves, reinitialization, and branch merging. |
-| [Structural borrow provenance](#structural-borrow-provenance) | Planned | Infer hidden provenance, enforce shared/exclusive access, and carry borrows structurally through values. |
+| [Move and initialization checking](#move-and-initialization-checking) | Complete | Typed-IR place-state dataflow enforces moves, initialization, partial moves, reinitialization, indexed extraction, and conservative control-flow joins. |
+| [Structural borrow provenance](#structural-borrow-provenance) | Planned — next | Infer hidden provenance, enforce shared/exclusive access, and carry borrows structurally through values. |
 | [Deterministic destruction](#deterministic-destruction) | Planned | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
 | [Owned core values and collections](#owned-core-values-and-collections) | Planned | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
 | [Inline first-class closures](#inline-first-class-closures) | Planned | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
@@ -388,7 +388,11 @@ give later dataflow passes an exact ownership vocabulary.
 
 ### Move and initialization checking
 
-> Status: Planned.
+> Status: Complete. A focused typed-IR analysis consumes concrete ownership
+> operations and projected places, tracks availability through ordinary and
+> unreachable control flow, and advances the compatibility boundary to
+> structural borrow provenance. `tests/semantic_revision.rs` and property
+> tests beside the analysis own the focused acceptance evidence.
 >
 > Blocked by: **Ownership facts and explicit use IR**.
 
@@ -397,11 +401,11 @@ ordinary control flow before owned resources depend on it.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Place-state dataflow** | Track uninitialized, initialized, moved, and partially moved states through blocks, branches, loops, `match`, early exits, and unreachable code. | Join behavior is conservative and deterministic; use-before-initialization and use-after-move diagnostics identify both the invalid use and the state-changing span. |
-| **Consuming operations** | Apply moves to assignment sources, by-value arguments, returns, captures, destructuring, field extraction, postfix propagation, and other accepted consuming contexts; retain bitwise reuse only for `Copy` types. | A non-`Copy` value has one owner after every operation, and using it again requires reinitialization, borrowing, or an explicit clone. |
-| **Partial moves and reinitialization** | Permit accepted disjoint-field moves and reinitialization while rejecting whole-value use or movement of unavailable projections. | Nested tuples and structs behave consistently across both target widths and generic instantiation. |
-| **Indexed ownership APIs** | Reject implicit moves from borrowed or ordinary indexed collection places and define ownership-taking operations such as `remove`, `pop`, or `take`. | Collection extraction is explicit, evaluates its receiver and index once, and cannot leave an invalid element observable through an alias. |
-| **Diagnostic and property suite** | Add compile-fail path explanations and property tests over small control-flow graphs and place projections. | The checker never panics, accepts only legal state transitions, and retains minimized regressions for every discovered merge or projection failure. |
+| **Place-state dataflow (done)** | Track uninitialized, initialized, moved, and partially moved states through blocks, branches, loops, `match`, early exits, and unreachable code. | Join behavior is conservative and deterministic; use-before-initialization and use-after-move diagnostics identify both the invalid use and the state-changing span. |
+| **Consuming operations (done)** | Apply moves to assignment sources, by-value arguments, returns, captures, destructuring, field extraction, postfix propagation, and other accepted consuming contexts; retain bitwise reuse only for `Copy` types. | A non-`Copy` value has one owner after every operation, and using it again requires reinitialization, borrowing, or an explicit clone. |
+| **Partial moves and reinitialization (done)** | Permit accepted disjoint-field moves and reinitialization while rejecting whole-value use or movement of unavailable projections. | Nested tuples and structs behave consistently across both target widths and generic instantiation. |
+| **Indexed ownership APIs (done)** | Reject implicit moves from borrowed or ordinary indexed collection places and define ownership-taking operations such as `remove`, `pop`, or `take`. | Collection extraction is explicit, evaluates its receiver and index once, and cannot leave an invalid element observable through an alias. |
+| **Diagnostic and property suite (done)** | Add compile-fail path explanations and property tests over small control-flow graphs and place projections. | The checker never panics, accepts only legal state transitions, and retains minimized regressions for every discovered merge or projection failure. |
 
 ### Structural borrow provenance
 
