@@ -328,6 +328,61 @@ pub enum StandardCall {
         boxed: TypeId,
         value: TypeId,
     },
+    IntegerMax {
+        value: TypeId,
+    },
+    SharedNew {
+        shared: TypeId,
+        value: TypeId,
+    },
+    SharedGet {
+        shared: TypeId,
+        value: TypeId,
+    },
+    SharedDowngrade {
+        shared: TypeId,
+        weak: TypeId,
+        value: TypeId,
+    },
+    WeakUpgrade {
+        weak: TypeId,
+        shared: TypeId,
+        value: TypeId,
+        result: TypeId,
+    },
+    StoreNew {
+        store: TypeId,
+        value: TypeId,
+    },
+    StoreLen {
+        store: TypeId,
+    },
+    StoreIsEmpty {
+        store: TypeId,
+    },
+    StoreInsert {
+        store: TypeId,
+        handle: TypeId,
+        value: TypeId,
+    },
+    StoreGet {
+        store: TypeId,
+        handle: TypeId,
+        value: TypeId,
+        mutable: bool,
+    },
+    StoreRemove {
+        store: TypeId,
+        handle: TypeId,
+        value: TypeId,
+    },
+    StoreCompact {
+        store: TypeId,
+    },
+    StoreClear {
+        store: TypeId,
+        value: TypeId,
+    },
     Text {
         operation: TextOperation,
         result_type: TypeId,
@@ -528,10 +583,62 @@ impl StandardCall {
         match &mut self {
             Self::Panic | Self::Assert | Self::StringFrom => {}
             Self::Clone { value } => *value = map(*value),
+            Self::IntegerMax { value } => *value = map(*value),
             Self::BoxNew { boxed, value } => {
                 *boxed = map(*boxed);
                 *value = map(*value);
             }
+            Self::SharedNew { shared, value } | Self::SharedGet { shared, value } => {
+                *shared = map(*shared);
+                *value = map(*value);
+            }
+            Self::SharedDowngrade {
+                shared,
+                weak,
+                value,
+            } => {
+                *shared = map(*shared);
+                *weak = map(*weak);
+                *value = map(*value);
+            }
+            Self::WeakUpgrade {
+                weak,
+                shared,
+                value,
+                result,
+            } => {
+                *weak = map(*weak);
+                *shared = map(*shared);
+                *value = map(*value);
+                *result = map(*result);
+            }
+            Self::StoreNew { store, value } | Self::StoreClear { store, value } => {
+                *store = map(*store);
+                *value = map(*value);
+            }
+            Self::StoreRemove {
+                store,
+                handle,
+                value,
+            }
+            | Self::StoreGet {
+                store,
+                handle,
+                value,
+                ..
+            }
+            | Self::StoreInsert {
+                store,
+                handle,
+                value,
+            } => {
+                *store = map(*store);
+                *handle = map(*handle);
+                *value = map(*value);
+            }
+            Self::StoreLen { store }
+            | Self::StoreIsEmpty { store }
+            | Self::StoreCompact { store } => *store = map(*store),
             Self::Text {
                 result_type,
                 input_type,

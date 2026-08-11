@@ -2134,6 +2134,38 @@ impl<'a> Checker<'a> {
                     );
                     return Some((collection, PlaceKind::Value));
                 }
+                "Shared"
+                    if self.resolved.semantic_revision.supports_owned_surface()
+                        && type_arguments.len() == 1
+                        && member_name == "new" =>
+                {
+                    let value = type_arguments[0];
+                    self.check_standard_arguments(call_span, &member_name, arguments, &[value]);
+                    self.program.calls.insert(
+                        call_span,
+                        CheckedCall::Standard(StandardCall::SharedNew {
+                            shared: collection,
+                            value,
+                        }),
+                    );
+                    return Some((collection, PlaceKind::Value));
+                }
+                "Store"
+                    if self.resolved.semantic_revision.supports_owned_surface()
+                        && type_arguments.len() == 1
+                        && member_name == "new" =>
+                {
+                    let value = type_arguments[0];
+                    self.check_standard_arguments(call_span, &member_name, arguments, &[]);
+                    self.program.calls.insert(
+                        call_span,
+                        CheckedCall::Standard(StandardCall::StoreNew {
+                            store: collection,
+                            value,
+                        }),
+                    );
+                    return Some((collection, PlaceKind::Value));
+                }
                 _ => {
                     self.diagnostics.push(
                         Diagnostic::new(
@@ -2164,6 +2196,18 @@ impl<'a> Checker<'a> {
             .primitive_selection(base)
             .filter(|primitive| primitive.is_integer() || primitive.is_float())
         {
+            if self.resolved.semantic_revision.supports_owned_surface()
+                && member_name == "max"
+                && primitive == PrimitiveType::Usize
+            {
+                self.check_standard_arguments(call_span, &member_name, arguments, &[]);
+                let value = self.typed.types.primitive(primitive);
+                self.program.calls.insert(
+                    call_span,
+                    CheckedCall::Standard(StandardCall::IntegerMax { value }),
+                );
+                return Some((value, PlaceKind::Value));
+            }
             if let Some(outcome) = match member_name.as_str() {
                 "try_from" => Some(NumericOutcome::Checked),
                 "wrapping_from" => Some(NumericOutcome::Wrapping),
@@ -2909,9 +2953,14 @@ impl<'a> Checker<'a> {
         else {
             return None;
         };
+        if matches!(self.resolved.builtin_name(builtin), "Shared" | "Store")
+            && !self.resolved.semantic_revision.supports_owned_surface()
+        {
+            return None;
+        }
         if !matches!(
             self.resolved.builtin_name(builtin),
-            "Vec" | "Map" | "Set" | "Box"
+            "Vec" | "Map" | "Set" | "Box" | "Shared" | "Store"
         ) {
             return None;
         }
@@ -2961,7 +3010,7 @@ impl<'a> Checker<'a> {
             TypeKind::Builtin { builtin, .. } => {
                 matches!(
                     self.resolved.builtin_name(*builtin),
-                    "Vec" | "Map" | "Set" | "Box"
+                    "Vec" | "Map" | "Set" | "Box" | "Shared" | "Weak"
                 )
             }
             _ => false,
@@ -3028,11 +3077,13 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             TypeKind::Builtin { builtin, arguments } => {
-                match (
-                    self.resolved.builtin_name(builtin),
-                    name,
-                    arguments.as_slice(),
-                ) {
+                let builtin_name = self.resolved.builtin_name(builtin);
+                if matches!(builtin_name, "Shared" | "Weak" | "Store" | "Handle")
+                    && !self.resolved.semantic_revision.supports_owned_surface()
+                {
+                    return None;
+                }
+                match (builtin_name, name, arguments.as_slice()) {
                     ("File", "read_to_end", []) => {
                         let u8_type = self.typed.types.primitive(PrimitiveType::U8);
                         let vec_builtin = self.resolved.builtin_named("Vec")?;
@@ -3322,6 +3373,148 @@ impl<'a> Checker<'a> {
                             value_type,
                             false,
                         ))
+                    }
+                    ("Shared", "get", [value]) => {
+                        let reference = self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Shared,
+                            target: *value,
+                        });
+                        Some((
+                            StandardCall::SharedGet {
+                                shared: receiver,
+                                value: *value,
+                            },
+                            Vec::new(),
+                            reference,
+                            false,
+                        ))
+                    }
+                    ("Shared", "downgrade", [value]) => {
+                        let weak_builtin = self.resolved.builtin_named("Weak")?;
+                        let weak = self.typed.types.intern(TypeKind::Builtin {
+                            builtin: weak_builtin,
+                            arguments: vec![*value],
+                        });
+                        Some((
+                            StandardCall::SharedDowngrade {
+                                shared: receiver,
+                                weak,
+                                value: *value,
+                            },
+                            Vec::new(),
+                            weak,
+                            false,
+                        ))
+                    }
+                    ("Weak", "upgrade", [value]) => {
+                        let shared_builtin = self.resolved.builtin_named("Shared")?;
+                        let shared = self.typed.types.intern(TypeKind::Builtin {
+                            builtin: shared_builtin,
+                            arguments: vec![*value],
+                        });
+                        let result = self.option_type(span, shared);
+                        Some((
+                            StandardCall::WeakUpgrade {
+                                weak: receiver,
+                                shared,
+                                value: *value,
+                                result,
+                            },
+                            Vec::new(),
+                            result,
+                            false,
+                        ))
+                    }
+                    ("Store", "len", [_]) => Some((
+                        StandardCall::StoreLen { store: receiver },
+                        Vec::new(),
+                        usize_type,
+                        false,
+                    )),
+                    ("Store", "is_empty", [_]) => Some((
+                        StandardCall::StoreIsEmpty { store: receiver },
+                        Vec::new(),
+                        bool_type,
+                        false,
+                    )),
+                    ("Store", method, [value]) => {
+                        let handle_builtin = self.resolved.builtin_named("Handle")?;
+                        let handle = self.typed.types.intern(TypeKind::Builtin {
+                            builtin: handle_builtin,
+                            arguments: vec![*value],
+                        });
+                        match method {
+                            "insert" => Some((
+                                StandardCall::StoreInsert {
+                                    store: receiver,
+                                    handle,
+                                    value: *value,
+                                },
+                                vec![*value],
+                                handle,
+                                true,
+                            )),
+                            "get" => {
+                                let reference = self.typed.types.intern(TypeKind::Reference {
+                                    mutability: Mutability::Shared,
+                                    target: *value,
+                                });
+                                Some((
+                                    StandardCall::StoreGet {
+                                        store: receiver,
+                                        handle,
+                                        value: *value,
+                                        mutable: false,
+                                    },
+                                    vec![handle],
+                                    reference,
+                                    false,
+                                ))
+                            }
+                            "get_var" => {
+                                let reference = self.typed.types.intern(TypeKind::Reference {
+                                    mutability: Mutability::Mutable,
+                                    target: *value,
+                                });
+                                Some((
+                                    StandardCall::StoreGet {
+                                        store: receiver,
+                                        handle,
+                                        value: *value,
+                                        mutable: true,
+                                    },
+                                    vec![handle],
+                                    reference,
+                                    true,
+                                ))
+                            }
+                            "remove" => Some((
+                                StandardCall::StoreRemove {
+                                    store: receiver,
+                                    handle,
+                                    value: *value,
+                                },
+                                vec![handle],
+                                *value,
+                                true,
+                            )),
+                            "compact" => Some((
+                                StandardCall::StoreCompact { store: receiver },
+                                Vec::new(),
+                                unit_type,
+                                true,
+                            )),
+                            "clear" => Some((
+                                StandardCall::StoreClear {
+                                    store: receiver,
+                                    value: *value,
+                                },
+                                Vec::new(),
+                                unit_type,
+                                true,
+                            )),
+                            _ => None,
+                        }
                     }
                     ("Vec", "len", [_]) => Some((
                         StandardCall::VecLen {

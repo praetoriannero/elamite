@@ -719,6 +719,29 @@ impl BorrowChecker<'_> {
                         &authorized,
                     );
                 }
+                if matches!(
+                    operation,
+                    StandardCall::SharedGet { .. }
+                        | StandardCall::StoreGet { mutable: false, .. }
+                        | StandardCall::StoreGet { mutable: true, .. }
+                ) && let Some(receiver) = arguments.first()
+                    && let Some(place) = receiver.ownership_place().map(normalized_place)
+                {
+                    value = self.create_loan(
+                        expression.span,
+                        place,
+                        if matches!(operation, StandardCall::StoreGet { mutable: true, .. }) {
+                            LoanKind::Exclusive
+                        } else {
+                            LoanKind::Shared
+                        },
+                        false,
+                        &value,
+                        state,
+                        live,
+                        ephemeral,
+                    );
+                }
                 value
             }
             TypedExpressionKind::CollectionLiteral {
@@ -1183,6 +1206,11 @@ fn standard_call_exclusively_accesses_receiver(operation: StandardCall) -> bool 
             | StandardCall::SetInsert { .. }
             | StandardCall::SetRemove { .. }
             | StandardCall::SetClear { .. }
+            | StandardCall::StoreInsert { .. }
+            | StandardCall::StoreGet { mutable: true, .. }
+            | StandardCall::StoreRemove { .. }
+            | StandardCall::StoreCompact { .. }
+            | StandardCall::StoreClear { .. }
     )
 }
 
@@ -1242,7 +1270,13 @@ fn collect_borrow_spans(statements: &[TypedStatement], spans: &mut BTreeSet<Span
                     | OwnershipUseKind::ReborrowShared
                     | OwnershipUseKind::ReborrowExclusive
             )
-        }) {
+        }) || matches!(
+            expression.kind,
+            TypedExpressionKind::StandardCall {
+                operation: StandardCall::SharedGet { .. } | StandardCall::StoreGet { .. },
+                ..
+            }
+        ) {
             spans.insert(expression.span);
         }
     });

@@ -465,6 +465,10 @@ pub enum IterationKind {
         collection: TypeId,
         element: TypeId,
     },
+    Store {
+        collection: TypeId,
+        element: TypeId,
+    },
     /// A source type implementing the ordinary `std.Iterator[Element]`
     /// protocol. The hidden mutable state is managed by control-flow lowering
     /// before `next` is called, so references yielded from it remain valid.
@@ -535,6 +539,15 @@ pub enum DropActionKind {
     },
     OwnedBox {
         value: Vec<DropAction>,
+    },
+    OwnedShared {
+        owner: TypeId,
+    },
+    OwnedWeak {
+        owner: TypeId,
+    },
+    OwnedStore {
+        owner: TypeId,
     },
 }
 

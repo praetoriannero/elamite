@@ -208,6 +208,37 @@ impl Query<'_> {
                 facts.clone = conjunction(arguments.iter().map(|ty| self.facts(*ty).clone));
                 facts
             }
+            "Shared" | "Weak" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Present,
+                needs_drop: CapabilityState::Present,
+                contains_borrow: disjunction(
+                    arguments.iter().map(|ty| self.facts(*ty).contains_borrow),
+                ),
+                send: conjunction(arguments.iter().flat_map(|ty| {
+                    let facts = self.facts(*ty);
+                    [facts.send, facts.sync]
+                })),
+                sync: conjunction(arguments.iter().map(|ty| self.facts(*ty).sync)),
+            },
+            "Store" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Absent,
+                needs_drop: CapabilityState::Present,
+                contains_borrow: disjunction(
+                    arguments.iter().map(|ty| self.facts(*ty).contains_borrow),
+                ),
+                send: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
+                sync: CapabilityState::Absent,
+            },
+            "Handle" => OwnershipFacts {
+                copy: CapabilityState::Present,
+                clone: CapabilityState::Present,
+                needs_drop: CapabilityState::Absent,
+                contains_borrow: CapabilityState::Absent,
+                send: CapabilityState::Present,
+                sync: CapabilityState::Present,
+            },
             "ForeignRoot" | "ForeignRootMut" | "File" | "Directory" | "Thread" | "Sender"
             | "Receiver" | "Mutex" => OwnershipFacts {
                 copy: CapabilityState::Absent,

@@ -4,6 +4,35 @@ use super::*;
 use crate::ir::control_flow::ValueModel;
 use crate::operations::{SystemOperation, TextOperation};
 
+fn collect_ownership_drop_types(action: &crate::ir::DropAction, types: &mut BTreeSet<TypeId>) {
+    use crate::ir::DropActionKind;
+    match &action.kind {
+        DropActionKind::OwnedShared { owner }
+        | DropActionKind::OwnedWeak { owner }
+        | DropActionKind::OwnedStore { owner } => {
+            types.insert(*owner);
+        }
+        DropActionKind::OwnedVec { elements } | DropActionKind::OwnedSet { elements } => {
+            for child in elements {
+                collect_ownership_drop_types(child, types);
+            }
+        }
+        DropActionKind::OwnedMap { keys, values } => {
+            for child in keys.iter().chain(values) {
+                collect_ownership_drop_types(child, types);
+            }
+        }
+        DropActionKind::OwnedBox { value } => {
+            for child in value {
+                collect_ownership_drop_types(child, types);
+            }
+        }
+        DropActionKind::StructuralLeaf
+        | DropActionKind::Custom(_)
+        | DropActionKind::OwnedString => {}
+    }
+}
+
 impl<'a> CEmitter<'a> {
     pub(super) fn uses_process_arguments(&self) -> bool {
         self.program.functions.iter().any(|function| {
@@ -92,7 +121,11 @@ impl<'a> CEmitter<'a> {
                                     | StandardCall::AtomicStore { .. }
                                     | StandardCall::AtomicExchange { .. }
                                     | StandardCall::AtomicCompareExchange { .. }
-                                    | StandardCall::AtomicFetchAdd { .. },
+                                    | StandardCall::AtomicFetchAdd { .. }
+                                    | StandardCall::SharedNew { .. }
+                                    | StandardCall::SharedGet { .. }
+                                    | StandardCall::SharedDowngrade { .. }
+                                    | StandardCall::WeakUpgrade { .. },
                                 ..
                             },
                             ..
@@ -1423,6 +1456,27 @@ impl<'a> CEmitter<'a> {
         for ty in clone_types {
             self.emit_clone_helper(ty);
         }
+        let mut ownership_drop_types = BTreeSet::new();
+        for function in &self.program.functions {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    match instruction {
+                        Instruction::DropValue { action, .. } => {
+                            collect_ownership_drop_types(action, &mut ownership_drop_types);
+                        }
+                        Instruction::DropIteration { actions, .. } => {
+                            for action in actions {
+                                collect_ownership_drop_types(action, &mut ownership_drop_types);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for ty in ownership_drop_types {
+            self.emit_drop_helper(ty);
+        }
         for operation in calls.keys() {
             if let StandardCall::BoxNew { boxed, value } = operation {
                 let (Some(boxed_c), Some(value_c)) =
@@ -1498,6 +1552,7 @@ impl<'a> CEmitter<'a> {
         self.emit_channel_helpers(&calls);
         self.emit_mutex_helpers(&calls);
         self.emit_atomic_helpers(&calls);
+        self.emit_shared_store_helpers(&calls);
         let literals = self.collection_literal_instances();
         let mut concatenated_types = BTreeSet::new();
         for function in &self.program.functions {
@@ -3555,6 +3610,197 @@ unavailable_error:
         }
     }
 
+    fn emit_shared_store_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        let store_new_used = calls
+            .keys()
+            .any(|call| matches!(call, StandardCall::StoreNew { .. }));
+        if store_new_used {
+            self.output
+                .push_str("static uintptr_t el_next_store_identity = 1U;\n\n");
+        }
+        for (operation, (result, _)) in calls {
+            match *operation {
+                StandardCall::SharedNew { shared, value } => {
+                    let (Some(shared_c), Some(value_c)) =
+                        (self.c_type(shared, None), self.c_type(value, None))
+                    else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static {shared_c} {}({value_c} value) {{\n    {shared_c} result = ({shared_c})malloc(sizeof(*result));\n    if (result == NULL) {{ el_out_of_memory(); }}\n    el_cost_allocation(sizeof(*result), false);\n    if (pthread_mutex_init(&result->lock, NULL) != 0) {{ el_out_of_memory(); }}\n    result->strong = 1U; result->weak = 1U; result->value = value; return result;\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::SharedGet { shared, value } => {
+                    let (Some(shared_c), Some(value_c)) =
+                        (self.c_type(shared, None), self.c_type(value, None))
+                    else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static {value_c} *{}({shared_c} value) {{ return &value->value; }}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::SharedDowngrade { shared, weak, .. } => {
+                    let (Some(shared_c), Some(weak_c)) =
+                        (self.c_type(shared, None), self.c_type(weak, None))
+                    else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static {weak_c} {}({shared_c} value) {{\n    (void)pthread_mutex_lock(&value->lock);\n    if (value->weak == UINTPTR_MAX) {{ (void)pthread_mutex_unlock(&value->lock); el_out_of_memory(); }}\n    ++value->weak; (void)pthread_mutex_unlock(&value->lock); return value;\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::WeakUpgrade {
+                    weak,
+                    shared,
+                    result: option,
+                    value,
+                } => {
+                    let (Some(weak_c), Some(shared_c), Some(option_c)) = (
+                        self.c_type(weak, None),
+                        self.c_type(shared, None),
+                        self.c_type(option, None),
+                    ) else {
+                        continue;
+                    };
+                    let none = self.option_expression(option, None);
+                    let some = self.option_expression(option, Some(("owner", value)));
+                    let _ = writeln!(
+                        self.output,
+                        "static {option_c} {}({weak_c} value) {{\n    {shared_c} owner;\n    (void)pthread_mutex_lock(&value->lock);\n    if (value->strong == 0U) {{ (void)pthread_mutex_unlock(&value->lock); return {none}; }}\n    if (value->strong == UINTPTR_MAX) {{ (void)pthread_mutex_unlock(&value->lock); el_out_of_memory(); }}\n    ++value->strong; owner = value; (void)pthread_mutex_unlock(&value->lock); return {some};\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreNew { store, .. } => {
+                    let Some(store_c) = self.c_type(store, None) else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static {store_c} {}(void) {{\n    {store_c} result = ({store_c})malloc(sizeof(*result));\n    if (result == NULL || el_next_store_identity == 0U) {{ el_out_of_memory(); }}\n    el_cost_allocation(sizeof(*result), false);\n    result->identity = el_next_store_identity++; result->length = 0U; result->capacity = 0U; result->slots = NULL; result->live_slots = NULL; return result;\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreLen { store } => {
+                    let Some(store_c) = self.c_type(store, None) else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static uintptr_t {}({store_c} value) {{ return value->length; }}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreIsEmpty { store } => {
+                    let Some(store_c) = self.c_type(store, None) else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static bool {}({store_c} value) {{ return value->length == 0U; }}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreInsert {
+                    store,
+                    handle,
+                    value,
+                } => {
+                    let (Some(store_c), Some(handle_c), Some(value_c)) = (
+                        self.c_type(store, None),
+                        self.c_type(handle, None),
+                        self.c_type(value, None),
+                    ) else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static {handle_c} {}({store_c} *value, {value_c} item) {{\n    uintptr_t index, old_capacity, capacity;\n    for (index = 0U; index < (*value)->capacity; ++index) if (!(*value)->slots[index].occupied && (*value)->slots[index].generation != UINTPTR_MAX) break;\n    if (index == (*value)->capacity) {{\n        if ((*value)->capacity == UINTPTR_MAX) {{ el_out_of_memory(); }}\n        old_capacity = (*value)->capacity; capacity = old_capacity == 0U ? 4U : old_capacity * 2U;\n        if (capacity <= old_capacity || capacity > SIZE_MAX / sizeof(*(*value)->slots) || capacity > SIZE_MAX / sizeof(uintptr_t)) {{ el_out_of_memory(); }}\n        (*value)->slots = realloc((*value)->slots, capacity * sizeof(*(*value)->slots));\n        (*value)->live_slots = realloc((*value)->live_slots, capacity * sizeof(uintptr_t));\n        if ((*value)->slots == NULL || (*value)->live_slots == NULL) {{ el_out_of_memory(); }}\n        el_cost_allocation(capacity * sizeof(*(*value)->slots), false); el_cost_allocation(capacity * sizeof(uintptr_t), false);\n        for (index = old_capacity; index < capacity; ++index) {{ (*value)->slots[index].generation = 1U; (*value)->slots[index].occupied = false; }}\n        (*value)->capacity = capacity; index = old_capacity;\n    }}\n    if ((*value)->length == UINTPTR_MAX) {{ el_out_of_memory(); }}\n    (*value)->slots[index].value = item; (*value)->slots[index].occupied = true; (*value)->slots[index].dense_index = (*value)->length; (*value)->live_slots[(*value)->length++] = index;\n    return ({handle_c}){{ (*value)->identity, index, (*value)->slots[index].generation }};\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreGet {
+                    store,
+                    handle,
+                    value,
+                    mutable,
+                } => {
+                    let (Some(store_c), Some(handle_c), Some(value_c)) = (
+                        self.c_type(store, None),
+                        self.c_type(handle, None),
+                        self.c_type(value, None),
+                    ) else {
+                        continue;
+                    };
+                    let receiver = if mutable {
+                        format!("{store_c} *value")
+                    } else {
+                        format!("{store_c} value")
+                    };
+                    let access = if mutable { "(*value)" } else { "value" };
+                    let _ = writeln!(
+                        self.output,
+                        "static {value_c} *{}({receiver}, {handle_c} handle, const char *path, uint32_t line, uint32_t column) {{\n    if (handle.store != {access}->identity) el_trap(\"E-RUN-WRONG-STORE\", path, line, column);\n    if (handle.slot >= {access}->capacity || !{access}->slots[handle.slot].occupied || {access}->slots[handle.slot].generation != handle.generation) el_trap(\"E-RUN-STALE\", path, line, column);\n    return &{access}->slots[handle.slot].value;\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreRemove {
+                    store,
+                    handle,
+                    value,
+                } => {
+                    let (Some(store_c), Some(handle_c), Some(value_c)) = (
+                        self.c_type(store, None),
+                        self.c_type(handle, None),
+                        self.c_type(value, None),
+                    ) else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static {value_c} {}({store_c} *value, {handle_c} handle, const char *path, uint32_t line, uint32_t column) {{\n    {value_c} result; uintptr_t dense, index, moved;\n    if (handle.store != (*value)->identity) el_trap(\"E-RUN-WRONG-STORE\", path, line, column);\n    if (handle.slot >= (*value)->capacity || !(*value)->slots[handle.slot].occupied || (*value)->slots[handle.slot].generation != handle.generation) el_trap(\"E-RUN-STALE\", path, line, column);\n    result = (*value)->slots[handle.slot].value; dense = (*value)->slots[handle.slot].dense_index;\n    for (index = dense + 1U; index < (*value)->length; ++index) {{ moved = (*value)->live_slots[index]; (*value)->live_slots[index - 1U] = moved; (*value)->slots[moved].dense_index = index - 1U; }}\n    --(*value)->length; (*value)->slots[handle.slot].occupied = false;\n    if ((*value)->slots[handle.slot].generation != UINTPTR_MAX) {{ ++(*value)->slots[handle.slot].generation; }}\n    return result;\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreCompact { store } => {
+                    let Some(store_c) = self.c_type(store, None) else {
+                        continue;
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static el_unit {}({store_c} *value) {{\n    void *slots, *live_slots; size_t slot_bytes, live_bytes;\n    if ((*value)->capacity == 0U) return (el_unit){{0}};\n    slot_bytes = (*value)->capacity * sizeof(*(*value)->slots); live_bytes = (*value)->capacity * sizeof(uintptr_t); slots = malloc(slot_bytes); live_slots = malloc(live_bytes);\n    if (slots == NULL || live_slots == NULL) {{ el_out_of_memory(); }}\n    el_cost_allocation(slot_bytes, false); el_cost_allocation(live_bytes, false); el_cost_memcpy(slots, (*value)->slots, slot_bytes); el_cost_memcpy(live_slots, (*value)->live_slots, live_bytes);\n    free((*value)->slots); free((*value)->live_slots); (*value)->slots = slots; (*value)->live_slots = live_slots; return (el_unit){{0}};\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                StandardCall::StoreClear { store, value } => {
+                    let Some(store_c) = self.c_type(store, None) else {
+                        continue;
+                    };
+                    self.emit_drop_helper(value);
+                    let drop = if self.type_has_drop_glue(value) {
+                        format!("el_drop_t{}(&(*store)->slots[index].value);", value.index())
+                    } else {
+                        String::new()
+                    };
+                    let _ = writeln!(
+                        self.output,
+                        "static el_unit {}({store_c} *store) {{\n    uintptr_t index;\n    for (index = 0U; index < (*store)->capacity; ++index) if ((*store)->slots[index].occupied) {{ {drop} (*store)->slots[index].occupied = false; if ((*store)->slots[index].generation != UINTPTR_MAX) ++(*store)->slots[index].generation; }}\n    (*store)->length = 0U; return (el_unit){{0}};\n}}\n",
+                        standard_call_name(*operation)
+                    );
+                }
+                _ => {
+                    let _ = result;
+                }
+            }
+        }
+    }
+
     fn emit_clone_helper(&mut self, ty: TypeId) {
         let ty = self.resolve_alias(ty);
         if !self.emitted_clone_helpers.insert(ty) {
@@ -3683,8 +3929,10 @@ unavailable_error:
             }
             TypeKind::Builtin { builtin, arguments } => {
                 let builtin = self.resolved.builtin_name(builtin);
-                for argument in &arguments {
-                    self.emit_clone_helper(*argument);
+                if !matches!(builtin, "Shared" | "Weak") {
+                    for argument in &arguments {
+                        self.emit_clone_helper(*argument);
+                    }
                 }
                 match (builtin, arguments.as_slice()) {
                     ("Vec", [element]) => {
@@ -3724,6 +3972,18 @@ unavailable_error:
                         let _ = writeln!(
                             self.output,
                             "static {c_type} {name}({c_type} value) {{\n    {c_type} result = ({c_type})malloc(sizeof(*result));\n    if (result == NULL) el_out_of_memory(); el_cost_allocation(sizeof(*result), false);\n    *result = {child}(*value);\n    return result;\n}}\n"
+                        );
+                    }
+                    ("Shared", [_]) => {
+                        let _ = writeln!(
+                            self.output,
+                            "static {c_type} {name}({c_type} value) {{\n    if (value == NULL) return NULL;\n    (void)pthread_mutex_lock(&value->lock);\n    if (value->strong == UINTPTR_MAX) {{ (void)pthread_mutex_unlock(&value->lock); el_out_of_memory(); }}\n    ++value->strong;\n    (void)pthread_mutex_unlock(&value->lock);\n    return value;\n}}\n"
+                        );
+                    }
+                    ("Weak", [_]) => {
+                        let _ = writeln!(
+                            self.output,
+                            "static {c_type} {name}({c_type} value) {{\n    if (value == NULL) return NULL;\n    (void)pthread_mutex_lock(&value->lock);\n    if (value->weak == UINTPTR_MAX) {{ (void)pthread_mutex_unlock(&value->lock); el_out_of_memory(); }}\n    ++value->weak;\n    (void)pthread_mutex_unlock(&value->lock);\n    return value;\n}}\n"
                         );
                     }
                     _ => {
@@ -3784,7 +4044,7 @@ unavailable_error:
             }
             TypeKind::Builtin { builtin, .. } => matches!(
                 self.resolved.builtin_name(*builtin),
-                "Vec" | "Map" | "Set" | "Box"
+                "Vec" | "Map" | "Set" | "Box" | "Shared" | "Weak" | "Store"
             ),
             _ => false,
         };
@@ -3980,6 +4240,31 @@ unavailable_error:
                         self.output
                             .push_str("        free(*value); *value = NULL;\n    }\n");
                     }
+                    ("Shared", [item]) => {
+                        self.output.push_str("    if (*value != NULL) {\n        bool destroy_value = false, free_block = false;\n        (void)pthread_mutex_lock(&(*value)->lock);\n        if (--(*value)->strong == 0U) destroy_value = true;\n        (void)pthread_mutex_unlock(&(*value)->lock);\n        if (destroy_value) {\n");
+                        if self.type_has_drop_glue(*item) {
+                            let _ = writeln!(
+                                self.output,
+                                "            el_drop_t{}(&(*value)->value);",
+                                item.index()
+                            );
+                        }
+                        self.output.push_str("            (void)pthread_mutex_lock(&(*value)->lock);\n            if (--(*value)->weak == 0U) free_block = true;\n            (void)pthread_mutex_unlock(&(*value)->lock);\n            if (free_block) { (void)pthread_mutex_destroy(&(*value)->lock); free(*value); }\n        }\n        *value = NULL;\n    }\n");
+                    }
+                    ("Weak", [_]) => {
+                        self.output.push_str("    if (*value != NULL) {\n        bool free_block = false;\n        (void)pthread_mutex_lock(&(*value)->lock);\n        if (--(*value)->weak == 0U) free_block = true;\n        (void)pthread_mutex_unlock(&(*value)->lock);\n        if (free_block) { (void)pthread_mutex_destroy(&(*value)->lock); free(*value); }\n        *value = NULL;\n    }\n");
+                    }
+                    ("Store", [item]) => {
+                        self.output.push_str("    if (*value != NULL) {\n        uintptr_t index;\n        for (index = (*value)->capacity; index != 0U; --index) {\n            if (!(*value)->slots[index - 1U].occupied) continue;\n");
+                        if self.type_has_drop_glue(*item) {
+                            let _ = writeln!(
+                                self.output,
+                                "            el_drop_t{}(&(*value)->slots[index - 1U].value);",
+                                item.index()
+                            );
+                        }
+                        self.output.push_str("        }\n        free((*value)->slots); free((*value)->live_slots); free(*value); *value = NULL;\n    }\n");
+                    }
                     _ => {}
                 }
             }
@@ -4003,7 +4288,7 @@ unavailable_error:
             || match self.typed.types.kind(ty) {
                 TypeKind::Builtin { builtin, .. } => matches!(
                     self.resolved.builtin_name(*builtin),
-                    "Vec" | "Map" | "Set" | "Box"
+                    "Vec" | "Map" | "Set" | "Box" | "Shared" | "Weak" | "Store"
                 ),
                 TypeKind::Tuple(elements) => {
                     elements.iter().any(|child| self.type_has_drop_glue(*child))
@@ -5000,7 +5285,15 @@ unavailable_error:
                     }
                 }
             }
-            TypeKind::Builtin { arguments, .. } => components.extend(arguments.iter().copied()),
+            TypeKind::Builtin { builtin, arguments }
+                if !matches!(
+                    self.resolved.builtin_name(*builtin),
+                    "Handle" | "Shared" | "Weak"
+                ) =>
+            {
+                components.extend(arguments.iter().copied());
+            }
+            TypeKind::Builtin { .. } => {}
             _ => {}
         }
         for component in components {
@@ -5114,6 +5407,12 @@ unavailable_error:
                     }
                     ("Identity", [_]) => {
                         body.push_str("    return a.target == b.target;\n");
+                    }
+                    ("Shared" | "Weak", [_]) => {
+                        body.push_str("    return a == b;\n");
+                    }
+                    ("Handle", [_]) => {
+                        body.push_str("    return a.store == b.store && a.slot == b.slot && a.generation == b.generation;\n");
                     }
                     _ => {}
                 }
@@ -5410,7 +5709,15 @@ unavailable_error:
                     Vec::new()
                 }
             }
-            TypeKind::Builtin { arguments, .. } => arguments.clone(),
+            TypeKind::Builtin { builtin, arguments }
+                if !matches!(
+                    self.resolved.builtin_name(*builtin),
+                    "Handle" | "Shared" | "Weak"
+                ) =>
+            {
+                arguments.clone()
+            }
+            TypeKind::Builtin { .. } => Vec::new(),
             _ => Vec::new(),
         };
         for component in components {
@@ -5476,6 +5783,19 @@ unavailable_error:
                     "    hash = el_hash_combine(hash, \
                      el_hash_u64((uint64_t)(uintptr_t)value.target));\n",
                 );
+            }
+            TypeKind::Builtin { builtin, arguments }
+                if matches!(self.resolved.builtin_name(*builtin), "Shared" | "Weak")
+                    && arguments.len() == 1 =>
+            {
+                body.push_str(
+                    "    hash = el_hash_combine(hash, el_hash_u64((uint64_t)(uintptr_t)value));\n",
+                );
+            }
+            TypeKind::Builtin { builtin, arguments }
+                if self.resolved.builtin_name(*builtin) == "Handle" && arguments.len() == 1 =>
+            {
+                body.push_str("    hash = el_hash_combine(hash, el_hash_u64((uint64_t)value.store));\n    hash = el_hash_combine(hash, el_hash_u64((uint64_t)value.slot));\n    hash = el_hash_combine(hash, el_hash_u64((uint64_t)value.generation));\n");
             }
             _ => {}
         }

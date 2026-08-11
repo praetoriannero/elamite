@@ -1,9 +1,9 @@
 # Elamite implementation cost model
 
-> Version: 16
+> Version: 17
 >
 > Applies to: the 0.10.0-draft compatibility path and implemented
-> 0.11.0-draft phases through inline first-class closures, on Linux x86 and
+> 0.11.0-draft phases through explicit shared and graph ownership, on Linux x86 and
 > x86-64
 >
 > Status: non-normative implementation documentation
@@ -29,9 +29,9 @@ or automatically protect backing reached through external aliases.
 
 ## Implemented 0.11 owned-core costs
 
-The ordinary driver still stops the 0.11 path before explicit shared and graph
-ownership, but the checked-to-C conformance path now implements the complete
-owned-core and inline-closure layers. On that path:
+The ordinary driver still stops the 0.11 path before promotion and tracing-GC
+removal, but the checked-to-C conformance path now implements the complete
+owned-core, inline-closure, and explicit shared/graph layers. On that path:
 
 - `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
   a constant-size descriptor transfer; it allocates and copies no backing.
@@ -82,6 +82,35 @@ owned-core and inline-closure layers. On that path:
 - Owned-path lowering no longer requests or links the tracing collector.
   Compatibility programs retain their existing collector costs until the
   migration seam is removed.
+
+## Implemented 0.11 shared and graph costs
+
+- `Shared[T]` and `Weak[T]` each move as one pointer. Construction performs one
+  control-block allocation containing `T`, a native mutex, and pointer-width
+  strong/weak counters. Clone, downgrade, upgrade, and destruction take that
+  mutex for constant-time counter work; counter overflow is process-fatal.
+- The control block retains one implicit weak count until the last strong owner
+  has destroyed `T`. Explicit weak owners can retain only the empty control
+  block. Strong cycles intentionally retain their complete strongly connected
+  allocations until code replaces back edges with `Weak` or uses a store.
+- `Store[T]` is one heap descriptor plus geometrically grown slot and live-slot
+  arrays. `Handle[T]` is three `uintptr_t` fields (store identity, slot,
+  generation), copies without allocation, and retains no store or element.
+  Lookup is constant time and returns a borrow; wrong-store and stale checks
+  are constant-time comparisons before access.
+- Insertion scans for a reusable free slot and can therefore take `O(capacity)`
+  before geometric growth. Removal shifts the dense live-slot index in
+  `O(n)` and increments the slot generation; exhausted generations are
+  retired. Consuming iteration moves
+  occupied values through the dense live-slot index without allocation.
+  `compact()` explicitly allocates and copies both arrays while preserving
+  logical slots and generations. Exclusive access statically blocks relocating
+  operations while an element borrow is live.
+- Store destruction visits all occupied slots, destroys each remaining `T`,
+  and releases all backing plus the descriptor. Handles neither participate in
+  cleanup nor keep elements alive. All sizes and counters use target-width
+  types on both supported architectures; none of these compiler-private
+  layouts is a C interoperability guarantee.
 
 These costs coexist temporarily with ordinary address-taken promotion,
 compatibility concurrency, and variadic-pack machinery owned by later

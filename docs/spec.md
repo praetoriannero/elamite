@@ -1750,6 +1750,11 @@ owner exists. Weak bookkeeping storage may remain until the last weak value is
 dropped. A cycle made entirely of `Shared` strong edges is not reclaimed; code
 uses `Weak` for back edges or a checked store for graph ownership.
 
+`Shared[T].new(value)` constructs one strong owner, `owner.get()` borrows its
+value, and `owner.downgrade()` constructs a weak owner. `weak.upgrade()` has the
+`Option[Shared[T]]` result described above. `Shared` and `Weak` equality is
+control-block identity rather than structural equality of `T`.
+
 `Store[T]` owns a homogeneous table and returns opaque `Handle[T]` identities.
 A handle is `Copy` and logically contains a store identity, slot, and generation
 even when the implementation packs them differently by target. Looking up a
@@ -1765,6 +1770,14 @@ relocate elements require exclusive store access and conflict with live element
 borrows. Dropping a store destroys every remaining element regardless of cycles
 formed by handles. This makes `Store` the standard ownership model for mutable
 graphs whose identity should not retain nodes individually.
+
+`Store[T].new()` constructs an empty store. `insert(value) -> Handle[T]`,
+`get(handle) -> &T`, `get_var(handle) -> &var T`, and `remove(handle) -> T`
+provide the core graph operations; `len`, `is_empty`, `clear`, and `compact`
+have their ordinary collection meanings. Direct `for` iteration consumes the
+store and moves each remaining `T` in insertion order; breaking destroys every
+unvisited element. Iteration therefore cannot leave handles naming a live
+store behind.
 
 Owned collections, `String`, boxes, shared allocations, stores, formatting, and
 explicit owning erasure may allocate. Borrow formation, receiver adaptation,

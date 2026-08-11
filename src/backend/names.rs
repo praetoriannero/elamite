@@ -84,7 +84,28 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
             return format!("el_{source}_now_t{}", clock_type.index());
         }
         StandardCall::Clone { value } => return format!("el_clone_t{}", value.index()),
+        StandardCall::IntegerMax { value } => return format!("el_integer_max_t{}", value.index()),
         StandardCall::BoxNew { boxed, .. } => return format!("el_box_new_t{}", boxed.index()),
+        StandardCall::SharedNew { shared, .. } => {
+            return format!("el_shared_new_t{}", shared.index());
+        }
+        StandardCall::SharedGet { shared, .. } => ("shared_get", shared),
+        StandardCall::SharedDowngrade { shared, .. } => ("shared_downgrade", shared),
+        StandardCall::WeakUpgrade { weak, .. } => ("weak_upgrade", weak),
+        StandardCall::StoreNew { store, .. } => ("store_new", store),
+        StandardCall::StoreLen { store } => ("store_len", store),
+        StandardCall::StoreIsEmpty { store } => ("store_is_empty", store),
+        StandardCall::StoreInsert { store, .. } => ("store_insert", store),
+        StandardCall::StoreGet { store, mutable, .. } => {
+            return format!(
+                "el_store_get{}_t{}",
+                if mutable { "_var" } else { "" },
+                store.index()
+            );
+        }
+        StandardCall::StoreRemove { store, .. } => ("store_remove", store),
+        StandardCall::StoreCompact { store } => ("store_compact", store),
+        StandardCall::StoreClear { store, .. } => ("store_clear", store),
         StringFrom => return "el_string_from".to_string(),
         StandardCall::Text {
             operation,

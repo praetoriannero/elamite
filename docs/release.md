@@ -54,9 +54,14 @@ provenance without allocation, structural clone/drop follows capture
 capabilities, every invocation borrows one shared receiver, and capture-free
 closures explicitly convert to exact function references. Direct,
 generic-bound, borrowed-erased, nested, and repeated calls run under strict
-C99; both supported pointer widths reach identical lowering. The temporary
-boundary has advanced to explicit shared and graph ownership. The compiling
-0.10 path and its shallow representation remain available unchanged.
+C99; both supported pointer widths reach identical lowering. `Shared`/`Weak`
+now use synchronized explicit reference counts with deterministic last-owner
+cleanup, while `Store`/`Handle` provide checked generational graph identity,
+consuming iteration, and stale or wrong-store traps. Store element borrows
+block relocation and removal, and pointer-width-neutral C99 lowering is covered
+on x86 and x86-64. The temporary boundary has advanced to promotion and
+tracing-GC removal. The compiling 0.10 path and its shallow representation
+remain available unchanged.
 
 ### Owned-core baseline comparison
 
@@ -94,6 +99,21 @@ RSS varied between runs and remain nondeterministic host observations. Owned
 closure conformance separately asserts allocation-free construction, no
 collector dependency, structural clone/drop, and C99 execution at `-O0` and
 `-O2`; those facts are semantic/generated-code evidence rather than benchmark
+thresholds.
+
+### Explicit shared/graph baseline comparison
+
+The required `benchmarks/memory-cost-baseline.sh` comparison used parent commit
+`7e68b1e` and this explicit shared/graph implementation on 2026-08-10 (Linux
+x86-64, rustc 1.89.0, GCC 15.2). The compiling compatibility corpus retained
+the six source hashes and every deterministic allocation/copy counter shown in
+the owned-core table above. The current run measured the same totals: 6/172,
+1,013/32,512, 2/82, 17/1,544, 2/257, and 6/1,008 allocations/bytes in workload
+order, with identical scanned-allocation and `memcpy` counters. Compile time
+and peak RSS varied as ordinary host observations. Owned-path conformance
+separately executes shared/weak lifetime transitions, generational store
+reuse, consuming iteration, stale and wrong-store traps, borrow exclusion, and
+pointer-width-neutral C99 layouts; those semantic checks are not benchmark
 thresholds.
 
 ## Language surface changes

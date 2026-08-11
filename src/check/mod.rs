@@ -159,10 +159,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after inline first-class closures. Explicit shared
-/// and graph ownership still lack their 0.11 representation, so ordinary
-/// driver entry points stop before backend lowering until that replacement is
-/// available.
+/// The temporary boundary after explicit shared and graph ownership. Ordinary
+/// driver entry points still stop before backend lowering until implicit
+/// promotion and tracing-collector dependencies have been removed.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -171,8 +170,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has inline first-class closures, but explicit \
-                 shared and graph ownership is not implemented yet",
+                "semantic revision 0.11.0-draft has explicit shared and graph ownership, but \
+                 promotion and tracing-GC removal is not implemented yet",
             )
         })
 }
@@ -851,6 +850,11 @@ impl<'a> Checker<'a> {
                     TypeKind::Builtin { builtin, arguments } => {
                         match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
                             ("Vec" | "Set", [element]) => Some(*element),
+                            ("Store", [element])
+                                if self.resolved.semantic_revision.supports_owned_surface() =>
+                            {
+                                Some(*element)
+                            }
                             ("Map", [key, value]) => {
                                 Some(self.typed.types.intern(TypeKind::Tuple(vec![*key, *value])))
                             }
@@ -895,7 +899,7 @@ impl<'a> Checker<'a> {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Category::ExpressionType,
-                            "a `for` iterable must be a slice, array, `Vec`, `Map`, `Set`, or \
+                            "a `for` iterable must be a slice, array, `Vec`, `Map`, `Set`, `Store`, or \
                              implement `std.Iterator[Element]`",
                         )
                         .with_primary(node.span),

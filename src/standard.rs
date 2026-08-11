@@ -299,6 +299,22 @@ pub const INTRINSICS: &[Intrinsic] = &[
         reason: "unique address-stable heap ownership and lowering hooks",
     },
     Intrinsic {
+        path: "Shared",
+        reason: "atomic explicit shared ownership and lowering hooks",
+    },
+    Intrinsic {
+        path: "Weak",
+        reason: "non-owning shared control-block identity and lowering hooks",
+    },
+    Intrinsic {
+        path: "Store",
+        reason: "homogeneous generational graph storage and lowering hooks",
+    },
+    Intrinsic {
+        path: "Handle",
+        reason: "target-width generational store identity representation",
+    },
+    Intrinsic {
         path: "Default",
         reason: "compiler-controlled structural derivation and primitive implementations",
     },

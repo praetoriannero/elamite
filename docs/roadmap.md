@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Explicit shared and graph ownership**
+> Next planned milestone: **Promotion and tracing-GC removal**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -26,8 +26,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Deterministic destruction](#deterministic-destruction) | Complete | Per-action drop flags, custom and structural glue, ordinary-exit cleanup, replacement, defer ordering, and explicit C99 lowering are implemented. |
 | [Owned core values and collections](#owned-core-values-and-collections) | Complete | Replaced shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
 | [Inline first-class closures](#inline-first-class-closures) | Complete | Nominal inline environments, capture ownership, structural clone/drop, shared calls, erasure, and capture-free conversion are implemented. |
-| [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned — next | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
-| [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
+| [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Complete | Atomic `Shared`/`Weak` ownership and generational `Store`/`Handle` graph identity are implemented with exact cleanup and checked borrowing. |
+| [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned — next | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
 | [Race-safe concurrency](#race-safe-concurrency) | Planned | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
 | [Owned-model C interoperability](#owned-model-c-interoperability) | Planned | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
 | [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
@@ -459,7 +459,7 @@ preserving Elamite's non-unwinding trap model.
 > backing, explicit recursive clone/drop glue, non-owning shared and exclusive
 > slices, address-stable `Box`, borrow-oriented query APIs, and owned/borrowed
 > iteration. The compatibility revision retains its measured shallow model.
-> The 0.11 boundary now names **Explicit shared and graph ownership**.
+> The 0.11 boundary has since advanced to **Promotion and tracing-GC removal**.
 >
 > Blocked by: **Deterministic destruction**.
 
@@ -482,8 +482,8 @@ impossible to mutate through an accidental shallow alias.
 > structural move/clone/drop capabilities, invokes every closure through one
 > shared receiver rule, and permits only capture-free exact function-reference
 > conversion. The compatibility revision retains its measured managed
-> environment representation. The 0.11 boundary now names **Explicit shared
-> and graph ownership**.
+> environment representation. The 0.11 boundary has since advanced to
+> **Promotion and tracing-GC removal**.
 >
 > Blocked by: **None**. Its prerequisites, **Structural borrow provenance**,
 > **Deterministic destruction**, and **Owned core values and collections**, are
@@ -502,7 +502,10 @@ whose captures obey ordinary ownership and borrowing.
 
 ### Explicit shared and graph ownership
 
-> Status: Planned — next.
+> Status: Complete. The owned revision now provides atomic strong/weak control
+> blocks, explicit upgrade and downgrade, compact target-width handles,
+> generational homogeneous stores, exact cleanup, and borrow-checked lookup.
+> The 0.11 boundary now names **Promotion and tracing-GC removal**.
 >
 > Blocked by: **None**. **Owned core values and collections**, **Deterministic
 > destruction**, and **Inline first-class closures** are complete.
@@ -512,10 +515,10 @@ cyclic or stable graph references without restoring implicit tracing ownership.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Shared and weak ownership** | Implement `Shared[T]` and the accepted `Weak[T]` behavior with explicit construction, clone, upgrade, identity, destruction, and overflow rules. | Reference-count changes are documented costs, cycles require an explicit strategy, and shared ownership alone does not grant unsynchronized mutation. |
-| **Checked stores and handles** | Implement homogeneous `Store[T]` ownership plus compact `Handle[T]` identity containing enough store, slot, and generation information for checked lookup. | Wrong-store and stale handles trap deterministically, slot reuse cannot resurrect an old handle, and handle copying does not retain unrelated object graphs. |
-| **Mutation and borrow integration** | Define lookup, insertion, removal, iteration, compaction, and mutation through the ordinary borrow checker and capability system. | A live borrowed element blocks invalid store mutation, and no safe operation yields a reference whose backing may move or disappear. |
-| **Representation and target audit** | Specify layouts, overflow limits, synchronization properties, and costs on x86 and x86-64 without exposing accidental C layout. | Pointer-width-sensitive tests and memory baselines agree with `cost_model.md`; only explicitly ABI-safe wrappers cross C. |
+| **Shared and weak ownership (done)** | Implement `Shared[T]` and the accepted `Weak[T]` behavior with explicit construction, clone, upgrade, identity, destruction, and overflow rules. | Reference-count changes are documented costs, cycles require an explicit strategy, and shared ownership alone does not grant unsynchronized mutation. |
+| **Checked stores and handles (done)** | Implement homogeneous `Store[T]` ownership plus compact `Handle[T]` identity containing enough store, slot, and generation information for checked lookup. | Wrong-store and stale handles trap deterministically, slot reuse cannot resurrect an old handle, and handle copying does not retain unrelated object graphs. |
+| **Mutation and borrow integration (done)** | Define lookup, insertion, removal, iteration, compaction, and mutation through the ordinary borrow checker and capability system. | A live borrowed element blocks invalid store mutation, and no safe operation yields a reference whose backing may move or disappear. |
+| **Representation and target audit (done)** | Specify layouts, overflow limits, synchronization properties, and costs on x86 and x86-64 without exposing accidental C layout. | Pointer-width-sensitive tests and memory baselines agree with `cost_model.md`; only explicitly ABI-safe wrappers cross C. |
 
 ### Promotion and tracing-GC removal
 

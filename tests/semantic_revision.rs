@@ -436,7 +436,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_inline_first_class_closures() {
+fn owned_packages_stop_after_explicit_shared_and_graph_ownership() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -444,7 +444,7 @@ fn owned_packages_stop_after_inline_first_class_closures() {
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
     let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
-        Ok(_) => panic!("explicit shared ownership is not enabled yet"),
+        Ok(_) => panic!("promotion and tracing-GC removal is not enabled yet"),
         Err(diagnostics) => diagnostics,
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
@@ -456,7 +456,7 @@ fn owned_packages_stop_after_inline_first_class_closures() {
     assert!(
         diagnostics[0]
             .message
-            .contains("explicit shared and graph ownership")
+            .contains("promotion and tracing-GC removal")
     );
 
     let mut sources = SourceManager::new();

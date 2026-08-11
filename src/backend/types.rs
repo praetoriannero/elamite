@@ -146,6 +146,30 @@ impl<'a> CEmitter<'a> {
                             let _ = writeln!(self.output, "typedef {value_type} *{name};\n");
                         }
                     }
+                    ("Shared" | "Weak", [value]) => {
+                        if let Some(value_type) = self.c_type(*value, span) {
+                            let guard = format!("EL_SHARED_DATA_T{}", value.index());
+                            let data = format!("el_shared_data_t{}", value.index());
+                            let _ = writeln!(
+                                self.output,
+                                "#ifndef {guard}\n#define {guard}\ntypedef struct {data} {{\n    pthread_mutex_t lock;\n    uintptr_t strong;\n    uintptr_t weak;\n    {value_type} value;\n}} {data};\n#endif\ntypedef {data} *{name};\n"
+                            );
+                        }
+                    }
+                    ("Handle", [_]) => {
+                        let _ = writeln!(
+                            self.output,
+                            "typedef struct {name} {{ uintptr_t store; uintptr_t slot; uintptr_t generation; }} {name};\n"
+                        );
+                    }
+                    ("Store", [value]) => {
+                        if let Some(value_type) = self.c_type(*value, span) {
+                            let _ = writeln!(
+                                self.output,
+                                "typedef struct {name}_slot {{\n    {value_type} value;\n    uintptr_t generation;\n    uintptr_t dense_index;\n    bool occupied;\n}} {name}_slot;\ntypedef struct {name}_data {{\n    uintptr_t identity;\n    uintptr_t length;\n    uintptr_t capacity;\n    {name}_slot *slots;\n    uintptr_t *live_slots;\n}} *{name};\n"
+                            );
+                        }
+                    }
                     ("Formatter", []) => {}
                     ("Identity", [_]) => {
                         let _ = writeln!(
@@ -656,6 +680,10 @@ impl<'a> CEmitter<'a> {
                         "Vec"
                             | "Set"
                             | "Box"
+                            | "Shared"
+                            | "Weak"
+                            | "Store"
+                            | "Handle"
                             | "Identity"
                             | "Thread"
                             | "Sender"

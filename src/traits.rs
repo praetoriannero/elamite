@@ -1587,6 +1587,13 @@ fn provides_inner(
                     )
                 }),
                 ("Identity", "PartialEq" | "Eq" | "Hash" | "StableHash") => true,
+                ("Shared" | "Weak" | "Handle", "PartialEq" | "Eq" | "Hash" | "StableHash") => true,
+                ("Shared" | "Weak" | "Handle", "PartialOrd" | "Ord") => false,
+                (
+                    "Store",
+                    "Default" | "Display" | "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash"
+                    | "StableHash",
+                ) => false,
                 ("String" | "Vec" | "Map" | "Set", "StableHash") => false,
                 (_, "StableHash") => arguments.iter().all(|argument| {
                     provides_inner(

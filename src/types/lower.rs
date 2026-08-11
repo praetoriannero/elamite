@@ -632,8 +632,8 @@ impl<'a> TypeBuilder<'a> {
             return self.types.primitive(primitive);
         }
         let arity = match name {
-            "Vec" | "Set" | "Box" | "Identity" | "ForeignRoot" | "ForeignRootMut" | "Thread"
-            | "Sender" | "Receiver" | "Mutex" => 1,
+            "Vec" | "Set" | "Box" | "Shared" | "Weak" | "Store" | "Handle" | "Identity"
+            | "ForeignRoot" | "ForeignRootMut" | "Thread" | "Sender" | "Receiver" | "Mutex" => 1,
             "Map" => 2,
             "print" | "println" | "spawn" | "channel" | "unbounded_channel" => {
                 self.diagnostics.push(

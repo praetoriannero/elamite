@@ -2415,6 +2415,11 @@ fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
             | StandardCall::VecRemove { .. }
             | StandardCall::VecPop { .. }
             | StandardCall::VecClear { .. }
+            | StandardCall::StoreInsert { .. }
+            | StandardCall::StoreGet { mutable: true, .. }
+            | StandardCall::StoreRemove { .. }
+            | StandardCall::StoreCompact { .. }
+            | StandardCall::StoreClear { .. }
     )
 }
 

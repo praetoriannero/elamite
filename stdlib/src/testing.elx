@@ -15,6 +15,8 @@ pub enum BuiltinTrap:
     NullPointer
     MisalignedPointer
     ClosedHandle
+    WrongStore
+    StaleHandle
 
 impl RuntimeTrap for BuiltinTrap:
     fn code(self: &Self) -> str:
@@ -39,6 +41,10 @@ impl RuntimeTrap for BuiltinTrap:
                 return "E-RUN-ALIGN"
             BuiltinTrap.ClosedHandle:
                 return "E-RUN-CLOSED"
+            BuiltinTrap.WrongStore:
+                return "E-RUN-WRONG-STORE"
+            BuiltinTrap.StaleHandle:
+                return "E-RUN-STALE"
 
     fn message(self: &Self) -> String:
         return String.from(self.code())

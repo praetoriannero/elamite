@@ -408,7 +408,20 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::Trap { .. }
         | StandardCall::ClockNow { .. }
         | StandardCall::Clone { .. }
+        | StandardCall::IntegerMax { .. }
         | StandardCall::BoxNew { .. }
+        | StandardCall::SharedNew { .. }
+        | StandardCall::SharedGet { .. }
+        | StandardCall::SharedDowngrade { .. }
+        | StandardCall::WeakUpgrade { .. }
+        | StandardCall::StoreNew { .. }
+        | StandardCall::StoreLen { .. }
+        | StandardCall::StoreIsEmpty { .. }
+        | StandardCall::StoreInsert { .. }
+        | StandardCall::StoreGet { .. }
+        | StandardCall::StoreRemove { .. }
+        | StandardCall::StoreCompact { .. }
+        | StandardCall::StoreClear { .. }
         | StandardCall::Text { .. }
         | StandardCall::System { .. }
         | StringFrom

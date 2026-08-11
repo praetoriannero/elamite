@@ -577,6 +577,15 @@ impl<'a> CEmitter<'a> {
                 let _ = writeln!(self.output, "{indent}}}");
                 let _ = writeln!(self.output, "{indent}{expression} = NULL;");
             }
+            DropActionKind::OwnedShared { owner }
+            | DropActionKind::OwnedWeak { owner }
+            | DropActionKind::OwnedStore { owner } => {
+                let _ = writeln!(
+                    self.output,
+                    "{indent}el_drop_t{}(&{expression});",
+                    owner.index()
+                );
+            }
         }
     }
 
@@ -700,6 +709,9 @@ impl<'a> CEmitter<'a> {
                 arguments,
                 receiver_place,
             } => {
+                if matches!(operation, StandardCall::IntegerMax { .. }) {
+                    return Some("UINTPTR_MAX".to_string());
+                }
                 if matches!(operation, StandardCall::SliceLen { .. }) {
                     return Some(format!("{}.length", temporary_name(*arguments.first()?)));
                 }
@@ -779,7 +791,10 @@ impl<'a> CEmitter<'a> {
                 }
                 if matches!(
                     operation,
-                    StandardCall::VecInsert { .. } | StandardCall::VecRemove { .. }
+                    StandardCall::VecInsert { .. }
+                        | StandardCall::VecRemove { .. }
+                        | StandardCall::StoreGet { .. }
+                        | StandardCall::StoreRemove { .. }
                 ) {
                     arguments.push(self.trap_arguments(span));
                 }
@@ -814,7 +829,9 @@ impl<'a> CEmitter<'a> {
                 IterationKind::Vec { .. } => {
                     format!("{}.length", temporary_name(*collection))
                 }
-                IterationKind::Map { .. } | IterationKind::Set { .. } => {
+                IterationKind::Map { .. }
+                | IterationKind::Set { .. }
+                | IterationKind::Store { .. } => {
                     format!("{}->length", temporary_name(*collection))
                 }
                 IterationKind::User { .. } => {
@@ -844,6 +861,11 @@ impl<'a> CEmitter<'a> {
                     }
                     IterationKind::Set { .. } => {
                         format!("{collection_name}->values[{index_name}]")
+                    }
+                    IterationKind::Store { .. } => {
+                        format!(
+                            "({collection_name}->slots[{collection_name}->live_slots[{index_name}]].occupied = false, {collection_name}->slots[{collection_name}->live_slots[{index_name}]].value)"
+                        )
                     }
                     IterationKind::Map { pair, .. } => {
                         let pair_type = self.c_type(*pair, Some(span))?;

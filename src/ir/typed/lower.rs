@@ -754,6 +754,9 @@ impl<'a> TypedLowerer<'a> {
                     ("Box", [value]) => Some(DropActionKind::OwnedBox {
                         value: self.drop_actions(*value, span),
                     }),
+                    ("Shared", [_]) => Some(DropActionKind::OwnedShared { owner: ty }),
+                    ("Weak", [_]) => Some(DropActionKind::OwnedWeak { owner: ty }),
+                    ("Store", [_]) => Some(DropActionKind::OwnedStore { owner: ty }),
                     _ => None,
                 };
                 actions.push(DropAction {
@@ -1234,6 +1237,17 @@ impl<'a> TypedLowerer<'a> {
                                 },
                                 *element,
                             ),
+                            ("Store", [element])
+                                if self.resolved.semantic_revision.supports_owned_surface() =>
+                            {
+                                (
+                                    IterationKind::Store {
+                                        collection: iterable.ty,
+                                        element: *element,
+                                    },
+                                    *element,
+                                )
+                            }
                             ("Map", [key, value]) => {
                                 let pair = self
                                     .typed
@@ -2472,6 +2486,9 @@ impl<'a> TypedLowerer<'a> {
                             | StandardCall::MapNew { .. }
                             | StandardCall::SetNew { .. }
                             | StandardCall::BoxNew { .. }
+                            | StandardCall::IntegerMax { .. }
+                            | StandardCall::SharedNew { .. }
+                            | StandardCall::StoreNew { .. }
                     ),
                 };
                 if has_receiver {
