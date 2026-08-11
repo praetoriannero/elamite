@@ -2957,6 +2957,7 @@ impl<'a> Checker<'a> {
         let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
         let compiler_owned_clone = match self.typed.types.kind(receiver) {
             TypeKind::Primitive(PrimitiveType::String) => true,
+            TypeKind::Closure { .. } => true,
             TypeKind::Builtin { builtin, .. } => {
                 matches!(
                     self.resolved.builtin_name(*builtin),

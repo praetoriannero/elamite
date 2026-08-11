@@ -1,16 +1,17 @@
 # Elamite implementation cost model
 
-> Version: 15
+> Version: 16
 >
 > Applies to: the 0.10.0-draft compatibility path and implemented
-> 0.11.0-draft phases through owned core values, on Linux x86 and x86-64
+> 0.11.0-draft phases through inline first-class closures, on Linux x86 and
+> x86-64
 >
 > Status: non-normative implementation documentation
 
 > Implementation revision: **The compatibility path remains shallow; the
-> owned path moves unique core values and clones only when requested.** The
-> semantic-revision selection is explicit in control-flow IR. The C backend
-> never infers a value model from source syntax.
+> owned path moves unique core values, stores closure environments inline, and
+> clones only when requested.** The semantic-revision selection is explicit in
+> control-flow IR. The C backend never infers a value model from source syntax.
 
 This document explains where the current 0.10 compiler copies values, allocates
 storage, retains memory, and synchronizes. `spec.md` now defines the accepted
@@ -28,9 +29,9 @@ or automatically protect backing reached through external aliases.
 
 ## Implemented 0.11 owned-core costs
 
-The ordinary driver still stops the 0.11 path before inline closure lowering,
-but the checked-to-C conformance path now implements the complete owned-core
-layer. On that path:
+The ordinary driver still stops the 0.11 path before explicit shared and graph
+ownership, but the checked-to-C conformance path now implements the complete
+owned-core and inline-closure layers. On that path:
 
 - `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
   a constant-size descriptor transfer; it allocates and copies no backing.
@@ -53,9 +54,39 @@ layer. On that path:
   elements exactly once. Slice iteration borrows and yields references without
   allocation.
 
-These costs coexist temporarily with managed promotion, closure, concurrency,
-and variadic-pack machinery owned by later migration milestones. They do not
-claim that the 0.11 path is yet available through the compiling driver.
+## Implemented 0.11 inline-closure costs
+
+- Every closure expression has a distinct inline aggregate containing its
+  capture representations. Construction evaluates captures left to right,
+  moves each non-`Copy` plain capture, copies each `Copy` capture, and stores
+  `&`/`&var` as non-owning pointers. The closure itself performs no allocation.
+- Moving a closure transfers its inline environment. The current C99 lowering
+  may assign bytes proportional to the immediate environment size; it never
+  traverses or clones owned backing. An explicit `clone()` visits every capture
+  and incurs exactly the clone costs of those fields. Destruction visits owned
+  capture fields in reverse order.
+- Direct, generic-bound, and erased calls use one shared receiver contract.
+  The current control-flow lowering may materialize one non-owning immediate
+  environment assignment at a call site before passing its address; the call
+  allocates nothing and cannot move a capture out.
+- A closure capture using `&` or `&var` keeps its source in the enclosing stack
+  frame and adds no promotion allocation. Borrow provenance prevents the
+  closure from escaping that storage. Taking an ordinary standalone reference
+  to a closure for erased dispatch can still use the broader conservative
+  promotion path scheduled for removal later.
+- A capture-free closure explicitly converted to its exact safe function
+  reference is one function pointer and carries no environment. Capturing
+  closures never convert to code pointers. Borrowed erasure adds only the
+  ordinary two-word trait-object view; owning erasure allocates solely through
+  its explicit `Box`.
+- Owned-path lowering no longer requests or links the tracing collector.
+  Compatibility programs retain their existing collector costs until the
+  migration seam is removed.
+
+These costs coexist temporarily with ordinary address-taken promotion,
+compatibility concurrency, and variadic-pack machinery owned by later
+migration milestones. They do not claim that the 0.11 path is yet available
+through the compiling driver.
 
 ## Reading the tables
 
@@ -71,6 +102,10 @@ claim that the 0.11 path is yet available through the compiling driver.
 width.
 
 ## Costs by type family
+
+The tables in this section remain the measured 0.10 compatibility baseline.
+The implemented 0.11 replacements are specified in the owned-core and
+inline-closure sections above.
 
 | Type family | Required semantics | Current physical representation and copy | Likely allocation | Retention and implementation freedom |
 | --- | --- | --- | --- | --- |
@@ -98,6 +133,9 @@ length are constant-time in the current implementation; inserting or removing
 away from the tail shifts the remaining inline element representations.
 
 ## Costs by source operation
+
+This table likewise records the compiling 0.10 compatibility path; owned-path
+operations use the replacement costs above.
 
 | Operation | Semantic behavior | Current physical work and allocation | Retention / future freedom |
 | --- | --- | --- | --- |

@@ -48,9 +48,15 @@ exclusive slices are allocation-free views; `Box[T]` provides deliberate
 address-stable allocation; collection queries return borrows; and owned versus
 borrowed loops respectively move values or yield references. The generated-C
 run covers independent clones, mutation, early iteration exit, slice mutation,
-and recursive cleanup under strict C99 and AddressSanitizer. The temporary
-boundary has advanced to inline first-class closures. The compiling 0.10 path
-and its shallow representation remain available unchanged.
+and recursive cleanup under strict C99 and AddressSanitizer. Closures now use
+nominal inline environments: capture construction transfers ownership or
+provenance without allocation, structural clone/drop follows capture
+capabilities, every invocation borrows one shared receiver, and capture-free
+closures explicitly convert to exact function references. Direct,
+generic-bound, borrowed-erased, nested, and repeated calls run under strict
+C99; both supported pointer widths reach identical lowering. The temporary
+boundary has advanced to explicit shared and graph ownership. The compiling
+0.10 path and its shallow representation remain available unchanged.
 
 ### Owned-core baseline comparison
 
@@ -72,6 +78,23 @@ Compile time and peak RSS varied between runs and remain nondeterministic host
 observations. The fixed benchmark corpus targets the compiling compatibility
 revision; owned-path costs are locked by generated C and semantic tests until
 the later tooling milestone exposes a normal 0.11 benchmark driver.
+
+### Inline-closure baseline comparison
+
+The required `benchmarks/memory-cost-baseline.sh` comparison used parent commit
+`3cb166e` and this inline-closure implementation on 2026-08-10 (Linux x86-64,
+rustc 1.89.0, GCC 15.2). The fixed corpus still compiles the compatibility
+revision, so all six workload hashes and deterministic allocation/copy counters
+remained identical to the owned-core table above. In particular,
+`aggregate_closure` remained at 6 allocations / 172 bytes, including 2 scanned
+allocations / 112 bytes and 3 explicit `memcpy` calls / 25 bytes. This confirms
+that selecting inline environments through explicit control-flow value-model
+facts did not alter the supported 0.10 representation. Compile time and peak
+RSS varied between runs and remain nondeterministic host observations. Owned
+closure conformance separately asserts allocation-free construction, no
+collector dependency, structural clone/drop, and C99 execution at `-O0` and
+`-O2`; those facts are semantic/generated-code evidence rather than benchmark
+thresholds.
 
 ## Language surface changes
 

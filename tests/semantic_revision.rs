@@ -436,7 +436,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_owned_core_values() {
+fn owned_packages_stop_after_inline_first_class_closures() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -444,7 +444,7 @@ fn owned_packages_stop_after_owned_core_values() {
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
     let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
-        Ok(_) => panic!("owned closure semantics are not enabled yet"),
+        Ok(_) => panic!("explicit shared ownership is not enabled yet"),
         Err(diagnostics) => diagnostics,
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
@@ -456,7 +456,7 @@ fn owned_packages_stop_after_owned_core_values() {
     assert!(
         diagnostics[0]
             .message
-            .contains("inline first-class closures")
+            .contains("explicit shared and graph ownership")
     );
 
     let mut sources = SourceManager::new();
@@ -1649,5 +1649,263 @@ fn owned_core_values_clone_move_mutate_and_drop_independently() {
     assert_eq!(
         String::from_utf8(run.stdout).expect("UTF-8 output"),
         "2\n3\n0\nbox\nchanged\n1\ntrue\n10\n1\ntrue\ntrue\n6\n2\n3\n9\n13\nfirst\n"
+    );
+}
+
+#[test]
+fn owned_closures_are_inline_shared_callable_values() {
+    let package = TestPackage::executable(
+        "owned_inline_closures",
+        r#"fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
+    return callback(value)
+
+fn invoke(callback: &Callable[(i32,), i32], value: i32) -> i32:
+    return callback(value)
+
+fn main() -> ():
+    let label = String.from("owned")
+    let show = fn[label](value: i32) -> i32:
+        println(&label)
+        return value + 1
+    let duplicate = show.clone()
+    println(show(2))
+    println(duplicate(3))
+    println(apply(show.clone(), 4))
+    println(invoke(&show, 5))
+    let stored = @vec[duplicate]
+    println(stored.len())
+
+    var total = 0
+    let add = fn[&var total as state](value: i32) -> i32:
+        *state += value
+        return *state
+    println(add(2))
+    println(add(3))
+
+    let base = 5
+    let inner = fn[base](value: i32) -> i32:
+        return base + value
+    let outer = fn[inner](value: i32) -> i32:
+        return inner(value) + 1
+    println(outer(6))
+    println(outer(7))
+
+    let increment = fn[](value: i32) -> i32:
+        return value + 1
+    let exact = increment as &fn(i32) -> i32
+    println(exact(9))
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty(), "{:#?}", types.diagnostics);
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty(), "{:#?}", traits.diagnostics);
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    let provenance = infer_provenance_signatures(&resolved, &mut types.program);
+    assert!(provenance.is_empty(), "{provenance:#?}");
+    let typed_ir = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(
+        typed_ir.diagnostics.is_empty(),
+        "{:#?}",
+        typed_ir.diagnostics
+    );
+    let moves = check_moves(&resolved, &mut types.program, &typed_ir.program);
+    assert!(moves.is_empty(), "{moves:#?}");
+    let borrows = check_borrows(&resolved, &mut types.program, &typed_ir.program);
+    assert!(borrows.is_empty(), "{borrows:#?}");
+    let control_flow = lower_control_flow(&typed_ir.program, &types.program);
+    assert_eq!(control_flow.value_model, elamite::ir::ValueModel::Owned);
+    let entry = resolved
+        .declarations
+        .iter()
+        .find(|declaration| resolved.symbol_text(declaration.name) == "main")
+        .map(|declaration| declaration.id)
+        .expect("resolved main declaration");
+    let output = emit_c(
+        &control_flow,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86_64,
+            entry: Some(entry),
+            test_entries: None,
+        },
+    );
+    assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+    assert!(output.source.contains("} el_closure_t"));
+    assert!(!output.source.contains("} *el_closure_t"));
+    assert!(output.source.contains(" *el_env"));
+    assert!(output.source.contains("el_clone_t"));
+    assert!(!output.source.contains("_Static_assert"));
+
+    let x86_output = emit_c(
+        &control_flow,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86,
+            entry: Some(entry),
+            test_entries: None,
+        },
+    );
+    assert!(
+        x86_output.diagnostics.is_empty(),
+        "{:#?}",
+        x86_output.diagnostics
+    );
+    assert!(x86_output.source.contains("} el_closure_t"));
+    assert!(!x86_output.source.contains("} *el_closure_t"));
+    assert!(!x86_output.source.contains("_Static_assert"));
+
+    let c_path = package.root.join("inline-closures.c");
+    fs::write(&c_path, output.source).expect("write generated C");
+    for optimization in ["-O0", "-O2"] {
+        let executable = package
+            .root
+            .join(format!("inline-closures-{}", &optimization[1..]));
+        let compiled = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+            .args([
+                "-std=c99",
+                "-pedantic-errors",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                optimization,
+            ])
+            .arg(&c_path)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .expect("invoke C99 compiler");
+        assert!(
+            compiled.status.success(),
+            "generated C failed under {optimization}: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let run = Command::new(&executable)
+            .output()
+            .expect("run generated program");
+        assert!(run.status.success(), "program failed under {optimization}");
+        assert_eq!(
+            String::from_utf8(run.stdout).expect("UTF-8 output"),
+            "owned\n3\nowned\n4\nowned\n5\nowned\n6\n1\n2\n5\n12\n13\n10\n"
+        );
+    }
+}
+
+#[test]
+fn owned_closure_construction_is_allocation_free_and_capture_moves_are_rejected() {
+    let package = TestPackage::executable(
+        "owned_allocation_free_closure",
+        r#"fn main() -> ():
+    let base = 4
+    let add = fn[base](value: i32) -> i32:
+        return base + value
+    println(add(3))
+    var slot = 1
+    let bump = fn[&var slot as state](value: i32) -> i32:
+        *state += value
+        return *state
+    println(bump(2))
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(resolution.diagnostics.is_empty());
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty());
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty());
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    let typed_ir = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(typed_ir.diagnostics.is_empty());
+    let main = typed_ir
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("lowered main function");
+    assert!(
+        main.promoted_locals.is_empty(),
+        "owned borrow captures keep their source in the enclosing frame"
+    );
+    assert!(
+        check_moves(&resolved, &mut types.program, &typed_ir.program).is_empty(),
+        "simple closure must pass move checking"
+    );
+    let control_flow = lower_control_flow(&typed_ir.program, &types.program);
+    assert!(
+        !control_flow.requires_managed_memory,
+        "an inline closure over an integer must not request managed storage"
+    );
+
+    let diagnostics = owned_move_diagnostics(
+        "owned_move_from_closure_capture",
+        r#"fn main() -> ():
+    let text = String.from("capture")
+    let consume = fn[text]() -> String:
+        return text
+"#,
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::Ownership
+                && diagnostic.message.contains("shared receiver")
+        }),
+        "{diagnostics:#?}"
+    );
+
+    let package = TestPackage::new(
+        "owned_invalid_closure_conversions",
+        r#"fn main() -> ():
+    let value = 1
+    let capturing = fn[value](input: i32) -> i32:
+        return value + input
+    let invalid_capture = capturing as &fn(i32) -> i32
+    let empty = fn[](input: i32) -> i32:
+        return input
+    let invalid_signature = empty as &fn(i64) -> i32
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(resolution.diagnostics.is_empty());
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty());
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty());
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(
+        checked.diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::ExpressionType
+                && diagnostic.message.contains("capturing closure")
+        }),
+        "{:#?}",
+        checked.diagnostics
+    );
+    assert!(
+        checked.diagnostics.iter().any(|diagnostic| {
+            diagnostic.category == Category::ExpressionType
+                && diagnostic.message.contains("exact safe function reference")
+        }),
+        "{:#?}",
+        checked.diagnostics
     );
 }

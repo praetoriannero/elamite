@@ -159,10 +159,10 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after owned core values and collections. Closure
-/// values still use the managed 0.10 environment representation, so ordinary
-/// 0.11 driver entry points stop before backend lowering until that complete
-/// replacement is available.
+/// The temporary boundary after inline first-class closures. Explicit shared
+/// and graph ownership still lack their 0.11 representation, so ordinary
+/// driver entry points stop before backend lowering until that replacement is
+/// available.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -171,8 +171,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has owned core values and collections, but inline \
-                 first-class closures are not implemented yet",
+                "semantic revision 0.11.0-draft has inline first-class closures, but explicit \
+                 shared and graph ownership is not implemented yet",
             )
         })
 }
@@ -2462,6 +2462,70 @@ impl<'a> Checker<'a> {
         }
         let source_resolved = self.typed.types.resolve_inference(source_type);
         let target_resolved = self.typed.types.resolve_inference(target_type);
+        let target_function = match self.typed.types.kind(target_resolved).clone() {
+            TypeKind::Reference {
+                mutability: Mutability::Shared,
+                target,
+            } => match self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(target))
+                .clone()
+            {
+                TypeKind::Function {
+                    safety: Safety::Safe,
+                    abi: crate::types::Abi::Elamite,
+                    receiver: None,
+                    parameters,
+                    return_type,
+                } => Some((parameters, return_type)),
+                _ => None,
+            },
+            _ => None,
+        };
+        // A capture-free owned closure has no environment state and may be
+        // named explicitly as its exact safe function reference. Capturing
+        // closures remain ordinary data objects and never masquerade as code
+        // pointers or foreign callbacks.
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && let TypeKind::Closure {
+                captures,
+                parameters: source_parameters,
+                return_type: source_return,
+                ..
+            } = self.typed.types.kind(source_resolved).clone()
+            && let Some((target_parameters, target_return)) = target_function
+        {
+            if !captures.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a capturing closure cannot convert to a function reference",
+                    )
+                    .with_primary(node.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+            let exact = source_parameters.len() == target_parameters.len()
+                && source_parameters
+                    .iter()
+                    .zip(&target_parameters)
+                    .all(|(source, target)| {
+                        !target.variadic && self.typed.types.exactly_equal(*source, target.ty)
+                    })
+                && self.typed.types.exactly_equal(source_return, target_return);
+            if exact {
+                return (target_type, PlaceKind::Value);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "a capture-free closure converts only to an exact safe function reference",
+                )
+                .with_primary(node.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
         // The pointer conversion matrix (`docs/spec.md` 3.3, Milestones 16.2 and
         // 16.5). Every permitted conversion preserves the address and
         // provenance; none upgrades mutability.

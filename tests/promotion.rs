@@ -87,7 +87,7 @@ fn body_of<'a>(resolved: &'a ResolvedProgram, name: &str) -> &'a SyntaxNode {
 fn promoted_names(source: &str, name: &str) -> Vec<String> {
     let (_sources, resolved) = resolve_source(source);
     let body = body_of(&resolved, name);
-    address_taken_locals(&resolved, body)
+    address_taken_locals(&resolved, body, elamite::config::SemanticRevision::V0_10)
         .into_iter()
         .map(|binding| {
             let local = resolved

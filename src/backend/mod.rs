@@ -20,7 +20,8 @@ use crate::diagnostics::{Category, Diagnostic};
 use crate::ir::{
     AggregateValue, BinaryOperator, BlockId, CollectionLiteralKind, ControlFlowFunction,
     ControlFlowPlace, ControlFlowProgram, IndexKind, Instruction, IterationKind, NeverCall,
-    RuntimeFormattedPart, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator, VtableMethod,
+    RuntimeFormattedPart, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator, ValueModel,
+    VtableMethod,
 };
 use crate::memory::{
     AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
@@ -562,7 +563,7 @@ fn primitive_bounds(
     })
 }
 
-fn zero_value(ty: TypeId, types: &TypeContext) -> String {
+fn zero_value(ty: TypeId, types: &TypeContext, value_model: ValueModel) -> String {
     let mut ty = ty;
     loop {
         match types.kind(ty) {
@@ -587,8 +588,14 @@ fn zero_value(ty: TypeId, types: &TypeContext) -> String {
             TypeKind::Reference { .. }
             | TypeKind::RawPointer { .. }
             | TypeKind::Function { .. }
-            | TypeKind::Closure { .. }
             | TypeKind::TraitObject { .. } => return "NULL".to_string(),
+            TypeKind::Closure { .. } => {
+                return if value_model == ValueModel::Owned {
+                    "{0}".to_string()
+                } else {
+                    "NULL".to_string()
+                };
+            }
             _ => return "0".to_string(),
         }
     }

@@ -801,6 +801,18 @@ impl MoveChecker<'_> {
         span: Span,
         state: &mut MoveState,
     ) {
+        if matches!(place.root, OwnershipPlaceRoot::ClosureCapture(_)) {
+            self.report(
+                span,
+                "move-closure-capture",
+                Diagnostic::new(
+                    Category::Ownership,
+                    "cannot move a capture out of a closure's shared receiver",
+                )
+                .with_primary(span),
+            );
+            return;
+        }
         if self.invalid_move_projection(place, span) {
             return;
         }

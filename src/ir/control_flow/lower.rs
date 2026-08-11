@@ -46,7 +46,7 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
                 .chain(function.local_types.values())
                 .chain(function.parameters.iter().map(|parameter| &parameter.ty))
                 .chain(function.temporary_types.iter())
-                .any(|ty| type_contains_runtime_managed(&types.types, *ty, 32))
+                .any(|ty| type_contains_runtime_managed(&types.types, *ty, value_model, 32))
     });
     ControlFlowProgram {
         semantic_revision: program.semantic_revision,
@@ -59,27 +59,39 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
         // materialized value can allocate managed backing storage. Include
         // temporaries and return values: `println(String.from(text))`, for
         // example, need not introduce a source local.
-        requires_managed_memory: runtime_expression_allocates || materializes_managed_values,
+        requires_managed_memory: value_model == ValueModel::ShallowManaged
+            && (runtime_expression_allocates || materializes_managed_values),
     }
 }
 
-fn type_contains_runtime_managed(types: &TypeContext, ty: TypeId, depth: u32) -> bool {
+fn type_contains_runtime_managed(
+    types: &TypeContext,
+    ty: TypeId,
+    value_model: ValueModel,
+    depth: u32,
+) -> bool {
     if depth == 0 {
         return true;
     }
     match types.kind(types.resolve_inference(ty)) {
-        TypeKind::Primitive(PrimitiveType::String)
-        | TypeKind::Builtin { .. }
-        | TypeKind::Closure { .. } => true,
+        TypeKind::Primitive(PrimitiveType::String) | TypeKind::Builtin { .. } => true,
+        TypeKind::Closure { captures, .. } => {
+            value_model == ValueModel::ShallowManaged
+                || captures.iter().any(|capture| {
+                    type_contains_runtime_managed(types, *capture, value_model, depth - 1)
+                })
+        }
         TypeKind::Tuple(elements) => elements
             .iter()
-            .any(|element| type_contains_runtime_managed(types, *element, depth - 1)),
+            .any(|element| type_contains_runtime_managed(types, *element, value_model, depth - 1)),
         TypeKind::Array { element, .. } | TypeKind::Slice { element, .. } => {
-            type_contains_runtime_managed(types, *element, depth - 1)
+            type_contains_runtime_managed(types, *element, value_model, depth - 1)
         }
-        TypeKind::Nominal { arguments, .. } | TypeKind::Alias { arguments, .. } => arguments
-            .iter()
-            .any(|argument| type_contains_runtime_managed(types, *argument, depth - 1)),
+        TypeKind::Nominal { arguments, .. } | TypeKind::Alias { arguments, .. } => {
+            arguments.iter().any(|argument| {
+                type_contains_runtime_managed(types, *argument, value_model, depth - 1)
+            })
+        }
         _ => false,
     }
 }

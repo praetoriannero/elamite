@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Inline first-class closures**
+> Next planned milestone: **Explicit shared and graph ownership**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -25,8 +25,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Structural borrow provenance](#structural-borrow-provenance) | Complete | Hidden provenance, shared/exclusive loans, structural propagation, public metadata, receiver adaptation, and robustness coverage are implemented. |
 | [Deterministic destruction](#deterministic-destruction) | Complete | Per-action drop flags, custom and structural glue, ordinary-exit cleanup, replacement, defer ordering, and explicit C99 lowering are implemented. |
 | [Owned core values and collections](#owned-core-values-and-collections) | Complete | Replaced shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
-| [Inline first-class closures](#inline-first-class-closures) | Planned — next | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
-| [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
+| [Inline first-class closures](#inline-first-class-closures) | Complete | Nominal inline environments, capture ownership, structural clone/drop, shared calls, erasure, and capture-free conversion are implemented. |
+| [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned — next | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
 | [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
 | [Race-safe concurrency](#race-safe-concurrency) | Planned | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
 | [Owned-model C interoperability](#owned-model-c-interoperability) | Planned | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
@@ -459,7 +459,7 @@ preserving Elamite's non-unwinding trap model.
 > backing, explicit recursive clone/drop glue, non-owning shared and exclusive
 > slices, address-stable `Box`, borrow-oriented query APIs, and owned/borrowed
 > iteration. The compatibility revision retains its measured shallow model.
-> The 0.11 boundary now names **Inline first-class closures**.
+> The 0.11 boundary now names **Explicit shared and graph ownership**.
 >
 > Blocked by: **Deterministic destruction**.
 
@@ -477,7 +477,13 @@ impossible to mutate through an accidental shallow alias.
 
 ### Inline first-class closures
 
-> Status: Planned — next.
+> Status: Complete. The owned revision emits one nominal inline C99 aggregate
+> per closure expression, transfers or borrows captures explicitly, derives
+> structural move/clone/drop capabilities, invokes every closure through one
+> shared receiver rule, and permits only capture-free exact function-reference
+> conversion. The compatibility revision retains its measured managed
+> environment representation. The 0.11 boundary now names **Explicit shared
+> and graph ownership**.
 >
 > Blocked by: **None**. Its prerequisites, **Structural borrow provenance**,
 > **Deterministic destruction**, and **Owned core values and collections**, are
@@ -488,18 +494,18 @@ whose captures obey ordinary ownership and borrowing.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Capture construction** | Type and evaluate exhaustive captures left to right: plain captures move or `Copy`, `&` captures shared provenance, and `&var` captures exclusive provenance. | Missing, duplicate, invalid, self-initializing, and escaping captures diagnose at their source; no capture causes an implicit clone or allocation. |
-| **Nominal inline environments** | Replace managed environment identity with one anonymous nominal aggregate per closure expression and synthesize ordinary move, borrow, and drop behavior for its fields. | Moving a closure transfers captures, explicit cloning follows their capabilities, borrowed captures constrain escape, and closure construction is allocation-free. |
-| **Callable capability model** | Implement the single shared-call `Callable[Arguments, Return]` contract behind ordinary call syntax; mutable external state remains explicit through captured `&var` or synchronized values. | Repeated calls use one receiver rule, closure bodies cannot move captures out, and function values plus borrowed or boxed erased callables interoperate only through specified conversions. |
-| **Typed and control-flow lowering** | Lower closure construction and invocation through the ordinary typed IR, monomorphizer, and C backend with exact evaluation and cleanup order. | Passed, returned, stored, nested, generic, trait-erased, and macro-generated closures behave identically on x86 and x86-64. |
-| **Closure conformance replacement** | Replace 0.10 shallow environment-copy tests and documentation while retaining them as historical migration evidence where useful. | No current test relies on managed closure identity, implicit promotion, or capture sharing outside an explicit owned/shared type. |
+| **Capture construction (done)** | Type and evaluate exhaustive captures left to right: plain captures move or `Copy`, `&` captures shared provenance, and `&var` captures exclusive provenance. | Missing, duplicate, invalid, self-initializing, and escaping captures diagnose at their source; no capture causes an implicit clone or allocation. |
+| **Nominal inline environments (done)** | Replace managed environment identity with one anonymous nominal aggregate per closure expression and synthesize ordinary move, borrow, and drop behavior for its fields. | Moving a closure transfers captures, explicit cloning follows their capabilities, borrowed captures constrain escape, and closure construction is allocation-free. |
+| **Callable capability model (done)** | Implement the single shared-call `Callable[Arguments, Return]` contract behind ordinary call syntax; mutable external state remains explicit through captured `&var` or synchronized values. | Repeated calls use one receiver rule, closure bodies cannot move captures out, and function values plus borrowed or boxed erased callables interoperate only through specified conversions. |
+| **Typed and control-flow lowering (done)** | Lower closure construction and invocation through the ordinary typed IR, monomorphizer, and C backend with exact evaluation and cleanup order. | Passed, returned, stored, nested, generic, trait-erased, and macro-generated closures behave identically on x86 and x86-64. |
+| **Closure conformance replacement (done)** | Replace 0.10 shallow environment-copy tests and documentation while retaining them as historical migration evidence where useful. | No current owned-path test relies on managed closure identity, implicit promotion, or capture sharing outside an explicit owned/shared type. |
 
 ### Explicit shared and graph ownership
 
-> Status: Planned.
+> Status: Planned — next.
 >
-> Blocked by: **Owned core values and collections** and **Deterministic
-> destruction**.
+> Blocked by: **None**. **Owned core values and collections**, **Deterministic
+> destruction**, and **Inline first-class closures** are complete.
 
 **Goal:** Provide deliberate, checked mechanisms for shared identity and
 cyclic or stable graph references without restoring implicit tracing ownership.

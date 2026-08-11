@@ -84,7 +84,15 @@ impl Query<'_> {
                 sync: CapabilityState::Absent,
             },
             TypeKind::Function { .. } => plain(CapabilityState::Present),
-            TypeKind::Closure { captures, .. } => self.aggregate(&captures, false, false),
+            TypeKind::Closure { captures, .. } => {
+                let mut facts = self.aggregate(&captures, false, false);
+                // Closures have compiler-synthesized structural `Clone` when
+                // every capture can be cloned. `Copy` remains the stricter
+                // structural conjunction, and an exclusive capture therefore
+                // makes the whole closure move-only.
+                facts.clone = conjunction(captures.iter().map(|ty| self.facts(*ty).clone));
+                facts
+            }
             TypeKind::Nominal {
                 identity,
                 arguments,

@@ -57,7 +57,14 @@ impl<'a> CEmitter<'a> {
             c_comment(&function.name)
         );
         let _ = writeln!(self.output, "{return_type} {symbol}({parameters}) {{");
-        if function.closure.is_some() {
+        let has_environment_parameter = function.closure.as_ref().is_some_and(|closure| {
+            self.program.value_model != ValueModel::Owned
+                || !matches!(
+                    self.typed.types.kind(self.resolve_alias(closure.ty)),
+                    TypeKind::Closure { captures, .. } if captures.is_empty()
+                )
+        });
+        if has_environment_parameter {
             self.output.push_str("    (void)el_env;\n");
         }
         let parameter_bindings = function
@@ -77,7 +84,7 @@ impl<'a> CEmitter<'a> {
                     self.output,
                     "    {c_type} {} = {};",
                     local_name(*binding),
-                    zero_value(*ty, &self.typed.types)
+                    zero_value(*ty, &self.typed.types, self.program.value_model)
                 );
             }
         }
@@ -115,7 +122,7 @@ impl<'a> CEmitter<'a> {
             } else {
                 // A braced zero initializer is only valid in a declaration, so
                 // an assignment into the cell needs a C99 compound literal.
-                let zero = zero_value(ty, &self.typed.types);
+                let zero = zero_value(ty, &self.typed.types, self.program.value_model);
                 if zero.starts_with('{') {
                     format!("({c_type}){zero}")
                 } else {
@@ -137,7 +144,7 @@ impl<'a> CEmitter<'a> {
                 let _ = writeln!(
                     self.output,
                     "    {c_type} t{index} = {};\n    (void)t{index};",
-                    zero_value(*ty, &self.typed.types)
+                    zero_value(*ty, &self.typed.types, self.program.value_model)
                 );
             }
         }
@@ -173,7 +180,21 @@ impl<'a> CEmitter<'a> {
         if let Some(closure) = &function.closure
             && let Some(ty) = self.c_type(closure.ty, Some(function.span))
         {
-            parameters.push(format!("{ty} el_env"));
+            let capture_free = matches!(
+                self.typed.types.kind(self.resolve_alias(closure.ty)),
+                TypeKind::Closure { captures, .. } if captures.is_empty()
+            );
+            if self.program.value_model != ValueModel::Owned || !capture_free {
+                parameters.push(if self.program.value_model == ValueModel::Owned {
+                    // The checker enforces the shared receiver contract. Keep
+                    // the internal C pointer mutable so forming an Elamite
+                    // shared reference to a capture does not discard a C
+                    // qualifier on the nested field.
+                    format!("{ty} *el_env")
+                } else {
+                    format!("{ty} el_env")
+                });
+            }
         }
         parameters.extend(function.parameters.iter().filter_map(|parameter| {
             self.c_type(parameter.ty, Some(parameter.span)).map(|ty| {
@@ -445,7 +466,11 @@ impl<'a> CEmitter<'a> {
                     );
                 }
                 DropProjection::ClosureCapture(index) => {
-                    expression = format!("{expression}->v{index}");
+                    expression = if self.program.value_model == ValueModel::Owned {
+                        format!("{expression}.v{index}")
+                    } else {
+                        format!("{expression}->v{index}")
+                    };
                 }
             }
         }
@@ -580,29 +605,39 @@ impl<'a> CEmitter<'a> {
             Rvalue::Closure { ty, captures } => {
                 let destination_name = temporary_name(destination);
                 let c_type = self.c_type(*ty, Some(span))?;
-                let class = if captures.iter().any(|capture| {
-                    let capture_type = function.temporary_types[capture.index()];
-                    self.scanned_allocation(capture_type)
-                }) {
-                    AllocationClass::Scanned
+                if self.program.value_model == ValueModel::Owned {
+                    for (index, capture) in captures.iter().enumerate() {
+                        let _ = writeln!(
+                            self.output,
+                            "    {destination_name}.v{index} = {};",
+                            temporary_name(*capture)
+                        );
+                    }
                 } else {
-                    AllocationClass::PointerFree
-                };
-                self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                    destination: &destination_name,
-                    byte_count: &format!("sizeof(*{destination_name})"),
-                    class,
-                });
-                let _ = writeln!(
-                    self.output,
-                    "    if ({destination_name} == NULL) el_out_of_memory();"
-                );
-                for (index, capture) in captures.iter().enumerate() {
+                    let class = if captures.iter().any(|capture| {
+                        let capture_type = function.temporary_types[capture.index()];
+                        self.scanned_allocation(capture_type)
+                    }) {
+                        AllocationClass::Scanned
+                    } else {
+                        AllocationClass::PointerFree
+                    };
+                    self.emit_managed_operation(ManagedMemoryOperation::Allocate {
+                        destination: &destination_name,
+                        byte_count: &format!("sizeof(*{destination_name})"),
+                        class,
+                    });
                     let _ = writeln!(
                         self.output,
-                        "    {destination_name}->v{index} = {};",
-                        temporary_name(*capture)
+                        "    if ({destination_name} == NULL) el_out_of_memory();"
                     );
+                    for (index, capture) in captures.iter().enumerate() {
+                        let _ = writeln!(
+                            self.output,
+                            "    {destination_name}->v{index} = {};",
+                            temporary_name(*capture)
+                        );
+                    }
                 }
                 let _ = c_type;
                 destination_name
@@ -1031,7 +1066,20 @@ impl<'a> CEmitter<'a> {
                 closure,
                 arguments,
             } => {
-                let mut values = vec![temporary_name(*closure)];
+                let closure_ty = function.temporary_types[closure.index()];
+                let capture_free = matches!(
+                    self.typed.types.kind(self.resolve_alias(closure_ty)),
+                    TypeKind::Closure { captures, .. } if captures.is_empty()
+                );
+                let mut values = if self.program.value_model == ValueModel::Owned {
+                    if capture_free {
+                        Vec::new()
+                    } else {
+                        vec![format!("&{}", temporary_name(*closure))]
+                    }
+                } else {
+                    vec![temporary_name(*closure)]
+                };
                 values.extend(arguments.iter().map(|argument| temporary_name(*argument)));
                 let call = format!("{}({})", self.function_symbol(instance), values.join(", "));
                 self.call_rvalue(call, destination_type)

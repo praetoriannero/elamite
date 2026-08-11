@@ -268,7 +268,11 @@ impl<'a> CEmitter<'a> {
                         }
                     }
                 }
-                let _ = writeln!(self.output, "}} *{name};\n");
+                if self.program.value_model == ValueModel::Owned {
+                    let _ = writeln!(self.output, "}} {name};\n");
+                } else {
+                    let _ = writeln!(self.output, "}} *{name};\n");
+                }
             }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
@@ -491,7 +495,7 @@ impl<'a> CEmitter<'a> {
             }
             _ => {
                 let c_type = self.c_type(resolved, span)?;
-                let zero = zero_value(resolved, &self.typed.types);
+                let zero = zero_value(resolved, &self.typed.types, self.program.value_model);
                 if zero.starts_with('{') {
                     Some(format!("({c_type}){zero}"))
                 } else {

@@ -286,7 +286,19 @@ impl<'a> CEmitter<'a> {
                         VtableMethod::Closure(instance) => {
                             let tuple_arguments =
                                 callable_tuple_arguments(&self.typed.types, &slot_signature);
-                            let mut arguments = vec![format!("*(({concrete_type} *)el_self)")];
+                            let capture_free = matches!(
+                                self.typed.types.kind(self.resolve_alias(table.concrete)),
+                                TypeKind::Closure { captures, .. } if captures.is_empty()
+                            );
+                            let mut arguments = if self.program.value_model == ValueModel::Owned {
+                                if capture_free {
+                                    Vec::new()
+                                } else {
+                                    vec![format!("(({concrete_type} *)el_self)")]
+                                }
+                            } else {
+                                vec![format!("*(({concrete_type} *)el_self)")]
+                            };
                             arguments.extend(tuple_arguments);
                             format!(
                                 "{}({})",
@@ -1324,18 +1336,18 @@ impl<'a> CEmitter<'a> {
         value: Option<(&str, TypeId)>,
     ) -> String {
         let Some(enumeration) = self.enums.get(&option).copied() else {
-            return zero_value(option, &self.typed.types);
+            return zero_value(option, &self.typed.types, self.program.value_model);
         };
         let variant_name = if value.is_some() { "Some" } else { "None" };
         let Some(variant_id) = self.resolved.standard_variant("Option", variant_name) else {
-            return zero_value(option, &self.typed.types);
+            return zero_value(option, &self.typed.types, self.program.value_model);
         };
         let Some(variant) = enumeration
             .variants
             .iter()
             .find(|variant| variant.id == variant_id)
         else {
-            return zero_value(option, &self.typed.types);
+            return zero_value(option, &self.typed.types, self.program.value_model);
         };
         let c_type = self
             .c_type(option, None)
@@ -1368,20 +1380,20 @@ impl<'a> CEmitter<'a> {
         value: (&str, TypeId),
     ) -> String {
         let Some(enumeration) = self.enums.get(&result).copied() else {
-            return zero_value(result, &self.typed.types);
+            return zero_value(result, &self.typed.types, self.program.value_model);
         };
         let Some(variant_id) = self.resolved.standard_variant("Result", variant_name) else {
-            return zero_value(result, &self.typed.types);
+            return zero_value(result, &self.typed.types, self.program.value_model);
         };
         let Some(variant) = enumeration
             .variants
             .iter()
             .find(|variant| variant.id == variant_id)
         else {
-            return zero_value(result, &self.typed.types);
+            return zero_value(result, &self.typed.types, self.program.value_model);
         };
         let Some((field, _, _)) = variant.fields.first() else {
-            return zero_value(result, &self.typed.types);
+            return zero_value(result, &self.typed.types, self.program.value_model);
         };
         let c_type = self
             .c_type(result, None)
@@ -2238,14 +2250,18 @@ impl<'a> CEmitter<'a> {
                         .resolved
                         .standard_variant("EnvError", "InvalidName")
                         .map(|variant| self.enum_unit_variant_expression(error_ty, variant))
-                        .unwrap_or_else(|| zero_value(error_ty, &self.typed.types));
+                        .unwrap_or_else(|| {
+                            zero_value(error_ty, &self.typed.types, self.program.value_model)
+                        });
                     let invalid_name =
                         self.result_expression(result, "Err", (&invalid_name, error_ty));
                     let invalid_text = self
                         .resolved
                         .standard_variant("EnvError", "InvalidText")
                         .map(|variant| self.enum_unit_variant_expression(error_ty, variant))
-                        .unwrap_or_else(|| zero_value(error_ty, &self.typed.types));
+                        .unwrap_or_else(|| {
+                            zero_value(error_ty, &self.typed.types, self.program.value_model)
+                        });
                     let invalid_text =
                         self.result_expression(result, "Err", (&invalid_text, error_ty));
                     let Some(argument) = arguments.first().copied() else {
@@ -2369,7 +2385,9 @@ impl<'a> CEmitter<'a> {
                             .resolved
                             .standard_variant("ProcessError", variant_name)
                             .map(|variant| self.enum_unit_variant_expression(error_ty, variant))
-                            .unwrap_or_else(|| zero_value(error_ty, &self.typed.types));
+                            .unwrap_or_else(|| {
+                                zero_value(error_ty, &self.typed.types, self.program.value_model)
+                            });
                         self.result_expression(result, "Err", (&value, error_ty))
                     };
                     let not_found = error_result("NotFound");
@@ -3597,6 +3615,21 @@ unavailable_error:
                     "static {c_type} {name}({c_type} value) {{\n    {c_type} result;\n    uintptr_t index;\n    for (index = 0U; index < {length}U; ++index) result.values[index] = {child}(value.values[index]);\n    return result;\n}}\n"
                 );
             }
+            TypeKind::Closure { captures, .. } if self.program.value_model == ValueModel::Owned => {
+                for capture in &captures {
+                    self.emit_clone_helper(*capture);
+                }
+                let _ = writeln!(self.output, "static {c_type} {name}({c_type} value) {{");
+                let _ = writeln!(self.output, "    {c_type} result = {{0}};");
+                for (index, capture) in captures.iter().enumerate() {
+                    let child = standard_call_name(StandardCall::Clone { value: *capture });
+                    let _ = writeln!(
+                        self.output,
+                        "    result.v{index} = {child}(value.v{index});"
+                    );
+                }
+                self.output.push_str("    return result;\n}\n\n");
+            }
             TypeKind::Nominal { .. } => {
                 if let Some(structure) = self.structs.get(&ty).copied() {
                     for (_, _, field_ty) in &structure.fields {
@@ -3729,6 +3762,11 @@ unavailable_error:
                 elements.iter().any(|child| self.type_has_drop_glue(*child))
             }
             TypeKind::Array { element, .. } => self.type_has_drop_glue(*element),
+            TypeKind::Closure { captures, .. } if self.program.value_model == ValueModel::Owned => {
+                captures
+                    .iter()
+                    .any(|capture| self.type_has_drop_glue(*capture))
+            }
             TypeKind::Nominal { .. } => {
                 self.structs.get(&ty).is_some_and(|structure| {
                     structure
@@ -3768,6 +3806,11 @@ unavailable_error:
             }
             TypeKind::Array { element, .. } => {
                 self.emit_drop_helper(*element);
+            }
+            TypeKind::Closure { captures, .. } if self.program.value_model == ValueModel::Owned => {
+                for capture in captures {
+                    self.emit_drop_helper(*capture);
+                }
             }
             TypeKind::Nominal { .. } => {
                 let children = self.structs.get(&ty).map_or_else(
@@ -3836,6 +3879,17 @@ unavailable_error:
                         "    for (uintptr_t index = {length}U; index != 0U; --index) el_drop_t{}(&value->values[index - 1U]);",
                         element.index()
                     );
+                }
+            }
+            TypeKind::Closure { captures, .. } if self.program.value_model == ValueModel::Owned => {
+                for (index, capture) in captures.iter().enumerate().rev() {
+                    if self.type_has_drop_glue(*capture) {
+                        let _ = writeln!(
+                            self.output,
+                            "    el_drop_t{}(&value->v{index});",
+                            capture.index()
+                        );
+                    }
                 }
             }
             TypeKind::Nominal { .. } => {
@@ -3955,6 +4009,13 @@ unavailable_error:
                     elements.iter().any(|child| self.type_has_drop_glue(*child))
                 }
                 TypeKind::Array { element, .. } => self.type_has_drop_glue(*element),
+                TypeKind::Closure { captures, .. }
+                    if self.program.value_model == ValueModel::Owned =>
+                {
+                    captures
+                        .iter()
+                        .any(|capture| self.type_has_drop_glue(*capture))
+                }
                 TypeKind::Nominal { .. } => {
                     self.structs.get(&ty).is_some_and(|structure| {
                         structure
@@ -3988,8 +4049,10 @@ unavailable_error:
         let Some(element_type) = self.c_type(element, None) else {
             return;
         };
-        let element_drops =
-            self.program.value_model == ValueModel::Owned && self.emit_drop_helper(element);
+        let clear = StandardCall::VecClear { collection };
+        let element_drops = self.program.value_model == ValueModel::Owned
+            && calls.contains_key(&clear)
+            && self.emit_drop_helper(element);
         let scanned = if self.scanned_allocation(element) {
             AllocationClass::Scanned
         } else {
@@ -4159,7 +4222,6 @@ unavailable_error:
                 standard_call_name(pop)
             );
         }
-        let clear = StandardCall::VecClear { collection };
         if calls.contains_key(&clear) {
             let drop_elements = if element_drops {
                 format!(
@@ -4225,9 +4287,20 @@ unavailable_error:
         ) else {
             return;
         };
-        let key_drops = self.program.value_model == ValueModel::Owned && self.emit_drop_helper(key);
-        let value_drops =
-            self.program.value_model == ValueModel::Owned && self.emit_drop_helper(value);
+        let key_drop_operation = [
+            StandardCall::MapInsert { collection },
+            StandardCall::MapRemove { collection },
+            StandardCall::MapClear { collection },
+        ]
+        .iter()
+        .any(|operation| calls.contains_key(operation));
+        let value_drop_operation = calls.contains_key(&StandardCall::MapClear { collection });
+        let key_drops = self.program.value_model == ValueModel::Owned
+            && key_drop_operation
+            && self.emit_drop_helper(key);
+        let value_drops = self.program.value_model == ValueModel::Owned
+            && value_drop_operation
+            && self.emit_drop_helper(value);
         if self.needs_equality_helper(key) {
             self.emit_equality_helper(key, None);
         }
@@ -4486,8 +4559,16 @@ unavailable_error:
         else {
             return;
         };
-        let element_drops =
-            self.program.value_model == ValueModel::Owned && self.emit_drop_helper(element);
+        let element_drop_operation = [
+            StandardCall::SetInsert { collection },
+            StandardCall::SetRemove { collection },
+            StandardCall::SetClear { collection },
+        ]
+        .iter()
+        .any(|operation| calls.contains_key(operation));
+        let element_drops = self.program.value_model == ValueModel::Owned
+            && element_drop_operation
+            && self.emit_drop_helper(element);
         if self.needs_equality_helper(element) {
             self.emit_equality_helper(element, None);
         }

@@ -571,6 +571,11 @@ impl<'a> TypedLowerer<'a> {
             TypeKind::Array { element, .. } => {
                 self.enqueue_clone_dependencies(element, span, visiting);
             }
+            TypeKind::Closure { captures, .. } => {
+                for capture in captures {
+                    self.enqueue_clone_dependencies(capture, span, visiting);
+                }
+            }
             TypeKind::Builtin { arguments, .. } => {
                 for argument in arguments {
                     self.enqueue_clone_dependencies(argument, span, visiting);
@@ -647,6 +652,15 @@ impl<'a> TypedLowerer<'a> {
                         projections: path.clone(),
                         kind: DropActionKind::StructuralLeaf,
                     });
+                }
+            }
+            TypeKind::Closure { captures, .. }
+                if self.resolved.semantic_revision.supports_owned_surface() =>
+            {
+                for (index, capture) in captures.into_iter().enumerate().rev() {
+                    path.push(DropProjection::ClosureCapture(index));
+                    self.collect_drop_actions(capture, span, path, visiting, actions);
+                    path.pop();
                 }
             }
             TypeKind::Nominal {
@@ -933,7 +947,13 @@ impl<'a> TypedLowerer<'a> {
         // reference lowering is not yet represented.
         let body_block = crate::syntax::direct_child(&data.syntax, SyntaxKind::Block);
         let promoted_locals = body_block
-            .map(|block| crate::promotion::address_taken_locals(self.resolved, block))
+            .map(|block| {
+                crate::promotion::address_taken_locals(
+                    self.resolved,
+                    block,
+                    self.resolved.semantic_revision,
+                )
+            })
             .unwrap_or_default();
         let allocates_managed =
             body_block.is_some_and(crate::promotion::allocates_managed_temporary);
@@ -1877,7 +1897,43 @@ impl<'a> TypedLowerer<'a> {
                 }
             }
             SyntaxKind::CastExpression => {
-                let value = self.lower_expression(child_nodes(node).into_iter().next()?)?;
+                let source_node = child_nodes(node).into_iter().next()?;
+                let source_template = self
+                    .checked
+                    .expression_types
+                    .get(&source_node.span)
+                    .copied()
+                    .unwrap_or_else(|| self.typed.types.error());
+                let source_ty = self.concrete_type(source_template);
+                let target_is_function_reference = matches!(
+                    self.expanded_kind(ty),
+                    TypeKind::Reference { target, .. }
+                        if matches!(self.expanded_kind(*target), TypeKind::Function { .. })
+                );
+                if self.resolved.semantic_revision.supports_owned_surface()
+                    && target_is_function_reference
+                    && let TypeKind::Closure {
+                        declaration,
+                        captures,
+                        ..
+                    } = self.expanded_kind(source_ty).clone()
+                    && captures.is_empty()
+                {
+                    let instance = self.closure_instance(declaration);
+                    self.enqueue_reachable(instance.clone(), node.span);
+                    return self.finish_expression(
+                        node,
+                        TypedExpression {
+                            kind: TypedExpressionKind::FunctionReference(instance),
+                            ty,
+                            place: PlaceKind::Value,
+                            copy: None,
+                            ownership: vec![OwnershipUse::default()],
+                            span: node.span,
+                        },
+                    );
+                }
+                let value = self.lower_expression(source_node)?;
                 // A conversion to a trait object pairs the concrete reference
                 // with its implementing type's vtable rather than reinterpreting
                 // a scalar.

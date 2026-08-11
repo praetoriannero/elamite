@@ -14,6 +14,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::config::SemanticRevision;
 use crate::resolution::{LocalBindingId, NameTarget, ResolvedProgram};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 
@@ -26,9 +27,10 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, Token, TokenKind};
 pub fn address_taken_locals(
     resolved: &ResolvedProgram,
     body: &SyntaxNode,
+    semantic_revision: SemanticRevision,
 ) -> BTreeSet<LocalBindingId> {
     let mut promoted = BTreeSet::new();
-    collect(resolved, body, &mut promoted);
+    collect(resolved, body, semantic_revision, &mut promoted);
     promoted
 }
 
@@ -48,14 +50,23 @@ pub fn allocates_managed_temporary(body: &SyntaxNode) -> bool {
     })
 }
 
-fn collect(resolved: &ResolvedProgram, node: &SyntaxNode, promoted: &mut BTreeSet<LocalBindingId>) {
+fn collect(
+    resolved: &ResolvedProgram,
+    node: &SyntaxNode,
+    semantic_revision: SemanticRevision,
+    promoted: &mut BTreeSet<LocalBindingId>,
+) {
     if node.kind == SyntaxKind::UnaryExpression
         && let Some(operand) = reference_operand(node)
         && let Some(binding) = root_local(resolved, operand)
     {
         promoted.insert(binding);
     }
-    if node.kind == SyntaxKind::ClosureCapture {
+    // An owned closure that captures a borrow is itself bounded by that
+    // borrow's inferred provenance, so the source remains in its enclosing
+    // stack frame. Compatibility closures can escape through managed identity
+    // and retain their conservative promotion behavior.
+    if node.kind == SyntaxKind::ClosureCapture && !semantic_revision.supports_owned_surface() {
         let mut tokens = node.children.iter().filter_map(|child| match child {
             SyntaxElement::Token(token) => Some(token),
             SyntaxElement::Node(_) => None,
@@ -73,7 +84,7 @@ fn collect(resolved: &ResolvedProgram, node: &SyntaxNode, promoted: &mut BTreeSe
     }
     for child in &node.children {
         if let SyntaxElement::Node(child) = child {
-            collect(resolved, child, promoted);
+            collect(resolved, child, semantic_revision, promoted);
         }
     }
 }
