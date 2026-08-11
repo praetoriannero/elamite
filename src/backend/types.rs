@@ -141,6 +141,11 @@ impl<'a> CEmitter<'a> {
                             );
                         }
                     }
+                    ("Box", [value]) => {
+                        if let Some(value_type) = self.c_type(*value, span) {
+                            let _ = writeln!(self.output, "typedef {value_type} *{name};\n");
+                        }
+                    }
                     ("Formatter", []) => {}
                     ("Identity", [_]) => {
                         let _ = writeln!(
@@ -644,7 +649,14 @@ impl<'a> CEmitter<'a> {
                 if matches!(
                     (self.resolved.builtin_name(*builtin), arguments.len()),
                     (
-                        "Vec" | "Set" | "Identity" | "Thread" | "Sender" | "Receiver" | "Mutex",
+                        "Vec"
+                            | "Set"
+                            | "Box"
+                            | "Identity"
+                            | "Thread"
+                            | "Sender"
+                            | "Receiver"
+                            | "Mutex",
                         1
                     ) | ("Map", 2)
                         | (

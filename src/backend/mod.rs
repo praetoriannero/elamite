@@ -137,6 +137,9 @@ struct CEmitter<'a> {
     /// Parameters using the compiler-only read-only borrowing ABI in the
     /// function currently being emitted.
     borrowed_parameters: BTreeSet<crate::resolution::LocalBindingId>,
+    next_drop_loop: u32,
+    emitted_clone_helpers: BTreeSet<TypeId>,
+    emitted_drop_helpers: BTreeSet<TypeId>,
 }
 
 impl<'a> CEmitter<'a> {
@@ -178,6 +181,9 @@ impl<'a> CEmitter<'a> {
             strategy: default_managed_memory_strategy(),
             promoted: BTreeSet::new(),
             borrowed_parameters: BTreeSet::new(),
+            next_drop_loop: 0,
+            emitted_clone_helpers: BTreeSet::new(),
+            emitted_drop_helpers: BTreeSet::new(),
         }
     }
 
@@ -391,8 +397,8 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
     use StandardCall::{
         ArrayGet, ArrayLen, MapClear, MapContainsKey, MapGet, MapInsert, MapIsEmpty, MapLen,
         MapNew, MapRemove, SetClear, SetContains, SetInsert, SetIsEmpty, SetLen, SetNew, SetRemove,
-        SliceLen, StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew,
-        VecRemove,
+        SliceLen, StringFrom, VecAppend, VecClear, VecGet, VecGetVar, VecInsert, VecIsEmpty,
+        VecLen, VecNew, VecPop, VecRemove,
     };
     Some(match operation {
         StandardCall::Panic
@@ -400,6 +406,8 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::Fail { .. }
         | StandardCall::Trap { .. }
         | StandardCall::ClockNow { .. }
+        | StandardCall::Clone { .. }
+        | StandardCall::BoxNew { .. }
         | StandardCall::Text { .. }
         | StandardCall::System { .. }
         | StringFrom
@@ -434,15 +442,18 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | VecLen { collection }
         | VecIsEmpty { collection }
         | VecGet { collection }
+        | VecGetVar { collection }
         | VecAppend { collection }
         | VecInsert { collection }
         | VecRemove { collection }
+        | VecPop { collection }
         | VecClear { collection }
         | MapNew { collection }
         | MapLen { collection }
         | MapIsEmpty { collection }
         | MapContainsKey { collection }
         | MapGet { collection }
+        | StandardCall::MapGetVar { collection }
         | MapInsert { collection }
         | MapRemove { collection }
         | MapClear { collection }

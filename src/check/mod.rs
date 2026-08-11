@@ -159,9 +159,10 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after deterministic destruction. Owned standard
-/// representations are deliberately the next pass rather than allowing the
-/// 0.11 surface to reuse the shallow 0.10 collection model.
+/// The temporary boundary after owned core values and collections. Closure
+/// values still use the managed 0.10 environment representation, so ordinary
+/// 0.11 driver entry points stop before backend lowering until that complete
+/// replacement is available.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -170,8 +171,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has deterministic destruction, but owned core \
-                 values and collections are not implemented yet",
+                "semantic revision 0.11.0-draft has owned core values and collections, but inline \
+                 first-class closures are not implemented yet",
             )
         })
 }
@@ -331,6 +332,7 @@ impl<'a> Checker<'a> {
         }
 
         for (span, call) in &self.program.calls {
+            let standard_clone = matches!(call, CheckedCall::Standard(StandardCall::Clone { .. }));
             let declaration = match call {
                 CheckedCall::Direct(instance) | CheckedCall::BoundMethod { instance, .. } => {
                     Some(instance.declaration)
@@ -338,7 +340,8 @@ impl<'a> Checker<'a> {
                 CheckedCall::Closure { declaration } => Some(*declaration),
                 _ => None,
             };
-            if declaration.is_some_and(|declaration| self.is_clone_method(declaration))
+            if (standard_clone
+                || declaration.is_some_and(|declaration| self.is_clone_method(declaration)))
                 && let Some(use_facts) = self.program.ownership_uses.get_mut(span)
             {
                 if use_facts.len() == 1 && use_facts[0].kind == OwnershipUseKind::Produce {
@@ -834,6 +837,15 @@ impl<'a> Checker<'a> {
                     .kind(self.typed.types.resolve_inference(iterable_type))
                     .clone()
                 {
+                    TypeKind::Slice {
+                        mutability,
+                        element,
+                    } if self.resolved.semantic_revision.supports_owned_surface() => {
+                        Some(self.typed.types.intern(TypeKind::Reference {
+                            mutability,
+                            target: element,
+                        }))
+                    }
                     TypeKind::Slice { element, .. } => Some(element),
                     TypeKind::Array { element, .. } => Some(element),
                     TypeKind::Builtin { builtin, arguments } => {
@@ -1677,6 +1689,24 @@ impl<'a> Checker<'a> {
                             element,
                         })
                     }
+                    TypeKind::Array { element, .. }
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        self.typed.types.intern(TypeKind::Slice {
+                            mutability,
+                            element,
+                        })
+                    }
+                    TypeKind::Builtin { builtin, arguments }
+                        if self.resolved.semantic_revision.supports_owned_surface()
+                            && self.resolved.builtin_name(builtin) == "Vec"
+                            && arguments.len() == 1 =>
+                    {
+                        self.typed.types.intern(TypeKind::Slice {
+                            mutability,
+                            element: arguments[0],
+                        })
+                    }
                     _ => self.typed.types.intern(TypeKind::Reference {
                         mutability,
                         target: operand_type,
@@ -1700,7 +1730,7 @@ impl<'a> Checker<'a> {
                 (ty, PlaceKind::Value)
             }
             TokenKind::Star => {
-                let (operand_type, _) = self.check_expr(operand, ExpectedType::None);
+                let (operand_type, operand_place) = self.check_expr(operand, ExpectedType::None);
                 let resolved = self.typed.types.resolve_inference(operand_type);
                 match self.typed.types.kind(resolved).clone() {
                     TypeKind::Reference { mutability, target } => {
@@ -1725,6 +1755,18 @@ impl<'a> Checker<'a> {
                             PlaceKind::Value
                         };
                         (target, place)
+                    }
+                    TypeKind::Builtin { builtin, arguments }
+                        if self.resolved.builtin_name(builtin) == "Box" && arguments.len() == 1 =>
+                    {
+                        (
+                            arguments[0],
+                            if operand_place.is_mutable() {
+                                PlaceKind::Mutable
+                            } else {
+                                PlaceKind::Addressable
+                            },
+                        )
                     }
                     TypeKind::Error => (self.typed.types.error(), PlaceKind::Value),
                     _ => {
@@ -3653,14 +3695,21 @@ impl<'a> Checker<'a> {
         };
         match result {
             Some(element_type) => {
-                let place =
-                    if matches!(self.typed.types.kind(resolved_base), TypeKind::Slice { .. }) {
-                        PlaceKind::Value
-                    } else if base_place.is_mutable() {
-                        PlaceKind::CollectionInterior
-                    } else {
-                        PlaceKind::Value
-                    };
+                let place = if matches!(
+                    self.typed.types.kind(resolved_base),
+                    TypeKind::Slice {
+                        mutability: Mutability::Mutable,
+                        ..
+                    }
+                ) {
+                    PlaceKind::CollectionInterior
+                } else if matches!(self.typed.types.kind(resolved_base), TypeKind::Slice { .. }) {
+                    PlaceKind::Value
+                } else if base_place.is_mutable() {
+                    PlaceKind::CollectionInterior
+                } else {
+                    PlaceKind::Value
+                };
                 (element_type, place)
             }
             None => (self.typed.types.error(), PlaceKind::Value),

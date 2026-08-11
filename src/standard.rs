@@ -284,15 +284,19 @@ pub const INTRINSICS: &[Intrinsic] = &[
     },
     Intrinsic {
         path: "Vec",
-        reason: "managed collection representation and operations",
+        reason: "revision-selected collection representation and operations",
     },
     Intrinsic {
         path: "Map",
-        reason: "managed collection representation and operations",
+        reason: "revision-selected collection representation and operations",
     },
     Intrinsic {
         path: "Set",
-        reason: "managed collection representation and operations",
+        reason: "revision-selected collection representation and operations",
+    },
+    Intrinsic {
+        path: "Box",
+        reason: "unique address-stable heap ownership and lowering hooks",
     },
     Intrinsic {
         path: "Default",

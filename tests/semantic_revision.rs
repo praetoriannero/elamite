@@ -436,7 +436,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_deterministic_destruction() {
+fn owned_packages_stop_after_owned_core_values() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -444,7 +444,7 @@ fn owned_packages_stop_after_deterministic_destruction() {
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
     let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
-        Ok(_) => panic!("owned body semantics are not enabled yet"),
+        Ok(_) => panic!("owned closure semantics are not enabled yet"),
         Err(diagnostics) => diagnostics,
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
@@ -453,7 +453,11 @@ fn owned_packages_stop_after_deterministic_destruction() {
         Category::SemanticRevision,
         "{diagnostics:#?}"
     );
-    assert!(diagnostics[0].message.contains("owned core values"));
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("inline first-class closures")
+    );
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
@@ -1032,6 +1036,12 @@ fn replaced_owner() -> ():
     let view = &point.left
     point = Pair { name: String.from("new"), left: 3, right: 4 }
     println(*view)
+
+fn relocated_vector() -> ():
+    var values = @vec[1, 2]
+    let view = &values
+    values.append(3)
+    println(view.len())
 "#,
     );
     assert_eq!(
@@ -1039,7 +1049,7 @@ fn replaced_owner() -> ():
             .iter()
             .filter(|diagnostic| diagnostic.category == Category::Borrow)
             .count(),
-        3,
+        4,
         "{diagnostics:#?}"
     );
 }
@@ -1457,4 +1467,187 @@ fn main() -> ():
             "5\n7\n4\n3\n2\n6\n"
         );
     }
+}
+
+#[test]
+fn owned_core_values_clone_move_mutate_and_drop_independently() {
+    let package = TestPackage::executable(
+        "owned_core_values",
+        r#"fn main() -> ():
+    let original = @vec[String.from("a"), String.from("b")]
+    var duplicate = original.clone()
+    let moved = original
+    duplicate.append(String.from("c"))
+    println(moved.len())
+    println(duplicate.len())
+    duplicate.clear()
+    println(duplicate.len())
+
+    var boxed = Box[String].new(String.from("box"))
+    println(&*boxed)
+    *boxed = String.from("changed")
+    println(&*boxed)
+
+    var map = Map[i32, i32].new()
+    map.insert(4, 7)
+    let map_copy = map.clone()
+    println(map_copy.len())
+    let map_key = 4
+    println(map.contains_key(&map_key))
+    match map.get_var(&map_key):
+        Option.Some(found):
+            *found = 10
+        Option.None:
+            pass
+    match map.get(&map_key):
+        Option.Some(found):
+            println(*found)
+        Option.None:
+            pass
+
+    var set = Set[i32].new()
+    set.insert(8)
+    let set_copy = set.clone()
+    println(set_copy.len())
+    let member = 8
+    println(set.contains(&member))
+    println(set.remove(&member))
+
+    var values = @vec[1, 2]
+    match values.get_var(0):
+        Option.Some(found):
+            *found = 6
+        Option.None:
+            pass
+    match values.get(0):
+        Option.Some(found):
+            println(*found)
+        Option.None:
+            pass
+    match values.pop():
+        Option.Some(popped):
+            println(popped)
+        Option.None:
+            pass
+
+    var fixed = [1, 2, 3]
+    let view = &fixed
+    println(view.len())
+    var mutable_view = &var fixed
+    mutable_view[1] = 9
+    println(fixed[1])
+    var sum = 0
+    for item in &fixed:
+        sum += *item
+    println(sum)
+
+    for word in @vec[String.from("first"), String.from("unvisited")]:
+        println(&word)
+        break
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty(), "{:#?}", types.diagnostics);
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty(), "{:#?}", traits.diagnostics);
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    let provenance = infer_provenance_signatures(&resolved, &mut types.program);
+    assert!(provenance.is_empty(), "{provenance:#?}");
+    let typed_ir = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(
+        typed_ir.diagnostics.is_empty(),
+        "{:#?}",
+        typed_ir.diagnostics
+    );
+    let moves = check_moves(&resolved, &mut types.program, &typed_ir.program);
+    assert!(moves.is_empty(), "{moves:#?}");
+    let borrows = check_borrows(&resolved, &mut types.program, &typed_ir.program);
+    assert!(borrows.is_empty(), "{borrows:#?}");
+    let control_flow = lower_control_flow(&typed_ir.program, &types.program);
+    assert_eq!(control_flow.value_model, elamite::ir::ValueModel::Owned);
+    let entry = resolved
+        .declarations
+        .iter()
+        .find(|declaration| resolved.symbol_text(declaration.name) == "main")
+        .map(|declaration| declaration.id)
+        .expect("resolved main declaration");
+    let output = emit_c(
+        &control_flow,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86_64,
+            entry: Some(entry),
+            test_entries: None,
+        },
+    );
+    assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+    assert!(output.source.contains("#define EL_OWNED_VALUES 1"));
+    assert!(output.source.contains("el_clone_t"));
+    assert!(!output.source.contains("_Static_assert"));
+    let x86_output = emit_c(
+        &control_flow,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86,
+            entry: Some(entry),
+            test_entries: None,
+        },
+    );
+    assert!(
+        x86_output.diagnostics.is_empty(),
+        "{:#?}",
+        x86_output.diagnostics
+    );
+    assert!(x86_output.source.contains("#define EL_OWNED_VALUES 1"));
+    assert!(!x86_output.source.contains("_Static_assert"));
+    let c_path = package.root.join("owned-core.c");
+    let executable = package.root.join("owned-core");
+    fs::write(&c_path, output.source).expect("write generated C");
+    let compiled = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args([
+            "-std=c99",
+            "-pedantic-errors",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fsanitize=address",
+        ])
+        .arg(&c_path)
+        .arg("-lgc")
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("invoke C99 compiler");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let run = Command::new(&executable)
+        .env("ASAN_OPTIONS", "detect_leaks=0:halt_on_error=1")
+        .output()
+        .expect("run owned core program");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(run.stdout).expect("UTF-8 output"),
+        "2\n3\n0\nbox\nchanged\n1\ntrue\n10\n1\ntrue\ntrue\n6\n2\n3\n9\n13\nfirst\n"
+    );
 }

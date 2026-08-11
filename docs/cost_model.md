@@ -1,18 +1,16 @@
 # Elamite implementation cost model
 
-> Version: 14
+> Version: 15
 >
-> Applies to: the compiler targeting 0.10.0-draft on Linux x86 and x86-64
+> Applies to: the 0.10.0-draft compatibility path and implemented
+> 0.11.0-draft phases through owned core values, on Linux x86 and x86-64
 >
 > Status: non-normative implementation documentation
 
-> Implementation revision: **All value-copy boundaries are shallow**. The
-> compiler directly copies immediate C representations for ordinary language
-> copies, including spawn environments, join results, channel messages, and
-> mutex storage and results. No recursive copy-helper boundary remains. Unsafe
-> raw-pointer arithmetic, indexing, and relational ordering add no managed
-> allocation. Standard text and lexical path algorithms now execute as
-> ordinary Elamite over a minimal UTF-8/runtime kernel.
+> Implementation revision: **The compatibility path remains shallow; the
+> owned path moves unique core values and clones only when requested.** The
+> semantic-revision selection is explicit in control-flow IR. The C backend
+> never infers a value model from source syntax.
 
 This document explains where the current 0.10 compiler copies values, allocates
 storage, retains memory, and synchronizes. `spec.md` now defines the accepted
@@ -27,6 +25,37 @@ identity. Threads, channels, and joins now publish those same immediate values.
 Mutex operations use the same rule while holding the mutex lock; the lock
 serializes access to its immediate stored representation but does not isolate
 or automatically protect backing reached through external aliases.
+
+## Implemented 0.11 owned-core costs
+
+The ordinary driver still stops the 0.11 path before inline closure lowering,
+but the checked-to-C conformance path now implements the complete owned-core
+layer. On that path:
+
+- `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
+  a constant-size descriptor transfer; it allocates and copies no backing.
+- `clone()` is explicit. A string clone allocates and copies `b` bytes; vector
+  and set clones allocate `O(n)` backing and clone each element; map clones
+  allocate parallel `O(n)` backing and clone each key and value.
+- destruction visits still-owned elements in reverse order and immediately
+  releases collection and string backing. `clear` destroys elements but keeps
+  reusable capacity. Growth geometrically allocates replacement backing,
+  relocates immediate representations, and frees the old backing.
+- `[T]` and `[var T]` are two-word non-owning pointer/length descriptors.
+  Forming them from an array, vector, or slice allocates nothing. Shared views
+  yield `&T`; exclusive views yield `&var T` and statically block overlapping
+  access or relocation.
+- `Box[T]` performs one explicit `sizeof(T)` allocation, keeps the pointee at a
+  stable address, moves as one pointer, recursively clones only on explicit
+  `clone()`, and destroys the pointee before freeing its allocation.
+- owned collection and array iteration moves visited elements. Its inline
+  index/descriptor state allocates nothing; early exit destroys unvisited
+  elements exactly once. Slice iteration borrows and yields references without
+  allocation.
+
+These costs coexist temporarily with managed promotion, closure, concurrency,
+and variadic-pack machinery owned by later migration milestones. They do not
+claim that the 0.11 path is yet available through the compiling driver.
 
 ## Reading the tables
 

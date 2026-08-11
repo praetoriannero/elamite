@@ -2,6 +2,16 @@
 
 use super::super::*;
 
+/// Explicit runtime representation policy selected before backend lowering.
+/// The C emitter consumes this fact instead of inferring a value model from
+/// source syntax or the package semantic revision.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ValueModel {
+    #[default]
+    ShallowManaged,
+    Owned,
+}
+
 #[derive(Debug, Clone)]
 pub enum ControlFlowPlace {
     Local(LocalBindingId),
@@ -66,6 +76,11 @@ pub enum Rvalue {
     /// The address of a place. Its root local is promoted, so the address is
     /// stable for as long as the reference is reachable.
     AddressOf(ControlFlowPlace),
+    /// A non-owning view over an array, vector, or existing slice place.
+    SliceOf {
+        place: ControlFlowPlace,
+        owner_type: TypeId,
+    },
     /// The structural default of a type, from a `Default` derivation.
     DefaultValue(TypeId),
     /// A standard nontrapping numeric conversion. The destination temporary
@@ -234,6 +249,12 @@ pub enum Instruction {
         flag: DropFlagId,
         binding: LocalBindingId,
         action: DropAction,
+        span: Span,
+    },
+    DropIteration {
+        collection: TemporaryId,
+        consumed: TemporaryId,
+        actions: Vec<DropAction>,
         span: Span,
     },
     PrintValue {
@@ -420,6 +441,7 @@ impl ControlFlowFunction {
 #[derive(Debug, Default)]
 pub struct ControlFlowProgram {
     pub semantic_revision: crate::config::SemanticRevision,
+    pub value_model: ValueModel,
     pub functions: Vec<ControlFlowFunction>,
     pub structs: Vec<TypedStruct>,
     pub enums: Vec<TypedEnum>,

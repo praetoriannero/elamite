@@ -15,7 +15,7 @@ use crate::ir::{
 };
 use crate::operations::{
     CapabilityState, OwnershipPlace, OwnershipPlaceRoot, OwnershipProjection, OwnershipUseKind,
-    PlaceOverlap,
+    PlaceOverlap, StandardCall,
 };
 use crate::resolution::{LocalBindingId, ResolvedProgram};
 use crate::source::Span;
@@ -695,8 +695,33 @@ impl BorrowChecker<'_> {
                 }
                 value
             }
-            TypedExpressionKind::StandardCall { arguments, .. }
-            | TypedExpressionKind::CollectionLiteral {
+            TypedExpressionKind::StandardCall {
+                operation,
+                arguments,
+            } => {
+                let mut value = ValueProvenance::default();
+                for (index, argument) in arguments.iter().enumerate() {
+                    let child = self.visit_expression(argument, state, live, ephemeral, true);
+                    value.union_with(&child.prefixed(OwnershipProjection::TupleField(index)));
+                }
+                if standard_call_exclusively_accesses_receiver(*operation)
+                    && let Some(receiver) = arguments.first()
+                    && let Some(place) = receiver.ownership_place().map(normalized_place)
+                {
+                    let authorized = self.authorized_loans(&place, state);
+                    self.check_access(
+                        &place,
+                        AccessKind::ReadWrite,
+                        expression.span,
+                        state,
+                        live,
+                        ephemeral,
+                        &authorized,
+                    );
+                }
+                value
+            }
+            TypedExpressionKind::CollectionLiteral {
                 elements: arguments,
                 ..
             } => {
@@ -1140,6 +1165,25 @@ impl BorrowChecker<'_> {
             self.diagnostics.push(diagnostic);
         }
     }
+}
+
+fn standard_call_exclusively_accesses_receiver(operation: StandardCall) -> bool {
+    matches!(
+        operation,
+        StandardCall::VecGetVar { .. }
+            | StandardCall::VecAppend { .. }
+            | StandardCall::VecInsert { .. }
+            | StandardCall::VecRemove { .. }
+            | StandardCall::VecPop { .. }
+            | StandardCall::VecClear { .. }
+            | StandardCall::MapGetVar { .. }
+            | StandardCall::MapInsert { .. }
+            | StandardCall::MapRemove { .. }
+            | StandardCall::MapClear { .. }
+            | StandardCall::SetInsert { .. }
+            | StandardCall::SetRemove { .. }
+            | StandardCall::SetClear { .. }
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

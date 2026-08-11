@@ -232,10 +232,13 @@ fn standard_call_mutates_receiver(operation: StandardCall) -> bool {
     matches!(
         operation,
         StandardCall::VecAppend { .. }
+            | StandardCall::VecGetVar { .. }
             | StandardCall::VecInsert { .. }
             | StandardCall::VecRemove { .. }
+            | StandardCall::VecPop { .. }
             | StandardCall::VecClear { .. }
             | StandardCall::MapInsert { .. }
+            | StandardCall::MapGetVar { .. }
             | StandardCall::MapRemove { .. }
             | StandardCall::MapClear { .. }
             | StandardCall::SetInsert { .. }

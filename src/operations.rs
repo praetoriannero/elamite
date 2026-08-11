@@ -320,6 +320,14 @@ pub enum StandardCall {
         monotonic: bool,
     },
     StringFrom,
+    /// Explicit content clone for compiler-represented owned values.
+    Clone {
+        value: TypeId,
+    },
+    BoxNew {
+        boxed: TypeId,
+        value: TypeId,
+    },
     Text {
         operation: TextOperation,
         result_type: TypeId,
@@ -445,6 +453,9 @@ pub enum StandardCall {
     VecGet {
         collection: TypeId,
     },
+    VecGetVar {
+        collection: TypeId,
+    },
     VecAppend {
         collection: TypeId,
     },
@@ -452,6 +463,9 @@ pub enum StandardCall {
         collection: TypeId,
     },
     VecRemove {
+        collection: TypeId,
+    },
+    VecPop {
         collection: TypeId,
     },
     VecClear {
@@ -470,6 +484,9 @@ pub enum StandardCall {
         collection: TypeId,
     },
     MapGet {
+        collection: TypeId,
+    },
+    MapGetVar {
         collection: TypeId,
     },
     MapInsert {
@@ -510,6 +527,11 @@ impl StandardCall {
     pub fn map_types(mut self, mut map: impl FnMut(TypeId) -> TypeId) -> Self {
         match &mut self {
             Self::Panic | Self::Assert | Self::StringFrom => {}
+            Self::Clone { value } => *value = map(*value),
+            Self::BoxNew { boxed, value } => {
+                *boxed = map(*boxed);
+                *value = map(*value);
+            }
             Self::Text {
                 result_type,
                 input_type,
@@ -602,15 +624,18 @@ impl StandardCall {
             | Self::VecLen { collection }
             | Self::VecIsEmpty { collection }
             | Self::VecGet { collection }
+            | Self::VecGetVar { collection }
             | Self::VecAppend { collection }
             | Self::VecInsert { collection }
             | Self::VecRemove { collection }
+            | Self::VecPop { collection }
             | Self::VecClear { collection }
             | Self::MapNew { collection }
             | Self::MapLen { collection }
             | Self::MapIsEmpty { collection }
             | Self::MapContainsKey { collection }
             | Self::MapGet { collection }
+            | Self::MapGetVar { collection }
             | Self::MapInsert { collection }
             | Self::MapRemove { collection }
             | Self::MapClear { collection }

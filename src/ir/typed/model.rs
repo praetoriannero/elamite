@@ -407,6 +407,7 @@ pub enum TypedStatementKind {
         binding: LocalBindingId,
         iterable: TypedExpression,
         kind: IterationKind,
+        iterator_drop: Vec<DropAction>,
         body: Vec<TypedStatement>,
     },
     Match {
@@ -521,6 +522,20 @@ pub enum DropActionKind {
     /// owning representation milestone. The flag transition is already exact.
     StructuralLeaf,
     Custom(FunctionInstance),
+    OwnedString,
+    OwnedVec {
+        elements: Vec<DropAction>,
+    },
+    OwnedMap {
+        keys: Vec<DropAction>,
+        values: Vec<DropAction>,
+    },
+    OwnedSet {
+        elements: Vec<DropAction>,
+    },
+    OwnedBox {
+        value: Vec<DropAction>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

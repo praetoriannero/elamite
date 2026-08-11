@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Owned core values and collections**
+> Next planned milestone: **Inline first-class closures**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -24,8 +24,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Move and initialization checking](#move-and-initialization-checking) | Complete | Typed-IR place-state dataflow enforces moves, initialization, partial moves, reinitialization, indexed extraction, and conservative control-flow joins. |
 | [Structural borrow provenance](#structural-borrow-provenance) | Complete | Hidden provenance, shared/exclusive loans, structural propagation, public metadata, receiver adaptation, and robustness coverage are implemented. |
 | [Deterministic destruction](#deterministic-destruction) | Complete | Per-action drop flags, custom and structural glue, ordinary-exit cleanup, replacement, defer ordering, and explicit C99 lowering are implemented. |
-| [Owned core values and collections](#owned-core-values-and-collections) | Planned — next | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
-| [Inline first-class closures](#inline-first-class-closures) | Planned | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
+| [Owned core values and collections](#owned-core-values-and-collections) | Complete | Replaced shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
+| [Inline first-class closures](#inline-first-class-closures) | Planned — next | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
 | [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
 | [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
 | [Race-safe concurrency](#race-safe-concurrency) | Planned | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
@@ -455,7 +455,11 @@ preserving Elamite's non-unwinding trap model.
 
 ### Owned core values and collections
 
-> Status: Planned — next.
+> Status: Complete. The owned revision selects unique string and collection
+> backing, explicit recursive clone/drop glue, non-owning shared and exclusive
+> slices, address-stable `Box`, borrow-oriented query APIs, and owned/borrowed
+> iteration. The compatibility revision retains its measured shallow model.
+> The 0.11 boundary now names **Inline first-class closures**.
 >
 > Blocked by: **Deterministic destruction**.
 
@@ -464,19 +468,20 @@ impossible to mutate through an accidental shallow alias.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Unique owned representations** | Replace mutable shared backing in `String`, `Vec`, `Map`, and `Set` with one-owner representations whose move is constant-size and whose explicit clone has the documented cost. | Assignment and by-value calls transfer ownership; explicit clones are independent; destruction releases backing exactly once. |
-| **Slices and views** | Implement `[T]` and `[var T]` values, array and collection coercions, bounds checks, mutation rules, and structural provenance. | Views cannot outlive or conflict with their owner, mutable views require exclusive access, and no slice operation owns or frees elements. |
-| **Allocation foundation** | Provide the minimal allocator hooks and `Box[T]` needed for deliberate heap ownership, including overflow and allocation-failure behavior. | Taking an address does not allocate; heap use is visible in the owning type; both pointer widths have layout and failure coverage. |
-| **Ownership-aware APIs** | Redesign mutation, insertion, removal, extension, iteration, formatting, and conversion APIs around moves, borrows, and explicit clones. | Common operations avoid unnecessary cloning, retain left-to-right evaluation, and make every ownership transfer visible in signatures and checked facts. |
-| **Iterator migration** | Replace managed hidden iterator state with owned or borrowed iterator values whose invalidation and provenance follow the collection contract. | Iteration allocates only when its explicit iterator type requires it and collection mutation cannot invalidate a live safe iterator unnoticed. |
-| **Cost and conformance evidence** | Update `cost_model.md`, run comparable memory workloads, and replace shallow-alias fixtures with move/clone/borrow cases. | Release evidence states constant-size moves, proportional clones, allocations, and retention without turning measurements into semantic thresholds. |
+| **Unique owned representations (done)** | Replace mutable shared backing in `String`, `Vec`, `Map`, and `Set` with one-owner representations whose move is constant-size and whose explicit clone has the documented cost. | Assignment and by-value calls transfer ownership; explicit clones are independent; destruction releases backing exactly once. |
+| **Slices and views (done)** | Implement `[T]` and `[var T]` values, array and collection coercions, bounds checks, mutation rules, and structural provenance. | Views cannot outlive or conflict with their owner, mutable views require exclusive access, and no slice operation owns or frees elements. |
+| **Allocation foundation (done)** | Provide the minimal allocator hooks and `Box[T]` needed for deliberate heap ownership, including overflow and allocation-failure behavior. | Taking an address does not allocate; heap use is visible in the owning type; both pointer widths have layout and failure coverage. |
+| **Ownership-aware APIs (done)** | Redesign mutation, insertion, removal, extension, iteration, formatting, and conversion APIs around moves, borrows, and explicit clones. | Common operations avoid unnecessary cloning, retain left-to-right evaluation, and make every ownership transfer visible in signatures and checked facts. |
+| **Iterator migration (done)** | Replace managed hidden iterator state with owned or borrowed iterator values whose invalidation and provenance follow the collection contract. | Iteration allocates only when its explicit iterator type requires it and collection mutation cannot invalidate a live safe iterator unnoticed. |
+| **Cost and conformance evidence (done)** | Update `cost_model.md`, run comparable memory workloads, and replace shallow-alias fixtures with move/clone/borrow cases. | Release evidence states constant-size moves, proportional clones, allocations, and retention without turning measurements into semantic thresholds. |
 
 ### Inline first-class closures
 
-> Status: Planned.
+> Status: Planned — next.
 >
-> Blocked by: **Structural borrow provenance** and **Deterministic
-> destruction**. It may proceed alongside collection representation work.
+> Blocked by: **None**. Its prerequisites, **Structural borrow provenance**,
+> **Deterministic destruction**, and **Owned core values and collections**, are
+> complete.
 
 **Goal:** Make every closure a nominal, statically sized first-class object
 whose captures obey ordinary ownership and borrowing.

@@ -194,7 +194,7 @@ impl Query<'_> {
         match name {
             "Copy" | "Send" | "Sync" | "Default" | "PartialEq" | "Eq" | "PartialOrd" | "Ord"
             | "Hash" | "StableHash" | "Display" | "Formatter" => conditional(),
-            "Vec" | "Map" | "Set" => {
+            "Vec" | "Map" | "Set" | "Box" => {
                 let mut facts = self.aggregate(arguments, true, false);
                 facts.copy = CapabilityState::Absent;
                 facts.clone = conjunction(arguments.iter().map(|ty| self.facts(*ty).clone));

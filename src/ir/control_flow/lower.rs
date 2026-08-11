@@ -4,6 +4,11 @@ use super::super::*;
 
 #[must_use]
 pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> ControlFlowProgram {
+    let value_model = if program.semantic_revision.supports_owned_surface() {
+        ValueModel::Owned
+    } else {
+        ValueModel::ShallowManaged
+    };
     let functions = program
         .functions
         .iter()
@@ -45,6 +50,7 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
     });
     ControlFlowProgram {
         semantic_revision: program.semantic_revision,
+        value_model,
         functions,
         structs: program.structs.clone(),
         enums: program.enums.clone(),
@@ -98,6 +104,7 @@ struct OpenBlock {
 struct CleanupScope {
     deferred: Vec<Vec<TypedStatement>>,
     bindings: Vec<LocalBindingId>,
+    iterators: Vec<(TemporaryId, TemporaryId, Vec<DropAction>)>,
 }
 
 struct FunctionLowerer<'a> {
@@ -243,6 +250,7 @@ impl<'a> FunctionLowerer<'a> {
         self.scopes.push(CleanupScope {
             deferred: Vec::new(),
             bindings: extra_bindings.clone(),
+            iterators: Vec::new(),
         });
         if self.scopes.len() == 1 {
             for parameter in &self.function.parameters {
@@ -272,6 +280,14 @@ impl<'a> FunctionLowerer<'a> {
             }
             for binding in scope.bindings.iter().rev() {
                 self.emit_binding_drop(*binding, self.function.span);
+            }
+            for (collection, consumed, actions) in scope.iterators.iter().rev() {
+                self.emit(Instruction::DropIteration {
+                    collection: *collection,
+                    consumed: *consumed,
+                    actions: actions.clone(),
+                    span: self.function.span,
+                });
             }
         }
     }
@@ -396,8 +412,16 @@ impl<'a> FunctionLowerer<'a> {
                 binding,
                 iterable,
                 kind,
+                iterator_drop,
                 body,
-            } => self.lower_for(*binding, iterable, kind, body, statement.span),
+            } => self.lower_for(
+                *binding,
+                iterable,
+                kind,
+                iterator_drop,
+                body,
+                statement.span,
+            ),
             TypedStatementKind::Match { scrutinee, arms } => self.lower_match(scrutinee, arms),
             TypedStatementKind::Block(body) => self.lower_scope(body),
             TypedStatementKind::Defer(body) => {
@@ -528,6 +552,7 @@ impl<'a> FunctionLowerer<'a> {
         binding: LocalBindingId,
         iterable: &TypedExpression,
         kind: &IterationKind,
+        iterator_drop: &[DropAction],
         body: &[TypedStatement],
         span: Span,
     ) {
@@ -539,6 +564,7 @@ impl<'a> FunctionLowerer<'a> {
         let usize_type = self.types.types.primitive_id(PrimitiveType::Usize);
         let bool_type = self.types.types.primitive_id(PrimitiveType::Bool);
         let index = self.temp(usize_type);
+        let consumed = self.temp(usize_type);
         self.emit(Instruction::Assign {
             destination: index,
             value: Rvalue::Constant(Constant::Integer {
@@ -547,6 +573,21 @@ impl<'a> FunctionLowerer<'a> {
             }),
             span,
         });
+        self.emit(Instruction::Assign {
+            destination: consumed,
+            value: Rvalue::Constant(Constant::Integer {
+                magnitude: 0,
+                negative: false,
+            }),
+            span,
+        });
+        if !iterator_drop.is_empty()
+            && let Some(scope) = self.scopes.last_mut()
+        {
+            scope
+                .iterators
+                .push((collection, consumed, iterator_drop.to_vec()));
+        }
         // The hidden loop state snapshots both the shallow iterable value and
         // its iteration length exactly once. For Vec this is the copied
         // descriptor's local length. Map/Set structural mutation remains UB,
@@ -616,6 +657,25 @@ impl<'a> FunctionLowerer<'a> {
             value: element,
             span,
         });
+        let one_consumed = self.temp(usize_type);
+        self.emit(Instruction::Assign {
+            destination: one_consumed,
+            value: Rvalue::Constant(Constant::Integer {
+                magnitude: 1,
+                negative: false,
+            }),
+            span,
+        });
+        self.emit(Instruction::Assign {
+            destination: consumed,
+            value: Rvalue::Binary {
+                operator: BinaryOperator::Add,
+                left: index,
+                right: one_consumed,
+                trap: None,
+            },
+            span,
+        });
         self.set_binding_drop_flags(binding, true, span);
         self.loops
             .push((exit_block, increment_block, self.scopes.len()));
@@ -626,23 +686,9 @@ impl<'a> FunctionLowerer<'a> {
         }
 
         self.current = increment_block;
-        let one = self.temp(usize_type);
-        self.emit(Instruction::Assign {
-            destination: one,
-            value: Rvalue::Constant(Constant::Integer {
-                magnitude: 1,
-                negative: false,
-            }),
-            span,
-        });
         self.emit(Instruction::Assign {
             destination: index,
-            value: Rvalue::Binary {
-                operator: BinaryOperator::Add,
-                left: index,
-                right: one,
-                trap: None,
-            },
+            value: Rvalue::Load(ControlFlowPlace::Temporary(consumed)),
             span,
         });
         self.terminate(Terminator::Goto(condition_block));
@@ -1055,8 +1101,16 @@ impl<'a> FunctionLowerer<'a> {
                     .collect(),
             },
             TypedExpressionKind::AddressOf(place) => {
+                let owner_type = place.ty();
                 let place = self.lower_place(place);
-                Rvalue::AddressOf(place)
+                if matches!(
+                    expanded_kind(&self.types.types, expression.ty),
+                    TypeKind::Slice { .. }
+                ) {
+                    Rvalue::SliceOf { place, owner_type }
+                } else {
+                    Rvalue::AddressOf(place)
+                }
             }
             TypedExpressionKind::AddressOfTemporary(value) => {
                 let value_type = value.ty;
@@ -2344,8 +2398,10 @@ fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
     matches!(
         operation,
         StandardCall::VecAppend { .. }
+            | StandardCall::VecGetVar { .. }
             | StandardCall::VecInsert { .. }
             | StandardCall::VecRemove { .. }
+            | StandardCall::VecPop { .. }
             | StandardCall::VecClear { .. }
     )
 }

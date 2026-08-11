@@ -1006,6 +1006,7 @@ pub(super) fn builtin_has_layout(name: &str) -> bool {
         "Vec"
             | "Map"
             | "Set"
+            | "Box"
             | "Formatter"
             | "Identity"
             | "ForeignRoot"

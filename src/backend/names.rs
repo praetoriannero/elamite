@@ -68,8 +68,8 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
     use StandardCall::{
         ArrayGet, ArrayLen, MapClear, MapContainsKey, MapGet, MapInsert, MapIsEmpty, MapLen,
         MapNew, MapRemove, SetClear, SetContains, SetInsert, SetIsEmpty, SetLen, SetNew, SetRemove,
-        SliceLen, StringFrom, VecAppend, VecClear, VecGet, VecInsert, VecIsEmpty, VecLen, VecNew,
-        VecRemove,
+        SliceLen, StringFrom, VecAppend, VecClear, VecGet, VecGetVar, VecInsert, VecIsEmpty,
+        VecLen, VecNew, VecPop, VecRemove,
     };
     let (name, ty) = match operation {
         StandardCall::Panic => return "el_panic".to_string(),
@@ -83,6 +83,8 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
             let source = if monotonic { "monotonic" } else { "system" };
             return format!("el_{source}_now_t{}", clock_type.index());
         }
+        StandardCall::Clone { value } => return format!("el_clone_t{}", value.index()),
+        StandardCall::BoxNew { boxed, .. } => return format!("el_box_new_t{}", boxed.index()),
         StringFrom => return "el_string_from".to_string(),
         StandardCall::Text {
             operation,
@@ -232,15 +234,18 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         VecLen { collection } => ("vec_len", collection),
         VecIsEmpty { collection } => ("vec_is_empty", collection),
         VecGet { collection } => ("vec_get", collection),
+        VecGetVar { collection } => ("vec_get_var", collection),
         VecAppend { collection } => ("vec_append", collection),
         VecInsert { collection } => ("vec_insert", collection),
         VecRemove { collection } => ("vec_remove", collection),
+        VecPop { collection } => ("vec_pop", collection),
         VecClear { collection } => ("vec_clear", collection),
         MapNew { collection } => ("map_new", collection),
         MapLen { collection } => ("map_len", collection),
         MapIsEmpty { collection } => ("map_is_empty", collection),
         MapContainsKey { collection } => ("map_contains_key", collection),
         MapGet { collection } => ("map_get", collection),
+        StandardCall::MapGetVar { collection } => ("map_get_var", collection),
         MapInsert { collection } => ("map_insert", collection),
         MapRemove { collection } => ("map_remove", collection),
         MapClear { collection } => ("map_clear", collection),

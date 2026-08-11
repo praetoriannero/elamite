@@ -946,6 +946,7 @@ fn prelude_surface_is_exact_and_standard_modules_are_source_backed() {
     assert_eq!(
         output.program.prelude_names(),
         vec![
+            "Box",
             "Callable",
             "Clone",
             "Copy",

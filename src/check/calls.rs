@@ -2122,6 +2122,18 @@ impl<'a> Checker<'a> {
                     }
                     StandardCall::SetNew { collection }
                 }
+                "Box" if type_arguments.len() == 1 && member_name == "new" => {
+                    let value = type_arguments[0];
+                    self.check_standard_arguments(call_span, &member_name, arguments, &[value]);
+                    self.program.calls.insert(
+                        call_span,
+                        CheckedCall::Standard(StandardCall::BoxNew {
+                            boxed: collection,
+                            value,
+                        }),
+                    );
+                    return Some((collection, PlaceKind::Value));
+                }
                 _ => {
                     self.diagnostics.push(
                         Diagnostic::new(
@@ -2897,7 +2909,10 @@ impl<'a> Checker<'a> {
         else {
             return None;
         };
-        if !matches!(self.resolved.builtin_name(builtin), "Vec" | "Map" | "Set") {
+        if !matches!(
+            self.resolved.builtin_name(builtin),
+            "Vec" | "Map" | "Set" | "Box"
+        ) {
             return None;
         }
         let arity = if self.resolved.builtin_name(builtin) == "Map" {
@@ -2940,6 +2955,30 @@ impl<'a> Checker<'a> {
         let usize_type = self.typed.types.primitive(PrimitiveType::Usize);
         let bool_type = self.typed.types.primitive(PrimitiveType::Bool);
         let unit_type = self.typed.types.primitive(PrimitiveType::Unit);
+        let compiler_owned_clone = match self.typed.types.kind(receiver) {
+            TypeKind::Primitive(PrimitiveType::String) => true,
+            TypeKind::Builtin { builtin, .. } => {
+                matches!(
+                    self.resolved.builtin_name(*builtin),
+                    "Vec" | "Map" | "Set" | "Box"
+                )
+            }
+            _ => false,
+        };
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && name == "clone"
+            && compiler_owned_clone
+            && crate::types::ownership_facts(self.resolved, self.typed, receiver)
+                .clone
+                .is_present()
+        {
+            return Some((
+                StandardCall::Clone { value: receiver },
+                Vec::new(),
+                receiver,
+                false,
+            ));
+        }
         if let TypeKind::Reference {
             mutability: Mutability::Mutable,
             target,
@@ -3299,14 +3338,42 @@ impl<'a> Checker<'a> {
                         bool_type,
                         false,
                     )),
-                    ("Vec", "get", [element]) => Some((
-                        StandardCall::VecGet {
-                            collection: receiver,
-                        },
-                        vec![usize_type],
-                        self.option_type(span, *element),
-                        false,
-                    )),
+                    ("Vec", "get", [element]) => {
+                        let result = if self.resolved.semantic_revision.supports_owned_surface() {
+                            let reference = self.typed.types.intern(TypeKind::Reference {
+                                mutability: Mutability::Shared,
+                                target: *element,
+                            });
+                            self.option_type(span, reference)
+                        } else {
+                            self.option_type(span, *element)
+                        };
+                        Some((
+                            StandardCall::VecGet {
+                                collection: receiver,
+                            },
+                            vec![usize_type],
+                            result,
+                            false,
+                        ))
+                    }
+                    ("Vec", "get_var", [element])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let reference = self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Mutable,
+                            target: *element,
+                        });
+                        let result = self.option_type(span, reference);
+                        Some((
+                            StandardCall::VecGetVar {
+                                collection: receiver,
+                            },
+                            vec![usize_type],
+                            result,
+                            true,
+                        ))
+                    }
                     ("Vec", "append", [element]) => Some((
                         StandardCall::VecAppend {
                             collection: receiver,
@@ -3329,6 +3396,14 @@ impl<'a> Checker<'a> {
                         },
                         vec![usize_type],
                         *element,
+                        true,
+                    )),
+                    ("Vec", "pop", [element]) => Some((
+                        StandardCall::VecPop {
+                            collection: receiver,
+                        },
+                        Vec::new(),
+                        self.option_type(span, *element),
                         true,
                     )),
                     ("Vec", "clear", [_]) => Some((
@@ -3355,22 +3430,71 @@ impl<'a> Checker<'a> {
                         bool_type,
                         false,
                     )),
-                    ("Map", "contains_key", [key, _]) => Some((
-                        StandardCall::MapContainsKey {
-                            collection: receiver,
-                        },
-                        vec![*key],
-                        bool_type,
-                        false,
-                    )),
-                    ("Map", "get", [key, value]) => Some((
-                        StandardCall::MapGet {
-                            collection: receiver,
-                        },
-                        vec![*key],
-                        self.option_type(span, *value),
-                        false,
-                    )),
+                    ("Map", "contains_key", [key, _]) => {
+                        let key = if self.resolved.semantic_revision.supports_owned_surface() {
+                            self.typed.types.intern(TypeKind::Reference {
+                                mutability: Mutability::Shared,
+                                target: *key,
+                            })
+                        } else {
+                            *key
+                        };
+                        Some((
+                            StandardCall::MapContainsKey {
+                                collection: receiver,
+                            },
+                            vec![key],
+                            bool_type,
+                            false,
+                        ))
+                    }
+                    ("Map", "get", [key, value]) => {
+                        let (key, value) =
+                            if self.resolved.semantic_revision.supports_owned_surface() {
+                                (
+                                    self.typed.types.intern(TypeKind::Reference {
+                                        mutability: Mutability::Shared,
+                                        target: *key,
+                                    }),
+                                    self.typed.types.intern(TypeKind::Reference {
+                                        mutability: Mutability::Shared,
+                                        target: *value,
+                                    }),
+                                )
+                            } else {
+                                (*key, *value)
+                            };
+                        let result = self.option_type(span, value);
+                        Some((
+                            StandardCall::MapGet {
+                                collection: receiver,
+                            },
+                            vec![key],
+                            result,
+                            false,
+                        ))
+                    }
+                    ("Map", "get_var", [key, value])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let key = self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Shared,
+                            target: *key,
+                        });
+                        let value = self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Mutable,
+                            target: *value,
+                        });
+                        let result = self.option_type(span, value);
+                        Some((
+                            StandardCall::MapGetVar {
+                                collection: receiver,
+                            },
+                            vec![key],
+                            result,
+                            true,
+                        ))
+                    }
                     ("Map", "insert", [key, value]) => Some((
                         StandardCall::MapInsert {
                             collection: receiver,
@@ -3379,14 +3503,24 @@ impl<'a> Checker<'a> {
                         self.option_type(span, *value),
                         true,
                     )),
-                    ("Map", "remove", [key, value]) => Some((
-                        StandardCall::MapRemove {
-                            collection: receiver,
-                        },
-                        vec![*key],
-                        self.option_type(span, *value),
-                        true,
-                    )),
+                    ("Map", "remove", [key, value]) => {
+                        let key = if self.resolved.semantic_revision.supports_owned_surface() {
+                            self.typed.types.intern(TypeKind::Reference {
+                                mutability: Mutability::Shared,
+                                target: *key,
+                            })
+                        } else {
+                            *key
+                        };
+                        Some((
+                            StandardCall::MapRemove {
+                                collection: receiver,
+                            },
+                            vec![key],
+                            self.option_type(span, *value),
+                            true,
+                        ))
+                    }
                     ("Map", "clear", [_, _]) => Some((
                         StandardCall::MapClear {
                             collection: receiver,
@@ -3411,14 +3545,24 @@ impl<'a> Checker<'a> {
                         bool_type,
                         false,
                     )),
-                    ("Set", "contains", [element]) => Some((
-                        StandardCall::SetContains {
-                            collection: receiver,
-                        },
-                        vec![*element],
-                        bool_type,
-                        false,
-                    )),
+                    ("Set", "contains", [element]) => {
+                        let element = if self.resolved.semantic_revision.supports_owned_surface() {
+                            self.typed.types.intern(TypeKind::Reference {
+                                mutability: Mutability::Shared,
+                                target: *element,
+                            })
+                        } else {
+                            *element
+                        };
+                        Some((
+                            StandardCall::SetContains {
+                                collection: receiver,
+                            },
+                            vec![element],
+                            bool_type,
+                            false,
+                        ))
+                    }
                     ("Set", "insert", [element]) => Some((
                         StandardCall::SetInsert {
                             collection: receiver,
@@ -3427,14 +3571,24 @@ impl<'a> Checker<'a> {
                         bool_type,
                         true,
                     )),
-                    ("Set", "remove", [element]) => Some((
-                        StandardCall::SetRemove {
-                            collection: receiver,
-                        },
-                        vec![*element],
-                        bool_type,
-                        true,
-                    )),
+                    ("Set", "remove", [element]) => {
+                        let element = if self.resolved.semantic_revision.supports_owned_surface() {
+                            self.typed.types.intern(TypeKind::Reference {
+                                mutability: Mutability::Shared,
+                                target: *element,
+                            })
+                        } else {
+                            *element
+                        };
+                        Some((
+                            StandardCall::SetRemove {
+                                collection: receiver,
+                            },
+                            vec![element],
+                            bool_type,
+                            true,
+                        ))
+                    }
                     ("Set", "clear", [_]) => Some((
                         StandardCall::SetClear {
                             collection: receiver,

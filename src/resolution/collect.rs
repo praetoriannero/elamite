@@ -86,6 +86,7 @@ impl<'a> Resolver<'a> {
             "Vec",
             "Map",
             "Set",
+            "Box",
             "Default",
             "PartialEq",
             "Eq",

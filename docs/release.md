@@ -41,16 +41,37 @@ cannot claim those cells from a frontend-only run.
 
 ## 0.11 migration progress
 
-Deterministic destruction now follows move and borrow checking on the owned
-revision path. Typed IR carries ordered custom and structural drop actions;
-control-flow IR uses conditional per-action flags for moves, partial moves,
-reinitialization, and replacement; and ordinary exits run defers before
-reverse-order automatic cleanup. `Drop.drop` is compiler-only, while the
-prelude `drop(value)` function provides explicit early destruction. Focused
-generated-C tests compile warning-clean C99 and verify the same exact-once trace
-at `-O0` and `-O2`. The temporary 0.11 boundary has advanced to owned core
-values and collections, so this change does not alter the shipped 0.10 value
-representation or its measured cost baseline.
+Owned core values now follow deterministic destruction on the 0.11 path.
+`String`, `Vec`, `Map`, and `Set` use unique backing with constant-size moves,
+explicit proportional clones, and recursive exact cleanup. Shared and
+exclusive slices are allocation-free views; `Box[T]` provides deliberate
+address-stable allocation; collection queries return borrows; and owned versus
+borrowed loops respectively move values or yield references. The generated-C
+run covers independent clones, mutation, early iteration exit, slice mutation,
+and recursive cleanup under strict C99 and AddressSanitizer. The temporary
+boundary has advanced to inline first-class closures. The compiling 0.10 path
+and its shallow representation remain available unchanged.
+
+### Owned-core baseline comparison
+
+The required `benchmarks/memory-cost-baseline.sh` comparison used parent commit
+`ca0c661` and this owned-core implementation on 2026-08-10 (Linux x86-64,
+rustc 1.89.0, GCC 15.2). All six compatibility workloads retained identical
+source hashes and deterministic counters:
+
+| Workload | Allocations | Allocated bytes | Scanned allocations | Scanned bytes | `memcpy` calls | `memcpy` bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `aggregate_closure` | 6 | 172 | 2 | 112 | 3 | 25 |
+| `cross_thread` | 1,013 | 32,512 | 1,005 | 32,472 | 8 | 32 |
+| `function_loop` | 2 | 82 | 0 | 0 | 1 | 17 |
+| `map_set_copy` | 17 | 1,544 | 2 | 56 | 12 | 720 |
+| `string_copy` | 2 | 257 | 0 | 0 | 3 | 256 |
+| `vector_copy` | 6 | 1,008 | 0 | 0 | 5 | 496 |
+
+Compile time and peak RSS varied between runs and remain nondeterministic host
+observations. The fixed benchmark corpus targets the compiling compatibility
+revision; owned-path costs are locked by generated C and semantic tests until
+the later tooling milestone exposes a normal 0.11 benchmark driver.
 
 ## Language surface changes
 

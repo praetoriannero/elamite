@@ -1,6 +1,7 @@
 //! Function and explicit-control-flow emission.
 
 use super::*;
+use crate::ir::control_flow::ValueModel;
 use crate::ir::{DropAction, DropActionKind, DropFlagId, DropProjection};
 use crate::resolution::LocalBindingId;
 
@@ -287,20 +288,27 @@ impl<'a> CEmitter<'a> {
                 if !guards.is_empty() {
                     let _ = writeln!(self.output, "        if ({}) {{", guards.join(" && "));
                 }
-                if let DropActionKind::Custom(instance) = &action.kind {
-                    let symbol = self.function_symbol(instance);
-                    let indent = if guards.is_empty() {
-                        "        "
-                    } else {
-                        "            "
-                    };
-                    let _ = writeln!(self.output, "{indent}{symbol}(&{expression});");
-                }
+                let indent = if guards.is_empty() {
+                    "        "
+                } else {
+                    "            "
+                };
+                self.emit_drop_kind(&expression, &action.kind, indent);
                 if !guards.is_empty() {
                     self.output.push_str("        }\n");
                 }
                 self.output.push_str("    }\n");
             }
+            Instruction::DropIteration {
+                collection,
+                consumed,
+                actions,
+                ..
+            } => self.emit_iteration_drop(
+                &temporary_name(*collection),
+                &temporary_name(*consumed),
+                actions,
+            ),
             Instruction::PrintValue {
                 value,
                 ty,
@@ -327,7 +335,95 @@ impl<'a> CEmitter<'a> {
         binding: LocalBindingId,
         action: &DropAction,
     ) -> (String, Vec<String>) {
-        let mut expression = self.place_expression(&ControlFlowPlace::Local(binding));
+        self.project_drop_action(
+            self.place_expression(&ControlFlowPlace::Local(binding)),
+            action,
+        )
+    }
+
+    fn emit_iteration_drop(&mut self, collection: &str, consumed: &str, actions: &[DropAction]) {
+        for action in actions {
+            match &action.kind {
+                DropActionKind::OwnedVec { elements } if action.projections.is_empty() => {
+                    let loop_id = self.take_drop_loop();
+                    let index = format!("el_iter_drop_index_{loop_id}");
+                    let _ = writeln!(
+                        self.output,
+                        "    for (uintptr_t {index} = {collection}.length; {index} > {consumed}; --{index}) {{"
+                    );
+                    let element = format!("{collection}.values[{index} - 1U]");
+                    for child in elements {
+                        self.emit_nested_drop_action(&element, child, "        ");
+                    }
+                    self.output.push_str("    }\n");
+                    let _ = writeln!(
+                        self.output,
+                        "    free({collection}.values); {collection}.values = NULL; {collection}.length = 0U; {collection}.capacity = 0U;"
+                    );
+                }
+                DropActionKind::OwnedMap { keys, values } if action.projections.is_empty() => {
+                    let loop_id = self.take_drop_loop();
+                    let index = format!("el_iter_drop_index_{loop_id}");
+                    let _ = writeln!(
+                        self.output,
+                        "    if ({collection} != NULL) {{\n        for (uintptr_t {index} = {collection}->length; {index} > {consumed}; --{index}) {{"
+                    );
+                    let value = format!("{collection}->values[{index} - 1U]");
+                    let key = format!("{collection}->keys[{index} - 1U]");
+                    for child in values {
+                        self.emit_nested_drop_action(&value, child, "            ");
+                    }
+                    for child in keys {
+                        self.emit_nested_drop_action(&key, child, "            ");
+                    }
+                    let _ = writeln!(
+                        self.output,
+                        "        }}\n        free({collection}->keys); free({collection}->values); free({collection});\n        {collection} = NULL;\n    }}"
+                    );
+                }
+                DropActionKind::OwnedSet { elements } if action.projections.is_empty() => {
+                    let loop_id = self.take_drop_loop();
+                    let index = format!("el_iter_drop_index_{loop_id}");
+                    let _ = writeln!(
+                        self.output,
+                        "    if ({collection} != NULL) {{\n        for (uintptr_t {index} = {collection}->length; {index} > {consumed}; --{index}) {{"
+                    );
+                    let element = format!("{collection}->values[{index} - 1U]");
+                    for child in elements {
+                        self.emit_nested_drop_action(&element, child, "            ");
+                    }
+                    let _ = writeln!(
+                        self.output,
+                        "        }}\n        free({collection}->values); free({collection});\n        {collection} = NULL;\n    }}"
+                    );
+                }
+                _ => {
+                    let first_index =
+                        action
+                            .projections
+                            .first()
+                            .and_then(|projection| match projection {
+                                DropProjection::ArrayIndex(index) => Some(*index),
+                                _ => None,
+                            });
+                    if let Some(index) = first_index {
+                        let _ =
+                            writeln!(self.output, "    if ((uintptr_t){index}U >= {consumed}) {{");
+                        self.emit_nested_drop_action(collection, action, "        ");
+                        self.output.push_str("    }\n");
+                    } else {
+                        self.emit_nested_drop_action(collection, action, "    ");
+                    }
+                }
+            }
+        }
+    }
+
+    fn project_drop_action(
+        &self,
+        mut expression: String,
+        action: &DropAction,
+    ) -> (String, Vec<String>) {
         let mut guards = Vec::new();
         for projection in &action.projections {
             match projection {
@@ -354,6 +450,118 @@ impl<'a> CEmitter<'a> {
             }
         }
         (expression, guards)
+    }
+
+    fn emit_nested_drop_action(&mut self, base: &str, action: &DropAction, indent: &str) {
+        let (expression, guards) = self.project_drop_action(base.to_string(), action);
+        if !guards.is_empty() {
+            let _ = writeln!(self.output, "{indent}if ({}) {{", guards.join(" && "));
+            let nested = format!("{indent}    ");
+            self.emit_drop_kind(&expression, &action.kind, &nested);
+            let _ = writeln!(self.output, "{indent}}}");
+        } else {
+            self.emit_drop_kind(&expression, &action.kind, indent);
+        }
+    }
+
+    fn emit_drop_kind(&mut self, expression: &str, kind: &DropActionKind, indent: &str) {
+        match kind {
+            DropActionKind::StructuralLeaf => {}
+            DropActionKind::Custom(instance) => {
+                let symbol = self.function_symbol(instance);
+                let _ = writeln!(self.output, "{indent}{symbol}(&{expression});");
+            }
+            DropActionKind::OwnedString => {
+                let _ = writeln!(self.output, "{indent}el_owned_string_drop(&{expression});");
+            }
+            DropActionKind::OwnedVec { elements } => {
+                let loop_id = self.take_drop_loop();
+                let index = format!("el_drop_index_{loop_id}");
+                let _ = writeln!(
+                    self.output,
+                    "{indent}for (uintptr_t {index} = {expression}.length; {index} != 0U; --{index}) {{"
+                );
+                let nested = format!("{indent}    ");
+                let element = format!("{expression}.values[{index} - 1U]");
+                for action in elements {
+                    self.emit_nested_drop_action(&element, action, &nested);
+                }
+                let _ = writeln!(self.output, "{indent}}}");
+                let _ = writeln!(self.output, "{indent}free({expression}.values);");
+                let _ = writeln!(
+                    self.output,
+                    "{indent}{expression}.values = NULL; {expression}.length = 0U; {expression}.capacity = 0U;"
+                );
+            }
+            DropActionKind::OwnedMap { keys, values } => {
+                let _ = writeln!(self.output, "{indent}if ({expression} != NULL) {{");
+                let body_indent = format!("{indent}    ");
+                let loop_id = self.take_drop_loop();
+                let index = format!("el_drop_index_{loop_id}");
+                let _ = writeln!(
+                    self.output,
+                    "{body_indent}for (uintptr_t {index} = {expression}->length; {index} != 0U; --{index}) {{"
+                );
+                let nested = format!("{body_indent}    ");
+                let key = format!("{expression}->keys[{index} - 1U]");
+                let value = format!("{expression}->values[{index} - 1U]");
+                for action in values {
+                    self.emit_nested_drop_action(&value, action, &nested);
+                }
+                for action in keys {
+                    self.emit_nested_drop_action(&key, action, &nested);
+                }
+                let _ = writeln!(self.output, "{body_indent}}}");
+                let _ = writeln!(
+                    self.output,
+                    "{body_indent}free({expression}->keys); free({expression}->values); free({expression});"
+                );
+                let _ = writeln!(self.output, "{indent}}}");
+                let _ = writeln!(self.output, "{indent}{expression} = NULL;");
+            }
+            DropActionKind::OwnedSet { elements } => {
+                let _ = writeln!(self.output, "{indent}if ({expression} != NULL) {{");
+                let body_indent = format!("{indent}    ");
+                let loop_id = self.take_drop_loop();
+                let index = format!("el_drop_index_{loop_id}");
+                let _ = writeln!(
+                    self.output,
+                    "{body_indent}for (uintptr_t {index} = {expression}->length; {index} != 0U; --{index}) {{"
+                );
+                let nested = format!("{body_indent}    ");
+                let element = format!("{expression}->values[{index} - 1U]");
+                for action in elements {
+                    self.emit_nested_drop_action(&element, action, &nested);
+                }
+                let _ = writeln!(self.output, "{body_indent}}}");
+                let _ = writeln!(
+                    self.output,
+                    "{body_indent}free({expression}->values); free({expression});"
+                );
+                let _ = writeln!(self.output, "{indent}}}");
+                let _ = writeln!(self.output, "{indent}{expression} = NULL;");
+            }
+            DropActionKind::OwnedBox { value } => {
+                let _ = writeln!(self.output, "{indent}if ({expression} != NULL) {{");
+                let nested = format!("{indent}    ");
+                let pointee = format!("(*{expression})");
+                for action in value {
+                    self.emit_nested_drop_action(&pointee, action, &nested);
+                }
+                let _ = writeln!(self.output, "{nested}free({expression});");
+                let _ = writeln!(self.output, "{indent}}}");
+                let _ = writeln!(self.output, "{indent}{expression} = NULL;");
+            }
+        }
+    }
+
+    fn take_drop_loop(&mut self) -> u32 {
+        let id = self.next_drop_loop;
+        self.next_drop_loop = self
+            .next_drop_loop
+            .checked_add(1)
+            .expect("too many generated drop loops");
+        id
     }
 
     pub(super) fn rvalue(
@@ -401,6 +609,24 @@ impl<'a> CEmitter<'a> {
             }
             Rvalue::Load(place) => self.place_expression(place),
             Rvalue::AddressOf(place) => format!("&{}", self.place_expression(place)),
+            Rvalue::SliceOf { place, owner_type } => {
+                let slice_type = self.c_type(destination_type, Some(span))?;
+                let place = self.place_expression(place);
+                match self.typed.types.kind(self.resolve_alias(*owner_type)) {
+                    TypeKind::Array { length, .. } => format!(
+                        "({slice_type}){{ .values = {place}.values, .length = (uintptr_t){length}U }}"
+                    ),
+                    TypeKind::Builtin { builtin, .. }
+                        if self.resolved.builtin_name(*builtin) == "Vec" =>
+                    {
+                        format!(
+                            "({slice_type}){{ .values = {place}.values, .length = {place}.length }}"
+                        )
+                    }
+                    TypeKind::Slice { .. } => place,
+                    _ => return None,
+                }
+            }
             Rvalue::DefaultValue(ty) => self.default_expression(*ty, span)?,
             Rvalue::NumericConversion {
                 outcome,
@@ -568,7 +794,14 @@ impl<'a> CEmitter<'a> {
                 let collection_name = temporary_name(*collection);
                 let index_name = temporary_name(*index);
                 match kind {
-                    IterationKind::Slice { .. } | IterationKind::Array { .. } => {
+                    IterationKind::Slice { .. } => {
+                        if self.program.value_model == ValueModel::Owned {
+                            format!("&{collection_name}.values[{index_name}]")
+                        } else {
+                            format!("{collection_name}.values[{index_name}]")
+                        }
+                    }
+                    IterationKind::Array { .. } => {
                         format!("{collection_name}.values[{index_name}]")
                     }
                     IterationKind::Vec { .. } => {

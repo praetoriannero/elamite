@@ -529,6 +529,58 @@ impl<'a> TypedLowerer<'a> {
         actions
     }
 
+    fn enqueue_clone_dependencies(
+        &mut self,
+        ty: TypeId,
+        span: Span,
+        visiting: &mut BTreeSet<TypeId>,
+    ) {
+        let ty = self.concrete_type(ty);
+        if !visiting.insert(ty) {
+            return;
+        }
+        let facts = crate::types::ownership_facts(self.resolved, self.typed, ty);
+        if facts.copy.is_present() {
+            visiting.remove(&ty);
+            return;
+        }
+        if let Ok(Some(selected)) =
+            crate::traits::select_trait_method(self.resolved, self.typed, ty, "clone", None)
+            && selected.trait_declaration == self.resolved.standard_declaration("Clone")
+        {
+            self.enqueue_reachable(
+                FunctionInstance {
+                    declaration: selected.declaration,
+                    arguments: selected.arguments,
+                    self_type: selected.self_type,
+                },
+                span,
+            );
+            visiting.remove(&ty);
+            return;
+        }
+        match self.typed.types.kind(ty).clone() {
+            TypeKind::Alias { target, .. } => {
+                self.enqueue_clone_dependencies(target, span, visiting);
+            }
+            TypeKind::Tuple(elements) => {
+                for element in elements {
+                    self.enqueue_clone_dependencies(element, span, visiting);
+                }
+            }
+            TypeKind::Array { element, .. } => {
+                self.enqueue_clone_dependencies(element, span, visiting);
+            }
+            TypeKind::Builtin { arguments, .. } => {
+                for argument in arguments {
+                    self.enqueue_clone_dependencies(argument, span, visiting);
+                }
+            }
+            _ => {}
+        }
+        visiting.remove(&ty);
+    }
+
     fn collect_drop_actions(
         &mut self,
         ty: TypeId,
@@ -666,8 +718,37 @@ impl<'a> TypedLowerer<'a> {
                     }
                 }
             }
+            TypeKind::Primitive(PrimitiveType::String) if custom.is_none() => {
+                actions.push(DropAction {
+                    ty,
+                    projections: path.clone(),
+                    kind: DropActionKind::OwnedString,
+                });
+            }
+            TypeKind::Builtin { builtin, arguments } if custom.is_none() => {
+                let kind = match (self.resolved.builtin_name(builtin), arguments.as_slice()) {
+                    ("Vec", [element]) => Some(DropActionKind::OwnedVec {
+                        elements: self.drop_actions(*element, span),
+                    }),
+                    ("Map", [key, value]) => Some(DropActionKind::OwnedMap {
+                        keys: self.drop_actions(*key, span),
+                        values: self.drop_actions(*value, span),
+                    }),
+                    ("Set", [element]) => Some(DropActionKind::OwnedSet {
+                        elements: self.drop_actions(*element, span),
+                    }),
+                    ("Box", [value]) => Some(DropActionKind::OwnedBox {
+                        value: self.drop_actions(*value, span),
+                    }),
+                    _ => None,
+                };
+                actions.push(DropAction {
+                    ty,
+                    projections: path.clone(),
+                    kind: kind.unwrap_or(DropActionKind::StructuralLeaf),
+                });
+            }
             TypeKind::Primitive(_)
-            | TypeKind::Builtin { .. }
             | TypeKind::Closure { .. }
             | TypeKind::GenericParameter(_)
             | TypeKind::SelfType(_)
@@ -690,6 +771,7 @@ impl<'a> TypedLowerer<'a> {
                     });
                 }
             }
+            TypeKind::Builtin { .. } => {}
             TypeKind::Alias { .. } => unreachable!("aliases return before drop action matching"),
         }
         visiting.remove(&ty);
@@ -1089,13 +1171,26 @@ impl<'a> TypedLowerer<'a> {
                     })?
                     .id;
                 let (kind, binding_type) = match self.expanded_kind(iterable.ty) {
-                    TypeKind::Slice { element, .. } => (
-                        IterationKind::Slice {
-                            collection: iterable.ty,
-                            element: *element,
-                        },
-                        *element,
-                    ),
+                    TypeKind::Slice {
+                        mutability,
+                        element,
+                    } => {
+                        let binding = if self.resolved.semantic_revision.supports_owned_surface() {
+                            self.typed.types.id_for_kind(&TypeKind::Reference {
+                                mutability: *mutability,
+                                target: *element,
+                            })?
+                        } else {
+                            *element
+                        };
+                        (
+                            IterationKind::Slice {
+                                collection: iterable.ty,
+                                element: *element,
+                            },
+                            binding,
+                        )
+                    }
                     TypeKind::Array { element, length } => (
                         IterationKind::Array {
                             length: *length,
@@ -1194,10 +1289,18 @@ impl<'a> TypedLowerer<'a> {
                     .find(|child| child.kind == SyntaxKind::Block)
                     .map(|block| self.lower_block(block, local_types))
                     .unwrap_or_default();
+                let iterator_drop = if self.resolved.semantic_revision.supports_owned_surface()
+                    && !matches!(kind, IterationKind::Slice { .. })
+                {
+                    self.drop_actions(iterable.ty, node.span)
+                } else {
+                    Vec::new()
+                };
                 TypedStatementKind::For {
                     binding,
                     iterable,
                     kind,
+                    iterator_drop,
                     body,
                 }
             }
@@ -2278,6 +2381,9 @@ impl<'a> TypedLowerer<'a> {
                             self.enqueue_trait_methods(display, value_type, &["fmt"], node.span);
                         }
                     }
+                    StandardCall::Clone { value } => {
+                        self.enqueue_clone_dependencies(value, node.span, &mut BTreeSet::new());
+                    }
                     _ => {}
                 }
                 let mut arguments = Vec::new();
@@ -2309,6 +2415,7 @@ impl<'a> TypedLowerer<'a> {
                             | StandardCall::VecNew { .. }
                             | StandardCall::MapNew { .. }
                             | StandardCall::SetNew { .. }
+                            | StandardCall::BoxNew { .. }
                     ),
                 };
                 if has_receiver {
