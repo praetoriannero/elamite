@@ -79,13 +79,12 @@ pub enum TypedExpressionKind {
         base: Box<TypedExpression>,
         index: Box<TypedExpression>,
     },
-    /// `&place` / `&var place`: the address of an addressable place. The
-    /// place's root local is promoted to managed storage by
-    /// [`crate::promotion`], so this is always the address of a managed cell
-    /// or of a subvalue inside one.
+    /// `&place` / `&var place`: the address of an addressable place. Owned
+    /// provenance keeps the place on stack; compatibility lowering may give
+    /// the root stable process lifetime.
     AddressOf(Box<TypedPlace>),
-    /// `&Composite { .. }`: a referenced composite literal, which allocates
-    /// its own managed cell because it has no source-level binding.
+    /// `&Composite { .. }`: a referenced composite literal with compiler-owned
+    /// stable temporary storage.
     AddressOfTemporary(Box<TypedExpression>),
     /// `*reference`: the value the reference names.
     Dereference(Box<TypedExpression>),
@@ -470,8 +469,8 @@ pub enum IterationKind {
         element: TypeId,
     },
     /// A source type implementing the ordinary `std.Iterator[Element]`
-    /// protocol. The hidden mutable state is managed by control-flow lowering
-    /// before `next` is called, so references yielded from it remain valid.
+    /// protocol. Control-flow lowering keeps the hidden mutable state in a
+    /// function-local cell for the duration proven by borrow checking.
     User {
         state: TypeId,
         element: TypeId,
@@ -569,14 +568,9 @@ pub struct TypedFunction {
     pub body: Vec<TypedStatement>,
     pub local_types: BTreeMap<LocalBindingId, TypeId>,
     pub drop_requirements: Vec<DropRequirement>,
-    /// Locals whose address is taken, and which therefore need managed storage
-    /// rather than a C stack slot (`docs/roadmap.md` Milestone 10). Conservative: every
-    /// address-taken local is promoted.
+    /// Compatibility locals whose address is taken and therefore need stable
+    /// process-lifetime storage. Always empty for the owned value model.
     pub promoted_locals: BTreeSet<LocalBindingId>,
-    /// Whether the body allocates a managed cell for a referenced composite
-    /// literal. Such a cell has no binding, so promotion alone does not imply
-    /// it.
-    pub allocates_managed: bool,
     pub closure: Option<TypedClosureBody>,
 }
 

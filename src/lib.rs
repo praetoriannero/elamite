@@ -14,7 +14,6 @@ pub mod ident;
 pub mod ir;
 pub mod lexer;
 pub mod manifest;
-pub mod memory;
 pub mod operations;
 pub mod package;
 pub mod parsed;

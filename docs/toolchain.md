@@ -1,8 +1,7 @@
 # Elamite toolchain
 
-> Current implementation baseline: Boehm and the related native prerequisites
-> remain required by 0.10 programs that engage managed storage. The accepted
-> 0.11 target removes them in **Promotion and tracing-GC removal**.
+> Current implementation baseline: generated programs are collector-free on
+> both semantic revisions. The temporary 0.11 boundary is race-safe concurrency.
 
 The temporary 0.11 frontend revision is selectable only through the compiler
 library and test harness. It deliberately stops after source-type lowering;
@@ -27,12 +26,12 @@ variable selects another compiler. The compiler must support:
 A 64-bit Linux installation commonly needs its distribution's multilib C
 development packages before `--target=x86` can link executables.
 
-Managed storage uses the Boehm-Demers-Weiser collector. The dependency is
-demand-driven: programs that require no managed storage do not include or link
-the collector. Programs that do require it need the Boehm headers and a
-linkable `gc` library; Debian- and Ubuntu-family distributions provide these
-through `libgc-dev`, with the corresponding 32-bit development libraries also
-needed for x86 builds.
+No garbage-collector headers or libraries are required. The 0.10 compatibility
+revision preserves its historical escaping-reference and shallow-backing
+behavior with a collector-free process-lifetime allocation registry, released
+at normal program exit. The 0.11 lowering keeps proven nonescaping references,
+iterator state, and variadic packs on the C stack and uses explicit owning APIs
+for heap storage.
 
 ## Commands
 
@@ -135,14 +134,14 @@ forms in `spec.md`.
   generic or variadic closure literals, unsafe closures, anonymous recursion,
   and closure-to-function-pointer conversion remain unsupported.
 - Synchronous C callback reentry is supported on the initializer thread and
-  an Elamite-created registered thread. Foreign-created-thread attachment and
-  asynchronous callbacks originating on such threads are unsupported.
+  an Elamite-created thread. Foreign-created-thread attachment and asynchronous
+  callbacks originating on such threads are unsupported.
 - C variadic functions and foreign ABIs other than `C` are unsupported.
 - Wildcard and grouped `use` declarations are unsupported.
 - The C backend does not yet lower 128-bit integer constants, arithmetic, or
   display, even though `i128` and `u128` remain reserved primitive types.
-- Boehm collection timing is unspecified and is never a deterministic cleanup
-  mechanism. Use explicit resource operations and `defer`.
+- Compatibility process-lifetime storage is released at normal process exit;
+  native resources still require explicit close operations and `defer`.
 - Foreign exceptions, `longjmp`, and Elamite traps must not unwind through the
   language boundary. Recoverable errors require explicit wrapper translation.
 

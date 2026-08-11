@@ -23,9 +23,6 @@ use crate::ir::{
     RuntimeFormattedPart, Rvalue, TemporaryId, Terminator, TypedEnum, UnaryOperator, ValueModel,
     VtableMethod,
 };
-use crate::memory::{
-    AllocationClass, ManagedMemoryOperation, ManagedMemoryStrategy, default_managed_memory_strategy,
-};
 use crate::operations::{
     NumericAlternative, NumericOperator, NumericOutcome, StandardCall, ValuePassingMode,
 };
@@ -56,10 +53,17 @@ impl Default for COptions {
 pub struct COutput {
     pub source: String,
     pub diagnostics: Vec<Diagnostic>,
-    /// Native libraries the generated unit requires, contributed by the
-    /// managed-memory strategy. Empty when the program needs no collector, so
-    /// the backend rather than the driver decides when the runtime is linked.
+    /// Native libraries required by emitted platform runtime helpers.
     pub native_libraries: Vec<String>,
+}
+
+/// Inventory classification for process-lifetime runtime allocations. The
+/// distinction documents whether generated storage can contain Elamite
+/// pointers; no allocation is traced or scanned by a collector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AllocationClass {
+    PointerBearing,
+    PointerFree,
 }
 
 /// Deterministically mangles an Elamite declaration. The package-instance
@@ -130,10 +134,7 @@ struct CEmitter<'a> {
     emitting_hash_helpers: BTreeSet<TypeId>,
     emitted_default_helpers: BTreeSet<TypeId>,
     emitting_default_helpers: BTreeSet<TypeId>,
-    strategy: &'static dyn ManagedMemoryStrategy,
-    /// Promoted locals of the function currently being emitted. A promoted
-    /// local lives in a managed cell, so every place naming it dereferences
-    /// that cell.
+    /// Compatibility-promoted locals of the function currently being emitted.
     promoted: BTreeSet<crate::resolution::LocalBindingId>,
     /// Parameters using the compiler-only read-only borrowing ABI in the
     /// function currently being emitted.
@@ -179,7 +180,6 @@ impl<'a> CEmitter<'a> {
             emitting_hash_helpers: BTreeSet::new(),
             emitted_default_helpers: BTreeSet::new(),
             emitting_default_helpers: BTreeSet::new(),
-            strategy: default_managed_memory_strategy(),
             promoted: BTreeSet::new(),
             borrowed_parameters: BTreeSet::new(),
             next_drop_loop: 0,
@@ -190,10 +190,7 @@ impl<'a> CEmitter<'a> {
 
     fn run(mut self) -> COutput {
         self.emit_prelude();
-        // The collector's feature macros must be visible before any foreign
-        // header can include `gc.h`; otherwise that header's include guard
-        // suppresses the thread-registration declarations needed below.
-        self.emit_managed_memory_prelude();
+        self.emit_process_allocation_runtime();
         self.emit_foreign_headers();
         self.emit_forward_structs();
         self.emit_object_types();
@@ -241,15 +238,7 @@ impl<'a> CEmitter<'a> {
             self.emit_function(function);
         }
         self.emit_entry();
-        let mut native_libraries = if self.program.requires_managed_memory {
-            self.strategy
-                .native_libraries()
-                .iter()
-                .map(|library| (*library).to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let mut native_libraries = Vec::new();
         if self.uses_native_threads() {
             native_libraries.push("pthread".to_string());
         }

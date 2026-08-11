@@ -9,6 +9,14 @@ fn drop_flag_name(flag: DropFlagId) -> String {
     format!("el_drop_{}", flag.index())
 }
 
+fn stable_storage_name(temporary: TemporaryId) -> String {
+    format!("el_stack_t{}", temporary.index())
+}
+
+fn variadic_storage_name(temporary: TemporaryId) -> String {
+    format!("el_variadic_t{}", temporary.index())
+}
+
 impl<'a> CEmitter<'a> {
     pub(super) fn emit_prototypes(&mut self) {
         for function in &self.program.functions {
@@ -57,6 +65,7 @@ impl<'a> CEmitter<'a> {
             c_comment(&function.name)
         );
         let _ = writeln!(self.output, "{return_type} {symbol}({parameters}) {{");
+        let reachable_blocks = reachable_blocks(function);
         let has_environment_parameter = function.closure.as_ref().is_some_and(|closure| {
             self.program.value_model != ValueModel::Owned
                 || !matches!(
@@ -91,10 +100,8 @@ impl<'a> CEmitter<'a> {
         for parameter in &function.parameters {
             let _ = writeln!(self.output, "    (void){};", local_name(parameter.binding));
         }
-        // A promoted local lives in a managed cell so a reference to it stays
-        // valid after the frame ends. The cell pointer itself is an ordinary
-        // stack variable, which Boehm's conservative stack scan treats as a
-        // root for as long as the frame is live.
+        // Compatibility references may escape their frame. Preserve that
+        // historical behavior with classified process-lifetime storage.
         let promoted = self.promoted.clone();
         for binding in &promoted {
             let Some(ty) = function.local_types.get(binding).copied() else {
@@ -104,19 +111,14 @@ impl<'a> CEmitter<'a> {
                 continue;
             };
             let cell = cell_name(*binding);
-            let class = if self.scanned_allocation(ty) {
-                AllocationClass::Scanned
+            let class = if self.pointer_bearing_allocation(ty) {
+                AllocationClass::PointerBearing
             } else {
                 AllocationClass::PointerFree
             };
             let _ = writeln!(self.output, "    {c_type} *{cell} = NULL;");
             let byte_count = format!("sizeof({c_type})");
-            self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                destination: &cell,
-                byte_count: &byte_count,
-                class,
-            });
-            let _ = writeln!(self.output, "    if ({cell} == NULL) el_out_of_memory();");
+            self.emit_process_allocate(&cell, &byte_count, class);
             let initial = if parameter_bindings.contains(binding) {
                 local_name(*binding)
             } else {
@@ -130,6 +132,46 @@ impl<'a> CEmitter<'a> {
                 }
             };
             let _ = writeln!(self.output, "    *{cell} = {initial};");
+        }
+        if self.program.value_model == ValueModel::Owned {
+            for block in &function.blocks {
+                if !reachable_blocks.contains(&block.id) {
+                    continue;
+                }
+                for instruction in &block.instructions {
+                    let Instruction::Assign {
+                        destination, value, ..
+                    } = instruction
+                    else {
+                        continue;
+                    };
+                    match value {
+                        Rvalue::AddressOfStableTemporary { value_type, .. } => {
+                            if let Some(c_type) = self.c_type(*value_type, Some(function.span)) {
+                                let _ = writeln!(
+                                    self.output,
+                                    "    {c_type} {};",
+                                    stable_storage_name(*destination)
+                                );
+                            }
+                        }
+                        Rvalue::VariadicSlice {
+                            elements,
+                            element_type,
+                        } if !elements.is_empty() => {
+                            if let Some(c_type) = self.c_type(*element_type, Some(function.span)) {
+                                let _ = writeln!(
+                                    self.output,
+                                    "    {c_type} {}[{}];",
+                                    variadic_storage_name(*destination),
+                                    elements.len()
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
         for (index, ty) in function.temporary_types.iter().enumerate() {
             if matches!(
@@ -159,7 +201,6 @@ impl<'a> CEmitter<'a> {
         // compilers reject under `-Werror=unused-label`. Lowering produces
         // unreachable blocks routinely — a `match` whose every arm returns
         // leaves its join block with no live predecessor.
-        let reachable_blocks = reachable_blocks(function);
         for block in &function.blocks {
             if !reachable_blocks.contains(&block.id) {
                 continue;
@@ -251,30 +292,6 @@ impl<'a> CEmitter<'a> {
                         self.output,
                         "    {destination_name} = {expression};\n    (void){destination_name};"
                     );
-                    if self.program.requires_managed_memory
-                        && let Rvalue::Call {
-                            instance,
-                            arguments,
-                            ..
-                        } = value
-                        && self.resolved.declarations[instance.declaration.index()].kind
-                            == crate::resolution::DeclarationKind::ForeignFunction
-                    {
-                        for argument in arguments {
-                            if matches!(
-                                self.typed.types.kind(
-                                    self.typed.types.resolve_inference(
-                                        function.temporary_types[argument.index()]
-                                    )
-                                ),
-                                TypeKind::RawPointer { .. }
-                            ) {
-                                self.emit_managed_operation(ManagedMemoryOperation::KeepAlive {
-                                    expression: &temporary_name(*argument),
-                                });
-                            }
-                        }
-                    }
                 }
             }
             Instruction::Store { place, value, span } => {
@@ -625,20 +642,16 @@ impl<'a> CEmitter<'a> {
                 } else {
                     let class = if captures.iter().any(|capture| {
                         let capture_type = function.temporary_types[capture.index()];
-                        self.scanned_allocation(capture_type)
+                        self.pointer_bearing_allocation(capture_type)
                     }) {
-                        AllocationClass::Scanned
+                        AllocationClass::PointerBearing
                     } else {
                         AllocationClass::PointerFree
                     };
-                    self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                        destination: &destination_name,
-                        byte_count: &format!("sizeof(*{destination_name})"),
+                    self.emit_process_allocate(
+                        &destination_name,
+                        &format!("sizeof(*{destination_name})"),
                         class,
-                    });
-                    let _ = writeln!(
-                        self.output,
-                        "    if ({destination_name} == NULL) el_out_of_memory();"
                     );
                     for (index, capture) in captures.iter().enumerate() {
                         let _ = writeln!(
@@ -973,27 +986,21 @@ impl<'a> CEmitter<'a> {
                 call.push(')');
                 self.call_rvalue(call, destination_type)
             }
-            Rvalue::AllocateManaged { value, value_type } => {
-                // A referenced composite literal needs its own managed cell.
-                // Allocation is a statement, so it is emitted before the
-                // assignment that consumes the resulting address.
+            Rvalue::AddressOfStableTemporary { value, value_type } => {
                 let cell_type = self.c_type(*value_type, Some(span))?;
                 let destination_name = temporary_name(destination);
-                let class = if self.scanned_allocation(*value_type) {
-                    AllocationClass::Scanned
+                if self.program.value_model == ValueModel::Owned {
+                    let storage = stable_storage_name(destination);
+                    let _ = writeln!(self.output, "    {storage} = {};", temporary_name(*value));
+                    return Some(format!("&{storage}"));
+                }
+                let class = if self.pointer_bearing_allocation(*value_type) {
+                    AllocationClass::PointerBearing
                 } else {
                     AllocationClass::PointerFree
                 };
                 let byte_count = format!("sizeof({cell_type})");
-                self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-                    destination: &destination_name,
-                    byte_count: &byte_count,
-                    class,
-                });
-                let _ = writeln!(
-                    self.output,
-                    "    if ({destination_name} == NULL) el_out_of_memory();"
-                );
+                self.emit_process_allocate(&destination_name, &byte_count, class);
                 let _ = writeln!(
                     self.output,
                     "    *{destination_name} = {};",
@@ -1110,6 +1117,24 @@ impl<'a> CEmitter<'a> {
                 elements,
                 element_type: _,
             } => {
+                if self.program.value_model == ValueModel::Owned {
+                    let slice_type = self.c_type(destination_type, Some(span))?;
+                    if elements.is_empty() {
+                        return Some(format!("({slice_type}){{ NULL, (uintptr_t)0U }}"));
+                    }
+                    let storage = variadic_storage_name(destination);
+                    for (index, element) in elements.iter().enumerate() {
+                        let _ = writeln!(
+                            self.output,
+                            "    {storage}[{index}] = {};",
+                            temporary_name(*element)
+                        );
+                    }
+                    return Some(format!(
+                        "({slice_type}){{ {storage}, (uintptr_t){}U }}",
+                        elements.len()
+                    ));
+                }
                 let values = elements
                     .iter()
                     .map(|element| temporary_name(*element))

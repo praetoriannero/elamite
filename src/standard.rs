@@ -102,7 +102,7 @@ pub const NATIVE_DECLARATIONS: &[Intrinsic] = &[
     },
     Intrinsic {
         path: "std.text._slice_bytes",
-        reason: "checked UTF-8 view construction retaining managed backing",
+        reason: "checked UTF-8 view construction retaining owned backing",
     },
     Intrinsic {
         path: "std.text._string_view",
@@ -110,7 +110,7 @@ pub const NATIVE_DECLARATIONS: &[Intrinsic] = &[
     },
     Intrinsic {
         path: "std.text._from_chars",
-        reason: "managed owned-text allocation and UTF-8 scalar encoding",
+        reason: "owned-text allocation and UTF-8 scalar encoding",
     },
 ];
 
@@ -360,7 +360,7 @@ pub const INTRINSICS: &[Intrinsic] = &[
     },
     Intrinsic {
         path: "Identity",
-        reason: "managed-address identity representation",
+        reason: "stable-address identity representation",
     },
     Intrinsic {
         path: "print",
@@ -372,11 +372,11 @@ pub const INTRINSICS: &[Intrinsic] = &[
     },
     Intrinsic {
         path: "std.ffi.ForeignRoot",
-        reason: "garbage-collector root registration",
+        reason: "foreign retained-pointer compatibility representation",
     },
     Intrinsic {
         path: "std.ffi.ForeignRootMut",
-        reason: "mutable garbage-collector root registration",
+        reason: "mutable foreign retained-pointer compatibility representation",
     },
     Intrinsic {
         path: "std.ffi.CVoid",

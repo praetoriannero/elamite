@@ -1,9 +1,8 @@
 # Standard library
 
 > Current implementation baseline: the APIs below describe the shipped 0.10
-> shallow/GC library. Owned signatures and representations migrate through
-> **Owned core values and collections**, **Promotion and tracing-GC removal**,
-> and **Race-safe concurrency** before 0.11 conformance.
+> shallow compatibility library on a collector-free runtime. Owned signatures
+> continue migrating through **Race-safe concurrency** before 0.11 conformance.
 
 The compiler ships the `std` package from `stdlib/src/`. These files pass
 through ordinary parsing, resolution, checking, and monomorphization. The
@@ -11,7 +10,7 @@ intrinsic inventory in `src/standard.rs` is limited to representations and
 native hooks that safe Elamite source cannot express.
 
 Public APIs favor owned results at operating-system boundaries. An operation
-does not return a reference into a managed buffer, C library allocation, or
+does not return a reference into runtime backing, C library allocation, or
 directory stream. Ordinary copying remains shallow throughout these modules.
 
 The root source now declares the accepted 0.11 `Clone` and `Drop` traits, and

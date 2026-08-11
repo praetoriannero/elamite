@@ -1,13 +1,11 @@
-//! Storage-promotion analysis (`docs/roadmap.md` Milestone 10).
+//! Compatibility storage-promotion analysis (`docs/roadmap.md` Milestone 10).
 //!
-//! A safe reference names storage, so any local whose address is taken must
-//! live in managed storage rather than on the C stack: the reference may
-//! outlive the frame, and the collector must be able to reach the target.
+//! The 0.10 compatibility model permits a reference to escape its source
+//! frame, so address-taken locals retain stable process-lifetime storage.
+//! Owned programs prove borrow provenance and keep the same locals on stack.
 //!
-//! This pass answers one question per function — which locals have their
-//! address taken — and is deliberately conservative, per `docs/roadmap.md` Milestone
-//! 10: every such local is promoted, with precise escape analysis left to
-//! **Post-conformance optimization**. Because references point into their container's storage
+//! This pass now answers one compatibility-only question per function — which
+//! locals have their address taken. Because references point into their container's storage
 //! rather than at a boxed subvalue (`docs/spec.md` §3.2), taking a reference through
 //! a path promotes the *root* local of that path and nothing else; no
 //! whole-program field analysis is involved.
@@ -29,44 +27,22 @@ pub fn address_taken_locals(
     body: &SyntaxNode,
     semantic_revision: SemanticRevision,
 ) -> BTreeSet<LocalBindingId> {
+    if semantic_revision.supports_owned_surface() {
+        return BTreeSet::new();
+    }
     let mut promoted = BTreeSet::new();
-    collect(resolved, body, semantic_revision, &mut promoted);
+    collect(resolved, body, &mut promoted);
     promoted
 }
 
-/// Whether `body` forms a referenced composite literal, which allocates a
-/// managed cell of its own even when no local is promoted.
-#[must_use]
-pub fn allocates_managed_temporary(body: &SyntaxNode) -> bool {
-    if body.kind == SyntaxKind::UnaryExpression
-        && let Some(operand) = reference_operand(body)
-        && operand.kind == SyntaxKind::RecordExpression
-    {
-        return true;
-    }
-    body.children.iter().any(|child| match child {
-        SyntaxElement::Node(child) => allocates_managed_temporary(child),
-        SyntaxElement::Token(_) => false,
-    })
-}
-
-fn collect(
-    resolved: &ResolvedProgram,
-    node: &SyntaxNode,
-    semantic_revision: SemanticRevision,
-    promoted: &mut BTreeSet<LocalBindingId>,
-) {
+fn collect(resolved: &ResolvedProgram, node: &SyntaxNode, promoted: &mut BTreeSet<LocalBindingId>) {
     if node.kind == SyntaxKind::UnaryExpression
         && let Some(operand) = reference_operand(node)
         && let Some(binding) = root_local(resolved, operand)
     {
         promoted.insert(binding);
     }
-    // An owned closure that captures a borrow is itself bounded by that
-    // borrow's inferred provenance, so the source remains in its enclosing
-    // stack frame. Compatibility closures can escape through managed identity
-    // and retain their conservative promotion behavior.
-    if node.kind == SyntaxKind::ClosureCapture && !semantic_revision.supports_owned_surface() {
+    if node.kind == SyntaxKind::ClosureCapture {
         let mut tokens = node.children.iter().filter_map(|child| match child {
             SyntaxElement::Token(token) => Some(token),
             SyntaxElement::Node(_) => None,
@@ -84,7 +60,7 @@ fn collect(
     }
     for child in &node.children {
         if let SyntaxElement::Node(child) = child {
-            collect(resolved, child, semantic_revision, promoted);
+            collect(resolved, child, promoted);
         }
     }
 }
@@ -109,7 +85,7 @@ fn reference_operand(node: &SyntaxNode) -> Option<&SyntaxNode> {
 ///
 /// Field and index selection stay within the same storage, so they descend to
 /// the same root. Everything else yields `None`, either because no local is
-/// involved or because the target is already managed:
+/// involved or because the target already has independently stable storage:
 ///
 /// - a referenced composite literal (`&Point { .. }`) allocates its own cell;
 /// - a dereference (`&*handle`) names the referent's storage, not a local;

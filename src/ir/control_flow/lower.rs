@@ -14,40 +14,6 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
         .iter()
         .map(|function| FunctionLowerer::new(types, function).run())
         .collect::<Vec<_>>();
-    let runtime_expression_allocates = functions.iter().any(|function| {
-        function.blocks.iter().any(|block| {
-            block.instructions.iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    Instruction::Assign {
-                        value: Rvalue::FormattedString(_),
-                        ..
-                    } | Instruction::Assign {
-                        value: Rvalue::VariadicSlice { .. },
-                        ..
-                    } | Instruction::Assign {
-                        value: Rvalue::AllocateManaged { .. },
-                        ..
-                    } | Instruction::Assign {
-                        value: Rvalue::Binary {
-                            operator: BinaryOperator::Concatenate,
-                            ..
-                        },
-                        ..
-                    }
-                )
-            })
-        })
-    });
-    let materializes_managed_values = functions.iter().any(|function| {
-        !function.promoted_locals.is_empty()
-            || function.allocates_managed
-            || std::iter::once(&function.return_type)
-                .chain(function.local_types.values())
-                .chain(function.parameters.iter().map(|parameter| &parameter.ty))
-                .chain(function.temporary_types.iter())
-                .any(|ty| type_contains_runtime_managed(&types.types, *ty, value_model, 32))
-    });
     ControlFlowProgram {
         semantic_revision: program.semantic_revision,
         value_model,
@@ -55,44 +21,6 @@ pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> Con
         structs: program.structs.clone(),
         enums: program.enums.clone(),
         vtables: program.vtables.clone(),
-        // Managed storage is needed when promotion requests it or any
-        // materialized value can allocate managed backing storage. Include
-        // temporaries and return values: `println(String.from(text))`, for
-        // example, need not introduce a source local.
-        requires_managed_memory: value_model == ValueModel::ShallowManaged
-            && (runtime_expression_allocates || materializes_managed_values),
-    }
-}
-
-fn type_contains_runtime_managed(
-    types: &TypeContext,
-    ty: TypeId,
-    value_model: ValueModel,
-    depth: u32,
-) -> bool {
-    if depth == 0 {
-        return true;
-    }
-    match types.kind(types.resolve_inference(ty)) {
-        TypeKind::Primitive(PrimitiveType::String) | TypeKind::Builtin { .. } => true,
-        TypeKind::Closure { captures, .. } => {
-            value_model == ValueModel::ShallowManaged
-                || captures.iter().any(|capture| {
-                    type_contains_runtime_managed(types, *capture, value_model, depth - 1)
-                })
-        }
-        TypeKind::Tuple(elements) => elements
-            .iter()
-            .any(|element| type_contains_runtime_managed(types, *element, value_model, depth - 1)),
-        TypeKind::Array { element, .. } | TypeKind::Slice { element, .. } => {
-            type_contains_runtime_managed(types, *element, value_model, depth - 1)
-        }
-        TypeKind::Nominal { arguments, .. } | TypeKind::Alias { arguments, .. } => {
-            arguments.iter().any(|argument| {
-                type_contains_runtime_managed(types, *argument, value_model, depth - 1)
-            })
-        }
-        _ => false,
     }
 }
 
@@ -220,7 +148,6 @@ impl<'a> FunctionLowerer<'a> {
             drop_requirements: self.function.drop_requirements.clone(),
             drop_flags: self.drop_flags,
             promoted_locals: self.function.promoted_locals.clone(),
-            allocates_managed: self.function.allocates_managed,
             closure: self.function.closure.clone(),
             temporary_types: self.temporary_types,
             entry: BlockId(0),
@@ -727,13 +654,12 @@ impl<'a> FunctionLowerer<'a> {
         else {
             unreachable!("only user iteration reaches user-loop lowering")
         };
-        // `next` receives `&var Self`, and Elamite references may escape. Give
-        // the hidden iterator state managed lifetime just as an address-taken
-        // source local would receive, rather than borrowing a C temporary.
+        // `next` receives `&var Self`. Use one stable temporary cell; owned
+        // borrow provenance prevents a yielded reference from escaping it.
         let receiver = self.temp(*receiver_type);
         self.emit(Instruction::Assign {
             destination: receiver,
-            value: Rvalue::AllocateManaged {
+            value: Rvalue::AddressOfStableTemporary {
                 value: state,
                 value_type: *state_type,
             },
@@ -1127,7 +1053,7 @@ impl<'a> FunctionLowerer<'a> {
             TypedExpressionKind::AddressOfTemporary(value) => {
                 let value_type = value.ty;
                 let value = self.lower_expression(value);
-                Rvalue::AllocateManaged { value, value_type }
+                Rvalue::AddressOfStableTemporary { value, value_type }
             }
             TypedExpressionKind::Dereference(operand) => {
                 let base = self.lower_expression(operand);

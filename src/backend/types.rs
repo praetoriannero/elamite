@@ -536,10 +536,9 @@ impl<'a> CEmitter<'a> {
         self.component_default(ty, Some(span))
     }
 
-    /// Whether an allocation of `ty` may contain managed pointers and must
-    /// therefore be scanned by the collector. Conservative: only types proven
-    /// free of references, pointers, and owned buffers are left unscanned.
-    pub(super) fn scanned_allocation(&self, ty: TypeId) -> bool {
+    /// Whether process-lifetime storage for `ty` may contain Elamite pointers.
+    /// This is an inventory classification only; no runtime tracing occurs.
+    pub(super) fn pointer_bearing_allocation(&self, ty: TypeId) -> bool {
         fn walk(types: &TypeContext, ty: TypeId, depth: u32) -> bool {
             if depth == 0 {
                 return true;

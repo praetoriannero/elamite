@@ -945,9 +945,8 @@ impl<'a> TypedLowerer<'a> {
                 local_types.insert(binding, parameter_type);
             }
         }
-        // Promotion is computed from the function's syntax rather than from
-        // lowered statements, so it is available even for bodies whose
-        // reference lowering is not yet represented.
+        // Compatibility promotion is computed from syntax. Owned reference
+        // lifetimes are instead proved by the borrow checker and stay on stack.
         let body_block = crate::syntax::direct_child(&data.syntax, SyntaxKind::Block);
         let promoted_locals = body_block
             .map(|block| {
@@ -958,8 +957,6 @@ impl<'a> TypedLowerer<'a> {
                 )
             })
             .unwrap_or_default();
-        let allocates_managed =
-            body_block.is_some_and(crate::promotion::allocates_managed_temporary);
         let body = crate::syntax::direct_child(&data.syntax, SyntaxKind::Block)
             .map(|block| self.lower_block(block, &mut local_types))
             .unwrap_or_default();
@@ -1015,7 +1012,6 @@ impl<'a> TypedLowerer<'a> {
             local_types,
             drop_requirements,
             promoted_locals,
-            allocates_managed,
             closure,
         })
     }
@@ -1809,8 +1805,8 @@ impl<'a> TypedLowerer<'a> {
                 let operand_node = child_nodes(node).into_iter().next_back()?;
                 let token = first_token(node)?;
                 if matches!(token.kind, TokenKind::Amp) {
-                    // A referenced composite literal has no place to address;
-                    // it allocates a managed cell of its own (SPEC 3.2).
+                    // A referenced composite literal has no source binding;
+                    // lowering gives it stable temporary storage.
                     if operand_node.kind == SyntaxKind::RecordExpression {
                         let value = self.lower_expression(operand_node)?;
                         return self.finish_expression(

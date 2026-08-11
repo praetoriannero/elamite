@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use elamite::backend::{COptions, Target, emit_c, mangle_function_instance};
+use elamite::backend::{Target, mangle_function_instance};
 use elamite::diagnostics::{Category, Diagnostic};
 use elamite::driver::{BuildOptions, DumpStage, Optimization, build, compile, dump, run};
 use elamite::ir::{TypedExpressionKind, TypedStatementKind};
@@ -238,8 +238,8 @@ fn adversarial_regressions_build_and_run_with_specified_behavior() {
 }
 
 #[test]
-fn variadic_slices_use_managed_backing_storage_even_for_scalar_elements() {
-    let tree = TestTree::new("managed-variadic-slice");
+fn compatibility_variadic_slices_use_process_lifetime_backing() {
+    let tree = TestTree::new("compatibility-variadic-slice");
     tree.executable(
         r#"
 fn collect(values: ...i32) -> [i32]:
@@ -254,9 +254,8 @@ fn main():
     let graph = tree.graph(&mut sources);
     let compilation = compile(&graph, &mut sources, Target::X86_64)
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
-    assert!(compilation.control_flow_ir.requires_managed_memory);
     assert!(compilation.generated_c.contains("static el_slice_t"));
-    assert!(compilation.generated_c.contains("el_variadic_t"));
+    assert!(compilation.generated_c.contains("el_process_alloc"));
     assert!(compilation.generated_c.contains("result.values"));
 }
 
@@ -1213,17 +1212,13 @@ fn main() -> ():
 }
 
 #[test]
-fn foreign_root_copies_share_one_idempotent_registration() {
+fn foreign_root_copies_share_one_idempotent_compatibility_state() {
     let source = r#"
-@importc("GC_gcollect", "gc.h")
-fn collect()
-
 fn main() -> ():
     let value = 42
     let registration = std.ffi.ForeignRoot[i32].retain(&value)
     let copy = registration
     unsafe:
-        collect()
         println(*copy.pointer())
     registration.close()
     copy.close()
@@ -1273,7 +1268,7 @@ fn main() -> ():
 }
 
 #[test]
-fn a_foreign_callback_can_use_registered_managed_context() {
+fn a_foreign_callback_can_use_retained_compatibility_context() {
     let tree = TestTree::new("callback-context");
     fs::create_dir_all(tree.root.join("native/include")).expect("create include directory");
     fs::write(
@@ -1342,7 +1337,8 @@ fn main() -> ():
             .expect("generated C is retained"),
     )
     .expect("read generated C");
-    assert!(generated.contains("GC_reachable_here("));
+    assert!(generated.contains("el_foreign_root_retain"));
+    assert!(!generated.contains("GC_"));
     let result = run(&artifact).expect("run callback fixture");
     assert_eq!(result.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&result.stdout), "42\n");
@@ -2003,7 +1999,7 @@ fn main() -> ():
     );
     assert!(!compilation.generated_c.contains("el_string_backing"));
     assert!(compilation.generated_c.contains("char *el_string_make_mut"));
-    assert!(compilation.generated_c.contains("el_runtime_alloc_atomic"));
+    assert!(compilation.generated_c.contains("el_process_alloc_atomic"));
 
     let identity = compilation
         .high_level_ir
@@ -2066,11 +2062,6 @@ fn string_mutation_aliases_ordinary_descriptors_without_detaching() {
     assert!(!generated_source.contains("__sync_val_compare_and_swap"));
     assert!(!generated_source.contains("el_string_backing"));
 
-    if !libgc_available() {
-        eprintln!("skipping String alias execution: no gc.h or link archive available");
-        return;
-    }
-
     let harness = tree.root.join("out/string_alias_harness.c");
     fs::write(
         &harness,
@@ -2081,8 +2072,6 @@ fn string_mutation_aliases_ordinary_descriptors_without_detaching() {
          \x20\x20\x20\x20const char *shared;\n\
          \x20\x20\x20\x20char *first;\n\
          \x20\x20\x20\x20char *second;\n\
-         \x20\x20\x20\x20GC_set_all_interior_pointers(1);\n\
-         \x20\x20\x20\x20GC_INIT();\n\
          \x20\x20\x20\x20original = el_string_from((el_str){\"alpha\", (size_t)5U});\n\
          \x20\x20\x20\x20snapshot = original;\n\
          \x20\x20\x20\x20shared = original.bytes;\n\
@@ -2109,7 +2098,6 @@ fn string_mutation_aliases_ordinary_descriptors_without_detaching() {
         .arg(&harness)
         .arg("-o")
         .arg(&executable)
-        .arg("-lgc")
         .output()
         .expect("compile String alias harness");
     assert!(
@@ -3401,126 +3389,48 @@ fn reports_a_toolchain_that_omits_its_promised_artifact() {
     assert!(output.join("backend_test.c").is_file());
 }
 
-/// Whether a C toolchain can compile and link against the Boehm collector.
-/// Only the runtime shared object is commonly installed; the headers and the
-/// link archive come from a separate development package, so this probes the
-/// real toolchain instead of guessing from a file path.
-fn libgc_available() -> bool {
-    let tree = TestTree::new("libgc-probe");
-    let probe = tree.root.join("probe.c");
-    let binary = tree.root.join("probe");
-    if fs::write(
-        &probe,
-        "#include <gc.h>\nint main(void) { GC_INIT(); return 0; }\n",
-    )
-    .is_err()
-    {
-        return false;
-    }
-    Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .arg("-std=c99")
-        .arg(&probe)
-        .arg("-o")
-        .arg(&binary)
-        .arg("-lgc")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
 #[test]
-fn programs_without_managed_storage_carry_no_collector_dependency() {
-    let tree = TestTree::new("no-managed-memory");
+fn every_generated_program_carries_no_collector_dependency() {
+    let tree = TestTree::new("no-collector");
     tree.executable("fn main() -> ():\n    println(\"ok\")\n");
     let mut sources = SourceManager::new();
     let graph = tree.graph(&mut sources);
     let compilation = compile(&graph, &mut sources, Target::X86_64)
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
 
-    assert!(!compilation.control_flow_ir.requires_managed_memory);
     assert!(
         compilation.native_libraries.is_empty(),
-        "a program with no managed storage must not request runtime libraries"
+        "a program without platform helpers needs no runtime libraries"
     );
     assert!(!compilation.generated_c.contains("gc.h"));
-    assert!(!compilation.generated_c.contains("GC_INIT"));
+    assert!(!compilation.generated_c.contains("GC_"));
+    assert!(!compilation.generated_c.contains("GC_MALLOC"));
+    assert!(
+        compilation
+            .generated_c
+            .contains("el_process_allocation_cleanup")
+    );
 }
 
 #[test]
-fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
-    let tree = TestTree::new("managed-memory");
-    tree.executable("fn main() -> ():\n    println(\"ok\")\n");
+fn compatibility_storage_uses_classified_process_lifetime_allocation() {
+    let tree = TestTree::new("process-lifetime-storage");
+    tree.executable(
+        "fn escaped() -> &i32:\n    let value = 7\n    return &value\n\nfn main() -> ():\n    println(*escaped())\n",
+    );
     let mut sources = SourceManager::new();
     let graph = tree.graph(&mut sources);
     let compilation = compile(&graph, &mut sources, Target::X86_64)
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
 
-    // Promotion analysis sets this flag from Phase 1 onward; forcing it here
-    // exercises the prelude, entry-shim initialization, and link inputs before
-    // any lowering produces managed storage.
-    let mut program = compilation.control_flow_ir;
-    program.requires_managed_memory = true;
-    let emitted = emit_c(
-        &program,
-        &compilation.resolved,
-        &compilation.typed,
-        &sources,
-        &COptions {
-            target: Target::X86_64,
-            entry: compilation.entry,
-            test_entries: None,
-        },
-    );
-
-    assert!(
-        emitted.diagnostics.is_empty(),
-        "{}",
-        render(&sources, &emitted.diagnostics)
-    );
-    assert_eq!(emitted.native_libraries, vec!["gc".to_string()]);
-    assert!(emitted.source.contains("#include <gc.h>"));
-    let initialization = emitted
-        .source
-        .find("GC_INIT();")
-        .expect("the entry shim initializes the collector");
-    let entry = emitted
-        .source
-        .find("int main(void) {")
-        .expect("an executable emits an entry shim");
-    assert!(
-        initialization > entry,
-        "the collector must be initialized inside the entry shim"
-    );
-    let scanned_allocator = emitted
-        .source
-        .split("void *el_runtime_alloc(size_t byte_count) {")
-        .nth(1)
-        .and_then(|source| source.split("void *el_runtime_alloc_atomic").next())
-        .expect("generated scanned allocation wrapper");
-    let first_attempt = scanned_allocator
-        .find("GC_MALLOC(byte_count)")
-        .expect("first allocation attempt");
-    let collection = scanned_allocator
-        .find("GC_gcollect()")
-        .expect("full collection after failure");
-    let retry = scanned_allocator[first_attempt + 1..]
-        .find("GC_MALLOC(byte_count)")
-        .map(|offset| offset + first_attempt + 1)
-        .expect("allocation retry");
-    let terminal = scanned_allocator
-        .find("el_out_of_memory()")
-        .expect("terminal OOM path");
-    assert!(
-        first_attempt < collection && collection < retry && retry < terminal,
-        "OOM handling must collect, retry, and only then terminate"
-    );
-
-    if !libgc_available() {
-        eprintln!("skipping libgc link verification: no gc.h or link archive available");
-        return;
-    }
+    let emitted = compilation.generated_c;
+    assert!(compilation.native_libraries.is_empty());
+    assert!(emitted.contains("el_process_alloc_atomic(sizeof("));
+    assert!(emitted.contains("atexit(el_process_allocation_cleanup)"));
+    assert!(!emitted.contains("GC_"));
     let c_path = tree.root.join("managed.c");
     let binary = tree.root.join("managed");
-    fs::write(&c_path, &emitted.source).expect("write generated C");
+    fs::write(&c_path, &emitted).expect("write generated C");
     let output = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
         .arg("-std=c99")
         .arg("-Wall")
@@ -3530,22 +3440,16 @@ fn managed_storage_engages_the_collector_prelude_and_link_inputs() {
         .arg(&c_path)
         .arg("-o")
         .arg(&binary)
-        .args(
-            emitted
-                .native_libraries
-                .iter()
-                .map(|library| format!("-l{library}")),
-        )
         .output()
         .expect("invoke the C compiler");
     assert!(
         output.status.success(),
-        "collector-enabled C must compile and link:\n{}",
+        "collector-free C must compile and link:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let executed = Command::new(&binary).output().expect("run linked program");
     assert!(executed.status.success());
-    assert_eq!(String::from_utf8_lossy(&executed.stdout), "ok\n");
+    assert_eq!(String::from_utf8_lossy(&executed.stdout), "7\n");
 }
 
 #[test]
@@ -3701,8 +3605,8 @@ fn main() -> ():
 
 #[test]
 fn a_reference_to_a_local_survives_its_frame() {
-    // SPEC 3.2: returning a reference to a local is valid because the local is
-    // promoted to managed storage when its address escapes.
+    // The 0.10 compatibility revision preserves escaping-reference behavior
+    // through explicit process-lifetime storage, without a collector.
     let (stdout, stderr, status) = build_and_run(
         r#"
 fn answer() -> &i32:
@@ -3731,14 +3635,8 @@ fn main() -> ():
 
 #[test]
 fn an_interior_reference_keeps_its_whole_container_reachable() {
-    // LEDGER 19: a reference into an aggregate points inside a managed
-    // allocation, so the collector must trace interior pointers and keep the
-    // whole container alive. Allocation churn between the reference and its
-    // use forces real collection cycles in between.
-    if !libgc_available() {
-        eprintln!("skipping: libgc unavailable");
-        return;
-    }
+    // Compatibility stable storage retains the full aggregate, so an interior
+    // reference remains valid without pointer tracing.
     let (stdout, stderr, status) = build_and_run(
         r#"
 struct Address:
@@ -3767,7 +3665,7 @@ fn main() -> ():
     );
     assert_eq!(
         stdout, "4242,1999000\n",
-        "the container must survive collection while only its interior is referenced"
+        "the compatibility container must survive while only its interior is referenced"
     );
     assert_eq!(stderr, "");
     assert_eq!(status, 0);
@@ -3775,14 +3673,8 @@ fn main() -> ():
 
 #[test]
 fn sustained_allocation_churn_is_reclaimed() {
-    // docs/roadmap.md Milestone 10: collection is best-effort and its *timing* is not a
-    // conformance requirement, so this asserts only that a program allocating
-    // far more than it retains completes normally rather than exhausting
-    // memory.
-    if !libgc_available() {
-        eprintln!("skipping: libgc unavailable");
-        return;
-    }
+    // Compatibility allocations have bounded test-process lifetime and are
+    // released by the process allocation registry at normal exit.
     let (stdout, stderr, status) = build_and_run(
         r#"
 struct Node:
@@ -4148,8 +4040,8 @@ fn main() -> ():
 #[test]
 fn option_of_a_safe_reference_keeps_a_recursive_graph_reachable() {
     // `Option[&T]` is the nullable safe reference (`docs/spec.md` 4.2). Its payload
-    // retains identity rather than copying, and the referenced links stay
-    // reachable through the collector's interior-pointer scan.
+    // retains identity rather than copying, and compatibility stable storage
+    // keeps the referenced links valid.
     let source = r#"
 struct Chain:
     value: i32
@@ -4184,8 +4076,8 @@ fn main() -> ():
     let compilation = compile(&graph, &mut sources, Target::X86_64)
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
     assert!(
-        compilation.generated_c.contains("GC_MALLOC"),
-        "a referenced link must live in managed storage:\n{}",
+        compilation.generated_c.contains("el_process_alloc"),
+        "a compatibility referenced link must live in stable storage:\n{}",
         compilation.generated_c
     );
 
@@ -4896,13 +4788,13 @@ fn main() -> ():
                 |block| block.instructions.iter().any(|instruction| matches!(
                     instruction,
                     elamite::ir::Instruction::Assign {
-                        value: elamite::ir::Rvalue::AllocateManaged { .. },
+                        value: elamite::ir::Rvalue::AddressOfStableTemporary { .. },
                         ..
                     }
                 ))
             )
         );
-        assert!(compilation.control_flow_ir.requires_managed_memory);
+        assert!(compilation.generated_c.contains("el_process_alloc"));
     }
 }
 
@@ -5818,9 +5710,9 @@ fn main() -> ():
     let graph = tree.graph(&mut sources);
     let compilation = compile(&graph, &mut sources, Target::X86_64)
         .unwrap_or_else(|diagnostics| panic!("{}", render(&sources, &diagnostics)));
-    // The address-taken local is promoted to managed storage, and the
-    // conversion site checks the pointer before forming the reference.
-    assert!(compilation.generated_c.contains("GC_MALLOC"));
+    // The compatibility address-taken local receives stable process-lifetime
+    // storage, and the conversion checks the pointer before forming the ref.
+    assert!(compilation.generated_c.contains("el_process_alloc"));
     assert!(
         compilation.generated_c.contains("el_check_ptr_t"),
         "{}",

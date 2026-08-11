@@ -436,7 +436,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_explicit_shared_and_graph_ownership() {
+fn owned_packages_stop_after_promotion_and_tracing_gc_removal() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -444,7 +444,7 @@ fn owned_packages_stop_after_explicit_shared_and_graph_ownership() {
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
     let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
-        Ok(_) => panic!("promotion and tracing-GC removal is not enabled yet"),
+        Ok(_) => panic!("race-safe concurrency is not enabled yet"),
         Err(diagnostics) => diagnostics,
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
@@ -453,11 +453,7 @@ fn owned_packages_stop_after_explicit_shared_and_graph_ownership() {
         Category::SemanticRevision,
         "{diagnostics:#?}"
     );
-    assert!(
-        diagnostics[0]
-            .message
-            .contains("promotion and tracing-GC removal")
-    );
+    assert!(diagnostics[0].message.contains("race-safe concurrency"));
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
@@ -1234,7 +1230,7 @@ fn borrow_interfaces_serialize_return_sources_in_package_metadata() {
 }
 
 #[test]
-fn owned_reference_formation_rejects_temporary_storage_and_mutable_shared_reborrows() {
+fn owned_reference_formation_accepts_composite_storage_and_rejects_mutable_shared_reborrows() {
     let package = TestPackage::new(
         "owned_borrow_formation",
         r#"struct Value:
@@ -1257,7 +1253,7 @@ fn invalid(input: &i32) -> ():
             .iter()
             .filter(|diagnostic| diagnostic.category == Category::Place)
             .count(),
-        2,
+        1,
         "{diagnostics:#?}"
     );
 }
@@ -1627,7 +1623,6 @@ fn owned_core_values_clone_move_mutate_and_drop_independently() {
             "-fsanitize=address",
         ])
         .arg(&c_path)
-        .arg("-lgc")
         .arg("-o")
         .arg(&executable)
         .output()
@@ -1806,6 +1801,90 @@ fn main() -> ():
 }
 
 #[test]
+fn owned_reference_temporaries_and_variadic_packs_use_stack_storage() {
+    let package = TestPackage::new(
+        "owned_stack_storage",
+        r#"
+struct Point:
+    value: i32
+
+fn first(values: ...i32) -> i32:
+    return values[0]
+
+pub fn inspect() -> i32:
+    let point = &Point { value: 41 }
+    return point.value + first(1, 2)
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(resolution.diagnostics.is_empty());
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty());
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty());
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    infer_provenance_signatures(&resolved, &mut types.program);
+    let typed_ir = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(typed_ir.diagnostics.is_empty());
+    assert!(check_moves(&resolved, &mut types.program, &typed_ir.program).is_empty());
+    assert!(check_borrows(&resolved, &mut types.program, &typed_ir.program).is_empty());
+    assert!(
+        typed_ir
+            .program
+            .functions
+            .iter()
+            .all(|function| function.promoted_locals.is_empty())
+    );
+    let control = lower_control_flow(&typed_ir.program, &types.program);
+    assert!(control.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    elamite::ir::Instruction::Assign {
+                        value: elamite::ir::Rvalue::AddressOfStableTemporary { .. },
+                        ..
+                    }
+                )
+            })
+        })
+    }));
+    assert!(control.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    elamite::ir::Instruction::Assign {
+                        value: elamite::ir::Rvalue::VariadicSlice { .. },
+                        ..
+                    }
+                )
+            })
+        })
+    }));
+    let output = emit_c(
+        &control,
+        &resolved,
+        &types.program,
+        &sources,
+        &COptions {
+            target: Target::X86_64,
+            entry: None,
+            test_entries: None,
+        },
+    );
+    assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+    assert!(output.source.contains("el_stack_t"));
+    assert!(output.source.contains("el_variadic_t"));
+    assert!(!output.source.contains("GC_"));
+    assert!(output.native_libraries.is_empty());
+}
+
+#[test]
 fn owned_closure_construction_is_allocation_free_and_capture_moves_are_rejected() {
     let package = TestPackage::executable(
         "owned_allocation_free_closure",
@@ -1849,10 +1928,7 @@ fn owned_closure_construction_is_allocation_free_and_capture_moves_are_rejected(
         "simple closure must pass move checking"
     );
     let control_flow = lower_control_flow(&typed_ir.program, &types.program);
-    assert!(
-        !control_flow.requires_managed_memory,
-        "an inline closure over an integer must not request managed storage"
-    );
+    assert_eq!(control_flow.value_model, elamite::ir::ValueModel::Owned);
 
     let diagnostics = owned_move_diagnostics(
         "owned_move_from_closure_capture",

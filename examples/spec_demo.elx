@@ -455,7 +455,7 @@ pub fn main() -> Result[(), io.IoError]:
     println(f"propagated value: {propagated}")
     return Result.Ok(())
 
-// Boehm GC provides non-moving managed memory; it never invokes user cleanup.
+// Compatibility escaping storage has process lifetime; native cleanup remains explicit.
 
 test standard_testing_region:
     std.testing.assert(increment(41) == 42)

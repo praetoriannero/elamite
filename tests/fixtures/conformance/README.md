@@ -38,7 +38,7 @@ files) when present, so x86 and x86-64 must demonstrate their distinct
 `isize`/`usize` widths instead of merely accepting a target flag.
 
 `14_concurrency` is the deterministic concurrency contract fixture. It covers
-registered-thread C callback reentry, collector-visible worker roots, shallow
+Elamite-thread C callback reentry, worker-held runtime values, shallow
 publication aliases, repeated joins, ordinary `Result` and `defer` behavior,
 channel state distinctions and closure, mutex copies, and the complete atomic
 surface. `15_concurrency_stress` is its repeated four-producer/four-consumer

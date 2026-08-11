@@ -1,10 +1,10 @@
 # Elamite implementation cost model
 
-> Version: 17
+> Version: 18
 >
 > Applies to: the 0.10.0-draft compatibility path and implemented
-> 0.11.0-draft phases through explicit shared and graph ownership, on Linux x86 and
-> x86-64
+> 0.11.0-draft phases through promotion and tracing-GC removal, on Linux x86
+> and x86-64
 >
 > Status: non-normative implementation documentation
 
@@ -29,9 +29,9 @@ or automatically protect backing reached through external aliases.
 
 ## Implemented 0.11 owned-core costs
 
-The ordinary driver still stops the 0.11 path before promotion and tracing-GC
-removal, but the checked-to-C conformance path now implements the complete
-owned-core, inline-closure, and explicit shared/graph layers. On that path:
+The ordinary driver stops the 0.11 path before race-safe concurrency, while the
+checked-to-C conformance path implements the owned-core, inline-closure,
+explicit shared/graph, and collector-removal layers. On that path:
 
 - `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
   a constant-size descriptor transfer; it allocates and copies no backing.
@@ -71,17 +71,14 @@ owned-core, inline-closure, and explicit shared/graph layers. On that path:
   allocates nothing and cannot move a capture out.
 - A closure capture using `&` or `&var` keeps its source in the enclosing stack
   frame and adds no promotion allocation. Borrow provenance prevents the
-  closure from escaping that storage. Taking an ordinary standalone reference
-  to a closure for erased dispatch can still use the broader conservative
-  promotion path scheduled for removal later.
+  closure from escaping that storage. Ordinary references use the same stack
+  storage and borrow-proven lifetime; no owned reference formation promotes.
 - A capture-free closure explicitly converted to its exact safe function
   reference is one function pointer and carries no environment. Capturing
   closures never convert to code pointers. Borrowed erasure adds only the
   ordinary two-word trait-object view; owning erasure allocates solely through
   its explicit `Box`.
-- Owned-path lowering no longer requests or links the tracing collector.
-  Compatibility programs retain their existing collector costs until the
-  migration seam is removed.
+- Neither semantic revision requests or links a tracing collector.
 
 ## Implemented 0.11 shared and graph costs
 
@@ -112,17 +109,34 @@ owned-core, inline-closure, and explicit shared/graph layers. On that path:
   types on both supported architectures; none of these compiler-private
   layouts is a C interoperability guarantee.
 
-These costs coexist temporarily with ordinary address-taken promotion,
-compatibility concurrency, and variadic-pack machinery owned by later
-migration milestones. They do not claim that the 0.11 path is yet available
-through the compiling driver.
+These costs coexist temporarily with compatibility concurrency. They do not
+claim that the 0.11 path is yet available through the compiling driver.
+
+## Collector-removal and reference-storage costs
+
+- Owned address-taken locals remain ordinary C locals. Referenced composite
+  literals and user-iterator receiver state receive one function-local C cell;
+  formation and use allocate nothing. Borrow checking rejects any escape past
+  that cell's lifetime.
+- A nonempty owned variadic pack uses one caller-frame C array initialized in
+  source order; the slice passed to the callee is a two-word view. Empty packs
+  use a null pointer and zero length. Neither form allocates.
+- The compiling 0.10 compatibility revision still permits references and
+  shallow backing to outlive lexical frames. Those allocations enter a
+  thread-safe process-lifetime registry and are released together at normal
+  exit. This is explicit bounded-lifetime retention, not reachability tracing;
+  there is no root scan, collection retry, or cycle discovery.
+- Formatting buffers and raw `str` results whose APIs expose no individual
+  owner use the same process-lifetime domain. Owned `String` and collection
+  backing instead has exact per-value destruction, while `Box`, `Shared`, and
+  `Store` use their documented explicit cleanup.
 
 ## Reading the tables
 
 - **Ordinary copy** means the implemented shallow 0.10 value operation.
 - **Physical work** describes this compiler revision, not a guarantee.
-- **Allocation** counts requested Elamite runtime allocations, before
-  collector metadata and rounding.
+- **Allocation** counts requested Elamite runtime allocations, before native
+  allocator and process-registry bookkeeping, metadata, and rounding.
 - **Retention** explains why storage can remain live after the source-level
   operation finishes.
 - **Implementation freedom** is work a future compiler may safely avoid.
@@ -141,19 +155,19 @@ inline-closure sections above.
 | Unit, booleans, characters, integers, floats | Independent scalar value | Inline C scalar; constant-size assignment | None | May live only in registers or be eliminated |
 | `str` | Immutable UTF-8 view | Two-word byte pointer/length descriptor; copying preserves immutable backing identity | None for the copy | Literal or existing backing determines lifetime; descriptor copies may be eliminated |
 | `String` | Shallow mutable backing identity | Two-word byte-pointer/length descriptor; every value copy aliases writable backing directly | Construction allocates `b + 1` pointer-free bytes; copying allocates nothing | Ordinary, published, and mutex copies all preserve the same backing identity |
-| Tuples, fixed arrays, structs | Immediate inline slots copy; nested backing identities remain shared | One C aggregate assignment, proportional only to inline representation size | None merely for copying | C may lower a large inline assignment to moves or `memcpy`; reachable managed contents are not traversed |
+| Tuples, fixed arrays, structs | Immediate inline slots copy; nested backing identities remain shared | One C aggregate assignment, proportional only to inline representation size | None merely for copying | C may lower a large inline assignment to moves or `memcpy`; nested backing is not traversed |
 | Enums and `Option`/`Result` | Discriminant and active inline payload copy shallowly | One explicit-tag C99 aggregate assignment | None merely for copying | Inactive payload storage affects layout but no reachable backing is traversed |
 | `Vec[T]` | Ordinary copies share backing while retaining descriptor-local length and capacity | Inline pointer/length/capacity descriptor; ordinary copy assigns three target words | None for a copy | Element writes alias within both ranges; growth updates one descriptor and may diverge from its copies |
-| `Map[K, V]` | Ordinary copies preserve complete mutable table identity | One managed-header pointer; lookup remains linear | None for a copy | Structural mutation is visible through every ordinary copy; hashing remains an implementation choice |
-| `Set[T]` | Ordinary copies preserve complete mutable table identity | One managed-header pointer; membership remains linear | None for a copy | Structural mutation is visible through every ordinary copy; hashing remains an implementation choice |
-| Safe references and raw pointers | Explicit alias identity | One pointer; copy preserves the same address; raw arithmetic uses element-scaled C pointer operations and ordering uses constant-size null guards plus a non-null byte-pointer comparison | None | Safe references may cause pointee promotion separately; raw pointers never root storage, and arithmetic or ordering does not extend provenance or lifetime |
+| `Map[K, V]` | Ordinary copies preserve complete mutable table identity | One compatibility-header pointer; lookup remains linear | None for a copy | Structural mutation is visible through every ordinary copy; hashing remains an implementation choice |
+| `Set[T]` | Ordinary copies preserve complete mutable table identity | One compatibility-header pointer; membership remains linear | None for a copy | Structural mutation is visible through every ordinary copy; hashing remains an implementation choice |
+| Safe references and raw pointers | Explicit alias identity | One pointer; copy preserves the same address; raw arithmetic uses element-scaled C pointer operations and ordering uses constant-size null guards plus a non-null byte-pointer comparison | None | Compatibility escaping references retain process-lifetime storage; owned references stay stack-bounded; raw pointers never retain storage |
 | Function references/pointers | Callable identity | One C function pointer | None | May be propagated in registers |
-| Closures | Construction shallow-copies captures once; callable copies preserve environment identity | One managed environment pointer; construction allocates one environment, ordinary copying copies only the pointer | One allocation at construction; none for a copy | Spawn copies the environment pointer directly; captureless environments may be optimized away |
+| Closures | Construction shallow-copies captures once; callable copies preserve environment identity | One compatibility environment pointer; construction allocates one environment, ordinary copying copies only the pointer | One allocation at construction; none for a copy | Spawn copies the environment pointer directly; captureless environments may be optimized away |
 | `&Trait` | Explicit fat reference alias | Data pointer plus vtable pointer; copying preserves identity | None for coercion/copy once the referent exists | Coercing an address-taken local can trigger promotion |
 | `Identity[T]`, `ForeignRoot`, thread/channel/mutex/atomic handles | Shared identity | One managed/raw handle pointer; copying is constant-size and preserves synchronized or registered state | Constructors allocate state; handle copies do not | Ordinary shallow copying treats these like every other identity-bearing descriptor |
-| Slices, including variadic parameter packs | Immutable view | Pointer plus length; a variadic call currently materializes managed backing for its trailing arguments | One backing allocation for a nonempty variadic pack | A proven nonescaping pack may eventually use caller storage |
+| Slices, including variadic parameter packs | Immutable view | Pointer plus length; compatibility variadics use process-lifetime backing | One compatibility backing allocation for a nonempty variadic pack; owned packs allocate nothing | Owned packs use caller-frame arrays proven not to escape |
 | `Duration`, `Instant`, `SystemTime`, `Generator` | Independent numeric state; clock domains remain nominally distinct | One inline `u64`; copying and clock reads are constant-size | None | Clock reads do not create synchronization edges; generator state advances only through its mutable receiver |
-| Filesystem paths and metadata | Ordinary shallow structs | A path contains one shared-backing `String` descriptor; metadata and status records are inline aggregates | Path construction allocates owned text; source-hosted lexical transformations may allocate a split vector and one or more concatenation results; metadata copying allocates nothing | Path copies share their string backing; operations never expose a reference into managed storage |
+| Filesystem paths and metadata | Ordinary shallow structs | A path contains one shared-backing `String` descriptor; metadata and status records are inline aggregates | Path construction allocates owned text; source-hosted lexical transformations may allocate a split vector and one or more concatenation results; metadata copying allocates nothing | Path copies share their string backing; operations never expose a reference into runtime backing |
 | File and directory handles | Shared native-resource identity with idempotent cleanup | One pointer to managed handle state containing the native handle and closed flag | One state allocation on successful open | Copies preserve one close state; unreachable open handles can retain native resources, so deterministic code uses `defer` |
 
 `Map` and `Set` operations are currently `O(n)` lookup operations. Their names
@@ -170,23 +184,23 @@ operations use the replacement costs above.
 | --- | --- | --- | --- |
 | Binding and assignment | Destination receives an ordinary shallow value | One immediate scalar, pointer, descriptor, or C aggregate assignment | No allocation merely for the copy; broader last-use analysis may still remove inline movement |
 | Value argument | Callee receives a shallow value and may observe shared backing through descriptors | Owned ABI passes the immediate representation; eligible internal direct calls may still use a hidden read-only pointer to avoid large inline C movement | Uncertain and ABI-visible calls retain the owned ABI but no longer recursively materialize backing |
-| Return value | Caller receives an ordinary shallow value | One immediate return representation; the existing reuse pass still records proven source handoffs | C may add ABI-level aggregate movement; no managed backing is traversed |
+| Return value | Caller receives an ordinary shallow value | One immediate return representation; the existing reuse pass still records proven source handoffs | C may add ABI-level aggregate movement; no backing is traversed |
 | Pattern binding | Bound payload is a shallow value; `_` binds nothing | Active payload and named inline representations assign directly | Tests and discriminants allocate nothing; nested descriptors preserve identity |
 | Plain closure capture | Capture evaluates once left-to-right and shallow-copies into a new environment | One environment allocation plus immediate capture assignments | Copying the resulting closure pointer allocates nothing and preserves environment identity |
-| Direct collection iteration | Iterable evaluates once into shallow hidden state and each yielded value is shallow | One immediate iterable copy and one length snapshot before the loop, then one shallow yielded assignment per visited item; no managed allocation merely for the loop | A hidden `Vec` descriptor fixes its own length and backing pointer; map/set structural mutation and vector length mutation during the active loop are UB rather than checked operations |
-| User-defined `Iterator` iteration | Iterator evaluates once and shallow-copies into mutable hidden state; each `Some` payload shallow-copies into the binding | One managed cell for the hidden state, one direct `next` call per attempted step, one `Option` result representation, and one shallow payload assignment per visited item | Managed state permits a yielded safe reference to outlive the loop; a fully exhausted `n`-item iterator makes `n + 1` calls, while `break` makes no final call; proven nonescaping state may eventually remain on the stack |
+| Direct collection iteration | Iterable evaluates once into shallow hidden state and each yielded value is shallow | One immediate iterable copy and one length snapshot before the loop, then one shallow yielded assignment per visited item; no allocation merely for the loop | A hidden `Vec` descriptor fixes its own length and backing pointer; map/set structural mutation and vector length mutation during the active loop are UB rather than checked operations |
+| User-defined `Iterator` iteration | Iterator evaluates once into mutable hidden state; each `Some` payload follows the revision's value model | Compatibility uses one process-lifetime cell; owned lowering uses one function-local cell; one direct `next` call per attempted step | Owned provenance prevents yielded references from escaping; a fully exhausted `n`-item iterator makes `n + 1` calls |
 | Thread spawn | Callable evaluates once and its environment shallow-copies into startup state | One immediate callable assignment plus thread/startup-state allocation; no capture backing is traversed | Startup state and captured roots remain live through registered thread state until completion |
 | Channel send | Argument evaluates once and shallow-copies into a queue/rendezvous message | One immediate assignment plus one message-node allocation while synchronized | Queue nodes and shared backing stay reachable through the channel until consumed, closed, or collected |
 | Thread join | Every join shallow-copies one cached result | Native join occurs once; each call returns the immediate cached `R` representation | Repeated results may share mutable backing; thread state remains rooted through handles/registry until unregistered |
-| `Mutex.new/read/replace/update` | Stored and returned values are shallow; the handle shares synchronized identity | One state allocation at `new`; immediate representation assignments while locked; no managed allocation merely for a stored or returned copy | Locking orders callers using the handle, but external aliases to nested backing remain aliases and require the programmer's synchronization protocol |
+| `Mutex.new/read/replace/update` | Stored and returned values are shallow; the handle shares synchronized identity | One state allocation at `new`; immediate representation assignments while locked; no allocation merely for a stored or returned copy | Locking orders callers using the handle, but external aliases to nested backing remain aliases and require the programmer's synchronization protocol |
 | Atomic operation | Atomic handle identity is shared | A native mutex protects the scalar cell in the C99 backend; operations allocate nothing after construction | May use target-provided atomic hooks later while retaining sequential consistency |
 | `String`/`str` concatenation | Produces new text | Allocates result length and copies both byte ranges | Temporary/dead-input reuse or ropes are permitted if text behavior is unchanged |
 | `Vec ++ Vec` | Produces a distinct concatenated vector whose element values are shallow | Inline result descriptor plus one exact backing allocation and immediate element assignments from both inputs | Fresh-input reuse is permitted when alias behavior is preserved |
-| Vector growth | Existing value remains the same logical vector with added capacity | Geometric capacity growth, new backing allocation, and shallow relocation of existing element representations; argument copying occurred earlier | Abandoned backing is GC-reclaimable, not immediately freed |
+| Vector growth | Existing value remains the same logical vector with added capacity | Geometric capacity growth, new backing allocation, and shallow relocation of existing element representations; argument copying occurred earlier | Compatibility abandoned backing remains until normal process exit; owned backing is freed immediately |
 | Map/set growth | Existing collection retains entries | Geometric parallel-array growth and shallow relocation, after linear lookup | Old arrays remain until collection; representation may be replaced wholesale |
 | `clear` | Collection becomes empty | Sets length to zero; does not shrink or release backing | Capacity and references in abandoned slots may remain conservatively retained until later overwrite/collection |
 | Formatting and f-strings | Produces formatted text | Geometrically grown formatter buffer plus byte appends; displaying nested values walks them; impossible-size growth traps as OOM before arithmetic overflow | Buffer reuse and size precomputation are permitted |
-| Safe reference formation | Reference preserves place identity and lifetime | Address-taken local is conservatively promoted to one managed cell for the function invocation | Current promotion answers only “address taken”; precise escape analysis may keep nonescaping cells on stack |
+| Safe reference formation | Reference preserves place identity and lifetime | Owned: address of natural stack storage, no allocation. Compatibility: address-taken roots use one process-lifetime cell | Owned escapes are rejected by provenance; compatibility retains historical escaping behavior without tracing |
 | Unsafe raw-pointer arithmetic, subtraction, indexing, and relational ordering | Offsets are element-scaled; indexing performs no bounds check; null orders below every non-null pointer; and non-null operations remain subject to provenance/liveness/extent obligations | Constant-size pointer/integer operations; each executed index reuses the raw null/alignment check before access; ordering uses equality guards before its C relational comparison; no managed allocation | The compiler may fold redundant arithmetic, checks, or comparison branches when validity is proven, but raw pointers remain non-rooting and undefined behavior is not made observable |
 | `defer` | Executes registered code at lexical exits | Registrations are static control-flow edges, not closure allocations; deferred calls have their ordinary argument/copy costs when executed | Compiler may simplify edges while preserving reverse registration order |
 | Stable ordering sort | Mutates vector elements in ascending order while retaining equal-input order | Stable insertion sort over shared vector backing; `O(n²)` comparisons/moves, one shallow element temporary, and no allocation | The deliberately small baseline may be replaced by another stable in-place algorithm |
@@ -249,9 +263,10 @@ source-level move: Elamite code can continue using every source binding.
 
 ### Shallow mutable `String` backing
 
-Every nonempty `String` descriptor points directly into a pointer-free managed
-allocation containing writable UTF-8 bytes and a trailing NUL used only by
-runtime helpers. An ordinary copy assigns the two-word descriptor, so mutable
+Every nonempty compatibility `String` descriptor points directly into a
+pointer-free process-lifetime allocation containing writable UTF-8 bytes and a
+trailing NUL used only by runtime helpers. An ordinary copy assigns the
+two-word descriptor, so mutable
 byte access through either descriptor observes the same backing without a
 flag, reference count, allocation, or detach check. The default empty value
 uses a null descriptor; its first mutable-byte access installs a terminator-only
@@ -264,8 +279,8 @@ mutable-byte hook, which now returns existing non-null backing directly.
 Thread and channel publication copies this descriptor directly, so no byte
 allocation or content copy occurs at spawn, send, receive, or join. Mutex
 operations copy it directly as well, so `new`, `read`, `replace`, and
-`update` add no proportional byte-copy path. Boehm GC remains solely
-responsible for reclamation.
+`update` add no proportional byte-copy path. The compatibility registry
+releases this backing at normal process exit.
 `String` remains outside the C ABI-safe type set, so foreign code receives text
 only through explicit raw-pointer/length wrappers and their documented rooting
 requirements.
@@ -297,33 +312,31 @@ storage lifetime boundaries. Runtime `new`, `read`, `replace`, and `update`
 lower the concrete value representation directly while holding the lock; no
 recursive copy-helper family is emitted.
 
-## Allocation, garbage collection, and retained memory
+## Allocation and retained memory
 
-Elamite uses a non-moving Boehm collector whenever lowered code requires
-managed storage. Programs that need no managed storage do not link it. The
-collector traces stacks conservatively, permits interior safe references, and
-reclaims unreachable cycles, but collection timing is unspecified.
+Generated programs contain no tracing collector. Owned storage is either
+stack-bounded or allocated by an explicit owning type with exact drop behavior.
+The compatibility revision and non-owning runtime results use a thread-safe
+registry of process-lifetime allocations, all released at normal exit.
 
-Important consequences of the current implementation are:
+Important consequences are:
 
-- allocation can occur implicitly during closure construction, variadic calls,
-  user-defined iteration state promotion, collection construction/growth,
-  formatting, publication, synchronization, and safe-reference promotion; an
-  ordinary shallow copy alone does not allocate;
-- allocation failure performs one full collection and retries before the
-  process-fatal OOM path;
-- `String`, raw `str` concatenation, and formatter byte buffers use the
-  pointer-free allocator because their backing contains no managed pointers;
-- clearing or growing a collection does not immediately return backing memory;
-- conservative stack scanning can retain an otherwise unreachable allocation
-  when an integer-like stack word resembles its address;
-- raw pointers do not register roots, while safe references and open foreign
-  roots do;
-- collector metadata, size-class rounding, native thread stacks, C library
-  buffers, and allocator fragmentation are not included in requested-byte
-  counts; and
-- peak RSS is therefore an upper-bound observation, not the sum of requested
-  Elamite allocations and not a deterministic semantic property.
+- owned reference formation, user iteration, closure construction, and
+  variadic packing allocate nothing;
+- compatibility closure construction, variadic packing, collection growth,
+  formatting, synchronization state, and escaping-reference storage can still
+  allocate implicitly to preserve the compiling 0.10 behavior;
+- allocation failure immediately follows the process-fatal OOM path; there is
+  no collection attempt or retry;
+- raw pointers retain no storage, and `ForeignRoot` is now only a compatibility
+  retained-pointer state with no root-registration hook;
+- compatibility backing is not reclaimed individually before normal exit, so
+  peak retention can exceed the former reachability-based implementation;
+- process-registry nodes, native allocator metadata, native thread stacks, C
+  library buffers, and fragmentation are not included in requested-byte counts;
+  and
+- peak RSS remains an upper-bound host observation, not a deterministic
+  semantic property.
 
 ## Synchronization costs
 
@@ -355,7 +368,7 @@ pointer-bearing descriptors use 32 bits; on x86-64 they use 64 bits. Thus a
 two-word string, slice, or trait-object descriptor ordinarily occupies 8 bytes
 on x86 and 16 bytes on x86-64 before C ABI alignment, while vector descriptors
 and set headers contain three target words and map headers contain four. Closure environments,
-aggregate padding, native mutexes, thread state, and collector metadata also
+aggregate padding, native mutexes, thread state, and allocator metadata also
 follow the selected C ABI. A nonempty `String` backing contains only its bytes
 and trailing runtime NUL.
 
@@ -428,7 +441,7 @@ native-thread runtime. They mean:
   for owned text, formatting, and backing relocation.
 
 The counters deliberately exclude `memmove`, scalar and recursive C
-assignments, parameter/return ABI traffic, collector internals, foreign
+assignments, parameter/return ABI traffic, native allocator internals, foreign
 allocations, and C library work. They are stable measurement fields, not a
 claim that `memcpy_bytes` equals all physical memory traffic. Instrumentation
 changes runtime cost and output and must not be enabled for semantic

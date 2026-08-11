@@ -6,7 +6,8 @@ borrowing, deterministic destruction, inline closure objects, explicit shared
 or graph ownership, and race-safe native concurrency without a tracing garbage
 collector. Raw data pointers retain direct C-like traversal behind `unsafe`.
 
-The current compiler still implements the 0.10 shallow-copy, Boehm-GC baseline.
+The current compiler still implements the 0.10 shallow-copy language behavior,
+but generated programs no longer contain or link a tracing collector.
 An internal package revision seam now parses, expands, resolves, and lowers the
 accepted 0.11 surface through canonical source types, then deliberately stops
 before ownership-dependent body checking. The ordered migration in
@@ -153,11 +154,10 @@ The runner supports fixture filtering, target and optimization matrices,
 isolated build directories, stable expected output/status files, and retained
 artifacts after failure.
 
-In the current 0.10 compiler, managed allocation runs behind
-`ManagedMemoryStrategy` and uses Boehm. A program that needs no managed storage
-links no collector; building one that does requires a Boehm development package
-(`libgc-dev` on Debian- and Ubuntu-family systems). The 0.11 migration removes
-this boundary after replacing every managed use with explicit ownership.
+The 0.10 compatibility compiler preserves historical escaping references and
+shallow backing with collector-free process-lifetime storage. The 0.11 path
+uses stack borrows and explicit ownership instead. No Boehm development package
+or garbage-collector link input is required.
 The non-normative [memory cost model](docs/cost_model.md) documents current copy,
 allocation, retention, promotion, and synchronization costs and links the
 reproducible release-mode baseline.
@@ -169,10 +169,8 @@ Elamite contributors.
 
 Third-party components retain their respective copyright and license terms;
 Elamite's MIT license does not replace them. Rust dependencies are recorded in
-`Cargo.lock`. Generated native programs may also link the
-Boehm-Demers-Weiser garbage collector when managed storage is required.
-Distributions that bundle these components must retain the license files and
-notices supplied by their authors.
+`Cargo.lock`. Distributions that bundle third-party components must retain the
+license files and notices supplied by their authors.
 
 The repository currently has `publish = false` and does not produce a bundled
 third-party binary distribution. Repeat the dependency-license audit if that

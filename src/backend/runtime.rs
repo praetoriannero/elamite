@@ -1,4 +1,4 @@
-//! Runtime prelude, helpers, managed-memory operations, and value operations.
+//! Runtime prelude, process-lifetime allocation, and value operations.
 
 use super::*;
 use crate::ir::control_flow::ValueModel;
@@ -171,10 +171,6 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20state->target = target;\n\
              \x20\x20\x20\x20state->open = true;\n",
         );
-        self.emit_managed_operation(ManagedMemoryOperation::RegisterRoot {
-            start: "&state->target",
-            byte_count: "sizeof(state->target)",
-        });
         self.output.push_str(
             "    return state;\n\
              }\n\n\
@@ -187,10 +183,6 @@ impl<'a> CEmitter<'a> {
              static el_unit el_foreign_root_close(el_foreign_root_state *state) {\n\
              \x20\x20\x20\x20if (state != NULL && state->open) {\n",
         );
-        self.emit_managed_operation(ManagedMemoryOperation::UnregisterRoot {
-            start: "&state->target",
-            byte_count: "sizeof(state->target)",
-        });
         self.output.push_str(
             "        state->target = NULL;\n\
              \x20\x20\x20\x20\x20\x20\x20\x20state->open = false;\n\
@@ -378,152 +370,69 @@ impl<'a> CEmitter<'a> {
         }
     }
 
-    /// Emits the collector's declarations behind the `ManagedMemoryStrategy`
-    /// boundary. A program with no managed storage emits nothing, keeping the
-    /// translation unit free of any collector dependency.
-    pub(super) fn emit_managed_memory_prelude(&mut self) {
-        if !self.program.requires_managed_memory {
-            self.output.push_str(
-                "void *el_runtime_alloc(size_t byte_count) {\n\
-                 \x20\x20\x20\x20void *result = malloc(byte_count);\n\
-                 \x20\x20\x20\x20if (result == NULL) exit(101);\n\
-                 \x20\x20\x20\x20el_cost_allocation(byte_count, true);\n\
-                 \x20\x20\x20\x20return result;\n\
-                 }\n\
-                 void *el_runtime_alloc_atomic(size_t byte_count) {\n\
-                 \x20\x20\x20\x20void *result = malloc(byte_count);\n\
-                 \x20\x20\x20\x20if (result == NULL) exit(101);\n\
-                 \x20\x20\x20\x20el_cost_allocation(byte_count, false);\n\
-                 \x20\x20\x20\x20return result;\n\
-                 }\n\
-                 void el_out_of_memory(void) { exit(101); }\n\n",
-            );
-            return;
-        }
-        let strategy = self.strategy;
-        if strategy.emit_c_prelude(&mut self.output).is_err() {
-            self.diagnostics.push(Diagnostic::new(
-                Category::CodeGeneration,
-                format!(
-                    "failed to emit the `{}` managed-memory prelude",
-                    strategy.name()
-                ),
-            ));
-            return;
-        }
-        self.output.push_str("\nvoid el_out_of_memory(void);\n");
-        for (name, class) in [
-            ("el_runtime_alloc", AllocationClass::Scanned),
-            ("el_runtime_alloc_atomic", AllocationClass::PointerFree),
-        ] {
-            let _ = writeln!(
-                self.output,
-                "\nvoid *{name}(size_t byte_count) {{\n    void *result;"
-            );
-            if strategy
-                .emit_c_operation(
-                    ManagedMemoryOperation::Allocate {
-                        destination: "result",
-                        byte_count: "byte_count",
-                        class,
-                    },
-                    &mut self.output,
-                )
-                .is_err()
-            {
-                self.diagnostics.push(Diagnostic::new(
-                    Category::CodeGeneration,
-                    format!(
-                        "failed to emit the `{}` allocation operation",
-                        strategy.name()
-                    ),
-                ));
-                return;
-            }
-            self.output.push_str("    if (result == NULL) {\n        ");
-            if strategy
-                .emit_c_operation(ManagedMemoryOperation::Collect, &mut self.output)
-                .is_err()
-            {
-                self.diagnostics.push(Diagnostic::new(
-                    Category::CodeGeneration,
-                    format!(
-                        "failed to emit the `{}` collection operation",
-                        strategy.name()
-                    ),
-                ));
-                return;
-            }
-            self.output.push_str("        ");
-            if strategy
-                .emit_c_operation(
-                    ManagedMemoryOperation::Allocate {
-                        destination: "result",
-                        byte_count: "byte_count",
-                        class,
-                    },
-                    &mut self.output,
-                )
-                .is_err()
-            {
-                self.diagnostics.push(Diagnostic::new(
-                    Category::CodeGeneration,
-                    format!("failed to emit the `{}` allocation retry", strategy.name()),
-                ));
-                return;
-            }
-            let scanned = if class == AllocationClass::Scanned {
-                "true"
-            } else {
-                "false"
-            };
-            let _ = writeln!(
-                self.output,
-                "        if (result == NULL) el_out_of_memory();\n    }}\n    \
-                 el_cost_allocation(byte_count, {scanned});\n    return result;\n}}"
-            );
-        }
-        // Every allocation wrapper has already attempted a full collection
-        // and retried before reaching this terminal path (`docs/spec.md` 9).
-        self.output.push_str("\nvoid el_out_of_memory(void) {\n");
+    /// Emits the collector-free process-lifetime allocation domain used by
+    /// compatibility values and runtime views. Every allocation is recorded
+    /// exactly once and released at normal process exit; no pointer tracing,
+    /// root registration, or thread attachment is involved.
+    pub(super) fn emit_process_allocation_runtime(&mut self) {
         self.output.push_str(
-            "\x20\x20\x20\x20fputs(\"elamite: out of memory\\n\", stderr);\n\
-             \x20\x20\x20\x20fflush(stderr);\n\
-             \x20\x20\x20\x20exit(101);\n\
-             }\n\n",
+            "typedef struct el_process_allocation {\n\
+             \x20\x20\x20\x20void *value;\n\
+             \x20\x20\x20\x20struct el_process_allocation *next;\n\
+             } el_process_allocation;\n\
+             static el_process_allocation *el_process_allocations = NULL;\n\
+             static volatile int el_process_allocation_lock = 0;\n\
+             static bool el_process_cleanup_registered = false;\n\
+             static void el_process_lock(void) { while (__sync_lock_test_and_set(&el_process_allocation_lock, 1)) { } }\n\
+             static void el_process_unlock(void) { __sync_lock_release(&el_process_allocation_lock); }\n\
+             static void el_process_allocation_cleanup(void) {\n\
+             \x20\x20\x20\x20el_process_allocation *node;\n\
+             \x20\x20\x20\x20el_process_lock(); node = el_process_allocations; el_process_allocations = NULL; el_process_unlock();\n\
+             \x20\x20\x20\x20while (node != NULL) { el_process_allocation *next = node->next; free(node->value); free(node); node = next; }\n\
+             }\n\
+             void el_out_of_memory(void) {\n\
+             \x20\x20\x20\x20fputs(\"elamite: out of memory\\n\", stderr); fflush(stderr); exit(101);\n\
+             }\n\
+             static void *el_process_alloc_impl(size_t byte_count, bool pointer_bearing) {\n\
+             \x20\x20\x20\x20void *result; el_process_allocation *node;\n\
+             \x20\x20\x20\x20if (byte_count == 0U) byte_count = 1U;\n\
+             \x20\x20\x20\x20result = malloc(byte_count); node = (el_process_allocation *)malloc(sizeof(*node));\n\
+             \x20\x20\x20\x20if (result == NULL || node == NULL) { free(result); free(node); el_out_of_memory(); }\n\
+             \x20\x20\x20\x20node->value = result;\n\
+             \x20\x20\x20\x20el_process_lock();\n\
+             \x20\x20\x20\x20if (!el_process_cleanup_registered) { if (atexit(el_process_allocation_cleanup) != 0) { el_process_unlock(); free(result); free(node); el_out_of_memory(); } el_process_cleanup_registered = true; }\n\
+             \x20\x20\x20\x20node->next = el_process_allocations; el_process_allocations = node; el_process_unlock();\n\
+             \x20\x20\x20\x20(void)pointer_bearing; el_cost_allocation(byte_count, false); return result;\n\
+             }\n\
+             void *el_process_alloc(size_t byte_count) { return el_process_alloc_impl(byte_count, true); }\n\
+             void *el_process_alloc_atomic(size_t byte_count) { return el_process_alloc_impl(byte_count, false); }\n\
+             static void *el_value_alloc_impl(size_t byte_count, bool pointer_bearing) {\n\
+             #if EL_OWNED_VALUES\n\
+             \x20\x20\x20\x20void *result; (void)pointer_bearing; if (byte_count == 0U) byte_count = 1U; result = malloc(byte_count); if (result == NULL) el_out_of_memory(); el_cost_allocation(byte_count, false); return result;\n\
+             #else\n\
+             \x20\x20\x20\x20return el_process_alloc_impl(byte_count, pointer_bearing);\n\
+             #endif\n\
+             }\n\
+             void *el_value_alloc(size_t byte_count) { return el_value_alloc_impl(byte_count, true); }\n\
+             void *el_value_alloc_atomic(size_t byte_count) { return el_value_alloc_impl(byte_count, false); }\n\n",
         );
     }
 
-    /// Emits one managed-memory operation behind the strategy boundary,
-    /// indented as a statement inside the current function body.
-    pub(super) fn emit_managed_operation(&mut self, operation: ManagedMemoryOperation<'_>) {
-        if let ManagedMemoryOperation::Allocate {
-            destination,
-            byte_count,
-            class,
-        } = operation
-        {
-            let allocator = match class {
-                AllocationClass::Scanned => "el_runtime_alloc",
-                AllocationClass::PointerFree => "el_runtime_alloc_atomic",
-            };
-            let _ = writeln!(self.output, "{destination} = {allocator}({byte_count});");
-            return;
-        }
-        let strategy = self.strategy;
-        self.output.push_str("    ");
-        if strategy
-            .emit_c_operation(operation, &mut self.output)
-            .is_err()
-        {
-            self.diagnostics.push(Diagnostic::new(
-                Category::CodeGeneration,
-                format!(
-                    "failed to emit a `{}` managed-memory operation",
-                    strategy.name()
-                ),
-            ));
-        }
+    pub(super) fn emit_process_allocate(
+        &mut self,
+        destination: &str,
+        byte_count: &str,
+        class: AllocationClass,
+    ) {
+        let allocator = match class {
+            AllocationClass::PointerBearing => "el_process_alloc",
+            AllocationClass::PointerFree => "el_process_alloc_atomic",
+        };
+        let _ = writeln!(self.output, "{destination} = {allocator}({byte_count});");
+        let _ = writeln!(
+            self.output,
+            "    if ({destination} == NULL) el_out_of_memory();"
+        );
     }
 
     pub(super) fn emit_prelude(&mut self) {
@@ -571,8 +480,8 @@ impl<'a> CEmitter<'a> {
              typedef struct { const char *bytes; size_t length; } el_str;\n\
              typedef struct { const char *bytes; size_t length; } el_string;\n\n\
              void el_out_of_memory(void);\n\
-             void *el_runtime_alloc(size_t byte_count);\n\
-             void *el_runtime_alloc_atomic(size_t byte_count);\n\n\
+             void *el_process_alloc(size_t byte_count);\n\
+             void *el_process_alloc_atomic(size_t byte_count);\n\n\
              #ifdef ELAMITE_COST_INSTRUMENTATION\n\
              static volatile uintptr_t el_cost_allocations = 0U;\n\
              static volatile uintptr_t el_cost_allocated_bytes = 0U;\n\
@@ -674,7 +583,7 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20if (result.bytes == NULL) el_out_of_memory();\n\
              \x20\x20\x20\x20el_cost_allocation(length + 1U, false);\n\
              #else\n\
-             \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc_atomic(length + 1U);\n\
+             \x20\x20\x20\x20result.bytes = (const char *)el_process_alloc_atomic(length + 1U);\n\
              #endif\n\
              \x20\x20\x20\x20return result;\n\
              }\n\
@@ -701,7 +610,7 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20el_str result = {NULL, 0U};\n\
              \x20\x20\x20\x20if (left.length > SIZE_MAX - right.length) el_out_of_memory();\n\
              \x20\x20\x20\x20result.length = left.length + right.length;\n\
-             \x20\x20\x20\x20result.bytes = (const char *)el_runtime_alloc_atomic(result.length == 0U ? 1U : result.length);\n\
+             \x20\x20\x20\x20result.bytes = (const char *)el_process_alloc_atomic(result.length == 0U ? 1U : result.length);\n\
              \x20\x20\x20\x20if (left.length != 0U) el_cost_memcpy((char *)result.bytes, left.bytes, left.length);\n\
              \x20\x20\x20\x20if (right.length != 0U) el_cost_memcpy((char *)result.bytes + left.length, right.bytes, right.length);\n\
              \x20\x20\x20\x20return result;\n\
@@ -762,7 +671,7 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20\x20\x20\x20\x20if (capacity > (size_t)PTRDIFF_MAX / 2U) { capacity = needed; break; }\n\
              \x20\x20\x20\x20\x20\x20\x20\x20capacity *= 2U;\n\
              \x20\x20\x20\x20}\n\
-             \x20\x20\x20\x20replacement = (char *)el_runtime_alloc_atomic(capacity);\n\
+             \x20\x20\x20\x20replacement = (char *)el_process_alloc_atomic(capacity);\n\
              \x20\x20\x20\x20if (formatter->length != 0U) el_cost_memcpy(replacement, formatter->bytes, formatter->length);\n\
              \x20\x20\x20\x20formatter->bytes = replacement;\n\
              \x20\x20\x20\x20formatter->capacity = capacity;\n\
@@ -800,7 +709,7 @@ impl<'a> CEmitter<'a> {
              \x20\x20\x20\x20el_fmt_append_n(formatter, bytes, length);\n\
              }\n\
              el_str el_fmt_finish(el_formatter *formatter) {\n\
-             \x20\x20\x20\x20if (formatter->bytes == NULL) { formatter->bytes = (char *)el_runtime_alloc_atomic(1U); formatter->bytes[0] = '\\0'; }\n\
+             \x20\x20\x20\x20if (formatter->bytes == NULL) { formatter->bytes = (char *)el_process_alloc_atomic(1U); formatter->bytes[0] = '\\0'; }\n\
              \x20\x20\x20\x20return (el_str){formatter->bytes, formatter->length};\n\
              }\n\n\
              void el_print_char(uint32_t value) {\n\
@@ -1315,8 +1224,8 @@ impl<'a> CEmitter<'a> {
             self.emit_runtime_allocate(
                 "result.values",
                 &format!("(size_t){length}U * sizeof({element_type})"),
-                if self.scanned_allocation(element) {
-                    AllocationClass::Scanned
+                if self.pointer_bearing_allocation(element) {
+                    AllocationClass::PointerBearing
                 } else {
                     AllocationClass::PointerFree
                 },
@@ -1334,15 +1243,7 @@ impl<'a> CEmitter<'a> {
         byte_count: &str,
         class: AllocationClass,
     ) {
-        self.emit_managed_operation(ManagedMemoryOperation::Allocate {
-            destination,
-            byte_count,
-            class,
-        });
-        let _ = writeln!(
-            self.output,
-            "    if ({destination} == NULL) el_out_of_memory();"
-        );
+        self.emit_process_allocate(destination, byte_count, class);
     }
 
     fn emit_collection_allocate(
@@ -1442,8 +1343,10 @@ impl<'a> CEmitter<'a> {
     }
 
     pub(super) fn emit_standard_runtime_helpers(&mut self) {
-        for (slice, element, length) in self.variadic_slice_instances() {
-            self.emit_variadic_slice_helper(slice, element, length);
+        if self.program.value_model != ValueModel::Owned {
+            for (slice, element, length) in self.variadic_slice_instances() {
+                self.emit_variadic_slice_helper(slice, element, length);
+            }
         }
         let calls = self.standard_call_instances();
         let clone_types = calls
@@ -1779,7 +1682,7 @@ impl<'a> CEmitter<'a> {
                 let path_bytes = format!("path->{}.bytes", field_name(path_field));
                 let _ = writeln!(
                     self.output,
-                    "static {result_c} {name}({path_c} path, {mode_c} mode) {{ int flags = mode.tag == {}U ? O_RDONLY : mode.tag == {}U ? (O_WRONLY|O_CREAT|O_TRUNC) : (O_WRONLY|O_CREAT|O_APPEND); int fd; {file_c} state; if(memchr({path_bytes},'\\0',path->{}.length)!=NULL){{errno=EINVAL;return {error};}}fd=open({path_bytes},flags,0666);if(fd<0)return {error};state=el_runtime_alloc(sizeof(*state));state->fd=fd;state->closed=false;return {ok};}}\n",
+                    "static {result_c} {name}({path_c} path, {mode_c} mode) {{ int flags = mode.tag == {}U ? O_RDONLY : mode.tag == {}U ? (O_WRONLY|O_CREAT|O_TRUNC) : (O_WRONLY|O_CREAT|O_APPEND); int fd; {file_c} state; if(memchr({path_bytes},'\\0',path->{}.length)!=NULL){{errno=EINVAL;return {error};}}fd=open({path_bytes},flags,0666);if(fd<0)return {error};state=el_process_alloc(sizeof(*state));state->fd=fd;state->closed=false;return {ok};}}\n",
                     read_mode.index(),
                     write_mode.index(),
                     field_name(path_field)
@@ -1930,7 +1833,7 @@ impl<'a> CEmitter<'a> {
                 let ok = self.result_expression(result, "Ok", ("out", bytes));
                 let _ = writeln!(
                     self.output,
-                    "static {result_c} {name}({file_c} file) {{ {bytes_c} out={{0}}; uint8_t chunk[4096]; size_t done=0U; if(file==NULL||file->closed){{errno=EBADF;return {error};}} for(;;){{ssize_t n=read(file->fd,chunk,sizeof(chunk));size_t required,capacity;uint8_t *grown;if(n<0){{if(errno==EINTR)continue;return {error};}}if(n==0)break;if(done>SIZE_MAX-(size_t)n){{errno=EFBIG;return {error};}}required=done+(size_t)n;capacity=(size_t)out.capacity;if(capacity<required){{capacity=capacity==0U?4096U:capacity;while(capacity<required){{if(capacity>SIZE_MAX/2U){{capacity=required;break;}}capacity*=2U;}}grown=el_runtime_alloc_atomic(capacity);if(done!=0U)memcpy(grown,out.values,done);out.values=grown;out.capacity=(uintptr_t)capacity;}}memcpy(out.values+done,chunk,(size_t)n);done=required;}}out.length=(uintptr_t)done;return {ok}; }}\n"
+                    "static {result_c} {name}({file_c} file) {{ {bytes_c} out={{0}}; uint8_t chunk[4096]; size_t done=0U; if(file==NULL||file->closed){{errno=EBADF;return {error};}} for(;;){{ssize_t n=read(file->fd,chunk,sizeof(chunk));size_t required,capacity;uint8_t *grown;if(n<0){{if(errno==EINTR)continue;return {error};}}if(n==0)break;if(done>SIZE_MAX-(size_t)n){{errno=EFBIG;return {error};}}required=done+(size_t)n;capacity=(size_t)out.capacity;if(capacity<required){{capacity=capacity==0U?4096U:capacity;while(capacity<required){{if(capacity>SIZE_MAX/2U){{capacity=required;break;}}capacity*=2U;}}grown=el_value_alloc_atomic(capacity);if(done!=0U)memcpy(grown,out.values,done);if(EL_OWNED_VALUES)free(out.values);out.values=grown;out.capacity=(uintptr_t)capacity;}}memcpy(out.values+done,chunk,(size_t)n);done=required;}}out.length=(uintptr_t)done;return {ok}; }}\n"
                 );
                 continue;
             }
@@ -1963,7 +1866,7 @@ impl<'a> CEmitter<'a> {
                 let ok = self.result_expression(result, "Ok", ("state", directory));
                 let _ = writeln!(
                     self.output,
-                    "static {result_c} {name}({path_c} path) {{{directory_c} state;DIR *stream;if(memchr(path->{}.bytes,'\\0',path->{}.length)!=NULL){{errno=EINVAL;return {error};}}stream=opendir(path->{}.bytes);if(stream==NULL)return {error};state=el_runtime_alloc(sizeof(*state));state->stream=stream;state->closed=false;state->path=path->{};return {ok};}}\n",
+                    "static {result_c} {name}({path_c} path) {{{directory_c} state;DIR *stream;if(memchr(path->{}.bytes,'\\0',path->{}.length)!=NULL){{errno=EINVAL;return {error};}}stream=opendir(path->{}.bytes);if(stream==NULL)return {error};state=el_process_alloc(sizeof(*state));state->stream=stream;state->closed=false;state->path=path->{};return {ok};}}\n",
                     field_name(field),
                     field_name(field),
                     field_name(field),
@@ -2269,7 +2172,7 @@ impl<'a> CEmitter<'a> {
                     };
                     let _ = writeln!(
                         self.output,
-                        "static int el_process_argc = 0;\nstatic char **el_process_argv = NULL;\nstatic {result_c} {name}(void) {{\n    {result_c} out = {{0}}; int i;\n    if (el_process_argc <= 0) return out;\n    if ((size_t)el_process_argc > SIZE_MAX / sizeof({element_c})) el_out_of_memory();\n    out.length = out.capacity = (uintptr_t)el_process_argc;\n    out.values = ({element_c} *)el_runtime_alloc((size_t)el_process_argc * sizeof({element_c}));\n    for (i = 0; i < el_process_argc; ++i) out.values[i] = el_string_from_host_text(el_process_argv[i]);\n    return out;\n}}\n"
+                        "static int el_process_argc = 0;\nstatic char **el_process_argv = NULL;\nstatic {result_c} {name}(void) {{\n    {result_c} out = {{0}}; int i;\n    if (el_process_argc <= 0) return out;\n    if ((size_t)el_process_argc > SIZE_MAX / sizeof({element_c})) el_out_of_memory();\n    out.length = out.capacity = (uintptr_t)el_process_argc;\n    out.values = ({element_c} *)el_value_alloc((size_t)el_process_argc * sizeof({element_c}));\n    for (i = 0; i < el_process_argc; ++i) out.values[i] = el_string_from_host_text(el_process_argv[i]);\n    return out;\n}}\n"
                     );
                 }
                 SystemOperation::EnvGet => {
@@ -2327,7 +2230,7 @@ impl<'a> CEmitter<'a> {
                     };
                     let _ = writeln!(
                         self.output,
-                        "static {result_c} {name}({argument_c} key) {{\n    char *name_bytes; const char *value; size_t i;\n    if (key.length == 0U) return {invalid_name};\n    for (i = 0U; i < key.length; ++i) if (key.bytes[i] == '\\0' || key.bytes[i] == '=') return {invalid_name};\n    name_bytes = (char *)el_runtime_alloc_atomic(key.length + 1U); memcpy(name_bytes, key.bytes, key.length); name_bytes[key.length] = '\\0';\n    value = getenv(name_bytes);\n    if (value == NULL) return {ok_none};\n    if (!el_valid_utf8_cstr(value)) return {invalid_text};\n    return {ok_some};\n}}\n"
+                        "static {result_c} {name}({argument_c} key) {{\n    char *name_bytes; const char *value; size_t i;\n    if (key.length == 0U) return {invalid_name};\n    for (i = 0U; i < key.length; ++i) if (key.bytes[i] == '\\0' || key.bytes[i] == '=') return {invalid_name};\n    name_bytes = (char *)el_process_alloc_atomic(key.length + 1U); memcpy(name_bytes, key.bytes, key.length); name_bytes[key.length] = '\\0';\n    value = getenv(name_bytes);\n    if (value == NULL) return {ok_none};\n    if (!el_valid_utf8_cstr(value)) return {invalid_text};\n    return {ok_some};\n}}\n"
                     );
                 }
                 SystemOperation::CurrentDir => {
@@ -2359,7 +2262,7 @@ impl<'a> CEmitter<'a> {
                     let error = self.result_expression(result, "Err", (&io_error, error_ty));
                     let _ = writeln!(
                         self.output,
-                        "static {result_c} {name}(void) {{\n    size_t size = 256U; char *bytes; el_string owned;\n    for (;;) {{ bytes = (char *)el_runtime_alloc_atomic(size); if (getcwd(bytes, size) != NULL) break; if (errno != ERANGE || size > SIZE_MAX / 2U) return {error}; size *= 2U; }}\n    if (!el_valid_utf8_cstr(bytes)) {{ errno = EINVAL; return {error}; }}\n    owned = el_string_from((el_str){{bytes, strlen(bytes)}});\n    return {ok};\n}}\n"
+                        "static {result_c} {name}(void) {{\n    size_t size = 256U; char *bytes; el_string owned;\n    for (;;) {{ bytes = (char *)el_process_alloc_atomic(size); if (getcwd(bytes, size) != NULL) break; if (errno != ERANGE || size > SIZE_MAX / 2U) return {error}; size *= 2U; }}\n    if (!el_valid_utf8_cstr(bytes)) {{ errno = EINVAL; return {error}; }}\n    owned = el_string_from((el_str){{bytes, strlen(bytes)}});\n    return {ok};\n}}\n"
                     );
                 }
                 SystemOperation::ProcessExit => {
@@ -2493,8 +2396,8 @@ impl<'a> CEmitter<'a> {
     free(argv); argv = NULL; free(path); path = NULL;
     if (child_errno != 0) {{ fclose(out_file); fclose(err_file); if (child_errno == ENOENT || child_errno == ENOTDIR) return {not_found}; if (child_errno == EACCES || child_errno == EPERM) return {denied}; if (child_errno == EINVAL || child_errno == ENAMETOOLONG || child_errno == ELOOP) return {invalid}; if (child_errno == EAGAIN || child_errno == ENOMEM || child_errno == EMFILE || child_errno == ENFILE) return {unavailable}; return {other}; }}
     if (fseek(out_file, 0L, SEEK_END) != 0 || (out_size = ftell(out_file)) < 0L || fseek(out_file, 0L, SEEK_SET) != 0 || fseek(err_file, 0L, SEEK_END) != 0 || (err_size = ftell(err_file)) < 0L || fseek(err_file, 0L, SEEK_SET) != 0) {{ fclose(out_file); fclose(err_file); return {other}; }}
-    if (out_size != 0L) {{ out_bytes.values = (uint8_t *)el_runtime_alloc_atomic((size_t)out_size); if (fread(out_bytes.values, 1U, (size_t)out_size, out_file) != (size_t)out_size) {{ fclose(out_file); fclose(err_file); return {other}; }} out_bytes.length = out_bytes.capacity = (uintptr_t)out_size; }}
-    if (err_size != 0L) {{ err_bytes.values = (uint8_t *)el_runtime_alloc_atomic((size_t)err_size); if (fread(err_bytes.values, 1U, (size_t)err_size, err_file) != (size_t)err_size) {{ fclose(out_file); fclose(err_file); return {other}; }} err_bytes.length = err_bytes.capacity = (uintptr_t)err_size; }} fclose(out_file); fclose(err_file);
+    if (out_size != 0L) {{ out_bytes.values = (uint8_t *)el_value_alloc_atomic((size_t)out_size); if (fread(out_bytes.values, 1U, (size_t)out_size, out_file) != (size_t)out_size) {{ fclose(out_file); fclose(err_file); return {other}; }} out_bytes.length = out_bytes.capacity = (uintptr_t)out_size; }}
+    if (err_size != 0L) {{ err_bytes.values = (uint8_t *)el_value_alloc_atomic((size_t)err_size); if (fread(err_bytes.values, 1U, (size_t)err_size, err_file) != (size_t)err_size) {{ fclose(out_file); fclose(err_file); return {other}; }} err_bytes.length = err_bytes.capacity = (uintptr_t)err_size; }} fclose(out_file); fclose(err_file);
     child_status = ({status_c}){{ .{code_field} = WIFEXITED(status) ? {some_code} : {none_code}, .{success_field} = WIFEXITED(status) && WEXITSTATUS(status) == 0 }}; return {ok};
 invalid_error:
     if (argv != NULL) {{ for (i = 0U; i < arguments.length; ++i) free(argv[i + 1U]); }} free(argv); free(path); if (out_file != NULL) fclose(out_file); if (err_file != NULL) fclose(err_file); return {invalid};
@@ -2806,7 +2709,7 @@ unavailable_error:
              static pthread_mutex_t el_thread_registry_lock = PTHREAD_MUTEX_INITIALIZER;\n\
              static el_thread_registry_node *el_thread_registry = NULL;\n\
              static void el_thread_register(void *state, el_thread_shutdown_join join) {\n\
-             \x20\x20\x20\x20el_thread_registry_node *node = (el_thread_registry_node *)GC_MALLOC(sizeof(*node));\n\
+             \x20\x20\x20\x20el_thread_registry_node *node = (el_thread_registry_node *)el_process_alloc(sizeof(*node));\n\
              \x20\x20\x20\x20if (node == NULL) el_out_of_memory();\n\
              \x20\x20\x20\x20node->state = state; node->join = join;\n\
              \x20\x20\x20\x20(void)pthread_mutex_lock(&el_thread_registry_lock);\n\
@@ -3014,8 +2917,12 @@ unavailable_error:
              static void *{spawn_name}_entry(void *raw) {{\n    {context_name} *context = ({context_name} *)raw;\n    {thread_c} state = context->state;\n    state->startup = NULL;\n    {publish_result}\n    (void)pthread_mutex_lock(&state->status_lock); state->finished = true; (void)pthread_mutex_unlock(&state->status_lock);\n    return NULL;\n}}\n\
              static {result_c} {spawn_name}({callable_c} body) {{\n    {thread_c} state; {context_name} *context; {result_c} outcome = {{0}}; int status;"
         );
-        self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::Scanned);
-        self.emit_runtime_allocate("context", "sizeof(*context)", AllocationClass::Scanned);
+        self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::PointerBearing);
+        self.emit_runtime_allocate(
+            "context",
+            "sizeof(*context)",
+            AllocationClass::PointerBearing,
+        );
         let _ = writeln!(
             self.output,
             "    state->joined = false; state->finished = false; context->state = state; context->body = body; state->startup = context;\n    (void)pthread_mutex_init(&state->join_lock, NULL); (void)pthread_mutex_init(&state->status_lock, NULL);\n    status = pthread_create(&state->thread, NULL, {spawn_name}_entry, context);\n    if (status != 0) {{\n        state->startup = NULL; (void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock);\n        outcome.tag = UINT32_C({});\n        outcome.payload.{}.{} = ({error_c}){{ .tag = UINT32_C({}) }};\n        return outcome;\n    }}\n    el_thread_register(state, {join_name}_shutdown);\n    outcome.tag = UINT32_C({});\n    outcome.payload.{}.{} = state;\n    return outcome;\n}}\n",
@@ -3152,7 +3059,11 @@ unavailable_error:
                 "static {result_c} {name}({parameters}) {{\n    {sender_c} channel;\n    \
                  {result_c} result = {{0}};"
             );
-            self.emit_runtime_allocate("channel", "sizeof(*channel)", AllocationClass::Scanned);
+            self.emit_runtime_allocate(
+                "channel",
+                "sizeof(*channel)",
+                AllocationClass::PointerBearing,
+            );
             let _ = writeln!(
                 self.output,
                 "    (void)pthread_mutex_init(&channel->lock, NULL);\n    \
@@ -3245,7 +3156,7 @@ unavailable_error:
             }
             let _ = writeln!(
                 self.output,
-                "    message = ({node} *)el_runtime_alloc(sizeof(*message));\n    \
+                "    message = ({node} *)el_process_alloc(sizeof(*message));\n    \
                  if (message == NULL) el_out_of_memory();\n    message->value = value; \
                  message->next = NULL;\n    if (channel->tail == NULL) channel->head = message; \
                  else channel->tail->next = message;\n    channel->tail = message; \
@@ -3417,7 +3328,11 @@ unavailable_error:
                     self.output,
                     "static {mutex_c} {name}({value_c} value) {{\n    {mutex_c} state;"
                 );
-                self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::Scanned);
+                self.emit_runtime_allocate(
+                    "state",
+                    "sizeof(*state)",
+                    AllocationClass::PointerBearing,
+                );
                 let _ = writeln!(
                     self.output,
                     "    (void)pthread_mutex_init(&state->lock, NULL); state->value = \
@@ -4338,8 +4253,8 @@ unavailable_error:
         let element_drops = self.program.value_model == ValueModel::Owned
             && calls.contains_key(&clear)
             && self.emit_drop_helper(element);
-        let scanned = if self.scanned_allocation(element) {
-            AllocationClass::Scanned
+        let allocation_class = if self.pointer_bearing_allocation(element) {
+            AllocationClass::PointerBearing
         } else {
             AllocationClass::PointerFree
         };
@@ -4369,7 +4284,7 @@ unavailable_error:
                  if (length != 0U) {{"
             );
             let bytes = format!("length * sizeof({element_type})");
-            self.emit_collection_allocate("result.values", &bytes, scanned);
+            self.emit_collection_allocate("result.values", &bytes, allocation_class);
             let _ = writeln!(
                 self.output,
                 "    }}\n    for (uintptr_t index = 0U; index < left.length; ++index) \
@@ -4442,7 +4357,7 @@ unavailable_error:
                  while (capacity < needed) {{ if (capacity > UINTPTR_MAX / 2U) {{ capacity = needed; break; }} capacity *= 2U; }}\n    if (capacity > SIZE_MAX / sizeof({element_type})) el_out_of_memory();"
             );
             let bytes = format!("capacity * sizeof({element_type})");
-            self.emit_collection_allocate("replacement", &bytes, scanned);
+            self.emit_collection_allocate("replacement", &bytes, allocation_class);
             self.output.push_str(
                 "    if (value->length != 0U) el_cost_memcpy(replacement, value->values, \
                  value->length * sizeof(*replacement));\n\
@@ -4544,7 +4459,7 @@ unavailable_error:
             );
             if *count != 0 {
                 let bytes = format!("{count}U * sizeof({element_type})");
-                self.emit_collection_allocate("result.values", &bytes, scanned);
+                self.emit_collection_allocate("result.values", &bytes, allocation_class);
                 let _ = writeln!(
                     self.output,
                     "    result.length = {count}U;\n    result.capacity = {count}U;"
@@ -4605,7 +4520,7 @@ unavailable_error:
         let new = standard_call_name(StandardCall::MapNew { collection });
         let _ = writeln!(self.output, "static {collection_type} {new}(void) {{");
         let _ = writeln!(self.output, "    {collection_type} result;");
-        self.emit_collection_allocate("result", "sizeof(*result)", AllocationClass::Scanned);
+        self.emit_collection_allocate("result", "sizeof(*result)", AllocationClass::PointerBearing);
         self.output.push_str(
             "    result->length = 0U;\n    result->capacity = 0U;\n    result->keys = NULL;\n    \
              result->values = NULL;\n    return result;\n}\n\n",
@@ -4620,13 +4535,13 @@ unavailable_error:
              return (intptr_t)-1;\n}}\n"
         );
         let reserve = format!("el_map_reserve_t{}", collection.index());
-        let key_class = if self.scanned_allocation(key) {
-            AllocationClass::Scanned
+        let key_class = if self.pointer_bearing_allocation(key) {
+            AllocationClass::PointerBearing
         } else {
             AllocationClass::PointerFree
         };
-        let value_class = if self.scanned_allocation(value) {
-            AllocationClass::Scanned
+        let value_class = if self.pointer_bearing_allocation(value) {
+            AllocationClass::PointerBearing
         } else {
             AllocationClass::PointerFree
         };
@@ -4873,7 +4788,7 @@ unavailable_error:
         let new = standard_call_name(StandardCall::SetNew { collection });
         let _ = writeln!(self.output, "static {collection_type} {new}(void) {{");
         let _ = writeln!(self.output, "    {collection_type} result;");
-        self.emit_collection_allocate("result", "sizeof(*result)", AllocationClass::Scanned);
+        self.emit_collection_allocate("result", "sizeof(*result)", AllocationClass::PointerBearing);
         self.output.push_str(
             "    result->length = 0U;\n    result->capacity = 0U;\n    result->values = NULL;\n    \
              return result;\n}\n\n",
@@ -4888,8 +4803,8 @@ unavailable_error:
              return (intptr_t)-1;\n}}\n"
         );
         let reserve = format!("el_set_reserve_t{}", collection.index());
-        let class = if self.scanned_allocation(element) {
-            AllocationClass::Scanned
+        let class = if self.pointer_bearing_allocation(element) {
+            AllocationClass::PointerBearing
         } else {
             AllocationClass::PointerFree
         };

@@ -27,8 +27,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Owned core values and collections](#owned-core-values-and-collections) | Complete | Replaced shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
 | [Inline first-class closures](#inline-first-class-closures) | Complete | Nominal inline environments, capture ownership, structural clone/drop, shared calls, erasure, and capture-free conversion are implemented. |
 | [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Complete | Atomic `Shared`/`Weak` ownership and generational `Store`/`Handle` graph identity are implemented with exact cleanup and checked borrowing. |
-| [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Planned — next | Remove address-taken-local promotion, managed closure state, collector registration, and the tracing collector. |
-| [Race-safe concurrency](#race-safe-concurrency) | Planned | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
+| [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Complete | Owned reference/iterator/vararg storage is stack-bounded; collector and root hooks are removed; compatibility retention has classified process lifetime. |
+| [Race-safe concurrency](#race-safe-concurrency) | Planned — next | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
 | [Owned-model C interoperability](#owned-model-c-interoperability) | Planned | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
 | [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | After owned-model conformance, optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
@@ -42,7 +42,7 @@ Keep this table synchronized with the detailed status blocks below.
 | [Inherent implementation blocks](#inherent-implementation-blocks) | Complete | Field-only structs, local coherent generic inherent blocks, selection/lowering, `std.ast` 2.0, and repository migration are complete. |
 | [Deferred specified surface](#deferred-specified-surface) | Candidate | Close or permanently document 128-bit integers and wildcard/grouped imports; coordinate additional foreign ABIs with the owned-model C milestone. |
 | [Standard-library expansion](#standard-library-expansion) | Complete baseline | The accepted filesystem, process/environment, time, ordering/search, text, and deterministic-randomness surfaces are implemented and documented; owned signatures migrate in the release-critical path. |
-| [Source-hosted standard library](#source-hosted-standard-library) | Complete baseline | An exact native inventory, explicit intrinsic declarations, a minimal UTF-8 kernel, source-hosted text/path algorithms, and demand-driven standard reachability are implemented; collector and ownership hooks are migrated later. |
+| [Source-hosted standard library](#source-hosted-standard-library) | Complete baseline | An exact native inventory, explicit intrinsic declarations, a minimal UTF-8 kernel, source-hosted text/path algorithms, and demand-driven standard reachability are implemented; collector hooks are removed and ownership signatures continue migrating. |
 | [Source-level debugging](#source-level-debugging) | Planned | After owned-model conformance, map generated C and ownership cleanup back to `.elx` locations and preserve usable names. |
 | [Language server](#language-server) | Candidate | Requires owned-model conformance, a scope decision, and the **Incremental queries** package. |
 | [API documentation generation](#api-documentation-generation) | Planned | After signature semantics stabilize, render API content, ownership-aware signatures, cross-links, and a distributable format. |
@@ -522,21 +522,24 @@ cyclic or stable graph references without restoring implicit tracing ownership.
 
 ### Promotion and tracing-GC removal
 
-> Status: Planned.
+> Status: Complete. Owned references, iterator state, and variadic packs now
+> use provenance-bounded stack storage; compatibility-only escaping storage is
+> classified and released at process exit. Collector strategy, initialization,
+> roots, thread attachment, toolchain probing, headers, and link inputs are
+> gone. The 0.11 boundary now names **Race-safe concurrency**.
 >
-> Blocked by: **Owned core values and collections**, **Inline first-class
-> closures**, and **Explicit shared and graph ownership**.
+> Blocked by: **None**.
 
 **Goal:** Remove implicit managed storage so address-taking, borrowing, and
 ordinary callable construction have no hidden allocation or collector cost.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Managed-root inventory** | Classify every remaining promotion, closure, iterator, vararg, collection, formatter, standard-library, thread, and runtime dependency on collector-managed storage. | An inventory test fails when an unclassified managed allocation or root-registration hook is added. |
-| **Stack reference lowering** | Keep locals and temporaries in their natural storage according to proven provenance and remove conservative address-taken promotion from ordinary reference formation. | Taking and passing a nonescaping reference performs no allocation, while every attempted escape is rejected by checking rather than made safe by promotion. |
-| **Runtime ownership migration** | Replace each remaining managed allocation with stack storage, unique ownership, `Box`, `Shared`, `Store`, or an explicitly justified process-lifetime allocation. | Every replacement has exact cleanup and cost behavior and preserves trap, evaluation, and identity rules. |
-| **Collector removal** | Delete collector initialization, root management, thread registration, backend paths, toolchain discovery, and the Boehm dependency; delete or narrow `src/promotion.rs` to any independently justified analysis. | Generated executables contain no tracing collector, the full suite runs under leak and address sanitizers, and documentation has no live GC guarantee or prerequisite. |
-| **Before-and-after evidence** | Run the fixed promotion, closure, collection, and cross-thread cost workloads and record the change in `cost_model.md` and `release.md`. | The evidence demonstrates which hidden allocations and retention sources disappeared on both supported targets. |
+| **Managed-root inventory (done)** | Classify every remaining promotion, closure, iterator, vararg, collection, formatter, standard-library, thread, and runtime dependency on collector-managed storage. | An inventory test fails when an unclassified managed allocation or root-registration hook is added. |
+| **Stack reference lowering (done)** | Keep locals and temporaries in their natural storage according to proven provenance and remove conservative address-taken promotion from ordinary reference formation. | Taking and passing a nonescaping reference performs no allocation, while every attempted escape is rejected by checking rather than made safe by promotion. |
+| **Runtime ownership migration (done)** | Replace each remaining managed allocation with stack storage, unique ownership, `Box`, `Shared`, `Store`, or an explicitly justified process-lifetime allocation. | Every replacement has exact cleanup and cost behavior and preserves trap, evaluation, and identity rules. |
+| **Collector removal (done)** | Delete collector initialization, root management, thread registration, backend paths, toolchain discovery, and the Boehm dependency; delete or narrow `src/promotion.rs` to any independently justified analysis. | Generated executables contain no tracing collector, the full suite runs under leak and address sanitizers, and documentation has no live GC guarantee or prerequisite. |
+| **Before-and-after evidence (done)** | Run the fixed promotion, closure, collection, and cross-thread cost workloads and record the change in `cost_model.md` and `release.md`. | The evidence demonstrates which hidden allocations and retention sources disappeared on both supported targets. |
 
 ### Race-safe concurrency
 

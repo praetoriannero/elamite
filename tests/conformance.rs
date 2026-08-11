@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use elamite::backend::Target;
@@ -196,10 +197,7 @@ fn generated_c_is_clean_under_address_and_undefined_behavior_sanitizers() {
                 OsString::from("-fsanitize=address,undefined"),
                 OsString::from("-fno-omit-frame-pointer"),
             ],
-            runtime_environment: vec![(
-                OsString::from("ASAN_OPTIONS"),
-                OsString::from("detect_leaks=0"),
-            )],
+            runtime_environment: vec![(OsString::from("ASAN_OPTIONS"), sanitizer_options())],
         },
     )
     .expect("run instrumented fixture");
@@ -222,7 +220,7 @@ fn concurrency_contract_matches_the_available_target_and_optimization_matrix() {
         targets.push(Target::X86);
     } else {
         eprintln!(
-            "skipping x86 concurrency execution: the host cannot build and run a 32-bit C/GC/thread probe"
+            "skipping x86 concurrency execution: the host cannot build and run a 32-bit C/thread probe"
         );
     }
     let report = run_suite(
@@ -262,10 +260,7 @@ fn concurrency_generated_c_is_clean_under_address_and_undefined_sanitizers() {
                 OsString::from("-fsanitize=address,undefined"),
                 OsString::from("-fno-omit-frame-pointer"),
             ],
-            runtime_environment: vec![(
-                OsString::from("ASAN_OPTIONS"),
-                OsString::from("detect_leaks=0:halt_on_error=1"),
-            )],
+            runtime_environment: vec![(OsString::from("ASAN_OPTIONS"), sanitizer_options())],
         },
     )
     .expect("run instrumented concurrency fixtures");
@@ -296,10 +291,7 @@ fn concurrency_stress_is_clean_under_thread_sanitizer() {
             ],
             runtime_environment: vec![(
                 OsString::from("TSAN_OPTIONS"),
-                // Boehm stops collector threads with signals. TSan reports
-                // the collector mechanism itself unless this unrelated
-                // diagnostic is disabled; data-race reports remain fatal.
-                OsString::from("halt_on_error=1:report_signal_unsafe=0"),
+                OsString::from("halt_on_error=1"),
             )],
         },
     )
@@ -381,12 +373,10 @@ fn x86_runtime_available() -> bool {
     let executable = source.with_extension("bin");
     if fs::write(
         &source,
-        "#define GC_THREADS 1\n\
-         #include <stdint.h>\n\
+        "#include <stdint.h>\n\
          #include <pthread.h>\n\
-         #include <gc.h>\n\
-         static void *worker(void *unused) { (void)unused; return GC_MALLOC(1U); }\n\
-         int main(void) { pthread_t thread; GC_INIT(); GC_allow_register_threads(); \
+         static void *worker(void *unused) { (void)unused; return NULL; }\n\
+         int main(void) { pthread_t thread; \
          if (pthread_create(&thread, NULL, worker, NULL) != 0) return 1; \
          return pthread_join(thread, NULL) == 0 ? 0 : 1; }\n",
     )
@@ -397,7 +387,7 @@ fn x86_runtime_available() -> bool {
     let compiled = Command::new("cc")
         .args(["-m32", "-std=c99"])
         .arg(&source)
-        .args(["-lgc", "-lpthread", "-o"])
+        .args(["-lpthread", "-o"])
         .arg(&executable)
         .output()
         .is_ok_and(|output| output.status.success());
@@ -408,6 +398,41 @@ fn x86_runtime_available() -> bool {
     let _ = fs::remove_file(source);
     let _ = fs::remove_file(executable);
     available
+}
+
+fn sanitizer_options() -> OsString {
+    if leak_sanitizer_available() {
+        OsString::from("detect_leaks=1:halt_on_error=1")
+    } else {
+        eprintln!("leak sanitizer unavailable on this host; address/undefined checks continue");
+        OsString::from("detect_leaks=0:halt_on_error=1")
+    }
+}
+
+fn leak_sanitizer_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let source = std::env::temp_dir().join(format!(
+            "elamite-lsan-probe-{}-{serial}.c",
+            std::process::id()
+        ));
+        let executable = source.with_extension("bin");
+        let available = fs::write(&source, "int main(void) { return 0; }\n").is_ok()
+            && Command::new("cc")
+                .args(["-std=c99", "-fsanitize=leak"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .is_ok_and(|output| output.status.success())
+            && Command::new(&executable)
+                .output()
+                .is_ok_and(|output| output.status.success());
+        let _ = fs::remove_file(source);
+        let _ = fs::remove_file(executable);
+        available
+    })
 }
 
 fn contains_file_named(directory: &Path, name: &str) -> bool {

@@ -159,9 +159,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after explicit shared and graph ownership. Ordinary
-/// driver entry points still stop before backend lowering until implicit
-/// promotion and tracing-collector dependencies have been removed.
+/// The temporary boundary after promotion and tracing-GC removal. Ordinary
+/// driver entry points stop before backend lowering until race-safe
+/// concurrency replaces the 0.10 shared-memory contract.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -170,8 +170,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has explicit shared and graph ownership, but \
-                 promotion and tracing-GC removal is not implemented yet",
+                "semantic revision 0.11.0-draft is collector-free, but race-safe concurrency is \
+                 not implemented yet",
             )
         })
 }
@@ -1616,8 +1616,7 @@ impl<'a> Checker<'a> {
                     )
                 });
                 let (operand_type, operand_place) = self.check_expr(operand, ExpectedType::None);
-                let composite_literal_exception = operand.kind == SyntaxKind::RecordExpression
-                    && !self.resolved.semantic_revision.supports_owned_surface();
+                let composite_literal_exception = operand.kind == SyntaxKind::RecordExpression;
                 // A collection interior is an assignable place but never a
                 // safe-reference target (SPEC 3.2), so `permits_safe_reference`
                 // gates both forms and `&var` additionally requires mutability.

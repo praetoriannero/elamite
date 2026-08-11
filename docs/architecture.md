@@ -7,8 +7,8 @@ The descriptions below reflect the executable compiler targeting Specification
 0.10 plus the temporary 0.11 frontend seam.
 Ordinary shallow-copy lowering and collection representations are implemented;
 direct collection state snapshots its shallow iterable and bound once, while a
-user-defined iterator is selected statically and promoted into managed hidden
-state for repeated `next` calls. Threads, channels, and mutex operations use
+user-defined iterator is selected statically and stored in stable hidden state
+for repeated `next` calls. Threads, channels, and mutex operations use
 shallow values. Pointer arithmetic and indexing are implemented, and pointer
 ordering lowers null cases through explicit equality guards before any C
 relational operator. POSIX start,
@@ -84,7 +84,7 @@ Logical copies are now explicitly the compatibility operation
 `OwnershipUseKind::LegacyCopy`. Only that variant enters the 0.10 copy
 materialization path. Owned moves and bitwise copies lower as explicit
 ownership uses whose C representation is an ordinary temporary transfer;
-neither operation can select recursive cloning or shallow managed sharing.
+neither operation can select recursive cloning or shallow compatibility sharing.
 
 Typed IR distinguishes numeric arithmetic from raw-pointer offset and distance
 operations. Pointer indexing adapts to an element-scaled offset followed by a
@@ -108,7 +108,7 @@ for future inline movement.
 
 The typed and control-flow IR classify ordinary `String` copies as
 shared-backing operations. Ordinary copies directly preserve the two-word
-descriptor, whose pointer names writable managed bytes; mutable access does not
+descriptor, whose pointer names writable compatibility bytes; mutable access does not
 detach. Thread environments, channel messages, and join results preserve that
 pointer directly, as do mutex storage and returned values. `Vec` uses an inline
 pointer/length/capacity descriptor and mutating calls carry the evaluated

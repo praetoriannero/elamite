@@ -73,8 +73,8 @@ pub enum Rvalue {
         captures: Vec<TemporaryId>,
     },
     Load(ControlFlowPlace),
-    /// The address of a place. Its root local is promoted, so the address is
-    /// stable for as long as the reference is reachable.
+    /// The address of a place. Owned-model provenance keeps the place alive;
+    /// compatibility lowering may give its root stable process lifetime.
     AddressOf(ControlFlowPlace),
     /// A non-owning view over an array, vector, or existing slice place.
     SliceOf {
@@ -137,9 +137,10 @@ pub enum Rvalue {
         slot: usize,
         arguments: Vec<TemporaryId>,
     },
-    /// Allocates a managed cell, initializes it from a temporary, and yields
-    /// its address. This backs a referenced composite literal.
-    AllocateManaged {
+    /// Places a value in stable temporary storage and yields its address.
+    /// Owned lowering uses a function-local cell; compatibility lowering uses
+    /// process-lifetime storage to retain its historical escaping semantics.
+    AddressOfStableTemporary {
         value: TemporaryId,
         value_type: TypeId,
     },
@@ -352,10 +353,8 @@ pub struct ControlFlowFunction {
     /// Source destruction requirements retained beside their elaborated flags.
     pub drop_requirements: Vec<DropRequirement>,
     pub drop_flags: Vec<DropFlag>,
-    /// Locals promoted to managed storage; see [`TypedFunction::promoted_locals`].
+    /// Compatibility locals promoted to stable process-lifetime storage.
     pub promoted_locals: BTreeSet<LocalBindingId>,
-    /// See [`TypedFunction::allocates_managed`].
-    pub allocates_managed: bool,
     pub closure: Option<TypedClosureBody>,
     pub temporary_types: Vec<TypeId>,
     pub entry: BlockId,
@@ -447,12 +446,6 @@ pub struct ControlFlowProgram {
     pub enums: Vec<TypedEnum>,
     /// Vtables reachable through trait objects; see [`Vtable`].
     pub vtables: Vec<Vtable>,
-    /// Whether lowering produced any managed allocation, promoted storage, or
-    /// managed root. The backend engages `ManagedMemoryStrategy` — and the
-    /// driver links its native libraries — only when this is set, so programs
-    /// that never need the collector keep a dependency-free translation unit.
-    /// Milestone 10 promotion analysis is what turns this on.
-    pub requires_managed_memory: bool,
 }
 
 impl ControlFlowProgram {

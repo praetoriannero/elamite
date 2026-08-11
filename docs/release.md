@@ -18,7 +18,7 @@ is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 | Runtime stress | `12_runtime_stress`, repeated in debug and release, plus the callback, trap, and C harness process tests in `tests/backend.rs` |
 | Diagnostics | `malformed_semantic_inputs_stop_at_diagnostics_without_internal_leaks` and the focused compile-fail suites |
 | Performance | `benchmarks/m19-baseline.sh` and `benchmarks/m19-baseline.tsv`; `cost_model.md` and the allocation/copied-byte workloads in `benchmarks/memory-cost-baseline.sh` |
-| Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib/Boehm prerequisites, native concurrency, and remaining foreign-thread restrictions |
+| Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib prerequisites, collector-free native concurrency, and remaining foreign-thread restrictions |
 | Version identity | `elamc --version` reports both the compiler version and `spec.md` revision; `command_line_version_reports_the_specification_revision` locks the format |
 | Rights/notices | MIT `LICENSE`, Cargo `license = "MIT"`, the `README.md` third-party notice, `Cargo.lock`, and `publish = false` |
 
@@ -35,9 +35,9 @@ cargo run -- conformance examples/spec_demo --all-modes
 cargo run -- conformance tests/fixtures/conformance --all-modes
 ```
 
-The x86 cells require a working 32-bit libc, C compiler, and Boehm development
-library. CI owns that installed environment; a local machine without multilib
-cannot claim those cells from a frontend-only run.
+The x86 cells require a working 32-bit libc and C compiler. CI owns that
+installed environment; a local machine without runnable multilib cannot claim
+those cells from a frontend-only run.
 
 ## 0.11 migration progress
 
@@ -59,9 +59,11 @@ now use synchronized explicit reference counts with deterministic last-owner
 cleanup, while `Store`/`Handle` provide checked generational graph identity,
 consuming iteration, and stale or wrong-store traps. Store element borrows
 block relocation and removal, and pointer-width-neutral C99 lowering is covered
-on x86 and x86-64. The temporary boundary has advanced to promotion and
-tracing-GC removal. The compiling 0.10 path and its shallow representation
-remain available unchanged.
+on x86 and x86-64. Owned references, iterator state, and variadic packs now use
+stack storage proven by provenance. The collector strategy and every generated
+root, initialization, attachment, header, and link hook are removed; the 0.10
+path preserves shallow identity with a normal-exit process-lifetime registry.
+The temporary boundary has advanced to race-safe concurrency.
 
 ### Owned-core baseline comparison
 
@@ -115,6 +117,33 @@ separately executes shared/weak lifetime transitions, generational store
 reuse, consuming iteration, stale and wrong-store traps, borrow exclusion, and
 pointer-width-neutral C99 layouts; those semantic checks are not benchmark
 thresholds.
+
+### Promotion and tracing-GC removal comparison
+
+The required `benchmarks/memory-cost-baseline.sh` comparison used parent commit
+`ca510d0` and this collector-removal implementation on 2026-08-10/11 (Linux
+x86-64, rustc 1.89.0, GCC 15.2). All six workload hashes, explicit `memcpy`
+counters, and non-thread allocation totals remained stable except for the
+thread-registry node, which is now included in the ordinary allocation counter
+instead of being allocated directly by the collector API.
+
+| Workload | Allocations, before → after | Bytes, before → after | Scanned allocations / bytes, before → after | `memcpy` calls / bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `aggregate_closure` | 6 → 6 | 172 → 172 | 2 / 112 → 0 / 0 | 3 / 25 |
+| `cross_thread` | 1,013 → 1,014 | 32,512 → 32,536 | 1,005 / 32,472 → 0 / 0 | 8 / 32 |
+| `function_loop` | 2 → 2 | 82 → 82 | 0 / 0 → 0 / 0 | 1 / 17 |
+| `map_set_copy` | 17 → 17 | 1,544 → 1,544 | 2 / 56 → 0 / 0 | 12 / 720 |
+| `string_copy` | 2 → 2 | 257 → 257 | 0 / 0 → 0 / 0 | 3 / 256 |
+| `vector_copy` | 6 → 6 | 1,008 → 1,008 | 0 / 0 → 0 / 0 | 5 / 496 |
+
+Zero scanned counters are structural evidence: allocations can still contain
+pointers, but no runtime scans them. The WSL2 host compiled the complete x86
+generated-C and target-width test matrix but could not execute the x86 benchmark
+binary, so x86 runtime observations remain CI-owned rather than fabricated.
+Address/undefined-behavior sanitizer runs now enable leak detection whenever a
+host probe can execute LeakSanitizer. This WSL2 session cannot run LSan under
+its ptrace wrapper, so local validation used ASan/UBSan plus normal-exit cleanup
+tests; CI remains responsible for the LSan-enabled cell.
 
 ## Language surface changes
 

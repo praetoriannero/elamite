@@ -1,9 +1,6 @@
 use std.sync.TryReceiveError
 use std.sync.TrySendError
 
-@importc("GC_gcollect", "gc.h")
-fn collect()
-
 @importc("elamite_conformance_callback", "concurrency_callback.h")
 fn invoke_callback(callback: *fn(i32) -> i32, value: i32) -> i32
 
@@ -13,7 +10,6 @@ fn double(value: i32) -> i32:
 fn callback_worker() -> i32:
     let rooted = @vec[String.from("registered")]
     unsafe:
-        collect()
         let callback: &fn(i32) -> i32 = double
         let result = invoke_callback(callback as *fn(i32) -> i32, 21)
         return result + rooted.len() as i32

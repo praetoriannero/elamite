@@ -203,7 +203,7 @@ fn nested_scopes() -> ():
 /// Runs the frontend far enough to inspect lowered IR. Reference *lowering* is
 /// Phase 3 of Milestone 10, so a body containing `&` still produces lowering
 /// diagnostics; promotion is computed from syntax and is available regardless.
-fn lowered(source: &str) -> (elamite::ir::TypedIrProgram, bool) {
+fn lowered(source: &str) -> elamite::ir::TypedIrProgram {
     let (_sources, resolved) = resolve_source(source);
     let mut typed = elamite::types::resolve_types(&resolved);
     assert!(typed.diagnostics.is_empty(), "{:?}", typed.diagnostics);
@@ -211,7 +211,6 @@ fn lowered(source: &str) -> (elamite::ir::TypedIrProgram, bool) {
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let high_level = elamite::ir::lower_typed_ir(&resolved, &mut typed.program, &checked.program);
     let control_flow = elamite::ir::lower_control_flow(&high_level.program, &typed.program);
-    let requires_managed_memory = control_flow.requires_managed_memory;
     for function in &control_flow.functions {
         let matching = high_level
             .program
@@ -224,12 +223,12 @@ fn lowered(source: &str) -> (elamite::ir::TypedIrProgram, bool) {
             "control-flow lowering must carry promotion forward unchanged"
         );
     }
-    (high_level.program, requires_managed_memory)
+    high_level.program
 }
 
 #[test]
-fn promotion_reaches_the_ir_and_drives_the_managed_memory_flag() {
-    let (program, requires_managed_memory) = lowered(
+fn compatibility_promotion_reaches_the_ir() {
+    let program = lowered(
         r#"
 fn takes_address() -> ():
     let value = 1
@@ -243,12 +242,8 @@ fn takes_address() -> ():
         .find(|function| function.name == "takes_address")
         .expect("the function is lowered");
     assert_eq!(function.promoted_locals.len(), 1);
-    assert!(
-        requires_managed_memory,
-        "a promoted local requires managed storage"
-    );
 
-    let (program, requires_managed_memory) = lowered(
+    let program = lowered(
         r#"
 fn plain() -> ():
     let value = 1
@@ -261,10 +256,6 @@ fn plain() -> ():
         .find(|function| function.name == "plain")
         .expect("the function is lowered");
     assert!(function.promoted_locals.is_empty());
-    assert!(
-        !requires_managed_memory,
-        "a program with no promoted local or allocating value stays collector-free"
-    );
 }
 
 #[test]

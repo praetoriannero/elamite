@@ -11,12 +11,6 @@ impl<'a> CEmitter<'a> {
                 self.output.push_str("int main(void) {\n");
             }
             self.output.push_str("    el_cost_begin();\n");
-            if self.program.requires_managed_memory {
-                self.emit_managed_operation(ManagedMemoryOperation::Initialize);
-                if self.uses_thread_lifecycle() {
-                    self.output.push_str("    GC_allow_register_threads();\n");
-                }
-            }
             self.output
                 .push_str("    const char *selected = getenv(\"ELAMITE_TEST\");\n");
             if entries.is_empty() {
@@ -108,21 +102,12 @@ impl<'a> CEmitter<'a> {
             arguments: Vec::new(),
             self_type: None,
         });
-        // The collector is initialized before any Elamite code runs. A library
-        // package emits no shim, so initialization is the linking
-        // executable's responsibility.
         if self.uses_process_arguments() {
             self.output.push_str("int main(int argc, char **argv) {\n    el_process_argc = argc; el_process_argv = argv;\n");
         } else {
             self.output.push_str("int main(void) {\n");
         }
         self.output.push_str("    el_cost_begin();\n");
-        if self.program.requires_managed_memory {
-            self.emit_managed_operation(ManagedMemoryOperation::Initialize);
-            if self.uses_thread_lifecycle() {
-                self.output.push_str("    GC_allow_register_threads();\n");
-            }
-        }
         let _ = writeln!(self.output, "    (void){symbol}();");
         if self.uses_thread_lifecycle() {
             self.output.push_str("    el_thread_shutdown_all();\n");

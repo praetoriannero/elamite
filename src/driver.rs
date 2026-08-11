@@ -69,8 +69,7 @@ pub struct Compilation {
     pub control_flow_ir: ControlFlowProgram,
     pub generated_c: String,
     pub entry: Option<DeclarationId>,
-    /// Native libraries the generated unit requires, contributed by the
-    /// managed-memory strategy. Empty unless lowering produced managed storage.
+    /// Native libraries required by emitted platform runtime helpers.
     pub native_libraries: Vec<String>,
 }
 
@@ -599,8 +598,7 @@ fn build_compilation(
             }
             command.args(&package.link_options);
         }
-        // Runtime libraries follow the manifest's own link inputs so a
-        // dependency that references the collector still resolves.
+        // Runtime libraries follow the manifest's own link inputs.
         for library in &compilation.native_libraries {
             command.arg(format!("-l{library}"));
         }
@@ -787,7 +785,7 @@ fn tool_failure(
     tool: &str,
     output: &Output,
     c_path: &Path,
-    native_libraries: &[String],
+    _native_libraries: &[String],
 ) -> Diagnostic {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -796,26 +794,10 @@ fn tool_failure(
     } else {
         stderr.trim()
     };
-    // A missing collector development package is the likeliest cause once a
-    // program needs managed storage, and the raw C error for it is opaque.
-    let hint = if native_libraries.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nthis program needs managed storage and links {}; \
-             ensure the development package providing its headers and link \
-             archive is installed",
-            native_libraries
-                .iter()
-                .map(|library| format!("-l{library}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-    };
     Diagnostic::new(
         Category::Toolchain,
         format!(
-            "{tool} failed with status {}; generated C retained at {}{}{hint}",
+            "{tool} failed with status {}; generated C retained at {}{}",
             output.status,
             c_path.display(),
             if details.is_empty() {
