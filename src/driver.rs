@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::backend::{COptions, emit_c};
-use crate::check::{check_for_target, check_moves, semantic_revision_boundary};
+use crate::check::{
+    check_borrows, check_for_target, check_moves, infer_provenance_signatures,
+    semantic_revision_boundary,
+};
 pub use crate::config::Optimization;
 use crate::config::{CompilerFeatures, Target};
 use crate::diagnostics::{Category, Diagnostic};
@@ -140,11 +143,19 @@ pub fn check_frontend_with_features(
         return Err(checked.diagnostics);
     }
     if resolved.semantic_revision.supports_owned_surface() {
+        let diagnostics = infer_provenance_signatures(&resolved, &mut type_output.program);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
         let high_level = lower_typed_ir(&resolved, &mut type_output.program, &checked.program);
         if !high_level.diagnostics.is_empty() {
             return Err(high_level.diagnostics);
         }
         let diagnostics = check_moves(&resolved, &mut type_output.program, &high_level.program);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+        let diagnostics = check_borrows(&resolved, &mut type_output.program, &high_level.program);
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
@@ -374,6 +385,12 @@ pub fn compile_tests_with_features(
     if !checked.diagnostics.is_empty() {
         return Err(checked.diagnostics);
     }
+    if resolved.semantic_revision.supports_owned_surface() {
+        let diagnostics = infer_provenance_signatures(&resolved, &mut type_output.program);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+    }
     let mut typed = type_output.program;
     let high_level = lower_typed_ir(&resolved, &mut typed, &checked.program);
     if !high_level.diagnostics.is_empty() {
@@ -381,6 +398,10 @@ pub fn compile_tests_with_features(
     }
     if resolved.semantic_revision.supports_owned_surface() {
         let diagnostics = check_moves(&resolved, &mut typed, &high_level.program);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+        let diagnostics = check_borrows(&resolved, &mut typed, &high_level.program);
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
@@ -535,8 +556,14 @@ fn build_compilation(
             )]
         })?;
     }
-    let (metadata, metadata_path, dependency_metadata_paths) =
-        materialize_package_metadata(graph, &compilation.resolved, sources, options, &stem)?;
+    let (metadata, metadata_path, dependency_metadata_paths) = materialize_package_metadata(
+        graph,
+        &compilation.resolved,
+        &compilation.typed,
+        sources,
+        options,
+        &stem,
+    )?;
     let compiler = options
         .c_compiler
         .clone()
@@ -623,6 +650,7 @@ fn build_compilation(
 fn materialize_package_metadata(
     graph: &PackageGraph,
     resolved: &ResolvedProgram,
+    typed: &TypedProgram,
     sources: &SourceManager,
     options: &BuildOptions,
     root_stem: &str,
@@ -654,7 +682,7 @@ fn materialize_package_metadata(
             path
         };
         let metadata =
-            crate::artifact::PackageMetadata::collect(graph, resolved, sources, package_id);
+            crate::artifact::PackageMetadata::collect(graph, resolved, typed, sources, package_id);
         metadata
             .write(&path)
             .map_err(|error| vec![Diagnostic::new(Category::Toolchain, error)])?;

@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Structural borrow provenance**
+> Next planned milestone: **Deterministic destruction**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -22,8 +22,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Migration seam and accepted surface](#migration-seam-and-accepted-surface) | Complete | Package revision selection, owned slice/closure/borrow syntax, `std.ast` 3.0 selection, canonical mutable slices, and the compatibility boundary are implemented. |
 | [Ownership facts and explicit use IR](#ownership-facts-and-explicit-use-ir) | Complete | Canonical capabilities, projected places, ordered ownership uses in both IR levels, and the legacy-copy backend seam are implemented. |
 | [Move and initialization checking](#move-and-initialization-checking) | Complete | Typed-IR place-state dataflow enforces moves, initialization, partial moves, reinitialization, indexed extraction, and conservative control-flow joins. |
-| [Structural borrow provenance](#structural-borrow-provenance) | Planned — next | Infer hidden provenance, enforce shared/exclusive access, and carry borrows structurally through values. |
-| [Deterministic destruction](#deterministic-destruction) | Planned | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
+| [Structural borrow provenance](#structural-borrow-provenance) | Complete | Hidden provenance, shared/exclusive loans, structural propagation, public metadata, receiver adaptation, and robustness coverage are implemented. |
+| [Deterministic destruction](#deterministic-destruction) | Planned — next | Elaborate drop glue and cleanup through every ordinary control-flow exit without adding unwinding. |
 | [Owned core values and collections](#owned-core-values-and-collections) | Planned | Replace shallow mutable backing aliases with uniquely owned values, explicit cloning, slices, and ownership-aware APIs. |
 | [Inline first-class closures](#inline-first-class-closures) | Planned | Replace managed identity-sharing environments with nominal inline closure objects and explicit capture ownership. |
 | [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Planned | Add `Shared`, `Weak`, `Store`, and `Handle` as the deliberate alternatives to implicit aliasing and tracing ownership. |
@@ -409,7 +409,13 @@ ordinary control flow before owned resources depend on it.
 
 ### Structural borrow provenance
 
-> Status: Planned.
+> Status: Complete. Stable loan identities, backwards last-use liveness, and
+> structural value provenance enforce accesses over typed IR. Inferred return
+> sources are serialized in package metadata, and the driver boundary has
+> advanced to deterministic destruction. Shipped 0.10 standard declarations
+> with body-selected view sources temporarily retain all borrow-bearing inputs;
+> their exact owned signatures migrate with **Owned core values and
+> collections**.
 >
 > Blocked by: **Move and initialization checking**.
 
@@ -418,16 +424,16 @@ lifetime parameters in Elamite source.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Internal provenance model** | Add stable loan, provenance-variable, source, and constraint identities plus inference and region solving over control-flow locations. | Diagnostics retain source spans, inference terminates on recursive constraints, and generated syntax uses origin-aware locations rather than fabricated spans. |
-| **Shared and exclusive loans** | Enforce many shared or one exclusive access, movement and assignment restrictions while borrowed, reborrowing, and last-use loan termination. | Safe code cannot construct overlapping live `&var` access or mutate through an alias while a conflicting borrow is live. |
-| **Structural propagation** | Carry provenance through fields, tuples, slices, generic arguments, closure environments, iterators, returns, and trait objects. | Hiding a reference inside another value cannot extend its source lifetime or erase its exclusivity requirements. |
-| **Public-interface inference** | Infer and serialize the provenance relationships needed to check callers of functions, methods, traits, implementations, and dependencies without written lifetime parameters. | Separately checked packages agree on returned-borrow sources, ambiguous signatures receive a design-level diagnostic, and metadata identity includes the accepted semantic revision. |
-| **Receiver adaptation and dereference** | Implement Rust-style field and method autodereferencing for references and raw pointers, including mutable receiver selection; retain explicit `unsafe` requirements and runtime checks for raw traversal. | Safe-reference access is ergonomic, raw pointer access cannot leave `unsafe`, and method selection remains type-dependent rather than entering name resolution. |
-| **Borrow robustness suite** | Add compile-pass/fail matrices for branches, loops, aggregate replacement, nested generics, returned views, closures, iterators, methods, raw pointers, and macro-generated code. | Accepted programs have no dangling or conflicting access under sanitizers, and rejected cases produce bounded non-cascading diagnostics. |
+| **Internal provenance model (done)** | Add stable loan, provenance-variable, source, and constraint identities plus inference and region solving over control-flow locations. | Diagnostics retain source spans, inference terminates on recursive constraints, and generated syntax uses origin-aware locations rather than fabricated spans. |
+| **Shared and exclusive loans (done)** | Enforce many shared or one exclusive access, movement and assignment restrictions while borrowed, reborrowing, and last-use loan termination. | Safe code cannot construct overlapping live `&var` access or mutate through an alias while a conflicting borrow is live. |
+| **Structural propagation (done)** | Carry provenance through fields, tuples, slices, generic arguments, closure environments, iterators, returns, and trait objects. | Hiding a reference inside another value cannot extend its source lifetime or erase its exclusivity requirements. |
+| **Public-interface inference (done)** | Infer and serialize the provenance relationships needed to check callers of functions, methods, traits, implementations, and dependencies without written lifetime parameters. | Separately checked packages agree on returned-borrow sources, ambiguous signatures receive a design-level diagnostic, and metadata identity includes the accepted semantic revision. |
+| **Receiver adaptation and dereference (done)** | Implement Rust-style field and method autodereferencing for references and raw pointers, including mutable receiver selection; retain explicit `unsafe` requirements and runtime checks for raw traversal. | Safe-reference access is ergonomic, raw pointer access cannot leave `unsafe`, and method selection remains type-dependent rather than entering name resolution. |
+| **Borrow robustness suite (done)** | Add compile-pass/fail matrices for branches, loops, aggregate replacement, nested generics, returned views, closures, iterators, methods, raw pointers, and macro-generated code. | Accepted programs have no dangling or conflicting access under sanitizers, and rejected cases produce bounded non-cascading diagnostics. |
 
 ### Deterministic destruction
 
-> Status: Planned.
+> Status: Planned — next.
 >
 > Blocked by: **Structural borrow provenance**.
 

@@ -733,10 +733,31 @@ impl MoveChecker<'_> {
             }
         }
         if apply_self {
+            let borrows_place = matches!(expression.kind, TypedExpressionKind::AddressOf(_))
+                && expression.ownership.iter().any(|operation| {
+                    matches!(
+                        operation.kind,
+                        OwnershipUseKind::BorrowShared
+                            | OwnershipUseKind::BorrowExclusive
+                            | OwnershipUseKind::ReborrowShared
+                            | OwnershipUseKind::ReborrowExclusive
+                    )
+                });
             for operation in &expression.ownership {
                 let Some(place) = operation.place.clone().map(normalized_place) else {
                     continue;
                 };
+                if borrows_place
+                    && matches!(
+                        operation.kind,
+                        OwnershipUseKind::Move | OwnershipUseKind::Copy
+                    )
+                {
+                    // This operation transfers the newly produced reference,
+                    // not the borrowed source place attached to the same
+                    // expression for provenance analysis.
+                    continue;
+                }
                 match operation.kind {
                     OwnershipUseKind::Move => {
                         self.move_place(&place, expression.ty, expression.span, state);

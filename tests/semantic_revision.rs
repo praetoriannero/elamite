@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use elamite::check::{check_for_target, check_moves};
+use elamite::check::{check_borrows, check_for_target, check_moves, infer_provenance_signatures};
 use elamite::config::{SemanticRevision, Target};
 use elamite::diagnostics::Category;
 use elamite::driver::check_frontend;
@@ -110,6 +110,34 @@ fn owned_move_diagnostics_for_bits(
         lowered.diagnostics
     );
     check_moves(&resolved, &mut types.program, &lowered.program)
+}
+
+fn owned_borrow_diagnostics(name: &str, source: &str) -> Vec<elamite::diagnostics::Diagnostic> {
+    let package = TestPackage::new(name, source);
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "resolution failed: {:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty(), "{:#?}", types.diagnostics);
+    let traits = elamite::traits::check_traits(&resolved, &mut types.program);
+    assert!(traits.diagnostics.is_empty(), "{:#?}", traits.diagnostics);
+    let checked = check_for_target(&resolved, &mut types.program, 64);
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    let signature_diagnostics = infer_provenance_signatures(&resolved, &mut types.program);
+    if !signature_diagnostics.is_empty() {
+        return signature_diagnostics;
+    }
+    let lowered = lower_typed_ir(&resolved, &mut types.program, &checked.program);
+    assert!(lowered.diagnostics.is_empty(), "{:#?}", lowered.diagnostics);
+    let moves = check_moves(&resolved, &mut types.program, &lowered.program);
+    assert!(moves.is_empty(), "move checking failed: {moves:#?}");
+    check_borrows(&resolved, &mut types.program, &lowered.program)
 }
 
 #[test]
@@ -395,7 +423,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_move_checking() {
+fn owned_packages_stop_after_borrow_checking() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -407,12 +435,12 @@ fn owned_packages_stop_after_move_checking() {
         Err(diagnostics) => diagnostics,
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_eq!(diagnostics[0].category, Category::SemanticRevision);
-    assert!(
-        diagnostics[0]
-            .message
-            .contains("structural borrow provenance")
+    assert_eq!(
+        diagnostics[0].category,
+        Category::SemanticRevision,
+        "{diagnostics:#?}"
     );
+    assert!(diagnostics[0].message.contains("deterministic destruction"));
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
@@ -914,4 +942,317 @@ fn invalid(value: String) -> ():
     assert_eq!(signature(&x86), signature(&x86_64));
     assert_eq!(x86.len(), 1, "{x86:#?}");
     assert_eq!(x86[0].category, Category::Ownership);
+}
+
+#[test]
+fn borrow_conflict_design_fixture_is_active() {
+    let source = include_str!("fixtures/owned_model_design/fail/borrow_conflict.elx");
+    let diagnostics = owned_borrow_diagnostics("owned_borrow_fixture", source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].category, Category::Borrow);
+    assert!(diagnostics[0].message.contains("overlapping live borrow"));
+    assert_eq!(diagnostics[0].related.len(), 1);
+
+    let package = TestPackage::new("owned_borrow_driver", source);
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let driver = match check_frontend(&graph, &mut sources, Target::X86_64) {
+        Ok(_) => panic!("borrow conflict must stop before the destruction boundary"),
+        Err(diagnostics) => diagnostics,
+    };
+    assert_eq!(driver.len(), 1, "{driver:#?}");
+    assert_eq!(driver[0].category, Category::Borrow);
+}
+
+#[test]
+fn borrow_checking_ends_loans_at_last_use_and_allows_disjoint_places() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_nll",
+        r#"struct Pair:
+    left: i32
+    right: i32
+
+fn valid() -> ():
+    var point = Pair { left: 1, right: 2 }
+    let view = &point
+    println(view.left)
+    let derived = view.right + 1
+    point.left = 3
+    println(derived)
+
+    let left = &var point.left
+    let right = &var point.right
+    *left = 4
+    *right = 5
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
+
+#[test]
+fn borrow_checking_rejects_exclusive_aliases_moves_and_aggregate_replacement() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_conflicts",
+        r#"struct Pair:
+    name: String
+    left: i32
+    right: i32
+
+fn consume(value: Pair) -> ():
+    pass
+
+fn exclusive_alias() -> ():
+    var point = Pair { name: String.from("exclusive"), left: 1, right: 2 }
+    let edit = &var point.left
+    let alias = &point.left
+    println(*edit)
+    println(*alias)
+
+fn moved_owner() -> ():
+    var point = Pair { name: String.from("moved"), left: 1, right: 2 }
+    let view = &point
+    consume(point)
+    println(view.left)
+
+fn replaced_owner() -> ():
+    var point = Pair { name: String.from("replaced"), left: 1, right: 2 }
+    let view = &point.left
+    point = Pair { name: String.from("new"), left: 3, right: 4 }
+    println(*view)
+"#,
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Borrow)
+            .count(),
+        3,
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn borrow_provenance_propagates_structurally_and_rejects_local_escape() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_structural",
+        r#"struct View:
+    value: &i32
+
+fn wrap(value: &i32) -> View:
+    return View { value: value }
+
+fn identity(value: &i32) -> &i32:
+    return value
+
+fn local_escape() -> &i32:
+    let local = 1
+    return &local
+
+fn retained() -> ():
+    var local = 1
+    let wrapped = wrap(&local)
+    local = 2
+    println(*wrapped.value)
+
+fn valid(input: &i32) -> &i32:
+    return identity(input)
+"#,
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Borrow)
+            .count(),
+        2,
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("local or temporary"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("overlapping live borrow"))
+    );
+}
+
+#[test]
+fn borrow_interface_inference_rejects_ambiguous_sources() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_ambiguous",
+        r#"fn choose(left: &i32, right: &i32, first: bool) -> &i32:
+    if first:
+        return left
+    else:
+        return right
+"#,
+    );
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].category, Category::Borrow);
+    assert!(diagnostics[0].message.contains("ambiguous"));
+}
+
+#[test]
+fn borrow_checking_tracks_reborrows_aggregate_fields_and_deferred_uses() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_reborrows",
+        r#"struct Pair:
+    left: i32
+    right: i32
+
+struct Edits:
+    left: &var i32
+    right: &var i32
+
+fn disjoint_fields() -> ():
+    var pair = Pair { left: 1, right: 2 }
+    let edits = Edits { left: &var pair.left, right: &var pair.right }
+    *edits.left = 3
+    *edits.right = 4
+
+fn shared_reborrow(input: &var i32) -> ():
+    var slot = input
+    let child = &slot
+    *slot = 1
+    println(*child)
+
+fn exclusive_reborrow(input: &var i32) -> ():
+    var slot = input
+    let child = &var slot
+    *slot = 1
+    println(*child)
+
+fn deferred_use() -> ():
+    var value = 1
+    let view = &value
+    defer println(*view)
+    value = 2
+"#,
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Borrow)
+            .count(),
+        3,
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn borrow_interface_prefers_receiver_and_callers_retain_its_provenance() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_receiver",
+        r#"struct View:
+    value: &i32
+
+impl View:
+    fn select(self: &Self, other: &i32) -> &i32:
+        return self.value
+
+fn retained() -> ():
+    var source = 1
+    let other = 2
+    let view = View { value: &source }
+    let selected = view.select(&other)
+    source = 3
+    println(*selected)
+"#,
+    );
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].category, Category::Borrow);
+    assert!(diagnostics[0].message.contains("overlapping live borrow"));
+}
+
+#[test]
+fn borrow_interfaces_serialize_return_sources_in_package_metadata() {
+    let package = TestPackage::new(
+        "owned_borrow_metadata",
+        r#"pub fn identity(value: &i32) -> &i32:
+    return value
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let resolution = resolve(&graph, &mut sources);
+    assert!(
+        resolution.diagnostics.is_empty(),
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let resolved = resolution.program;
+    let mut types = resolve_types(&resolved);
+    assert!(types.diagnostics.is_empty(), "{:#?}", types.diagnostics);
+    let diagnostics = infer_provenance_signatures(&resolved, &mut types.program);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+
+    let metadata = elamite::artifact::PackageMetadata::collect(
+        &graph,
+        &resolved,
+        &types.program,
+        &sources,
+        &graph.root,
+    );
+    let identity = metadata
+        .public_api
+        .iter()
+        .find(|item| item.path == "root.identity")
+        .expect("public identity metadata");
+    assert_eq!(identity.return_provenance.as_deref(), Some("parameter:0"));
+    assert_eq!(metadata.semantic_revision, "0.11.0-draft");
+
+    let path = package.root.join("borrow-metadata.toml");
+    metadata.write(&path).expect("serialize borrow metadata");
+    let decoded =
+        elamite::artifact::PackageMetadata::read(&path).expect("deserialize borrow metadata");
+    assert_eq!(decoded, metadata);
+}
+
+#[test]
+fn owned_reference_formation_rejects_temporary_storage_and_mutable_shared_reborrows() {
+    let package = TestPackage::new(
+        "owned_borrow_formation",
+        r#"struct Value:
+    number: i32
+
+fn invalid(input: &i32) -> ():
+    var slot = input
+    let exclusive = &var slot
+    let temporary = &Value { number: 1 }
+"#,
+    );
+    let mut sources = SourceManager::new();
+    let graph = package.graph(&mut sources, SemanticRevision::V0_11);
+    let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
+        Ok(_) => panic!("invalid reference formation must stop during checking"),
+        Err(diagnostics) => diagnostics,
+    };
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.category == Category::Place)
+            .count(),
+        2,
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn borrow_provenance_flows_through_closure_environments_and_calls() {
+    let diagnostics = owned_borrow_diagnostics(
+        "owned_borrow_closure",
+        r#"fn retained() -> ():
+    var source = 1
+    let view = fn[&source]() -> &i32:
+        return source
+    let selected = view()
+    source = 2
+    println(*selected)
+"#,
+    );
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].category, Category::Borrow);
+    assert!(diagnostics[0].message.contains("overlapping live borrow"));
 }

@@ -74,6 +74,9 @@ pub enum Category {
     /// unsupported indexed extraction, or in another invalid move-state
     /// transition.
     Ownership,
+    /// A safe borrow conflicts with another live access, escapes its source,
+    /// or has an ambiguous public-interface provenance relationship.
+    Borrow,
     /// A struct or enum containment cycle does not cross an explicit safe
     /// reference or raw-pointer indirection (Milestone 6).
     Containment,

@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::docs;
 use crate::package::{PackageGraph, PackageId};
-use crate::resolution::{ItemId, ResolvedProgram, Visibility};
+use crate::resolution::{DeclarationId, ItemId, ResolvedProgram, Visibility};
 use crate::source::SourceManager;
+use crate::types::{ProvenanceSource, TypedProgram};
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicApi {
@@ -17,6 +18,8 @@ pub struct PublicApi {
     pub kind: String,
     pub signature: String,
     pub reexport: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_provenance: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +41,7 @@ impl PackageMetadata {
     pub fn collect(
         graph: &PackageGraph,
         resolved: &ResolvedProgram,
+        typed: &TypedProgram,
         sources: &SourceManager,
         package_id: &PackageId,
     ) -> Self {
@@ -45,11 +49,19 @@ impl PackageMetadata {
         let mut public_api = docs::extract(resolved, sources, package_id)
             .items
             .into_iter()
-            .map(|item| PublicApi {
-                path: item.path,
-                kind: format!("{:?}", item.kind),
-                signature: item.signature,
-                reexport: false,
+            .map(|item| {
+                let return_provenance = resolved
+                    .declarations
+                    .iter()
+                    .find(|declaration| public_path(resolved, declaration.id) == item.path)
+                    .and_then(|declaration| return_provenance(typed, declaration.id));
+                PublicApi {
+                    path: item.path,
+                    kind: format!("{:?}", item.kind),
+                    signature: item.signature,
+                    reexport: false,
+                    return_provenance,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -75,6 +87,7 @@ impl PackageMetadata {
                 kind: format!("{:?}", declaration.kind),
                 signature: docs::declaration_signature(&declaration.syntax, sources),
                 reexport: true,
+                return_provenance: return_provenance(typed, target),
             });
         }
         public_api.sort_by(|left, right| {
@@ -132,4 +145,38 @@ impl PackageMetadata {
         }
         Ok(metadata)
     }
+}
+
+fn public_path(resolved: &ResolvedProgram, declaration: DeclarationId) -> String {
+    let declaration = &resolved.declarations[declaration.index()];
+    let module = &resolved.modules[declaration.module.index()];
+    let mut components = vec!["root".to_string()];
+    components.extend(
+        module
+            .path
+            .iter()
+            .map(|part| resolved.symbol_text(*part).to_string()),
+    );
+    if let Some(parent) = declaration.parent_declaration {
+        components.push(
+            resolved
+                .symbol_text(resolved.declarations[parent.index()].name)
+                .to_string(),
+        );
+    }
+    components.push(resolved.symbol_text(declaration.name).to_string());
+    components.join(".")
+}
+
+fn return_provenance(typed: &TypedProgram, declaration: DeclarationId) -> Option<String> {
+    typed
+        .function_provenance
+        .get(&declaration)
+        .map(|provenance| match provenance.returned_from {
+            ProvenanceSource::Static => "static".to_string(),
+            ProvenanceSource::Receiver => "receiver".to_string(),
+            ProvenanceSource::Parameter(index) => format!("parameter:{index}"),
+            ProvenanceSource::ClosureCapture(index) => format!("capture:{index}"),
+            ProvenanceSource::AllBorrowingInputs => "all-borrowing-inputs".to_string(),
+        })
 }

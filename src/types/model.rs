@@ -64,6 +64,10 @@ pub struct TypedProgram {
     pub impl_trait_types: BTreeMap<ImplId, TypeId>,
     pub impl_target_types: BTreeMap<ImplId, TypeId>,
     pub obligations: Vec<TraitObligation>,
+    /// Inferred, source-elided provenance relationship for every callable
+    /// whose result may contain a borrow. This is semantic metadata, not a
+    /// source-level lifetime parameter.
+    pub function_provenance: BTreeMap<DeclarationId, FunctionProvenance>,
     /// Memoized canonical ownership facts. The cache is keyed only by stable
     /// canonical `TypeId`; body checking may intern more types without
     /// invalidating facts for existing identities.
@@ -89,6 +93,7 @@ impl Default for TypedProgram {
             impl_trait_types: BTreeMap::new(),
             impl_target_types: BTreeMap::new(),
             obligations: Vec::new(),
+            function_provenance: BTreeMap::new(),
             ownership_cache: BTreeMap::new(),
             foreign_fields: BTreeMap::new(),
             nominal_fields: BTreeMap::new(),
@@ -97,6 +102,24 @@ impl Default for TypedProgram {
             builtin_layout: BTreeMap::new(),
         }
     }
+}
+
+/// The source policy a borrow-bearing callable result retains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProvenanceSource {
+    Static,
+    Receiver,
+    Parameter(usize),
+    ClosureCapture(usize),
+    /// Conservative compatibility policy for a shipped 0.10 standard
+    /// declaration whose body-derived source is not yet represented exactly.
+    AllBorrowingInputs,
+}
+
+/// Public-interface provenance inferred without lifetime syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionProvenance {
+    pub returned_from: ProvenanceSource,
 }
 
 /// Result of canonicalizing every signature in a resolved program.
@@ -129,6 +152,13 @@ impl TypedProgram {
         }
         for obligation in &self.obligations {
             output.push_str(&format!("obligation {obligation:?}\n"));
+        }
+        for (declaration, provenance) in &self.function_provenance {
+            output.push_str(&format!(
+                "function {} return provenance {:?}\n",
+                declaration.index(),
+                provenance.returned_from
+            ));
         }
         output
     }

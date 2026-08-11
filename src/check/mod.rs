@@ -36,6 +36,7 @@
 //! source-order recursive-descent structure; materializing them as explicit
 //! IR metadata is Milestone 8's job, since no IR exists yet.
 
+mod borrows;
 mod calls;
 mod containment;
 mod coverage;
@@ -43,6 +44,7 @@ mod model;
 mod moves;
 mod patterns;
 
+pub use borrows::{check_borrows, infer_provenance_signatures};
 pub use model::*;
 pub use moves::check_moves;
 
@@ -157,9 +159,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after move and initialization checking. Structural
-/// borrow provenance is deliberately the next pass rather than being
-/// approximated by move-state analysis.
+/// The temporary boundary after structural borrow provenance. Deterministic
+/// destruction is deliberately the next pass rather than being approximated
+/// by ownership or loan analysis.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -168,8 +170,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has move and initialization checking, but \
-                 structural borrow provenance is not implemented yet",
+                "semantic revision 0.11.0-draft has structural borrow provenance, but \
+                 deterministic destruction is not implemented yet",
             )
         })
 }
@@ -1572,7 +1574,8 @@ impl<'a> Checker<'a> {
                     )
                 });
                 let (operand_type, operand_place) = self.check_expr(operand, ExpectedType::None);
-                let composite_literal_exception = operand.kind == SyntaxKind::RecordExpression;
+                let composite_literal_exception = operand.kind == SyntaxKind::RecordExpression
+                    && !self.resolved.semantic_revision.supports_owned_surface();
                 // A collection interior is an assignable place but never a
                 // safe-reference target (SPEC 3.2), so `permits_safe_reference`
                 // gates both forms and `&var` additionally requires mutability.
@@ -1602,16 +1605,57 @@ impl<'a> Checker<'a> {
                 } else {
                     Mutability::Shared
                 };
-                let ty = self.typed.types.intern(TypeKind::Reference {
-                    mutability,
-                    target: operand_type,
-                });
-                let reborrow = matches!(
-                    self.typed
-                        .types
-                        .kind(self.typed.types.resolve_inference(operand_type)),
-                    TypeKind::Reference { .. } | TypeKind::Slice { .. }
-                );
+                let operand_kind = self
+                    .typed
+                    .types
+                    .kind(self.typed.types.resolve_inference(operand_type))
+                    .clone();
+                let reborrow = self.resolved.semantic_revision.supports_owned_surface()
+                    && matches!(
+                        operand_kind,
+                        TypeKind::Reference { .. } | TypeKind::Slice { .. }
+                    );
+                let ty = match operand_kind {
+                    TypeKind::Reference {
+                        mutability: source_mutability,
+                        target,
+                    } if reborrow => {
+                        if mutable && source_mutability != Mutability::Mutable {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::Place,
+                                    "cannot form an exclusive reborrow through a shared reference",
+                                )
+                                .with_primary(node.span),
+                            );
+                        }
+                        self.typed
+                            .types
+                            .intern(TypeKind::Reference { mutability, target })
+                    }
+                    TypeKind::Slice {
+                        mutability: source_mutability,
+                        element,
+                    } if reborrow => {
+                        if mutable && source_mutability != Mutability::Mutable {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::Place,
+                                    "cannot form an exclusive reborrow through a shared slice",
+                                )
+                                .with_primary(node.span),
+                            );
+                        }
+                        self.typed.types.intern(TypeKind::Slice {
+                            mutability,
+                            element,
+                        })
+                    }
+                    _ => self.typed.types.intern(TypeKind::Reference {
+                        mutability,
+                        target: operand_type,
+                    }),
+                };
                 self.program
                     .ownership_uses
                     .entry(node.span)

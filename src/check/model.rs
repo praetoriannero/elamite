@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// Stable identities minted by structural borrow analysis. They are separate
+/// from source type identity because Elamite has no written lifetime syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LoanId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProvenanceVariableId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProvenanceConstraintId(pub u32);
+
 /// Milestones 6-7 output: per-expression classification and copied pattern
 /// bindings consumed by later lowering passes. Expression facts are keyed by
 /// source span since the syntax tree has no per-node stable identity.
