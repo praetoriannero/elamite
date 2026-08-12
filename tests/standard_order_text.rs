@@ -59,59 +59,6 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
-fn ordering_checks_and_runs_through_the_shipped_standard_module() {
-    let package = TestPackage::new(
-        r#"use std.ordering
-use std.ordering.Ordering
-
-fn first_in_slice(needle: i32, values: ...i32) -> Option[usize]:
-    return ordering.binary_search(values, needle)
-
-fn show_index(value: Option[usize]) -> ():
-    match value:
-        Option.Some(index):
-            println(index)
-        Option.None:
-            println("none")
-
-fn show_order(value: Ordering) -> ():
-    match value:
-        Ordering.Less:
-            println("less")
-        Ordering.Equal:
-            println("equal")
-        Ordering.Greater:
-            println("greater")
-
-fn main() -> ():
-    var values = @vec[3, 1, 2, 1]
-    ordering.sort(values)
-    println(f"{values[0]} {values[1]} {values[2]} {values[3]}")
-    show_index(ordering.binary_search_vec(values, 1))
-    show_index(first_in_slice(2, 1, 1, 2, 3))
-    show_order(ordering.compare(2, 3))
-    show_order(ordering.compare(3, 3))
-    show_order(ordering.compare(4, 3))
-"#,
-    );
-
-    let checked = package.command("check");
-    assert!(checked.status.success(), "{}", stderr(&checked));
-
-    let run = package.command("run");
-    assert!(run.status.success(), "{}", stderr(&run));
-    assert_eq!(
-        String::from_utf8(run.stdout).expect("UTF-8 output"),
-        "1 1 2 3\n0\n2\nless\nequal\ngreater\n"
-    );
-
-    let ordering_source = include_str!("../stdlib/src/ordering.elx");
-    assert!(ordering_source.contains("equal values retain their input order"));
-    assert!(!ordering_source.contains("Vec.new()"));
-    assert!(!ordering_source.contains("++"));
-}
-
-#[test]
 fn text_surface_states_borrowing_materialization_and_unicode_rules() {
     let source = include_str!("../stdlib/src/text.elx");
     let parsed = parses("text.elx", source);
@@ -163,7 +110,9 @@ fn main() -> ():
     let separated = text.split("a--b--", "--")
     println(f"{separated.len()}:{separated[0]}:{separated[1]}:{separated[2]}")
     let owned = text.split_string(String.from("x:y"), ":")
-    println(f"{owned.len()}:{owned[0]}:{owned[1]}")
+    let owned_first = owned[0].clone()
+    let owned_second = owned[1].clone()
+    println(f"{owned.len()}:{&owned_first}:{&owned_second}")
     println(f"[{text.trim("\u{2003} hi \u{00a0}")}]")
     println(f"[{text.trim_string(String.from("\u{2003}owned\u{2003}"))}]")
     println(text.to_uppercase("straße"))

@@ -42,7 +42,7 @@ fn compiler_sources_contain_no_collector_or_root_hook() {
 }
 
 #[test]
-fn process_lifetime_allocation_sites_stay_in_the_runtime_inventory() {
+fn process_lifetime_runtime_view_allocations_stay_in_one_inventory() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut sources = Vec::new();
     rust_sources(&root, &mut sources);

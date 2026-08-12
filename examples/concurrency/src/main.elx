@@ -1,32 +1,31 @@
-fn increment(value: i32) -> i32:
-    return value + 1
-
 fn main() -> ():
-    let (sender, receiver) = std.sync.unbounded_channel[i32]()
-    let worker = fn[sender]() -> i32:
-        let _ = sender.send(41)
-        sender.close()
-        return 42
-    let started = std.thread.spawn(worker)
-    match receiver.receive():
-        Option.Some(value):
-            println(value)
-        Option.None:
-            println("channel closed")
-    match started:
+    let (sender, receiver) = std.sync.channel[String](1)
+    let worker = fn[sender]() -> ():
+        let _ = sender.send(String.from("moved message"))
+    match std.thread.spawn(worker):
         Result.Ok(thread):
-            let copy = thread
-            println(thread.join())
-            println(copy.join())
-            println(copy.is_finished())
+            thread.join()
         Result.Err(_):
             println("spawn failed")
+    match receiver.receive():
+        Option.Some(message):
+            println(message)
+        Option.None:
+            println("channel closed")
 
-    let mutex = std.sync.Mutex[i32].new(10)
-    println(mutex.update(increment))
-    println(mutex.replace(20))
-    println(mutex.read())
+    let mutex = Shared[std.sync.Mutex[i32]].new(std.sync.Mutex[i32].new(10))
+    let child_mutex = mutex.clone()
+    let update = fn[child_mutex]() -> ():
+        let guard = (*child_mutex.get()).lock()
+        *guard.get_var() = 20
+    match std.thread.spawn(update):
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            println("spawn failed")
+    let guard = (*mutex.get()).lock()
+    println(*guard.get())
 
-    let atomic = std.sync.AtomicI32.new(5)
-    println(atomic.fetch_add(3))
-    println(atomic.load())
+    let atomic = Shared[std.sync.AtomicI32].new(std.sync.AtomicI32.new(5))
+    println((*atomic.get()).fetch_add(3))
+    println((*atomic.get()).load())

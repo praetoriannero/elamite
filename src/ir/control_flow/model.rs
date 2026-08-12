@@ -2,13 +2,10 @@
 
 use super::super::*;
 
-/// Explicit runtime representation policy selected before backend lowering.
-/// The C emitter consumes this fact instead of inferring a value model from
-/// source syntax or the package semantic revision.
+/// Runtime representation policy consumed by backend lowering.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ValueModel {
     #[default]
-    ShallowManaged,
     Owned,
 }
 

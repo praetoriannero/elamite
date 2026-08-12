@@ -1,463 +1,82 @@
-// The `//` is used to mark a comment
-// Multi-line comments use `//`
+// Authoritative Elamite 0.11 owned-model demonstration.
 
-// `use` is used to bring in symbols into the current module.
-use std.io
-
-// `pub` is used to make a symbol public.
-/// # Diagnostics
-/// Documentation comments attach to the declaration that follows them.
-pub mod diagnostics:
-
-    // `use` is allowed in any module.
-    use std.io
-    use super.UserId
-
-    // The return type of functions can be omitted if it returns
-    // the unit type, `()`.
-    pub fn report(message: String):
-        io.println(message)
-
-    pub fn default_user_id() -> UserId:
-        return 0
-
-// Type aliases are possible
-pub type UserId = u64
-
-// A public `use` re-exports an item without changing its identity.
-pub use root.diagnostics.report as report_diagnostic
-
-// Aliases expose parameters that remain variable and may specialize others.
-type NameMap[V] = Map[str, V]
-
-// `Point` derives multiple compiler-supported traits.
-struct Point(Default, PartialEq):
-    x: f64
-    y: f64
-
-impl Point:
-    pub fn new() -> Self:
-        // `default` is added as a method because of its trait derivation.
-        return Self.default()
-
-    // Inside an inherent implementation, `Self` is the complete target type.
-    fn translated(self: Self, dx: f64) -> Self:
-        return Point { x: self.x + dx, y: self.y }
-
-// A struct with a direct `&T` field cannot derive `Default`.
-// This derivation is illegal:
-// struct MyType(Default):
-//      my_field: &u32
-//
-// Safe references have no default, but raw pointers default to `null`.
-struct MyType(Default):
-    my_field: *u32
-
-// It is recommended to make these `Option` types.
-struct MyBetterType(Default):
-    my_field: Option[u32]
-
-struct Session:
-    active: bool
-    name: String
-
-impl Session:
-    pub fn new(name: String) -> Self:
-        return Self { active: true, name: name }
-
-    // Illegal location of struct field.
-    // Fields must be defined before methods for clarity.
-    // other: i32
-
-    // The return type is not needed here, but completely allowed / legal.
-    // `&var` is used to denote a mutable reference.
-    fn stop(self: &var Self) -> ():
-        self.active = false
-
-    // `*T` types can be created from `&T` types safely.
-    pub fn get_const_self_ptr(self: &Self) -> *Self:
-        return self as *Self
-
-    // `*var T` types can be created from `&var T` types safely, as well.
-    pub fn get_mut_self_ptr(self: &var Self) -> *var Self:
-        return self as *var Self
-
-    // `*T` types cannot safely be converted into reference types, `&T`.
-    // fn get_self_ptr_bad(self: *Self) -> &Self:
-    //      return self as &Self
-
-    // `*T` to `&T` can be done in an unsafe block.
-    // Unsafe functions are marked with `unsafe`.
-    unsafe pub fn get_self_ptr_unsafe(self: *Self) -> &Self:
-        unsafe:
-            return self as &Self
-
-    // Tuples are enclosed in `()`, and can be used as anonymous, heterogenous data structures.
-    fn unpack(self: &Self) -> (bool, String):
-        return (self.active, self.name)
-
-    // `str` is an immutable sequence of UTF-8 encoded characters.
-    fn status(self: &Self) -> str:
-        if self.active:
-            return "inherent active"
-        else:
-            return "inherent inactive"
-
-    // `String` is a standard-library mutable UTF-8 sequence.
-    fn status_string(self: &Self) -> String:
-        if self.active:
-            return String.from("active")
-
-        return String.from("inactive")
-
-struct Packet:
-    id: i32
-    body: str
-
-struct Address:
-    city: String
-
-struct Account:
-    name: String
-    address: Address
-
-struct DemoResourceState:
-    closed: bool
-
-struct DemoResource:
-    // Copies share state because the handle explicitly contains a reference.
-    state: &var DemoResourceState
-
-impl DemoResource:
-    fn is_closed(self: &Self) -> bool:
-        return self.state.closed
-
-    fn close(self: &Self) -> ():
-        // This resource's API defines `close` as idempotent.
-        self.state.closed = true
-
-struct IntTransform:
-    apply: &fn(i32) -> i32
-
-struct Chain[T]:
-    value: T
-    // Recursive containment crosses an explicit reference.
-    next: Option[&Chain[T]]
-
-enum State:
-    Count(i32)
-    Positioned { x: i32, y: i32 }
-    Disabled
-
-trait Toggle:
-    fn status(self: &Self) -> String
-
-    // Trait methods may provide default implementations.
-    fn category(self: &Self) -> str:
-        return "toggle"
-
-impl Toggle for Session:
-    fn status(self: &Self) -> String:
-        if self.active:
-            return String.from("trait active")
-        else:
-            return String.from("trait inactive")
-
-fn chain_length[T](node: &Chain[T]) -> i32:
-    match node.next:
-        Option.Some(next):
-            return 1 + chain_length(next)
-        Option.None:
-            return 1
-
-fn horizontal(point: Point) -> f64:
-    match point:
-        Point { x, .. }:
-            return x
-
-// A function reference `&fn(...) -> ...` holds a named function; input and
-// return types are always explicit.
-fn apply_offset(callback: &fn(i32) -> i32, value: i32) -> i32:
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
     return callback(value)
 
-// A function reference is produced only by naming a function. Closures are
-// separate anonymous nominal callable values and never convert to `&fn`.
-fn increment(value: i32) -> i32:
-    return value + 1
+fn main() -> ():
+    let original = @vec[String.from("a"), String.from("b")]
+    var duplicate = original.clone()
+    let moved = original
+    duplicate.append(String.from("c"))
+    println(moved.len())
+    println(duplicate.len())
 
-fn closure_demo(offset: i32) -> i32:
-    let add = fn[offset](value: i32):
-        return value + offset
-    return add(2)
+    var boxed = Box[String].new(String.from("box"))
+    println(&*boxed)
+    *boxed = String.from("changed")
+    println(&*boxed)
 
-// A user-defined trait object remains another stateful callback option.
-trait Transform:
-    fn apply(self: &Self, value: i32) -> i32
+    var map = Map[i32, i32].new()
+    map.insert(4, 7)
+    let key = 4
+    println(map.len())
+    println(map.contains_key(&key))
+    match map.get_var(&key):
+        Option.Some(found):
+            *found = 10
+        Option.None:
+            pass
+    match map.get(&key):
+        Option.Some(found):
+            println(*found)
+        Option.None:
+            pass
 
-struct AddOffset:
-    offset: i32
+    var fixed = [1, 2, 3]
+    let view = &fixed
+    println(view.len())
+    var mutable_view = &var fixed
+    mutable_view[1] = 9
+    println(fixed[1])
+    var sum = 0
+    for item in &fixed:
+        sum += *item
+    println(sum)
 
-impl Transform for AddOffset:
-    fn apply(self: &Self, value: i32) -> i32:
-        return value + self.offset
+    let label = String.from("owned")
+    let show = fn[label](value: i32) -> i32:
+        println(&label)
+        return value + 1
+    println(apply(show, 2))
 
-fn apply_transform(transform: &Transform, value: i32) -> i32:
-    return transform.apply(value)
-
-fn equivalent[T: PartialEq](left: &T, right: &T) -> bool:
-    return *left == *right
-
-// Mutual recursion uses named functions.
-fn is_even(value: i32) -> bool:
-    if value == 0:
-        return true
-    return is_odd(value - 1)
-
-fn is_odd(value: i32) -> bool:
-    if value == 0:
-        return false
-    return is_even(value - 1)
-
-fn make_demo_resource() -> DemoResource:
-    var state = DemoResourceState { closed: false }
-    return DemoResource { state: &var state }
-
-fn use_demo_resource(resource: DemoResource):
-    defer resource.close()
-    println(f"resource closed: {resource.is_closed()}")  // false
-
-fn use_demo_resource_block(resource: DemoResource):
-    // `defer:` defers several statements as one registration. A deferred block
-    // is an ordinary lexical scope and cannot redirect control, so `return`,
-    // `break`, `continue`, `?`, a nested `defer`, and `unsafe` are invalid
-    // inside it.
-    defer:
-        let closing = "closing demo resource"
-        println(closing)
-        resource.close()
-    println(f"resource closed: {resource.is_closed()}")  // false
-
-fn propagate_io(result: Result[i32, io.IoError]) -> Result[i32, io.IoError]:
-    // `?` propagates only the exact enclosing error type.
-    let value = result?
-    return Result.Ok(value)
-
-pub fn main() -> Result[(), io.IoError]:
-    report_diagnostic("starting spec demonstration")
-
-    let resource = make_demo_resource()
-    use_demo_resource(resource)
-    println(f"resource closed: {resource.is_closed()}")  // true through shared state
-
-    let byte_mask: u8 = 0xffu8
-    let widened_mask: i32 = byte_mask as i32
-    println(f"mask: {widened_mask}")
-
-    let precedence_demo = 1 + 2 * 3
-    println(f"precedence: {precedence_demo}")  // 7
-
-    let origin = Point { x: 0.0, y: 0.0 }
-    // A `self: Self` bound call copies its receiver; `origin` remains valid.
-    let moved_right = origin.translated(10.0)
-    println(f"{moved_right.x}, {moved_right.y}")
-
-    // Shallow copies still give inline scalar fields distinct storage.
-    var origin_copy = origin
-    origin_copy.x = 5.0
-    println(f"original x: {origin.x}, copied x: {origin_copy.x}")
-
-    let origin_ref = &origin
-    let copy_ref = &origin_copy
-    println(f"same target: {origin_ref == copy_ref}")  // false
-    println(f"equal contents: {equivalent(origin_ref, copy_ref)}")  // false
-
-    // A reference names storage. A reference into an aggregate points at that
-    // subvalue within its container, so replacing the container is observable
-    // through the reference, exactly as in C and Go.
-    var account = Account {
-        name: "Ari",
-        address: Address { city: "Aster" },
-    }
-    let city = &account.address.city
-    println(f"city: {city}")  // "Aster"
-
-    account = Account {
-        name: "Bea",
-        address: Address { city: "Beacon" },
-    }
-    println(f"city after replacement: {city}")  // "Beacon"
-
-    // Mutation through such a reference is visible in the container, because
-    // both name the same storage.
-    let relocate = &var account.address.city
-    *relocate = "Cove"
-    println(f"city after mutation: {account.address.city}")  // "Cove"
-
-    let coordinate_sum = moved_right.x
-        +moved_right.y
-    println(f"coordinate sum: {coordinate_sum}")
-
-    let ptr: *i32 = null
-    if ptr == null:
-        println("ptr was null")
-    else:
-        // Pointer-validity diagnostics do not propagate `let` or branch facts;
-        // this unreachable branch is legal, and an executed null access traps.
-        unsafe:
-            println(f"{*ptr}")
-
-    // Raw data-pointer traversal is explicit and unsafe. Offsets and indexing
-    // are element-scaled, `end` is the permitted one-past position, and
-    // relational ordering is defined because both non-null pointers remain in
-    // one live array extent.
-    var pointer_values = [3, 4, 5]
-    let whole: *var [i32; 3] = (&var pointer_values) as *var [i32; 3]
-    unsafe:
-        let first: *var i32 = whole as *var i32
-        let end = first + 3
-        var cursor = first
-        var pointer_sum = 0
-        while cursor < end:
-            pointer_sum += *cursor
-            cursor += 1
-        first[1] = 6
-        let none: *i32 = null
-        println(f"pointer traversal: {pointer_sum}, indexed: {first[1]}")
-        println(f"null orders first: {none < first}")
-
-    let leaf = Chain { value: 1, next: Option.None }
-    let chain_root = Chain { value: 2, next: Option.Some(&leaf) }
-    println(f"chain length: {chain_length(&chain_root)}")
-
-    var packet = Packet { id: 7, body: "first" }
-    let body = packet.body
-    // Replacing a field is distinct from mutating the immutable `str` contents.
-    packet.body = "replacement"
-    let repaired_packet = packet
-
-    // `new` is an ordinary associated function; this one returns a `Session`.
-    var session: Session = Session.new("build")
-    // Selecting a method from a type yields an unbound function reference; the
-    // caller forms the receiver reference explicitly.
-    let fn_stop: &fn(&var Session) -> () = Session.stop
-    fn_stop(&var session)
-
-    let observer: Session = session
-    let unpacked = observer.unpack()
-    let (was_active, observer_name): (bool, String) = unpacked
-    var mutable_summary = (was_active, observer_name)
-    mutable_summary.0 = true
-    let summary_name = &mutable_summary.1
-    println(f"tuple summary: {mutable_summary.0} / {summary_name}")
-
-    // A raw-pointer receiver accepts an already matching pointer without
-    // implicitly dereferencing or converting it. The unsafe method call and
-    // the raw-to-reference conversion in its body each remain explicit.
-    let observer_ptr: *Session = observer.get_const_self_ptr()
-    // Selecting the unsafe method unbound preserves its safety qualifier.
-    let recover_observer: &unsafe fn(*Session) -> &Session =
-        Session.get_self_ptr_unsafe
-    unsafe:
-        let recovered_bound = observer_ptr.get_self_ptr_unsafe()
-        let recovered_unbound = recover_observer(observer_ptr)
-        println(f"recovered bound status: {recovered_bound.status()}")
-        println(f"recovered unbound status: {recovered_unbound.status()}")
-
-    let inherent_status = observer.status()
-    // Fully qualified trait selection bypasses the same-named inherent method.
-    let trait_status = Session.Toggle.status(&observer)
-    let toggle_category = observer.category()
-    // An exact expected trait-object type automatically converts a concrete
-    // safe reference when its target implements the trait.
-    let observer_ref = &observer
-    let dynamic_toggle: &Toggle = observer_ref
-    let dynamic_status = dynamic_toggle.status()
-    println(
-        f"{inherent_status} / {trait_status} / {toggle_category} / {dynamic_status}"
-    )
-
-    // Naming a function produces an `&fn` value. An anonymous closure instead
-    // has its own nominal callable type and an explicit capture list.
-    let add_one: &fn(i32) -> i32 = increment
-    println(f"function reference result: {add_one(41)}")  // 42
-    println(f"closure result: {closure_demo(40)}")  // 42
-
-    let transform = IntTransform { apply: add_one }
-    // Field selection composes with ordinary call syntax.
-    println(f"stored function reference result: {transform.apply(41)}")  // 42
-
-    // Two references naming the same function compare equal by identity.
-    let also_increment: &fn(i32) -> i32 = increment
-    println(f"same function: {add_one == also_increment}")  // true
-
-    // A callback that carries data may use a trait object instead of a closure;
-    // a function reference itself has no captured environment.
-    let adder = AddOffset { offset: 1 }
-    let adder_ref = &adder
-    println(f"transform result: {apply_transform(adder_ref, 41)}")  // 42
-
-    // Direct and mutual recursion use named functions.
-    println(f"is_even(4): {is_even(4)}")  // true
-
-    let array = [1, 2, 3]
-    println(f"fixed array first element: {array[0]}")
-
-    var vec = @vec[1, 2, 3]
-    // Reads copy an element; direct indexed assignment updates the collection.
-    var element = vec[1]
-    element += 1
-    println(f"copied element: {element}, vector element: {vec[1]}")  // 3, 2
-    vec[1] = element
-    vec.append(4)
-
-    // A Vec copy has descriptor-local length/capacity and shared backing.
-    // Element replacement aliases while appending changes only this copied
-    // descriptor (and may move it to new backing if growth is needed).
-    var vec_copy = vec
-    vec_copy[0] = 9
-    vec_copy.append(5)
-    println(f"shallow vector: {vec[0]} / {vec.len()} / {vec_copy.len()}")
-
-    // Thread publication is the same shallow copy. Joining orders the worker's
-    // backing mutation before the read in this thread; no `unsafe` is needed.
-    var shared_values = @vec[0]
-    let publish = fn[shared_values as captured_values]() -> ():
-        var worker_values = captured_values
-        worker_values[0] = 21
-    match std.thread.spawn(publish):
+    let (sender, receiver) = std.sync.channel[String](1)
+    let worker = fn[sender]() -> ():
+        let message = String.from("moved")
+        let _ = sender.send(message)
+    match std.thread.spawn(worker):
         Result.Ok(thread):
             thread.join()
-            println(f"joined shared value: {shared_values[0]}")
         Result.Err(_):
-            println("spawn unavailable")
+            pass
+    match receiver.receive():
+        Option.Some(received):
+            println(received)
+        Option.None:
+            pass
 
-    // A function reference is passed to a higher-order function by naming it.
-    println(f"apply_offset result: {apply_offset(increment, 41)}")  // 42
+    let mutex = Shared[std.sync.Mutex[i32]].new(std.sync.Mutex[i32].new(1))
+    let child_mutex = mutex.clone()
+    let update = fn[child_mutex]() -> ():
+        let guard = (*child_mutex.get()).lock()
+        *guard.get_var() = 7
+    match std.thread.spawn(update):
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+    let guard = (*mutex.get()).lock()
+    println(*guard.get())
 
-    var retries = 0
-    while retries < 2:
-        println(f"retry {retries}")
-        retries = retries + 1
-
-    var names = @map{ "first": "Ada", "second": "Grace" }
-    var names_copy = names
-    let _ = names_copy.insert("third", "Lin")
-    var tags = @set{ "compiler", "managed" }
-    var tags_copy = tags
-    let _ = tags_copy.insert("shallow")
-    println(f"map entries: {names.len()}, set entries: {tags.len()}")
-
-    // Iteration yields independent values and never interior references.
-    for value in vec:
-        println(f"value {value}")
-
-    let propagated = propagate_io(Result.Ok(42))?
-    println(f"propagated value: {propagated}")
-    return Result.Ok(())
-
-// Compatibility escaping storage has process lifetime; native cleanup remains explicit.
-
-test standard_testing_region:
-    std.testing.assert(increment(41) == 42)
-    expect (std.testing.BuiltinTrap.Panic):
-        panic("expected by the package test")
+    let atomic = Shared[std.sync.AtomicUsize].new(std.sync.AtomicUsize.new(3usize))
+    println((*atomic.get()).fetch_add(4usize))
+    println((*atomic.get()).load())

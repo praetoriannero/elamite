@@ -108,11 +108,6 @@ impl<'a> TypedLowerer<'a> {
         }
         self.collect_concrete_nominals(&mut program);
         program.vtables = std::mem::take(&mut self.vtables);
-        super::super::borrowing::apply_read_only_call_borrowing(
-            &mut program,
-            self.resolved,
-            &self.typed.types,
-        );
         super::super::reuse::apply_temporary_and_return_reuse(&mut program);
         TypedIrOutput {
             program,
@@ -956,18 +951,9 @@ impl<'a> TypedLowerer<'a> {
                 local_types.insert(binding, parameter_type);
             }
         }
-        // Compatibility promotion is computed from syntax. Owned reference
-        // lifetimes are instead proved by the borrow checker and stay on stack.
-        let body_block = crate::syntax::direct_child(&data.syntax, SyntaxKind::Block);
-        let promoted_locals = body_block
-            .map(|block| {
-                crate::promotion::address_taken_locals(
-                    self.resolved,
-                    block,
-                    self.resolved.semantic_revision,
-                )
-            })
-            .unwrap_or_default();
+        // Owned reference lifetimes are proved by the borrow checker; ordinary
+        // reference formation never promotes a local to managed storage.
+        let promoted_locals = BTreeSet::new();
         let body = crate::syntax::direct_child(&data.syntax, SyntaxKind::Block)
             .map(|block| self.lower_block(block, &mut local_types))
             .unwrap_or_default();

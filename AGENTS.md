@@ -133,26 +133,12 @@ milestone exit criteria in `docs/roadmap.md`.
 
 ## Design, Commits, and Pull Requests
 
-Treat `docs/spec.md` 0.11.0-draft as the normative design target and follow the
-strict implementation order in `docs/roadmap.md`. The current compiler remains
-the 0.10 shallow/GC implementation baseline in `examples/spec_demo.elx`;
-`owned_spec_demo.elx` is the target-only 0.11 demonstration and must
-not be added to current compile-pass tests prematurely. The inactive split
-target corpus lives under `tests/fixtures/owned_model_design/`.
-
-During migration, select one complete semantic revision per package. Preserve
-0.10 behavior unless the active work package explicitly introduces its 0.11
-replacement, and stop unsupported 0.11 constructs at the declared migration
-boundary rather than lowering them with shallow semantics. Do not implement a
-later ownership milestone around a missing earlier checker or IR fact.
-
-`src/config.rs::SemanticRevision` and `PackageGraph::*_with_revision` own the
-temporary revision seam. Parsed, expanded, resolved, and typed programs retain
-that immutable selection. The 0.11 path currently stops in
-`check::semantic_revision_boundary`; do not move, weaken, or bypass that guard
-until the owning roadmap milestone supplies the replacement semantics. The C
-backend must never inspect source syntax or semantic revision to guess a value
-model.
+Treat implemented `docs/spec.md` 0.11.0-draft as the normative design and
+follow the milestone order in `docs/roadmap.md`.
+`examples/spec_demo.elx` is the authoritative executable demonstration and
+`owned_spec_demo.elx` mirrors it. The compiler has one owned semantic model;
+do not reintroduce the retired 0.10 revision seam, shallow mutable backing,
+managed promotion, or backend representation selection from source syntax.
 
 The function-pointer model remains exact: safe named functions use
 `&fn(P) -> R` or `&unsafe fn(P) -> R`, raw counterparts use `*fn(P) -> R` or

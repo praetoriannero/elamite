@@ -4,11 +4,7 @@ use super::super::*;
 
 #[must_use]
 pub fn lower_control_flow(program: &TypedIrProgram, types: &TypedProgram) -> ControlFlowProgram {
-    let value_model = if program.semantic_revision.supports_owned_surface() {
-        ValueModel::Owned
-    } else {
-        ValueModel::ShallowManaged
-    };
+    let value_model = ValueModel::Owned;
     let functions = program
         .functions
         .iter()
@@ -2352,62 +2348,8 @@ fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DropProjection, LogicalCopyStrategy, drop_paths_overlap, logical_copy_allocation,
-        logical_copy_strategy,
-    };
-    use crate::operations::{LogicalCopyAllocation, OwnershipProjection};
-    use crate::types::{Mutability, PrimitiveType, TypeContext, TypeKind};
-
-    #[test]
-    fn every_logical_copy_uses_the_shallow_value_contract() {
-        let mut types = TypeContext::new();
-        let integer = types.primitive(PrimitiveType::I32);
-        let string = types.primitive(PrimitiveType::String);
-        let tuple = types.intern(TypeKind::Tuple(vec![integer, string]));
-        let reference = types.intern(TypeKind::Reference {
-            mutability: Mutability::Shared,
-            target: tuple,
-        });
-        let pointer = types.intern(TypeKind::RawPointer {
-            mutability: Mutability::Mutable,
-            target: tuple,
-        });
-
-        assert_eq!(
-            logical_copy_strategy(&types, integer),
-            LogicalCopyStrategy::Trivial
-        );
-        assert_eq!(
-            logical_copy_strategy(&types, string),
-            LogicalCopyStrategy::MutableString
-        );
-        assert_eq!(
-            logical_copy_strategy(&types, tuple),
-            LogicalCopyStrategy::Recursive
-        );
-        assert_eq!(
-            logical_copy_strategy(&types, reference),
-            LogicalCopyStrategy::PreserveIdentity
-        );
-        assert_eq!(
-            logical_copy_strategy(&types, pointer),
-            LogicalCopyStrategy::PreserveIdentity
-        );
-
-        assert_eq!(
-            logical_copy_allocation(&types, tuple),
-            LogicalCopyAllocation::Shallow
-        );
-        assert_eq!(
-            logical_copy_allocation(&types, reference),
-            LogicalCopyAllocation::PreserveIdentity
-        );
-        assert_eq!(
-            logical_copy_allocation(&types, string),
-            LogicalCopyAllocation::SharedBacking
-        );
-    }
+    use super::{DropProjection, drop_paths_overlap};
+    use crate::operations::OwnershipProjection;
 
     #[test]
     fn drop_paths_distinguish_ancestor_replacement_from_descendant_replacement() {

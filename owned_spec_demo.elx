@@ -1,210 +1,82 @@
-// Authoritative Elamite 0.11 target demonstration.
-//
-// This file specifies accepted source behavior. The current 0.10 compiler is
-// not expected to parse or check it until the ordered owned-model migration
-// reaches the corresponding milestones. `examples/spec_demo.elx` remains the
-// executable 0.10 baseline during that migration.
+// Authoritative Elamite 0.11 owned-model demonstration.
 
-use std.io
-use std.sync
-use std.thread
-
-struct Point:
-    x: f64
-    y: f64
-
-impl Point:
-    fn translated(self: Self, amount: f64) -> Self:
-        return Self { x: self.x + amount, y: self.y }
-
-    fn translate(self: &var Self, amount: f64) -> ():
-        self.x += amount
-
-struct Document:
-    title: String
-    lines: Vec[String]
-
-impl Clone for Document:
-    fn clone(self: &Self) -> Self:
-        return Self {
-            title: self.title.clone(),
-            lines: self.lines.clone(),
-        }
-
-// Plain by-value parameters consume non-Copy values.
-fn publish(document: Document) -> usize:
-    return document.lines.len()
-
-// Returned provenance is inferred from the sole borrow-bearing input.
-fn first_line(document: &Document) -> Option[&String]:
-    return document.lines.get(0)
-
-fn sum(values: [i32]) -> i32:
-    var total = 0
-    for value in values:
-        total += *value
-    return total
-
-fn clear(values: [var i32]) -> ():
-    for value in values:
-        *value = 0
-
-struct Trace:
-    name: String
-
-impl Drop for Trace:
-    fn drop(self: &var Self) -> ():
-        println(f"dropping {&self.name}")
-
-fn cleanup_demo() -> Result[(), io.IoError]:
-    let outer = Trace { name: String.from("outer") }
-    defer println("defer runs before automatic drops")
-
-    let file = io.File.open("owned-demo.txt", "w")?
-    file.write("owned model")?
-    // File destruction is deterministic. Fallible work is explicit before
-    // scope exit; its Drop implementation is only the infallible fallback.
-    file.flush()?
-    return Result.Ok(())
-
-fn closure_demo(prefix: String) -> String:
-    let render = fn[prefix](value: i32) -> String:
-        return f"{&prefix}: {value}"
-
-    // A closure is an inline first-class object passed as an ordinary value.
-    return apply(render, 42)
-
-fn apply[F: Callable[(i32,), String]](callback: F, value: i32) -> String:
+fn apply[F: Callable[(i32,), i32]](callback: F, value: i32) -> i32:
     return callback(value)
 
-fn scoped_threads(values: &var [i32; 4]) -> ():
-    thread.scope(fn[&var values](scope: &var thread.Scope) -> ():
-        let first = scope.spawn(fn[&var values]() -> ():
-            values[0] = 10
-        )
-        first.join()
+fn main() -> ():
+    let original = @vec[String.from("a"), String.from("b")]
+    var duplicate = original.clone()
+    let moved = original
+    duplicate.append(String.from("c"))
+    println(moved.len())
+    println(duplicate.len())
 
-        let second = scope.spawn(fn[&var values]() -> ():
-            values[1] = 20
-        )
-        second.join()
-    )
+    var boxed = Box[String].new(String.from("box"))
+    println(&*boxed)
+    *boxed = String.from("changed")
+    println(&*boxed)
 
-fn owned_thread() -> Result[i32, thread.SpawnError]:
-    let message = String.from("worker")
-    let worker = fn[message]() -> i32:
-        println(&message)
-        return 42
+    var map = Map[i32, i32].new()
+    map.insert(4, 7)
+    let key = 4
+    println(map.len())
+    println(map.contains_key(&key))
+    match map.get_var(&key):
+        Option.Some(found):
+            *found = 10
+        Option.None:
+            pass
+    match map.get(&key):
+        Option.Some(found):
+            println(*found)
+        Option.None:
+            pass
 
-    let handle = thread.spawn(worker)?
-    return Result.Ok(handle.join())
+    var fixed = [1, 2, 3]
+    let view = &fixed
+    println(view.len())
+    var mutable_view = &var fixed
+    mutable_view[1] = 9
+    println(fixed[1])
+    var sum = 0
+    for item in &fixed:
+        sum += *item
+    println(sum)
 
-fn synchronized_counter() -> Result[i32, thread.SpawnError]:
-    let counter = Shared.new(sync.Mutex.new(0))
-    let worker_counter = counter.clone()
-    let worker = thread.spawn(fn[worker_counter]() -> ():
-        let guard = worker_counter.lock()
-        let value = guard.get_var()
-        *value += 1
-    )?
+    let label = String.from("owned")
+    let show = fn[label](value: i32) -> i32:
+        println(&label)
+        return value + 1
+    println(apply(show, 2))
 
-    worker.join()
-    let guard = counter.lock()
-    return Result.Ok(*guard.get())
-
-fn channel_demo() -> Result[String, thread.SpawnError]:
-    let (sender, receiver) = sync.channel[String](1)
-    let worker = thread.spawn(fn[sender]() -> ():
-        let _ = sender.send(String.from("moved message"))
-    )?
-
-    worker.join()
+    let (sender, receiver) = std.sync.channel[String](1)
+    let worker = fn[sender]() -> ():
+        let message = String.from("moved")
+        let _ = sender.send(message)
+    match std.thread.spawn(worker):
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
     match receiver.receive():
-        Option.Some(message):
-            return Result.Ok(message)
+        Option.Some(received):
+            println(received)
         Option.None:
-            return Result.Ok(String.from("closed"))
+            pass
 
-struct Node:
-    name: String
-    edges: Vec[Handle[Node]]
+    let mutex = Shared[std.sync.Mutex[i32]].new(std.sync.Mutex[i32].new(1))
+    let child_mutex = mutex.clone()
+    let update = fn[child_mutex]() -> ():
+        let guard = (*child_mutex.get()).lock()
+        *guard.get_var() = 7
+    match std.thread.spawn(update):
+        Result.Ok(thread):
+            thread.join()
+        Result.Err(_):
+            pass
+    let guard = (*mutex.get()).lock()
+    println(*guard.get())
 
-fn graph_demo() -> usize:
-    var nodes = Store[Node].new()
-    let root_handle = nodes.insert(Node {
-        name: String.from("root"),
-        edges: Vec.new(),
-    })
-    let leaf = nodes.insert(Node {
-        name: String.from("leaf"),
-        edges: Vec.new(),
-    })
-
-    let root_node = nodes.get_var(root_handle)
-    root_node.edges.append(leaf)
-    return nodes.len()
-
-@importc("FILE", "stdio.h")
-type CFile
-
-@importc("fclose", "stdio.h")
-fn c_close(file: *var CFile) -> i32
-
-struct OwnedCFile:
-    pointer: *var CFile
-
-impl Drop for OwnedCFile:
-    fn drop(self: &var Self) -> ():
-        if self.pointer != null:
-            unsafe:
-                let _ = c_close(self.pointer)
-            self.pointer = null
-
-@exportc("elamite_visit")
-unsafe fn visit(context: *var i32) -> i32:
-    unsafe:
-        let value = context as &var i32
-        *value += 1
-        return *value
-
-fn pointer_demo(values: &var [i32; 3]) -> ():
-    let array_pointer = values as *var [i32; 3]
-    unsafe:
-        let first = array_pointer as *var i32
-        first[1] = 7
-
-fn main() -> Result[(), io.IoError]:
-    let original = Document {
-        title: String.from("Ownership"),
-        lines: @vec[String.from("move"), String.from("borrow")],
-    }
-    let independent = original.clone()
-
-    match first_line(&original):
-        Option.Some(line):
-            println(line)
-        Option.None:
-            println("empty")
-
-    let count = publish(original)
-    // `original` is unavailable here; `independent` is separately owned.
-    println(count)
-    println(&independent.title)
-
-    var point = Point { x: 1.0, y: 2.0 }
-    let view = &point
-    println(view.x)
-    // The shared borrow ends after its last use, so exclusive access resumes.
-    point.translate(3.0)
-    let moved_point = point.translated(1.0)
-    println(moved_point.x)
-
-    var numbers = [1, 2, 3]
-    println(sum(&numbers))
-    clear(&var numbers)
-
-    println(closure_demo(String.from("answer")))
-    let _ = graph_demo()
-    pointer_demo(&var numbers)
-    cleanup_demo()?
-    return Result.Ok(())
+    let atomic = Shared[std.sync.AtomicUsize].new(std.sync.AtomicUsize.new(3usize))
+    println((*atomic.get()).fetch_add(4usize))
+    println((*atomic.get()).load())

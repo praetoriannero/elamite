@@ -15,9 +15,9 @@ pub fn compare[T: Ord](left: T, right: T) -> Ordering:
 /// Sorts `values` in ascending order, in place.
 ///
 /// This is a stable insertion sort: equal values retain their input order.
-/// It performs no allocation and uses one shallow element temporary. The
-/// quadratic worst case is intentional for this small, predictable baseline.
-pub fn sort[T: Ord](values: Vec[T]) -> ():
+/// This baseline accepts `Copy` elements and performs no allocation. The
+/// quadratic worst case is intentional for a small, predictable primitive.
+pub fn sort[T: Copy + Ord](values: [var T]) -> ():
     var working = values
     var index: usize = 1
     while index < working.len():
@@ -49,7 +49,7 @@ pub fn binary_search[T: Ord](values: [T], needle: T) -> Option[usize]:
 ///
 /// The vector backing is observed directly and this function allocates
 /// nothing. Structural mutation during the call is not permitted.
-pub fn binary_search_vec[T: Ord](values: Vec[T], needle: T) -> Option[usize]:
+pub fn binary_search_vec[T: Ord](values: [T], needle: T) -> Option[usize]:
     var low: usize = 0
     var high = values.len()
     while low < high:

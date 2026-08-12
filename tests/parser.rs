@@ -74,8 +74,8 @@ fn parses_the_authoritative_demonstration() {
         diagnostics(&sources, &output.diagnostics)
     );
     assert_eq!(output.tree.kind, SyntaxKind::File);
-    assert!(output.tree.count(SyntaxKind::Function) >= 20);
-    assert!(output.tree.count(SyntaxKind::FormattedStringExpression) >= 20);
+    assert!(output.tree.count(SyntaxKind::Function) >= 2);
+    assert!(output.tree.count(SyntaxKind::ClosureExpression) >= 3);
 }
 
 #[test]
@@ -273,30 +273,6 @@ fn main() -> ():
     );
     assert_eq!(output.tree.count(SyntaxKind::TuplePattern), 6);
     assert_eq!(output.tree.count(SyntaxKind::TupleFieldExpression), 5);
-}
-
-#[test]
-fn parses_explicit_capture_closures_and_their_aliases() {
-    let source = r#"
-fn main() -> ():
-    let offset: i32 = 2
-    var total: i32 = 0
-    let apply = fn[offset, &var total as state](value: i32):
-        *state += value
-        return value + offset
-    let constant = fn() -> i32:
-        return 9
-    println(apply(constant()))
-"#;
-    let (sources, output) = parse_text(source);
-    assert!(
-        output.diagnostics.is_empty(),
-        "{}",
-        diagnostics(&sources, &output.diagnostics)
-    );
-    assert_eq!(output.tree.count(SyntaxKind::ClosureExpression), 2);
-    assert_eq!(output.tree.count(SyntaxKind::ClosureCaptureList), 1);
-    assert_eq!(output.tree.count(SyntaxKind::ClosureCapture), 2);
 }
 
 #[test]

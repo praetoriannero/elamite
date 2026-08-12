@@ -1,14 +1,14 @@
 use std.io
 use std.text
 
-/// An owned filesystem path. Copies share the contained `String` backing under
-/// ordinary shallow-copy semantics. Path operations are lexical unless their
-/// documentation explicitly says that they access the filesystem.
+/// An owned filesystem path. Moving transfers its `String`; cloning produces
+/// independent backing. Path operations are lexical unless their documentation
+/// explicitly says that they access the filesystem.
 pub struct Path:
     pub value: String
 
 impl Path:
-    /// Copies `value` into an owned path.
+    /// Materializes `value` into an owned path.
     pub fn from(value: str) -> Self:
         return Self { value: String.from(value) }
 

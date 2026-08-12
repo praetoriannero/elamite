@@ -1,15 +1,12 @@
 # Elamite toolchain
 
-> Current implementation baseline: generated programs are collector-free on
-> both semantic revisions. The temporary 0.11 boundary is owned-model tooling
-> and final conformance.
+> Current implementation: Elamite 0.11.0-draft, collector-free and owned from
+> every compiler entry point through generated C.
 
-The temporary 0.11 frontend revision is selectable only through the compiler
-library and test harness. It now reaches owned checking, control-flow lowering,
-runtime emission, concurrency, and C interoperability in focused conformance
-tests, but the ordinary driver still stops at the final tooling boundary; there
-is no CLI flag or manifest field promising executable 0.11 packages during the
-ordered migration.
+There is one shipped semantic model. The CLI, formatter, documentation
+extractor, conformance runner, compiler library, and package-test driver all
+select the owned model; no manifest flag or edition switch selects the retired
+shallow behavior.
 
 Elamite's current toolchain supports Linux on x86-64 and x86 (32-bit). The
 compiler itself may run on either architecture; `--target=x86` and
@@ -29,12 +26,9 @@ variable selects another compiler. The compiler must support:
 A 64-bit Linux installation commonly needs its distribution's multilib C
 development packages before `--target=x86` can link executables.
 
-No garbage-collector headers or libraries are required. The 0.10 compatibility
-revision preserves its historical escaping-reference and shallow-backing
-behavior with a collector-free process-lifetime allocation registry, released
-at normal program exit. The 0.11 lowering keeps proven nonescaping references,
-iterator state, and variadic packs on the C stack and uses explicit owning APIs
-for heap storage.
+No garbage-collector headers or libraries are required. Proven nonescaping
+references, iterator state, and variadic packs stay on the C stack; heap storage
+is introduced only by explicit owning APIs and documented runtime state.
 
 ## Commands
 
@@ -103,12 +97,8 @@ spelling.
 
 ## Compiler interfaces
 
-The revision reported by the compiler is its current compatibility boundary;
-`spec.md` describes the accepted migration target. The compiler reports and
-implements 0.10.0-draft: ordinary copies,
-collection descriptors, direct iteration snapshots, user-defined `Iterator`
-loops, thread/channel/mutex publication, and the unsafe raw-data-pointer
-surface all follow that revision. The following developer interfaces remain
+The compiler reports and implements `spec.md` 0.11.0-draft. The following
+developer interfaces remain
 implementation-private and may change between compiler revisions:
 
 - generated C names and helper layout;
@@ -119,18 +109,16 @@ implementation-private and may change between compiler revisions:
 - the Rust compiler-library API.
 
 Do not treat a library package's relocatable object as a stable C ABI. Only an
-exact `@exportc` entry point has the reviewed C ABI; the focused owned path now
-enforces the complete explicit ownership-aware FFI contract in `spec.md`, but
-ordinary artifact production remains behind the temporary revision boundary.
+exact `@exportc` entry point has the reviewed C ABI; the ordinary pipeline
+enforces the explicit ownership-aware FFI contract in `spec.md`.
 
 ## Current limitations
 
 - Package dependencies are local paths. There is no registry, Git resolver,
   version solver, or lockfile workflow.
-- Cooperative tasks, executors, futures, and async/await are unsupported. The
-  compiling 0.10 path retains shallow programmer-managed race safety; the
-  focused 0.11 path implements structural `Send`/`Sync`, scoped borrowing,
-  moved messages, guarded mutation, and sequentially consistent atomics.
+- Cooperative tasks, executors, futures, and async/await are unsupported.
+  Native concurrency uses structural `Send`/`Sync`, scoped borrowing, moved
+  messages, guarded mutation, and sequentially consistent atomics.
 - Raw data-pointer arithmetic, indexing, subtraction, compound offsets, and
   null-low relational ordering are implemented. Ordering two non-null pointers
   from different live extents remains undefined behavior.
@@ -144,8 +132,8 @@ ordinary artifact production remains behind the temporary revision boundary.
 - Wildcard and grouped `use` declarations are unsupported.
 - The C backend does not yet lower 128-bit integer constants, arithmetic, or
   display, even though `i128` and `u128` remain reserved primitive types.
-- Compatibility process-lifetime storage is released at normal process exit;
-  native resources still require explicit close operations and `defer`.
+- Native resources still require explicit ownership, close operations where
+  fallible cleanup matters, and `defer` where lexical ordering is needed.
 - Foreign exceptions, `longjmp`, and Elamite traps must not unwind through the
   language boundary. Recoverable errors require explicit wrapper translation.
 

@@ -6,14 +6,10 @@ borrowing, deterministic destruction, inline closure objects, explicit shared
 or graph ownership, and race-safe native concurrency without a tracing garbage
 collector. Raw data pointers retain direct C-like traversal behind `unsafe`.
 
-The current compiler still implements the 0.10 shallow-copy language behavior,
-but generated programs no longer contain or link a tracing collector.
-An internal package revision seam now carries the accepted 0.11 surface through
-owned checking, lowering, runtime behavior, race-safe concurrency, and explicit
-C interoperability, then deliberately stops before tooling and final
-conformance. The ordered migration in `docs/roadmap.md` keeps 0.10 executable
-while replacing one semantic layer at a time; version output continues to
-report the implemented revision rather than claiming 0.11 conformance.
+The compiler implements that 0.11 model through parsing, expansion, checking,
+lowering, generated C, tooling, and the supported target matrix. Generated
+programs contain no tracing collector or compatibility value model, and
+`elamc --version` reports the implemented specification revision.
 
 The shipped `std` package includes filesystem, environment, process, time,
 deterministic randomness, stable ordering/search, and UTF-8 text utilities in
@@ -39,9 +35,9 @@ addition to collections, formatting, FFI, testing, and concurrency support.
 - [`docs/proposals.md`](docs/proposals.md) and [`docs/critiques.md`](docs/critiques.md) preserve
   non-normative design history and review.
 
-The authoritative 0.11 target is
-[`owned_spec_demo.elx`](owned_spec_demo.elx); the executable
-0.10 baseline remains [`examples/spec_demo.elx`](examples/spec_demo.elx).
+The authoritative executable demonstration is
+[`examples/spec_demo.elx`](examples/spec_demo.elx); the root
+[`owned_spec_demo.elx`](owned_spec_demo.elx) mirrors it for direct inspection.
 Focused packages currently cover
 [`closures`](examples/closures), [`macros`](examples/macros),
 [`concurrency`](examples/concurrency), [C FFI](examples/c_ffi),
@@ -154,10 +150,9 @@ The runner supports fixture filtering, target and optimization matrices,
 isolated build directories, stable expected output/status files, and retained
 artifacts after failure.
 
-The 0.10 compatibility compiler preserves historical escaping references and
-shallow backing with collector-free process-lifetime storage. The 0.11 path
-uses stack borrows and explicit ownership instead. No Boehm development package
-or garbage-collector link input is required.
+Borrows stay on the stack unless the program selects an explicit owning type;
+escaping local references and shallow mutable backing aliases are rejected. No
+Boehm development package or garbage-collector link input is required.
 The non-normative [memory cost model](docs/cost_model.md) documents current copy,
 allocation, retention, promotion, and synchronization costs and links the
 reproducible release-mode baseline.

@@ -47,7 +47,7 @@ pub fn logical_copy_strategy(types: &TypeContext, mut ty: TypeId) -> LogicalCopy
 
 /// Classify the physical work required by one recorded copy.
 ///
-/// Ordinary 0.10 copies never recursively duplicate reachable backing.
+/// Classify materialization cost for the remaining internal copy records.
 #[must_use]
 pub fn logical_copy_allocation(types: &TypeContext, mut ty: TypeId) -> LogicalCopyAllocation {
     loop {

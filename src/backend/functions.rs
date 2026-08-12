@@ -1747,11 +1747,12 @@ impl<'a> CEmitter<'a> {
                     }
                     IndexKind::Map { collection } => {
                         let find = format!("el_map_find_t{}", collection.index());
+                        let key = format!("&{}", temporary_name(*index));
                         let _ = writeln!(
                             self.output,
                             "    if ({find}({}, {}) < 0) el_trap(\"{}\", {arguments});",
                             self.place_expression(base),
-                            temporary_name(*index),
+                            key,
                             trap.code()
                         );
                     }
@@ -1809,13 +1810,16 @@ impl<'a> CEmitter<'a> {
                     self.place_expression(base),
                     temporary_name(*index)
                 ),
-                IndexKind::Map { collection } => format!(
-                    "{}->values[(uintptr_t)el_map_find_t{}({}, {})]",
-                    self.place_expression(base),
-                    collection.index(),
-                    self.place_expression(base),
-                    temporary_name(*index)
-                ),
+                IndexKind::Map { collection } => {
+                    let key = format!("&{}", temporary_name(*index));
+                    format!(
+                        "{}->values[(uintptr_t)el_map_find_t{}({}, {})]",
+                        self.place_expression(base),
+                        collection.index(),
+                        self.place_expression(base),
+                        key
+                    )
+                }
             },
         }
     }

@@ -1,8 +1,6 @@
 # Conformance release audit
 
-> Historical implemented baseline: this evidence audits compiler conformance
-> to 0.10. It remains valid during the ordered 0.11 ownership migration and is
-> replaced only by **Owned-model tooling and final conformance**.
+> Implemented baseline: Elamite 0.11.0-draft owned-model conformance.
 
 This file is the evidence index for `roadmap.md` Milestone 19. The initial release
 is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
@@ -10,12 +8,12 @@ is a source/compiler conformance checkpoint; Cargo publishing remains disabled.
 | Gate | Evidence |
 | --- | --- |
 | Authoritative behavior | `examples/spec_demo/elamite.toml`, `examples/spec_demo.elx`, `examples/spec_demo/expected.stdout`, and `authoritative_demo_matches_in_debug_and_release` |
-| Section conformance | `tests/fixtures/conformance/README.md` and its numbered package fixtures |
+| Section conformance | Focused integration suites under `tests/`, including ownership, borrows, cleanup, sharing, concurrency, and C interoperability |
 | Normative ledger | `ledger.md` assigns every rule to an implementation milestone, dependency, and concrete test layer; the M19 audit found no unowned rule |
 | Target/optimization matrix | `.github/workflows/conformance.yml` runs x86 and x86-64 in debug and release; the driver always applies C99, strong warnings, and the selected width flag |
-| C hardening | `generated_c_is_clean_under_address_and_undefined_behavior_sanitizers` plus the driver-owned `-Wall -Wextra -Werror` flags |
+| C hardening | `owned_c_interoperability`, `race_safe_concurrency`, `shared_graph_ownership`, and owned-core ASan/UBSan runs plus driver-owned `-Wall -Wextra -Werror` flags |
 | Parser/semantic robustness | `tests/robustness.rs`, the retained parser corpus, and the existing seeded parser property test |
-| Runtime stress | `12_runtime_stress`, repeated in debug and release, plus the callback, trap, and C harness process tests in `tests/backend.rs` |
+| Runtime stress | The authoritative debug/release run plus focused callback, trap, sharing, thread, and C-harness process tests |
 | Diagnostics | `malformed_semantic_inputs_stop_at_diagnostics_without_internal_leaks` and the focused compile-fail suites |
 | Performance | `benchmarks/m19-baseline.sh` and `benchmarks/m19-baseline.tsv`; `cost_model.md` and the allocation/copied-byte workloads in `benchmarks/memory-cost-baseline.sh` |
 | Toolchain and limitations | `docs/toolchain.md`, including Linux/multilib prerequisites, collector-free native concurrency, and remaining foreign-thread restrictions |
@@ -32,14 +30,27 @@ cargo clippy --all-targets -- -D warnings
 cargo run -- test examples/spec_demo
 cargo run -- test examples/spec_demo --release
 cargo run -- conformance examples/spec_demo --all-modes
-cargo run -- conformance tests/fixtures/conformance --all-modes
 ```
 
 The x86 cells require a working 32-bit libc and C compiler. CI owns that
 installed environment; a local machine without runnable multilib cannot claim
 those cells from a frontend-only run.
 
-## 0.11 migration progress
+The final local audit generated and linked both target widths in debug and
+release. The x86-64 cells ran in the ordinary sandbox; the x86 executables were
+run outside its 32-bit syscall filter and matched `expected.stdout` exactly in
+both modes.
+
+## 0.11 final conformance
+
+Every ordinary compiler and tooling entry point now selects 0.11.0-draft and
+`std.ast` 3.0. The authoritative demonstration runs in debug and release;
+owned checking/lowering, strict C99 emission, race-safe concurrency, graph
+ownership, and C interoperability retain their focused sanitizer harnesses.
+Historical shallow-alias, promotion, implicit-capture, and safe-race tests were
+retired because 0.11 requires those programs to be rejected.
+
+### Historical migration record
 
 Owned core values now follow deterministic destruction on the 0.11 path.
 `String`, `Vec`, `Map`, and `Set` use unique backing with constant-size moves,
@@ -80,6 +91,16 @@ capture-free callbacks can enter from C-created threads without collector
 attachment. The native harness passes strict C99 at `-O0` and `-O2` under
 ASan/UBSan and checks release counts explicitly. The temporary boundary now
 names owned-model tooling and final conformance.
+
+### Final owned-model baseline comparison
+
+The required `benchmarks/memory-cost-baseline.sh` run on 2026-08-12 UTC used
+Linux x86-64, rustc 1.89.0, and GCC 15.2. The owned corpus recorded
+allocations/bytes of 5/92 (`aggregate_closure`), 10,013/200,544
+(`cross_thread`), 2/82 (`function_loop`), 5,017/825,544 (`map_set_copy`),
+10,002/1,290,257 (`string_copy`), and 2,006/1,025,008 (`vector_copy`). Scanned
+allocation and byte counters remained zero. Explicit cloning accounts for the
+proportional costs; moves and borrowed calls remain allocation-free.
 
 ### Owned-C-interoperability baseline comparison
 

@@ -2,7 +2,7 @@ struct Batch:
     name: String
     values: Vec[i32]
 
-fn consume(batch: Batch, index: i32) -> i32:
+fn consume(batch: &Batch, index: i32) -> i32:
     return batch.values[index % 16]
 
 fn main() -> ():
@@ -13,6 +13,6 @@ fn main() -> ():
     var checksum = 0
     var index = 0
     while index < 5000:
-        checksum += consume(batch, index)
+        checksum += consume(&batch, index)
         index += 1
     println(checksum)

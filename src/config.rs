@@ -4,16 +4,10 @@
 //! conformance, and future test execution. They are not owned by the C backend
 //! or command-line driver.
 
-/// Complete source-semantics model selected for one package.
-///
-/// This is a temporary migration seam, not a source-level edition mechanism.
-/// The package graph selects one value before parsing and every frontend phase
-/// carries it as immutable data. The owned revision deliberately stops after
-/// move-state enforcement until structural borrow provenance is complete.
+/// Implemented source-semantics revision.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SemanticRevision {
     #[default]
-    V0_10,
     V0_11,
 }
 
@@ -21,7 +15,6 @@ impl SemanticRevision {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::V0_10 => "0.10.0-draft",
             Self::V0_11 => "0.11.0-draft",
         }
     }

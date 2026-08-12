@@ -1,9 +1,7 @@
 # Standard library
 
-> Current implementation baseline: ordinary driver APIs remain the shipped
-> 0.10 shallow compatibility library. The focused 0.11 path now implements
-> owned C interoperability and stops at **Owned-model tooling and final
-> conformance**.
+> Current implementation baseline: 0.11.0-draft owned values and race-safe
+> concurrency through every ordinary driver API.
 
 The compiler ships the `std` package from `stdlib/src/`. These files pass
 through ordinary parsing, resolution, checking, and monomorphization. The
@@ -12,17 +10,16 @@ native hooks that safe Elamite source cannot express.
 
 Public APIs favor owned results at operating-system boundaries. An operation
 does not return a reference into runtime backing, C library allocation, or
-directory stream. Ordinary copying remains shallow throughout these modules.
+directory stream. Non-`Copy` values move and independent duplication is
+explicit through `clone()`.
 
-The root source now declares the accepted 0.11 `Clone` and `Drop` traits, and
-the compiler inventory exposes the structural `Copy`, `Send`, and `Sync`
-capabilities to owned-model analysis. The executable 0.10 path does not invoke
-`Drop` or infer owned collection behavior from those declarations; their
-runtime hooks remain gated by the ordered migration milestones.
+The root source declares `Clone` and `Drop`, and the compiler inventory exposes
+the structural `Copy`, `Send`, and `Sync` capabilities used by checking,
+cleanup, and concurrency lowering.
 
 ## Owned C interoperability
 
-The 0.11 path keeps `@importc` and `@exportc` restricted to the platform C ABI
+The compiler keeps `@importc` and `@exportc` restricted to the platform C ABI
 and the recursively audited ABI-safe type set. Safe references, slices,
 ordinary aggregates, owning descriptors, and closure objects do not cross by
 layout coincidence. Imported calls and ownership reconstruction remain
@@ -97,10 +94,11 @@ for an empty range.
 
 ## Ordering and text
 
-`std.ordering.sort` is a stable, allocation-free insertion sort over shared
-vector backing. `binary_search` and `binary_search_vec` return the first equal
-index. These deliberately small baselines use the ordinary `Ord` rules and may
-be replaced by algorithms with the same stability and allocation contracts.
+`std.ordering.sort` is a stable, allocation-free insertion sort over an
+exclusive slice of `Copy + Ord` elements. `binary_search` and
+`binary_search_vec` borrow their input and return the first equal index. These
+deliberately small baselines may be replaced by algorithms with the same
+stability and allocation contracts.
 
 `std.text` separates borrowed and allocating results. `find`, `contains`,
 `trim`, and borrowed `split` do not copy substring bytes; `split` allocates its
@@ -117,7 +115,7 @@ complexity guarantees.
 
 ## Owned concurrency
 
-The 0.11 path treats `Send` and `Sync` as structural capabilities. Raw pointers
+The compiler treats `Send` and `Sync` as structural capabilities. Raw pointers
 receive neither automatically; a nominal wrapper may assume either only with
 an explicit `unsafe impl`. `std.thread.spawn` consumes a borrow-free `Send`
 closure and produces one move-only `Thread[R]`; joining consumes the handle and

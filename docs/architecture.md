@@ -3,19 +3,15 @@
 Milestone 20 established explicit, owned boundaries without changing Elamite
 language behavior or the public compiler commands.
 
-The descriptions below reflect the executable compiler targeting Specification
-0.10 plus the temporary 0.11 frontend seam.
-Ordinary shallow-copy lowering and collection representations are implemented;
-direct collection state snapshots its shallow iterable and bound once, while a
-user-defined iterator is selected statically and stored in stable hidden state
-for repeated `next` calls. Threads, channels, and mutex operations use
-shallow values. Pointer arithmetic and indexing are implemented, and pointer
+The descriptions below reflect the executable compiler targeting implemented
+Specification 0.11. Values move by default, borrows retain structural
+provenance, collections have unique ownership, and threads/channels transfer
+owned values. Pointer arithmetic and indexing are implemented, and pointer
 ordering lowers null cases through explicit equality guards before any C
 relational operator. POSIX start,
 channel, mutex, join, and atomic operations own the concurrency ordering
-boundaries. Current
-reuse and borrowing facts remain documented here until their implementation is
-replaced.
+boundaries. Reuse remains a physical optimization that cannot alter ownership
+semantics.
 
 ## Pipeline and ownership
 
@@ -34,7 +30,6 @@ replaced.
 | Checked output and pure checker analyses | `src/check/model.rs`, `coverage.rs`, `containment.rs` |
 | Body-checking orchestration | `src/check/mod.rs` |
 | Typed IR and lowering | `src/ir/typed/model.rs`, `lower.rs` |
-| Internal read-only call analysis and ABI selection | `src/ir/borrowing.rs` |
 | Temporary and return storage-reuse selection | `src/ir/reuse.rs` |
 | Control-flow IR and lowering | `src/ir/control_flow/model.rs`, `lower.rs` |
 | Shared ownership/use operations, logical-copy facts, and traps | `src/operations.rs`, `src/ir/traps.rs` |
@@ -47,17 +42,10 @@ their established public paths. Compatibility re-exports for `Target` from
 users already import them there; new compiler code should use `config`
 directly.
 
-`src/config.rs::SemanticRevision` is chosen once while the package graph is
-constructed. Every package on a dependency edge must carry the same revision;
-parsed, expanded, resolved, and typed results retain it explicitly. The 0.11
-path admits the accepted slice, array, closure-capture, and borrow syntax,
-canonicalizes its source types, validates trait declarations, and constructs
-ownership-aware checked facts. It then stops at
-`check::semantic_revision_boundary` before move-state enforcement. Focused
-tests lower those checked facts through both IR levels, but compiling driver
-entry points do not yet send an owned-model value to the backend. Consequently
-the backend has no revision switch and cannot infer a semantic model from
-syntax.
+`src/config.rs::SemanticRevision` records the one implemented revision while a
+package graph is constructed. Parsed, expanded, resolved, typed, and IR results
+retain that identity. Every ordinary entry point runs ownership-aware checking,
+move and borrow validation, control-flow lowering, and the owned C backend.
 
 `src/types/ownership.rs` computes `Copy`, clone availability, destruction,
 borrow containment, and provisional `Send`/`Sync` from canonical types and
@@ -72,19 +60,10 @@ control-flow IR assigns stable per-function operation IDs after source
 evaluation. Move, `Copy`, clone, borrow, reborrow, and future drop operations
 therefore remain distinct without backend inference.
 
-Logical-copy intent is selected before backend lowering. Checking records the
-copy kind and source and destination lifetime classes; typed IR adds the
-type-selected allocation class; control-flow IR assigns a stable per-function
-copy identity. Debug builds audit that inventory for exact-once emission. The C
-backend lowers every copy, including thread, channel, and mutex values, as an
-immediate representation assignment. There is no recursive per-type copy-helper
-family.
-
-Logical copies are now explicitly the compatibility operation
-`OwnershipUseKind::LegacyCopy`. Only that variant enters the 0.10 copy
-materialization path. Owned moves and bitwise copies lower as explicit
-ownership uses whose C representation is an ordinary temporary transfer;
-neither operation can select recursive cloning or shallow compatibility sharing.
+Ownership intent is selected before backend lowering. Moves, bitwise `Copy`,
+explicit clones, borrows, and drops remain distinct operations through both IR
+levels. Control-flow lowering assigns stable operation identities; the backend
+never infers ownership from syntax or inserts a hidden clone.
 
 Typed IR distinguishes numeric arithmetic from raw-pointer offset and distance
 operations. Pointer indexing adapts to an element-scaled offset followed by a
@@ -93,28 +72,14 @@ index once in left-to-right order and emits the existing null/alignment check
 before the load or store. The backend therefore emits ordinary C99 pointer
 operations without introducing a parallel indexing or trap mechanism.
 
-After concrete typed functions and vtables exist, `src/ir/borrowing.rs`
-conservatively identifies costly internal direct-call parameters whose storage
-cannot be mutated or address-exposed. It records an explicit passing mode on
-parameters and arguments before control-flow lowering. The backend implements
-that mode with a hidden `const` pointer ABI; indirect, closure, vtable, and
-foreign-visible callables retain the ordinary owned ABI.
-
 `src/ir/reuse.rs` retains each remaining semantic copy record while selecting
 an explicit `ReuseSource` physical mode for fresh temporaries and conservatively
-dead local returns. Ordinary `Materialize` and `ReuseSource` copies now both
-preserve the shallow representation; the distinction remains an optimizer seam
-for future inline movement.
+dead local returns. The distinction is an optimizer seam for future inline
+movement and cannot change source-level move or clone behavior.
 
-The typed and control-flow IR classify ordinary `String` copies as
-shared-backing operations. Ordinary copies directly preserve the two-word
-descriptor, whose pointer names writable compatibility bytes; mutable access does not
-detach. Thread environments, channel messages, and join results preserve that
-pointer directly, as do mutex storage and returned values. `Vec` uses an inline
-pointer/length/capacity descriptor and mutating calls carry the evaluated
-receiver place through control-flow IR so only that descriptor's length,
-capacity, and growth pointer change. `Map` and `Set` retain shared table
-handles. None of these representations is exposed through the foreign ABI.
+`String`, `Vec`, `Map`, and `Set` own their backing. Moves transfer descriptors,
+explicit clones recursively duplicate contents, and drop glue releases backing
+exactly once. None of these representations is exposed through the foreign ABI.
 
 The expansion pass owns a lossless nested token-tree view containing exact
 source spellings, layout tokens, and stable origin identities. Parsed units are
@@ -136,8 +101,7 @@ must remain outside compiler-private parsed, resolved, and typed data models and
 must not gain ambient host or target capabilities.
 
 `src/expansion/ast.rs` owns that façade. Expanded packages carry an exact
-`std.ast` 2.0 interface handshake for 0.10 or the selected 3.0 owned-surface
-handshake for 0.11, plus a stable intrinsic
+`std.ast` 3.0 owned-surface handshake plus a stable intrinsic
 type inventory. Its opaque, immutable values cover definitions, items,
 expressions, statements, patterns, written types, metadata, fields, variants,
 parameters, and implementations; persistent typed lists and `with_` methods

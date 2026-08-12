@@ -159,23 +159,6 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after owned-model C interoperability. Ordinary
-/// driver entry points stop before backend lowering until tooling and final
-/// conformance remove the compatibility revision seam.
-#[must_use]
-pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
-    resolved
-        .semantic_revision
-        .supports_owned_surface()
-        .then(|| {
-            Diagnostic::new(
-                Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has owned-model C interoperability, but \
-                 owned-model tooling and final conformance are not implemented yet",
-            )
-        })
-}
-
 /// Checks with the selected target's pointer width for contextual
 /// `isize`/`usize` literal materialization.
 #[must_use]

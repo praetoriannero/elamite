@@ -1,37 +1,25 @@
 # Elamite implementation cost model
 
-> Version: 20
+> Version: 21
 >
-> Applies to: the 0.10.0-draft compatibility path and implemented
-> 0.11.0-draft phases through owned-model C interoperability, on Linux x86
-> and x86-64
+> Applies to: implemented 0.11.0-draft on Linux x86 and x86-64
 >
 > Status: non-normative implementation documentation
 
-> Implementation revision: **The compatibility path remains shallow; the
-> owned path moves unique core values, stores closure environments inline, and
-> clones only when requested.** The semantic-revision selection is explicit in
-> control-flow IR. The C backend never infers a value model from source syntax.
+> Implementation revision: **Values move by default, unique core values clone
+> only when requested, closure environments are inline, and borrow formation
+> does not allocate.** Control-flow IR and the C backend have one owned value
+> model.
 
-This document explains where the current 0.10 compiler copies values, allocates
-storage, retains memory, and synchronizes. `spec.md` now defines the accepted
-0.11 target; this cost model remains the measured migration baseline until each
-representation milestone updates it. Nothing here creates an allocation,
-timing, collector, address, or complexity guarantee.
-
-Ordinary assignment, argument, return, capture, pattern, indexing, propagation,
-and aggregate copies now copy only their immediate representation. Inline
-aggregate storage is distinct, while nested descriptors and handles retain
-identity. Threads, channels, and joins now publish those same immediate values.
-Mutex operations use the same rule while holding the mutex lock; the lock
-serializes access to its immediate stored representation but does not isolate
-or automatically protect backing reached through external aliases.
+This document explains where the current compiler moves values, clones data,
+allocates storage, retains memory, and synchronizes. Nothing here creates an
+allocation, timing, address, or complexity guarantee beyond the semantic rules
+in `spec.md`.
 
 ## Implemented 0.11 owned-core costs
 
-The ordinary driver stops the 0.11 path before owned-model tooling and final
-conformance, while the checked-to-C conformance path implements owned values,
-race-safe concurrency, and the ownership-aware C boundary. On that path:
+The ordinary driver implements owned values, race-safe concurrency, and the
+ownership-aware C boundary:
 
 - `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
   a constant-size descriptor transfer; it allocates and copies no backing.
@@ -112,7 +100,7 @@ race-safe concurrency, and the ownership-aware C boundary. On that path:
   closures never convert to code pointers. Borrowed erasure adds only the
   ordinary two-word trait-object view; owning erasure allocates solely through
   its explicit `Box`.
-- Neither semantic revision requests or links a tracing collector.
+- The compiler neither requests nor links a tracing collector.
 
 ## Implemented 0.11 shared and graph costs
 
@@ -143,9 +131,6 @@ race-safe concurrency, and the ownership-aware C boundary. On that path:
   types on both supported architectures; none of these compiler-private
   layouts is a C interoperability guarantee.
 
-These costs coexist temporarily with compatibility concurrency. They do not
-claim that the 0.11 path is yet available through the compiling driver.
-
 ## Collector-removal and reference-storage costs
 
 - Owned address-taken locals remain ordinary C locals. Referenced composite
@@ -155,17 +140,14 @@ claim that the 0.11 path is yet available through the compiling driver.
 - A nonempty owned variadic pack uses one caller-frame C array initialized in
   source order; the slice passed to the callee is a two-word view. Empty packs
   use a null pointer and zero length. Neither form allocates.
-- The compiling 0.10 compatibility revision still permits references and
-  shallow backing to outlive lexical frames. Those allocations enter a
-  thread-safe process-lifetime registry and are released together at normal
-  exit. This is explicit bounded-lifetime retention, not reachability tracing;
-  there is no root scan, collection retry, or cycle discovery.
-- Formatting buffers and raw `str` results whose APIs expose no individual
-  owner use the same process-lifetime domain. Owned `String` and collection
-  backing instead has exact per-value destruction, while `Box`, `Shared`, and
-  `Store` use their documented explicit cleanup.
+- Formatting buffers materialize owned `String` results. `String`, collection,
+  `Box`, `Shared`, and `Store` storage follows its documented exact cleanup.
 
-## Reading the tables
+## Historical 0.10 cost tables
+
+The following two tables preserve the measured migration baseline. They are
+not the current value model; current costs are stated in the 0.11 sections
+above and the operation notes below.
 
 - **Ordinary copy** means the implemented shallow 0.10 value operation.
 - **Physical work** describes this compiler revision, not a guarantee.
@@ -178,7 +160,7 @@ claim that the 0.11 path is yet available through the compiling driver.
 `n` is a collection length, `b` a UTF-8 byte length, and `w` the target pointer
 width.
 
-## Costs by type family
+### Costs by type family
 
 The tables in this section remain the measured 0.10 compatibility baseline.
 The implemented 0.11 replacements are specified in the owned-core and
@@ -209,7 +191,7 @@ do not promise a particular hashing representation. Vector indexed access and
 length are constant-time in the current implementation; inserting or removing
 away from the tail shifts the remaining inline element representations.
 
-## Costs by source operation
+### Costs by source operation
 
 This table likewise records the compiling 0.10 compatibility path; owned-path
 operations use the replacement costs above.
@@ -328,45 +310,33 @@ inline copying, shared backing, or runtime-managed copying. The lifetime class
 still distinguishes lexical, caller, returned, thread, and synchronized-storage
 boundaries without assigning them different value semantics.
 
-Before control-flow lowering, read-only call analysis changes eligible argument
-copies into an explicit borrowed passing mode, while reuse analysis marks
-eligible remaining semantic copies as `ReuseSource`. Control-flow lowering
+Before control-flow lowering, reuse analysis marks eligible semantic moves as
+`ReuseSource`. Control-flow lowering
 preserves those facts on every explicit `Copy` rvalue and assigns a stable,
 per-function copy ID. Debug compiler builds verify that the emitted IDs are
 unique and form a complete sequence, and the public IR exposes the same
-inventory for optimizer tests and measurements. This inventory counts semantic
-copy operations that remain after proven call borrowing whether materialized
-or reused, not recursive field copies, allocator requests, ABI traffic, or
+inventory for optimizer tests and measurements. This inventory counts explicit
+clone/copy operations whether materialized or reused, not recursive field
+copies, allocator requests, ABI traffic, or
 physical bytes. It adds no generated-C counters, output, or runtime behavior in
 release programs; the separate opt-in `elamite-cost-v1` instrumentation below
 remains the source of physical allocation and byte-copy measurements.
-
-Mutex call arguments remain explicit logical-copy records at synchronized-
-storage lifetime boundaries. Runtime `new`, `read`, `replace`, and `update`
-lower the concrete value representation directly while holding the lock; no
-recursive copy-helper family is emitted.
 
 ## Allocation and retained memory
 
 Generated programs contain no tracing collector. Owned storage is either
 stack-bounded or allocated by an explicit owning type with exact drop behavior.
-The compatibility revision and non-owning runtime results use a thread-safe
-registry of process-lifetime allocations, all released at normal exit.
 
 Important consequences are:
 
 - owned reference formation, user iteration, closure construction, and
   variadic packing allocate nothing;
-- compatibility closure construction, variadic packing, collection growth,
-  formatting, synchronization state, and escaping-reference storage can still
-  allocate implicitly to preserve the compiling 0.10 behavior;
+- collection growth, formatting, and synchronization state allocate where the
+  owning runtime operation documents it;
 - allocation failure immediately follows the process-fatal OOM path; there is
   no collection attempt or retry;
-- raw pointers retain no storage, and `ForeignRoot` is now only a compatibility
-  retained-pointer state with no root-registration hook;
-- compatibility backing is not reclaimed individually before normal exit, so
-  peak retention can exceed the former reachability-based implementation;
-- process-registry nodes, native allocator metadata, native thread stacks, C
+- raw pointers retain no storage;
+- native allocator metadata, native thread stacks, C
   library buffers, and fragmentation are not included in requested-byte counts;
   and
 - peak RSS remains an upper-bound host observation, not a deterministic
@@ -374,14 +344,13 @@ Important consequences are:
 
 ## Synchronization costs
 
-Compatibility threads are joinable pthreads with shallow startup/result
-publication and process-lifetime state. Owned threads instead move an inline
-closure into startup state, move the result out on the single join, and release
+Threads move an inline closure into startup state, move the result out on the
+single join, and release
 claimed state immediately; scope exit joins every borrowing child. Channels
 use one mutex and condition variables around their queue; bounded sends can
 block, capacity zero performs a rendezvous, and queued sends allocate one node.
-Compatibility messages remain shallow, while owned messages transfer one owner
-and are destroyed if the final receiver closes. Owned mutex values are never
+Messages transfer one owner and are destroyed if the final receiver closes.
+Mutex values are never
 copied out: `lock` returns an inline move-only guard whose destruction unlocks.
 The three sequentially consistent atomic cell types use a native mutex per
 cell rather than C11 `_Atomic`, preserving the C99 target.
@@ -389,8 +358,8 @@ cell rather than C11 `_Atomic`, preserving the C99 target.
 These synchronization operations establish the normative ordering described
 by `spec.md`: `pthread_create` and `pthread_join` own thread start/completion,
 channel and mutex edges use their queue or value mutex, and every atomic cell
-operation is a synchronous mutex-protected linearization point. On the owned
-path, structural `Send`/`Sync`, borrow provenance, moved messages, and guarded
+operation is a synchronous mutex-protected linearization point. Structural
+`Send`/`Sync`, borrow provenance, moved messages, and guarded
 mutation prevent safe unordered conflicting access. Raw, foreign, or explicitly
 unsafe capability contracts can still introduce C data races if violated and
 are never executed as ordinary conformance fixtures. Wall time and fairness are
@@ -429,6 +398,16 @@ It records the source hash, release compiler/toolchain identity, target, wall
 time, peak RSS, requested allocations, and explicit byte-copy totals. Use
 `ELAMITE_BENCH_TARGET=x86` for a native 32-bit observation and `ELAMC_BIN` to
 select a prebuilt compiler.
+
+The version 21 owned-model observation was recorded on 2026-08-12 with the
+checked-in source hashes. The six workloads request 5, 10,013, 2, 5,017,
+10,002, and 2,006 allocations and 92, 200,544, 82, 825,544, 1,290,257, and
+1,025,008 bytes. The proportional increases are the deliberately explicit
+clones in the thread, map/set, string, and vector workloads; the borrowed
+function loop remains at 2/82. Scanned allocation/byte counters are zero.
+Compile time, runtime time, and peak RSS are observations, not thresholds.
+
+The remaining observations below are historical migration comparisons.
 
 The final 0.10 observation was recorded on 2026-08-03 with identical workload
 hashes to the preceding shallow baseline. All deterministic counters were

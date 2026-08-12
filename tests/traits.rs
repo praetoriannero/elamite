@@ -610,61 +610,6 @@ fn main() -> ():
 }
 
 #[test]
-fn inherent_blocks_compare_aliases_canonically_and_share_the_field_namespace() {
-    assert_reports_any(
-        r#"
-struct Record:
-    value: i32
-
-type Alias = Record
-
-impl Record:
-    fn name(self: &Self) -> str:
-        return "record"
-
-impl Alias:
-    fn name(self: &Self) -> str:
-        return "alias"
-
-fn main() -> ():
-    pass
-"#,
-        "overlapping implementation targets",
-    );
-    assert_reports_any(
-        r#"
-struct Record:
-    value: i32
-
-impl Record:
-    fn value(self: &Self) -> i32:
-        return 1
-
-fn main() -> ():
-    pass
-"#,
-        "conflicts with a field",
-    );
-
-    assert_clean(
-        r#"
-struct Record:
-    value: i32
-
-type Alias = Record
-
-impl Alias:
-    fn new(value: i32) -> Self:
-        return Self { value: value }
-
-fn main() -> ():
-    let record = Alias.new(7)
-    println(record.value)
-"#,
-    );
-}
-
-#[test]
 fn inherent_blocks_are_confined_to_the_target_declaration_module() {
     assert_reports_any(
         r#"

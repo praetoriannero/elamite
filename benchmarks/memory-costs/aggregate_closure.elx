@@ -22,7 +22,6 @@ fn main() -> ():
     var checksum = 0
     var index = 0
     while index < 2000:
-        let closure_snapshot = read
-        checksum += closure_snapshot(index)
+        checksum += read(index)
         index += 1
     println(checksum)

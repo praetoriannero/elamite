@@ -25,8 +25,7 @@ pub struct AstInterfaceVersion {
 }
 
 pub const INTERFACE_VERSION: AstInterfaceVersion = AstInterfaceVersion { major: 2, minor: 0 };
-/// Interface selected by the accepted owned-model surface. It remains behind
-/// the semantic-revision seam until final owned-model conformance.
+/// Interface selected by the shipped owned-model surface.
 pub const OWNED_INTERFACE_VERSION: AstInterfaceVersion = AstInterfaceVersion { major: 3, minor: 0 };
 
 /// Stable public type inventory admitted by the initial façade.
@@ -92,7 +91,7 @@ impl AstInterface {
     #[must_use]
     pub const fn current() -> Self {
         Self {
-            version: INTERFACE_VERSION,
+            version: OWNED_INTERFACE_VERSION,
         }
     }
 
@@ -100,7 +99,6 @@ impl AstInterface {
     pub const fn for_semantic_revision(revision: SemanticRevision) -> Self {
         Self {
             version: match revision {
-                SemanticRevision::V0_10 => INTERFACE_VERSION,
                 SemanticRevision::V0_11 => OWNED_INTERFACE_VERSION,
             },
         }
@@ -2143,7 +2141,7 @@ mod tests {
 
     #[test]
     fn interface_versions_are_exact_and_inventory_is_stable() {
-        assert_eq!(AstInterface::current().version(), INTERFACE_VERSION);
+        assert_eq!(AstInterface::current().version(), OWNED_INTERFACE_VERSION);
         assert_eq!(
             AstInterface::for_semantic_revision(SemanticRevision::V0_11).version(),
             OWNED_INTERFACE_VERSION
@@ -2155,7 +2153,7 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(AstInterface::negotiate(INTERFACE_VERSION).is_ok());
+        assert!(AstInterface::negotiate(OWNED_INTERFACE_VERSION).is_ok());
         assert!(matches!(
             AstInterface::negotiate(AstInterfaceVersion { major: 1, minor: 1 }),
             Err(AstError::VersionMismatch { .. })
@@ -2164,7 +2162,7 @@ mod tests {
             .expect_err("the frozen 1.0 interface is not reinterpreted as 2.0");
         assert_eq!(
             retired.to_string(),
-            "std.ast interface version 1.0 is required, but this compiler provides 2.0"
+            "std.ast interface version 1.0 is required, but this compiler provides 3.0"
         );
         assert_eq!(TYPE_NAMES.len(), 21);
         assert!(TYPE_NAMES.windows(2).all(|names| names[0] < names[1]));
@@ -2753,12 +2751,12 @@ mod tests {
         #[test]
         fn every_noncurrent_interface_version_is_rejected(major in any::<u16>(), minor in any::<u16>()) {
             let required = AstInterfaceVersion { major, minor };
-            prop_assume!(required != INTERFACE_VERSION);
+            prop_assume!(required != OWNED_INTERFACE_VERSION);
             prop_assert_eq!(
                 AstInterface::negotiate(required).unwrap_err(),
                 AstError::VersionMismatch {
                     required,
-                    provided: INTERFACE_VERSION,
+                    provided: OWNED_INTERFACE_VERSION,
                 }
             );
         }

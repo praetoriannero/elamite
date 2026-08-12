@@ -1,10 +1,8 @@
 # Elamite Feature Ledger
 
-> Status: Active — 0.11 semantic contract accepted; implementation planned
+> Status: Active — 0.11 semantic contract implemented
 >
-> Basis: `spec.md` version 0.11.0-draft. The current compiler remains the 0.10
-> implementation baseline until the ordered migration reaches final
-> conformance.
+> Basis: implemented `spec.md` version 0.11.0-draft.
 >
 > Purpose: map the accepted specification to the descriptive migration
 > milestones in [`roadmap.md`](roadmap.md). This document assigns no semantics.
@@ -59,14 +57,12 @@ and behavior-neutral baseline are recorded in `docs/architecture.md`.
 
 ## 0.1 Owned-model implementation map
 
-Rows in this section map the accepted 0.11 contract. `Accepted` means the rule
-is normative, not that the current compiler implements it. Design fixtures
-under `tests/fixtures/owned_model_design/` are intentionally inactive until
-their owning migration milestone turns them into ordinary conformance tests.
+Rows in this section map the implemented 0.11 contract. Historical design
+fixtures remain useful only where an active focused test owns the same rule.
 
 | Specification rule | Implementation pass | Runtime | Required evidence |
 | --- | --- | --- | --- |
-| 0.11 is the accepted target while one complete 0.10 path remains as temporary migration scaffolding | **Migration seam and accepted surface** (done), **Ownership facts and explicit use IR** (done), **Move and initialization checking** (done), **Structural borrow provenance** (done), **Deterministic destruction** (done), **Owned core values and collections** (done) | — | `semantic_revision` package/phase integration, dependency-skew diagnostic, single post-owned-core boundary |
+| 0.11 is the only shipped semantic model | **Owned-model tooling and final conformance** (done) | — | ordinary driver, version identity, `semantic_revision`, and full conformance gates |
 | Non-`Copy` consuming contexts move; `Copy` values remain available; no hidden clone | **Ownership facts and explicit use IR** (operation selection done), **Move and initialization checking** (done) | — | `ownership_facts_places_and_operations_cross_both_ir_levels`, `move_checking_rejects_second_uses_and_conservative_branch_merges`, active owned-model fixtures |
 | `Clone.clone(&self)` is explicit and may allocate; last-use analysis never changes source semantics | **Ownership facts and explicit use IR** (explicit operation done), **Owned core values and collections** (done) | allocator where documented | typed/CFG dumps; owned-core generated-C/ASan run and cost workload |
 | Moved, uninitialized, partially moved, and reinitialized places are tracked through branches, loops, patterns, and early exits | **Move and initialization checking** (done) | — | compile-fail related spans, typed-IR dataflow tests, join properties |
@@ -99,29 +95,24 @@ their owning migration milestone turns them into ordinary conformance tests.
 | `Send`/`Sync` prevent safe cross-thread alias races; raw pointers receive neither automatically | **Race-safe concurrency** (done) | capability metadata | `unscoped_threads_and_channels_reject_non_send_or_borrowed_state` |
 | Unscoped spawn consumes an owned `Send` closure and returns a move-only join handle; join moves the result | **Race-safe concurrency** (done) | native threads | owned runtime and lifecycle stress |
 | `thread.scope` is an ordinary function admitting scoped borrowing closures; children finish before the inferred region ends | **Race-safe concurrency** (done), **Structural borrow provenance** (done) | native threads | `thread_scope_joins_borrowing_children_before_return` |
-| Channels move messages, mutexes expose data through guards, and atomics are non-`Copy` sequentially-consistent cells | **Race-safe concurrency** (done) | thread/sync runtime | owned ASan/UBSan run, compatibility stress, target-width C99 |
+| Channels move messages, mutexes expose data through guards, and atomics are non-`Copy` sequentially-consistent cells | **Race-safe concurrency** (done) | thread/sync runtime | owned ASan/UBSan run and target-width C99 |
 | Safe code has no data-race UB; races require a violated unsafe/raw/foreign contract | **Race-safe concurrency** (done) | C99 synchronization hooks | raw publication compile-fail and explicit unsafe assertion coverage |
 | C declarations accept only explicit ABI-safe types; owning Elamite values, safe references, slices, and closure objects never cross accidentally | **Owned-model C interoperability** (done) | C ABI | `owned_foreign_signatures_and_uninitialized_storage_are_checked`; native C harness |
 | Retained C pointers require address-stable `Box`/`Shared` ownership; owning transfers pair exact allocators and deleters | **Owned-model C interoperability** (done) | foreign libraries | `owned_output_transfer_callback_and_foreign_resource_cleanup_are_exact`; ASan/UBSan and exact release counter |
 | C output parameters use `MaybeUninit`; wrappers prove initialization before producing owned values | **Owned-model C interoperability** (done) | C ABI | compile-fail plus `owned_output_transfer_callback_and_foreign_resource_cleanup_are_exact` |
 | Foreign callbacks use named or capture-free functions plus optional owned raw context; foreign threads enter through exported/callback boundaries under `Send`/`Sync` obligations | **Owned-model C interoperability** (done), **Race-safe concurrency** (done) | callback runtime | `a_foreign_created_thread_may_enter_through_an_exported_boundary`; pthread callback under ASan/UBSan |
 | Compile-time syntax generation preserves provenance, uses the 0.11 AST interface, and generated code enters ordinary ownership checking | **Owned-model tooling and final conformance** | bounded interpreter | expansion properties, version-skew integration |
-| The owned demonstration and split design corpus cover every rule on x86 and x86-64 before the 0.10 seam is deleted | **Owned-model tooling and final conformance** | complete runtime | full conformance and sanitizer matrix |
+| The owned demonstration and focused corpus cover every rule on x86 and x86-64 | **Owned-model tooling and final conformance** (done) | complete runtime | full conformance and sanitizer matrix |
 
 ### Owned-model demonstration coverage
 
 | `owned_spec_demo.elx` region | Normative ownership |
 | --- | --- |
-| `Point`, consuming and borrowing receivers | §§3.1–3.2, 4.2 |
-| `Document`, `Clone`, `publish`, `first_line` | §§3.1–3.2, 4.1, 6 |
-| `sum`, `clear`, slice coercions | §§3.2, 4.1, 7.1 |
-| `Trace`, `cleanup_demo` | §8 deterministic destruction and `defer` ordering |
-| `closure_demo`, `apply` | §5.1 inline first-class closure objects |
-| `scoped_threads`, `owned_thread` | §10.4 scoped borrows, owned spawn, and join |
-| `synchronized_counter`, `channel_demo` | §§9–10.4 explicit sharing, guards, and moved messages |
-| `Node`, `graph_demo` | §9 checked store/handle graph ownership |
-| `OwnedCFile`, `visit`, `pointer_demo` | §§3.3 and 10 ownership-aware C/raw boundaries |
-| `main` | Moves, explicit clone, last-use borrows, owned collections, formatted strings, `Result`, and cleanup integration |
+| vector clone/move and `Box` replacement | §§3.1–3.2, 4.1 |
+| map query borrows and exclusive mutation | §§3.2, 7.1, 9 |
+| slice coercions and borrowed iteration | §§3.2, 4.1, 7.1 |
+| inline closure capture and generic call | §§5.1, 6 |
+| channel, shared mutex, guard, and atomics | §§9–10.4 |
 
 The split design fixtures map the same rules to compile-pass, compile-fail,
 run-pass, trap, C-harness, and target-width layers. No target-only construct is
@@ -129,11 +120,11 @@ silently treated as implemented merely because it appears in this table.
 
 ## 0.2 Historical 0.10 implementation evidence
 
-The remaining numbered sections record the currently implemented 0.10
-baseline and its completed legacy milestones. Their shallow-copy, promotion,
+The remaining numbered sections record the historical 0.10 baseline and its
+completed legacy milestones. Their shallow-copy, promotion,
 collector, closure-environment, and concurrency rows are historical evidence,
-not authority for 0.11. They remain until final conformance decides which
-fixtures still provide useful regression coverage.
+not authority for 0.11. Retained rows explain old milestone names and design
+history; active conformance evidence is listed in §0.1.
 
 ### Legacy artifact inventory
 
@@ -572,24 +563,17 @@ initial surface.
 
 ## 16. Demonstration coverage
 
-`examples/spec_demo.elx` is the authoritative implemented 0.10 demonstration.
+`examples/spec_demo.elx` is the authoritative implemented 0.11 demonstration.
 Its constructs map below:
 
 | `spec_demo.elx` region | Ledger section(s) |
 | --- | --- |
-| `use`, `mod`, `pub`, re-exports, `type` alias | §2.3, §4.4 |
-| `Point(Default, PartialEq)`, `MyType`/`MyBetterType` derive examples | §4.2, §4.3 |
-| `Session` — five `self` receiver forms and `Toggle` trait | §4.2, §6 |
-| `Packet`, `DemoResourceState`, `DemoResource`, `use_demo_resource` (`defer call`), `use_demo_resource_block` (`defer:` block) | §4.2, §8 |
-| `Address`, `Account` — reference into an aggregate observing container replacement and caller-visible mutation | §3.2, §19 |
-| `IntTransform`, `apply_offset`, `increment`, `Transform`/`AddOffset`, `apply_transform` | §5, §6 |
-| `Chain[T]`, `chain_length` | §4.2, §6, §9 |
-| `State` enum | §4.4 |
-| `equivalent[T: PartialEq]`, `is_even`/`is_odd` | §4.5, §5, §6 |
-| `propagate_io` (`?`) | §8 |
-| `main`: raw pointer round-trip (`*Self`/`*var Self`, unsafe receiver), null check, typed traversal/indexing/null-low ordering, arrays/`Vec`/`@map`/`@set`, `for`, `while`, f-strings | §3.3, §4.1, §7, §7.1, §7.2 |
-| `main`: shallow vector descriptor/backing behavior and shared `Map`/`Set` identity | §3.1, §4.1, §4.4, §7.1 |
-| `main`: shallow closure publication, worker mutation, and join ordering | §5.1, §10.4 |
+| `original`, `duplicate`, and `moved` vectors | §§3.1, 4.1, 7.1 |
+| `Box`, `Map`, shared queries, and exclusive mutation | §§3.2, 4.1, 9 |
+| shared and exclusive array slices plus borrowed iteration | §§3.2, 4.1, 7.1 |
+| `show` and generic `apply` | §§5.1, 6 |
+| moved channel sender and message | §10.4 |
+| `Shared[Mutex]`, guard mutation, and atomic cell | §§9, 10.4 |
 
 Every top-level and `main`-body construct in the demonstration has at least
 one corresponding row above; there is no construct in the demonstration

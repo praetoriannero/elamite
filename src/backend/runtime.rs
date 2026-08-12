@@ -381,9 +381,10 @@ impl<'a> CEmitter<'a> {
     }
 
     /// Emits the collector-free process-lifetime allocation domain used by
-    /// compatibility values and runtime views. Every allocation is recorded
-    /// exactly once and released at normal process exit; no pointer tracing,
-    /// root registration, or thread attachment is involved.
+    /// non-owning runtime views and process-scoped operating-system state.
+    /// Every allocation is recorded exactly once and released at normal
+    /// process exit; no pointer tracing, root registration, or thread
+    /// attachment is involved.
     pub(super) fn emit_process_allocation_runtime(&mut self) {
         self.output.push_str(
             "typedef struct el_process_allocation {\n\

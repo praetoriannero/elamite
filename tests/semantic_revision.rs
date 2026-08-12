@@ -182,15 +182,6 @@ fn owned_surface_parses_closures_slices_arrays_and_borrows_without_legacy_leakag
         3
     );
 
-    let legacy = parse_for_revision(&lexed.tokens, SemanticRevision::V0_10);
-    assert!(
-        legacy
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("expected a type")),
-        "legacy parsing must not reinterpret `[var T]`"
-    );
-
     for malformed in [
         "fn bad(values: [var i32; 4]) -> ():\n    pass\n",
         "fn bad() -> ():\n    let callback = fn(value: i32) -> i32:\n        return value\n",
@@ -211,7 +202,7 @@ fn owned_surface_parses_closures_slices_arrays_and_borrows_without_legacy_leakag
 }
 
 #[test]
-fn authoritative_owned_demo_reaches_the_revision_boundary_cleanly() {
+fn authoritative_owned_demo_is_accepted_by_syntax_tooling() {
     let source = include_str!("../owned_spec_demo.elx");
     let mut sources = SourceManager::new();
     let file = sources.add_text(PathBuf::from("owned_spec_demo.elx"), source.to_string());
@@ -436,28 +427,15 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_c_interoperability() {
+fn owned_packages_reach_the_complete_pipeline() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
     );
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
-    let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
-        Ok(_) => panic!("owned-model final conformance is not enabled yet"),
-        Err(diagnostics) => diagnostics,
-    };
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_eq!(
-        diagnostics[0].category,
-        Category::SemanticRevision,
-        "{diagnostics:#?}"
-    );
-    assert!(
-        diagnostics[0]
-            .message
-            .contains("owned-model tooling and final conformance")
-    );
+    check_frontend(&graph, &mut sources, Target::X86_64)
+        .expect("the shipped owned model reaches checking and lowering");
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);

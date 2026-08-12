@@ -8,7 +8,7 @@ fn main() -> ():
     var checksum = 0
     index = 0
     while index < 2000:
-        let snapshot = source
+        let snapshot = source.clone()
         checksum += snapshot[index % 128]
         index += 1
     println(checksum)

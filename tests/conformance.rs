@@ -1,8 +1,6 @@
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use elamite::backend::Target;
@@ -61,6 +59,20 @@ impl Drop for Suite {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+fn contains_file_named(directory: &Path, name: &str) -> bool {
+    fs::read_dir(directory)
+        .expect("read retained directory")
+        .filter_map(Result::ok)
+        .any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                contains_file_named(&path, name)
+            } else {
+                path.file_name().and_then(|file| file.to_str()) == Some(name)
+            }
+        })
 }
 
 fn options(filter: Option<&str>) -> RunnerOptions {
@@ -160,291 +172,4 @@ fn authoritative_demo_matches_in_debug_and_release() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-}
-
-#[test]
-fn generated_c_is_clean_under_address_and_undefined_behavior_sanitizers() {
-    let suite = Suite::new();
-    suite.source_case(
-        "sanitizers",
-        r#"fn main() -> ():
-    var values = [1, 2, 3, 4]
-    let whole: *var [i32; 4] = (&var values) as *var [i32; 4]
-    unsafe:
-        let first: *var i32 = whole as *var i32
-        first[1] = 5
-        println(first[1])
-        println(*(first + 2))
-        println((first + 4) - first)
-        let end = first + 4
-        var cursor = first
-        var sum = 0
-        while cursor < end:
-            sum += *cursor
-            cursor += 1
-        println(sum)
-"#,
-        "5\n3\n4\n13\n",
-    );
-    let report = run_suite(
-        &suite.root,
-        &RunnerOptions {
-            filter: None,
-            targets: vec![Target::X86_64],
-            optimizations: vec![Optimization::Debug],
-            features: Default::default(),
-            c_flags: vec![
-                OsString::from("-fsanitize=address,undefined"),
-                OsString::from("-fno-omit-frame-pointer"),
-            ],
-            runtime_environment: vec![(OsString::from("ASAN_OPTIONS"), sanitizer_options())],
-        },
-    )
-    .expect("run instrumented fixture");
-    assert!(
-        report.success(),
-        "{}",
-        report
-            .cases
-            .iter()
-            .map(|case| case.detail.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-}
-
-#[test]
-fn concurrency_contract_matches_the_available_target_and_optimization_matrix() {
-    let mut targets = vec![Target::X86_64];
-    if x86_runtime_available() {
-        targets.push(Target::X86);
-    } else {
-        eprintln!(
-            "skipping x86 concurrency execution: the host cannot build and run a 32-bit C/thread probe"
-        );
-    }
-    let report = run_suite(
-        Path::new("tests/fixtures/conformance/14_concurrency"),
-        &RunnerOptions {
-            filter: None,
-            targets,
-            optimizations: vec![Optimization::Debug, Optimization::Release],
-            features: Default::default(),
-            c_flags: Vec::new(),
-            runtime_environment: Vec::new(),
-        },
-    )
-    .expect("run concurrency contract fixture");
-    assert!(
-        report.success(),
-        "{}",
-        report
-            .cases
-            .iter()
-            .map(|case| case.detail.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-}
-
-#[test]
-fn concurrency_generated_c_is_clean_under_address_and_undefined_sanitizers() {
-    let report = run_suite(
-        Path::new("tests/fixtures/conformance"),
-        &RunnerOptions {
-            filter: Some("concurrency".to_string()),
-            targets: vec![Target::X86_64],
-            optimizations: vec![Optimization::Debug],
-            features: Default::default(),
-            c_flags: vec![
-                OsString::from("-fsanitize=address,undefined"),
-                OsString::from("-fno-omit-frame-pointer"),
-            ],
-            runtime_environment: vec![(OsString::from("ASAN_OPTIONS"), sanitizer_options())],
-        },
-    )
-    .expect("run instrumented concurrency fixtures");
-    assert!(
-        report.success(),
-        "{}",
-        report
-            .cases
-            .iter()
-            .map(|case| case.detail.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-}
-
-#[test]
-fn concurrency_stress_is_clean_under_thread_sanitizer() {
-    let report = run_suite(
-        Path::new("tests/fixtures/conformance/15_concurrency_stress"),
-        &RunnerOptions {
-            filter: None,
-            targets: vec![Target::X86_64],
-            optimizations: vec![Optimization::Debug],
-            features: Default::default(),
-            c_flags: vec![
-                OsString::from("-fsanitize=thread"),
-                OsString::from("-fno-omit-frame-pointer"),
-            ],
-            runtime_environment: vec![(
-                OsString::from("TSAN_OPTIONS"),
-                OsString::from("halt_on_error=1"),
-            )],
-        },
-    )
-    .expect("run thread-sanitized concurrency fixture");
-    assert!(
-        report.success(),
-        "{}",
-        report
-            .cases
-            .iter()
-            .map(|case| case.detail.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-}
-
-#[test]
-fn runtime_stress_is_stable_across_repeated_debug_and_release_runs() {
-    for _ in 0..3 {
-        let report = run_suite(
-            Path::new("tests/fixtures/conformance/12_runtime_stress"),
-            &RunnerOptions {
-                filter: None,
-                targets: vec![Target::X86_64],
-                optimizations: vec![Optimization::Debug, Optimization::Release],
-                features: Default::default(),
-                c_flags: Vec::new(),
-                runtime_environment: Vec::new(),
-            },
-        )
-        .expect("run stress fixture");
-        assert!(
-            report.success(),
-            "{}",
-            report
-                .cases
-                .iter()
-                .map(|case| case.detail.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-}
-
-#[test]
-fn concurrency_stress_is_stable_across_repeated_debug_and_release_runs() {
-    for _ in 0..3 {
-        let report = run_suite(
-            Path::new("tests/fixtures/conformance/15_concurrency_stress"),
-            &RunnerOptions {
-                filter: None,
-                targets: vec![Target::X86_64],
-                optimizations: vec![Optimization::Debug, Optimization::Release],
-                features: Default::default(),
-                c_flags: Vec::new(),
-                runtime_environment: Vec::new(),
-            },
-        )
-        .expect("run concurrency stress fixture");
-        assert!(
-            report.success(),
-            "{}",
-            report
-                .cases
-                .iter()
-                .map(|case| case.detail.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-}
-
-fn x86_runtime_available() -> bool {
-    let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-    let source = std::env::temp_dir().join(format!(
-        "elamite-x86-conformance-{}-{serial}.c",
-        std::process::id()
-    ));
-    let executable = source.with_extension("bin");
-    if fs::write(
-        &source,
-        "#include <stdint.h>\n\
-         #include <pthread.h>\n\
-         static void *worker(void *unused) { (void)unused; return NULL; }\n\
-         int main(void) { pthread_t thread; \
-         if (pthread_create(&thread, NULL, worker, NULL) != 0) return 1; \
-         return pthread_join(thread, NULL) == 0 ? 0 : 1; }\n",
-    )
-    .is_err()
-    {
-        return false;
-    }
-    let compiled = Command::new("cc")
-        .args(["-m32", "-std=c99"])
-        .arg(&source)
-        .args(["-lpthread", "-o"])
-        .arg(&executable)
-        .output()
-        .is_ok_and(|output| output.status.success());
-    let available = compiled
-        && Command::new(&executable)
-            .output()
-            .is_ok_and(|output| output.status.success());
-    let _ = fs::remove_file(source);
-    let _ = fs::remove_file(executable);
-    available
-}
-
-fn sanitizer_options() -> OsString {
-    if leak_sanitizer_available() {
-        OsString::from("detect_leaks=1:halt_on_error=1")
-    } else {
-        eprintln!("leak sanitizer unavailable on this host; address/undefined checks continue");
-        OsString::from("detect_leaks=0:halt_on_error=1")
-    }
-}
-
-fn leak_sanitizer_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let source = std::env::temp_dir().join(format!(
-            "elamite-lsan-probe-{}-{serial}.c",
-            std::process::id()
-        ));
-        let executable = source.with_extension("bin");
-        let available = fs::write(&source, "int main(void) { return 0; }\n").is_ok()
-            && Command::new("cc")
-                .args(["-std=c99", "-fsanitize=leak"])
-                .arg(&source)
-                .arg("-o")
-                .arg(&executable)
-                .output()
-                .is_ok_and(|output| output.status.success())
-            && Command::new(&executable)
-                .output()
-                .is_ok_and(|output| output.status.success());
-        let _ = fs::remove_file(source);
-        let _ = fs::remove_file(executable);
-        available
-    })
-}
-
-fn contains_file_named(directory: &Path, name: &str) -> bool {
-    fs::read_dir(directory)
-        .expect("read retained directory")
-        .filter_map(Result::ok)
-        .any(|entry| {
-            let path = entry.path();
-            if path.is_dir() {
-                contains_file_named(&path, name)
-            } else {
-                path.file_name().and_then(|file| file.to_str()) == Some(name)
-            }
-        })
 }

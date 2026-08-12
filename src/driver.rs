@@ -5,10 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::backend::{COptions, emit_c};
-use crate::check::{
-    check_borrows, check_for_target, check_moves, infer_provenance_signatures,
-    semantic_revision_boundary,
-};
+use crate::check::{check_borrows, check_for_target, check_moves, infer_provenance_signatures};
 pub use crate::config::Optimization;
 use crate::config::{CompilerFeatures, Target};
 use crate::diagnostics::{Category, Diagnostic};
@@ -159,9 +156,6 @@ pub fn check_frontend_with_features(
             return Err(diagnostics);
         }
         let _control_flow = lower_control_flow(&high_level.program, &type_output.program);
-        if let Some(diagnostic) = semantic_revision_boundary(&resolved) {
-            return Err(vec![diagnostic]);
-        }
     }
     Ok(FrontendOutput {
         resolved,
@@ -406,9 +400,6 @@ pub fn compile_tests_with_features(
             return Err(diagnostics);
         }
         let _control_flow = lower_control_flow(&high_level.program, &typed);
-        if let Some(diagnostic) = semantic_revision_boundary(&resolved) {
-            return Err(vec![diagnostic]);
-        }
     }
     let control_flow = lower_control_flow(&high_level.program, &typed);
     let mut cases = resolved

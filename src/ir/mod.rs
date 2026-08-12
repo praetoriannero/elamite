@@ -8,7 +8,6 @@
 //! trapping operations explicit before any C is emitted. Milestone 9 adds the
 //! canonical logical-copy contract and source-ordered pattern-match lowering.
 
-mod borrowing;
 pub mod control_flow;
 mod copy;
 mod reuse;

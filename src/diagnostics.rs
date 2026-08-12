@@ -37,9 +37,6 @@ pub enum Category {
     /// Source uses a deliberately unstable language feature without its
     /// explicit compiler opt-in.
     ExperimentalFeature,
-    /// A package reached a deliberately incomplete semantic-revision boundary
-    /// during an ordered language-model migration.
-    SemanticRevision,
     /// A compile-time AST intrinsic, macro interpreter execution, or generated
     /// syntax result is invalid or exhausts its deterministic boundary.
     CompileTime,

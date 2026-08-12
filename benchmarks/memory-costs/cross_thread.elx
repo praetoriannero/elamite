@@ -13,9 +13,8 @@ fn main() -> ():
     let produce = fn[sender, payload]() -> ():
         var index = 0
         while index < 1000:
-            let _ = sender.send(payload)
+            let _ = sender.send(payload.clone())
             index += 1
-        sender.close()
 
     let started = std.thread.spawn(produce)
     var checksum: usize = 0

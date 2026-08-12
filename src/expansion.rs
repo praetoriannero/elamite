@@ -256,7 +256,7 @@ fn expand_unit(unit: ParsedUnit, provenance: &mut ProvenanceTable) -> ExpandedUn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expansion::ast::{HasOrigin, INTERFACE_VERSION};
+    use crate::expansion::ast::{HasOrigin, OWNED_INTERFACE_VERSION};
     use crate::lexer::lex;
     use crate::parsed::StandardModule;
     use crate::parser::parse;
@@ -337,7 +337,7 @@ mod tests {
                 .map(|token| (&token.kind, Some(token.span)))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(output.package.ast.version(), INTERFACE_VERSION);
+        assert_eq!(output.package.ast.version(), OWNED_INTERFACE_VERSION);
         let token = unit.token_trees.flattened()[0].clone();
         let builder = output.package.ast_builder_for_token(&token);
         let identifier = builder.identifier("generated_name").unwrap();

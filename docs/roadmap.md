@@ -3,12 +3,10 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Owned-model tooling and final conformance**
+> Next candidate milestone: **Post-conformance optimization**
 >
-> Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
-> baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
-> ordered migration below. The compiler remains a 0.10 implementation until
-> each planned semantic layer reaches its exit criteria.
+> Basis: implemented `spec.md` version 0.11.0-draft. The historical 0.10
+> shallow model was the migration baseline and is no longer selectable.
 
 ## Milestone summary
 
@@ -30,7 +28,7 @@ Keep this table synchronized with the detailed status blocks below.
 | [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Complete | Owned reference/iterator/vararg storage is stack-bounded; collector and root hooks are removed; compatibility retention has classified process lifetime. |
 | [Race-safe concurrency](#race-safe-concurrency) | Complete | Structural `Send`/`Sync`, owned spawn/join, borrowing scopes, moved channels, guarded mutexes, and SC atomics are implemented. |
 | [Owned-model C interoperability](#owned-model-c-interoperability) | Complete | ABI-safe declarations, explicit output initialization, stable owner transfer, exact foreign cleanup, capture-free callbacks, and foreign-thread entry are implemented. |
-| [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned — next | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
+| [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Complete | Expansion ABI 3.0, shipped sources, tools, conformance, cost evidence, version identity, and ordinary drivers now use the owned model. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | After owned-model conformance, optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
 | [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The versioned `std.ast` façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete; inherent blocks advance its exact ABI to 2.0. |
@@ -123,15 +121,14 @@ Each representation should have one clear responsibility:
   functions, types, and trait implementations.
 - The C backend selects representations and emits strictly sequenced C.
 
-The 0.10 implementation uses shallow representation copying, conservative
-managed promotion, identity-sharing closure environments, and
-programmer-managed shared-memory concurrency. The next semantic revision
+The historical 0.10 implementation used shallow representation copying,
+conservative managed promotion, identity-sharing closure environments, and
+programmer-managed shared-memory concurrency. The implemented revision
 replaces that model with move-by-default owned values, explicit cloning,
 structurally inferred borrows, inline closure environments, explicit shared or
 graph ownership, deterministic destruction, and race-safe concurrency. The
-compiler may retain a temporary compatibility seam while the new path is
-built, but each checked program must use one coherent semantic model and the
-seam is deleted at final conformance.
+compiler retained a temporary compatibility seam during migration; final
+conformance removed its selectable revision and backend value model.
 
 ## 2. Cross-cutting engineering rules
 
@@ -593,29 +590,25 @@ borrow, initialization, thread, and cleanup contract explicit.
 
 ### Owned-model tooling and final conformance
 
-> Status: Planned.
->
-> Blocked by: every earlier milestone in this section.
+> Status: Complete.
 
 **Goal:** Make the owned model the only shipped model and align every compiler
 entry point, source artifact, tool, cost claim, and supported target with it.
 
-| Task | Deliverable | Focused acceptance |
-| --- | --- | --- |
-| **Expansion ABI migration** | Advance the versioned `std.ast` interface for changed types and syntax, migrate shipped macros, and prove generated output undergoes ordinary ownership and provenance checking. | Version skew diagnoses cleanly, macro provenance remains complete, and arbitrary generated ownership syntax cannot crash or bypass semantic phases. |
-| **Repository and standard-library migration** | Rewrite shipped sources, examples, fixtures, benchmarks, API documentation, editor support, and the authoritative demonstration for moves, borrows, owned collections, closures, sharing, and safe threads. | Searches and inventory tests find no live dependency on shallow mutable aliasing, managed promotion, collector behavior, or safe-code race UB. |
-| **Conformance and robustness campaign** | Run parse snapshots, compile-pass/fail, run-pass, traps, package tests, C harnesses, property/fuzz suites, ASan, UBSan, TSan, and x86/x86-64 matrices. | The complete matrix is deterministic, warning-clean, bounded on adversarial input, and contains directed coverage for every normative ledger rule. |
-| **Cost and release evidence** | Run comparable memory workloads and update `cost_model.md`, `release.md`, version output, README, toolchain documentation, and migration notes. | Documentation distinguishes semantic guarantees from measured costs and reports one implemented specification revision everywhere. |
-| **Compatibility-seam deletion** | Remove the 0.10 semantic path, obsolete transfer/copy helpers, mode branches, old runtime representations, and historical tests that no longer provide regression value. | One parser-to-backend path implements the owned model; no permanent edition or compatibility promise remains unless separately reviewed and specified. |
-| **Conformance declaration** | Mark the new `spec.md` revision implemented only after the ledger has implementation and test evidence for every rule. | `cargo fmt --check`, `cargo check --all-targets`, `cargo test --all-targets`, and `cargo clippy --all-targets -- -D warnings` pass together with both native target matrices. |
+The compiler now reports and implements 0.11.0-draft through every ordinary
+entry point. `std.ast` 3.0 is current, the authoritative demonstration and
+shipped examples use owned syntax, the memory corpus measures explicit clone
+costs, and historical shallow-behavior tests no longer gate releases. The
+parser-to-backend path has one selectable semantic revision and one owned
+control-flow value model. Formatting, checking, tests, clippy, strict C99,
+sanitizer harnesses, and the available x86/x86-64 matrix provide the release
+evidence indexed in `release.md`.
 
 ## 5. Post-owned-model optimization
 
 ### Post-conformance optimization
 
 > Status: Candidate work; select a measured problem before implementation.
->
-> Blocked by: **Owned-model tooling and final conformance**.
 
 **Goal:** Improve implementation quality without changing language behavior.
 

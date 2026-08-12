@@ -10,8 +10,8 @@ fn main() -> ():
     var checksum: usize = 0
     index = 0
     while index < 1000:
-        let map_snapshot = source_map
-        let set_snapshot = source_set
+        let map_snapshot = source_map.clone()
+        let set_snapshot = source_set.clone()
         checksum += map_snapshot.len() + set_snapshot.len()
         index += 1
     println(checksum)

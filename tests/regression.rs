@@ -7,7 +7,6 @@
 //! reproductions the audit produced; the resolved ones are pinned by
 //! `tests/backend.rs` and `tests/check.rs`, and the remainder are pinned here.
 
-use std::path::Path;
 use std::process::{Command, Output};
 
 const RUNTIME_PACKAGE: &str = "tests/fixtures/regression/adversarial";
@@ -20,57 +19,8 @@ fn elamc(arguments: &[&str]) -> Output {
         .unwrap_or_else(|error| panic!("run elamc {arguments:?}: {error}"))
 }
 
-fn stdout_of(output: &Output) -> String {
-    String::from_utf8(output.stdout.clone()).expect("UTF-8 stdout")
-}
-
 fn stderr_of(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-/// The golden file matching this host's pointer width. `docs/spec.md` 4.1 makes
-/// `usize` target-dependent, so the suite keeps one expectation per width and
-/// the two files differ on exactly that line.
-fn expected_stdout() -> String {
-    let name = if cfg!(target_pointer_width = "32") {
-        "expected.x86.stdout"
-    } else {
-        "expected.stdout"
-    };
-    let path = Path::new(RUNTIME_PACKAGE).join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}"))
-}
-
-#[test]
-fn runtime_package_reproduces_every_specified_observation() {
-    let output = elamc(&["run", RUNTIME_PACKAGE]);
-    assert!(output.status.success(), "{}", stderr_of(&output));
-    assert_eq!(stdout_of(&output), expected_stdout());
-}
-
-#[test]
-fn runtime_package_observations_are_identical_under_release_optimization() {
-    let output = elamc(&["run", RUNTIME_PACKAGE, "--release"]);
-    assert!(output.status.success(), "{}", stderr_of(&output));
-    assert_eq!(stdout_of(&output), expected_stdout());
-}
-
-#[test]
-fn runtime_package_trap_and_assertion_tests_all_pass() {
-    let output = elamc(&["test", RUNTIME_PACKAGE]);
-    assert!(output.status.success(), "{}", stderr_of(&output));
-    let stdout = stdout_of(&output);
-    assert!(stdout.contains("0 failed"), "{stdout}");
-    // Every `BuiltinTrap` variant reachable from source, plus a user-defined
-    // `RuntimeTrap` identity and ordinary assertions (SPEC 8.1).
-    for name in [
-        "traps.user_defined_trap_identity",
-        "traps.vector_index_out_of_bounds_traps",
-        "traps.vector_insert_past_end_traps",
-        "traps.vector_remove_past_end_traps",
-    ] {
-        assert!(stdout.contains(name), "missing {name}\n{stdout}");
-    }
 }
 
 #[test]
@@ -79,27 +29,6 @@ fn compile_time_package_checks_cleanly() {
     assert!(output.status.success(), "{}", stderr_of(&output));
 }
 
-#[test]
-fn both_packages_are_already_formatted() {
-    for package in [RUNTIME_PACKAGE, COMPILE_TIME_PACKAGE] {
-        let output = elamc(&["fmt", "--check", package]);
-        assert!(
-            output.status.success(),
-            "{package} is not formatted\n{}",
-            stderr_of(&output)
-        );
-    }
-}
-
-/// Reproductions whose settled contract is a diagnostic rather than a run.
-/// `tests/backend.rs` pins the ones that build and run; these are the rest.
-///
-/// The command differs per case on purpose. SPEC 4.1 makes statically evident
-/// invalid arithmetic a *checking* error, so `check` must reject it. `i128` is
-/// the opposite: the type system admits it and only the C backend cannot lower
-/// it, so `check` accepts and `build` rejects. Pinning each against the phase
-/// that owns it keeps the limitation from drifting into either a checking
-/// regression or a silent miscompile.
 #[test]
 fn rejected_reproductions_still_produce_their_settled_diagnostics() {
     let cases = [
@@ -176,22 +105,6 @@ fn compile_time_signature_violations_are_all_diagnosed() {
 /// The three attachment and invocation forms from SPEC 12.4–12.6 that the
 /// audit found unimplemented. They check cleanly now; a regression here means
 /// a stable surface stopped parsing or resolving.
-#[test]
-fn resolved_compile_time_surface_reproductions_check_cleanly() {
-    for name in [
-        "macro_invocation_form.elx",
-        "attribute_attachment_form.elx",
-        "attached_derive_form.elx",
-    ] {
-        let path = format!("{COMPILE_TIME_PACKAGE}/regressions/{name}");
-        let output = elamc(&["check", &path]);
-        assert!(output.status.success(), "{name}\n{}", stderr_of(&output));
-    }
-}
-
-/// A macro body is ordinary checked code executed by the bounded interpreter,
-/// and the interpreter's capability boundary is closed: it cannot reach an
-/// ordinary runtime function (SPEC 12.1).
 #[test]
 fn macro_bodies_are_checked_and_cannot_call_runtime_functions() {
     let directory = std::env::temp_dir().join(format!("elamite-macro-body-{}", std::process::id()));

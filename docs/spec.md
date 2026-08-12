@@ -1,15 +1,15 @@
 # Elamite Language Specification
 
-> Status: Draft
+> Status: Implemented draft
 >
 > Version: 0.11.0-draft
 >
-> This document is the accepted 0.11 language design. The current compiler
-> still implements the 0.10 baseline demonstrated by
-> [`examples/spec_demo.elx`](../examples/spec_demo.elx); the authoritative 0.11
-> target is the [owned-model demonstration](../owned_spec_demo.elx).
-> Implementation status is mapped separately in [ledger.md](ledger.md), and
-> unresolved questions are listed in [issues.md](issues.md).
+> This document is the implemented 0.11 language design. Its authoritative
+> executable demonstration is
+> [`examples/spec_demo.elx`](../examples/spec_demo.elx), mirrored by the
+> [owned-model demonstration](../owned_spec_demo.elx). Implementation evidence
+> is mapped in [ledger.md](ledger.md), and unresolved questions are listed in
+> [issues.md](issues.md).
 
 ## 1. Overview
 
@@ -2145,11 +2145,9 @@ fn main() -> Result[(), String]:
     return Result.Ok(())
 ~~~
 
-The complete normative surface is demonstrated by
-[`owned_spec_demo.elx`](../owned_spec_demo.elx). The currently
-implemented 0.10 compiler demonstration remains
-[`examples/spec_demo.elx`](../examples/spec_demo.elx) until the final migration
-milestone.
+The complete normative surface is demonstrated by the executable
+[`examples/spec_demo.elx`](../examples/spec_demo.elx) and the focused
+conformance suites indexed by [ledger.md](ledger.md).
 ## 12. Compile-time syntax generation
 
 Elamite has three user-defined compile-time declarations: `macro` produces

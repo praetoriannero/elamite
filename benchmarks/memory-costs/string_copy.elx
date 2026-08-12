@@ -6,7 +6,7 @@ fn main() -> ():
     var checksum = 0
     var index = 0
     while index < 10000:
-        let snapshot = source
+        let snapshot = source.clone()
         if snapshot == source:
             checksum += 1
         index += 1
