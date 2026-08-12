@@ -8,12 +8,12 @@ collector. Raw data pointers retain direct C-like traversal behind `unsafe`.
 
 The current compiler still implements the 0.10 shallow-copy language behavior,
 but generated programs no longer contain or link a tracing collector.
-An internal package revision seam now parses, expands, resolves, and lowers the
-accepted 0.11 surface through canonical source types, then deliberately stops
-before ownership-dependent body checking. The ordered migration in
-`docs/roadmap.md` keeps 0.10 executable while replacing one semantic layer at a
-time; version output continues to report the implemented revision rather than
-claiming 0.11 conformance.
+An internal package revision seam now carries the accepted 0.11 surface through
+owned checking, lowering, runtime behavior, race-safe concurrency, and explicit
+C interoperability, then deliberately stops before tooling and final
+conformance. The ordered migration in `docs/roadmap.md` keeps 0.10 executable
+while replacing one semantic layer at a time; version output continues to
+report the implemented revision rather than claiming 0.11 conformance.
 
 The shipped `std` package includes filesystem, environment, process, time,
 deterministic randomness, stable ordering/search, and UTF-8 text utilities in

@@ -399,6 +399,11 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::Clone { .. }
         | StandardCall::IntegerMax { .. }
         | StandardCall::BoxNew { .. }
+        | StandardCall::BoxPointer { .. }
+        | StandardCall::BoxFromRaw { .. }
+        | StandardCall::MaybeUninitNew { .. }
+        | StandardCall::MaybeUninitPointer { .. }
+        | StandardCall::MaybeUninitAssumeInit { .. }
         | StandardCall::SharedNew { .. }
         | StandardCall::SharedGet { .. }
         | StandardCall::SharedDowngrade { .. }

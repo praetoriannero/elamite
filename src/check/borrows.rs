@@ -1199,7 +1199,9 @@ impl BorrowChecker<'_> {
 fn standard_call_exclusively_accesses_receiver(operation: StandardCall) -> bool {
     matches!(
         operation,
-        StandardCall::VecGetVar { .. }
+        StandardCall::BoxPointer { mutable: true, .. }
+            | StandardCall::MaybeUninitPointer { .. }
+            | StandardCall::VecGetVar { .. }
             | StandardCall::MutexGuardGet { mutable: true, .. }
             | StandardCall::VecAppend { .. }
             | StandardCall::VecInsert { .. }

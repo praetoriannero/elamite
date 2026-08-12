@@ -1934,6 +1934,11 @@ and what event ends its validity. The compiler does not infer those facts from
 a C header. C output parameters use explicit `std.ffi.MaybeUninit[T]` storage;
 unsafe wrapper code verifies successful initialization before converting it to
 an owned `T`. Reading uninitialized storage is undefined behavior.
+`MaybeUninit[T].new()` creates logically uninitialized, ABI-aligned storage for
+an ABI-safe `T`; `pointer()` requires a mutable storage place and returns
+`*var T`; and unsafe `assume_init()` consumes the storage to produce `T` after
+the wrapper has verified the foreign success condition. `MaybeUninit` is
+move-only and does not destroy a logically uninitialized `T`.
 
 ### 10.2 Ownership, retention, and foreign resources
 
@@ -1962,6 +1967,15 @@ the consuming wrapper operation suppresses Elamite destruction only after C has
 accepted ownership. Allocator pairing is part of the unsafe contract; Elamite
 never assumes that C `free`, an Elamite allocator, and a library-specific
 release function are interchangeable.
+
+For an Elamite `Box[T]`, `pointer()` and `pointer_var()` expose nonowning raw
+addresses while the box remains the owner. Consuming `into_raw()` transfers
+cleanup responsibility with a `*var T`. Unsafe `Box[T].from_raw()` restores
+that owner only when the pointer is the live result of the compatible Elamite
+box allocation contract and has not already been adopted or freed. A pointer
+allocated by a foreign library instead belongs in that library's ordinary
+move-only wrapper with its exact deleter; it is not converted to `Box` merely
+because both implementations currently use a C allocator.
 
 A raw pointer returned by C does not retain foreign storage. Converting it to a
 safe reference requires an inferred provenance source that is no longer than

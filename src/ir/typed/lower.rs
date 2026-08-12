@@ -1931,8 +1931,13 @@ impl<'a> TypedLowerer<'a> {
                     TypeKind::Reference { target, .. }
                         if matches!(self.expanded_kind(*target), TypeKind::Function { .. })
                 );
+                let target_is_raw_function_pointer = matches!(
+                    self.expanded_kind(ty),
+                    TypeKind::RawPointer { target, .. }
+                        if matches!(self.expanded_kind(*target), TypeKind::Function { .. })
+                );
                 if self.resolved.semantic_revision.supports_owned_surface()
-                    && target_is_function_reference
+                    && (target_is_function_reference || target_is_raw_function_pointer)
                     && let TypeKind::Closure {
                         declaration,
                         captures,
@@ -2494,6 +2499,8 @@ impl<'a> TypedLowerer<'a> {
                             | StandardCall::MapNew { .. }
                             | StandardCall::SetNew { .. }
                             | StandardCall::BoxNew { .. }
+                            | StandardCall::BoxFromRaw { .. }
+                            | StandardCall::MaybeUninitNew { .. }
                             | StandardCall::IntegerMax { .. }
                             | StandardCall::SharedNew { .. }
                             | StandardCall::StoreNew { .. }

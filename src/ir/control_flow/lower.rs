@@ -2335,7 +2335,8 @@ fn assignment_binary(
 fn standard_call_mutates_inline_descriptor(operation: StandardCall) -> bool {
     matches!(
         operation,
-        StandardCall::VecAppend { .. }
+        StandardCall::MaybeUninitPointer { .. }
+            | StandardCall::VecAppend { .. }
             | StandardCall::VecGetVar { .. }
             | StandardCall::VecInsert { .. }
             | StandardCall::VecRemove { .. }

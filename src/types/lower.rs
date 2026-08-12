@@ -633,8 +633,8 @@ impl<'a> TypeBuilder<'a> {
         }
         let arity = match name {
             "Vec" | "Set" | "Box" | "Shared" | "Weak" | "Store" | "Handle" | "Identity"
-            | "ForeignRoot" | "ForeignRootMut" | "Thread" | "ScopedThread" | "Sender"
-            | "Receiver" | "Mutex" | "MutexGuard" => 1,
+            | "ForeignRoot" | "ForeignRootMut" | "MaybeUninit" | "Thread" | "ScopedThread"
+            | "Sender" | "Receiver" | "Mutex" | "MutexGuard" => 1,
             "Map" => 2,
             "print" | "println" | "spawn" | "scope" | "channel" | "unbounded_channel" => {
                 self.diagnostics.push(

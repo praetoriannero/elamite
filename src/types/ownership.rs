@@ -256,6 +256,16 @@ impl Query<'_> {
                 send: CapabilityState::Present,
                 sync: CapabilityState::Present,
             },
+            "MaybeUninit" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Absent,
+                needs_drop: CapabilityState::Absent,
+                contains_borrow: disjunction(
+                    arguments.iter().map(|ty| self.facts(*ty).contains_borrow),
+                ),
+                send: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
+                sync: CapabilityState::Absent,
+            },
             "ForeignRoot" | "ForeignRootMut" | "File" | "Directory" | "Thread" => OwnershipFacts {
                 copy: CapabilityState::Absent,
                 clone: CapabilityState::Absent,

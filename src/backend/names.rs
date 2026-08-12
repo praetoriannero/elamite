@@ -149,6 +149,13 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
             return format!("el_{operation}_t{}", result_type.index());
         }
         StandardCall::IdentityFrom { wrapper } => ("identity_from", wrapper),
+        StandardCall::BoxPointer { boxed, .. } => ("box_pointer", boxed),
+        StandardCall::BoxFromRaw { boxed, .. } => ("box_from_raw", boxed),
+        StandardCall::MaybeUninitNew { storage, .. } => ("maybe_uninit_new", storage),
+        StandardCall::MaybeUninitPointer { storage, .. } => ("maybe_uninit_pointer", storage),
+        StandardCall::MaybeUninitAssumeInit { storage, .. } => {
+            ("maybe_uninit_assume_init", storage)
+        }
         StandardCall::ForeignRootRetain { handle, .. } => ("foreign_root_retain", handle),
         StandardCall::ForeignRootPointer { handle, .. } => ("foreign_root_pointer", handle),
         StandardCall::ForeignRootClose { handle } => ("foreign_root_close", handle),

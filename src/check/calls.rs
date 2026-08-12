@@ -2224,6 +2224,7 @@ impl<'a> Checker<'a> {
         }
 
         if member_name == "retain"
+            && !self.resolved.semantic_revision.supports_owned_surface()
             && let Some(handle) = self.type_from_expression(base)
             && let TypeKind::Builtin {
                 builtin,
@@ -2255,6 +2256,35 @@ impl<'a> Checker<'a> {
                 CheckedCall::Standard(StandardCall::ForeignRootRetain { handle, mutable }),
             );
             return Some((handle, PlaceKind::Value));
+        }
+
+        if member_name == "from_raw"
+            && self.resolved.semantic_revision.supports_owned_surface()
+            && let Some(boxed) = self.type_from_expression(base)
+            && let TypeKind::Builtin {
+                builtin,
+                arguments: type_arguments,
+            } = self.typed.types.kind(boxed).clone()
+            && self.resolved.builtin_name(builtin) == "Box"
+            && let [value] = type_arguments.as_slice()
+        {
+            self.require_unsafe_context(
+                call_span,
+                "reconstructing an owning `Box` from a raw pointer",
+            );
+            let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                mutability: Mutability::Mutable,
+                target: *value,
+            });
+            self.check_standard_arguments(call_span, "Box.from_raw", arguments, &[pointer]);
+            self.program.calls.insert(
+                call_span,
+                CheckedCall::Standard(StandardCall::BoxFromRaw {
+                    boxed,
+                    value: *value,
+                }),
+            );
+            return Some((boxed, PlaceKind::Value));
         }
 
         // Synchronization handles use associated constructors so their
@@ -2364,6 +2394,31 @@ impl<'a> Checker<'a> {
                         call_span,
                         CheckedCall::Standard(StandardCall::BoxNew {
                             boxed: collection,
+                            value,
+                        }),
+                    );
+                    return Some((collection, PlaceKind::Value));
+                }
+                "MaybeUninit"
+                    if self.resolved.semantic_revision.supports_owned_surface()
+                        && type_arguments.len() == 1
+                        && member_name == "new" =>
+                {
+                    let value = type_arguments[0];
+                    if !self.typed.is_abi_safe(value) {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                Category::TypeSystem,
+                                "`MaybeUninit` C output storage requires an ABI-safe value type",
+                            )
+                            .with_primary(call_span),
+                        );
+                    }
+                    self.check_standard_arguments(call_span, &member_name, arguments, &[]);
+                    self.program.calls.insert(
+                        call_span,
+                        CheckedCall::Standard(StandardCall::MaybeUninitNew {
+                            storage: collection,
                             value,
                         }),
                     );
@@ -2674,6 +2729,11 @@ impl<'a> Checker<'a> {
                     StandardCall::ThreadJoin { .. }
                         | StandardCall::ScopedThreadJoin { .. }
                         | StandardCall::ChannelClose { .. }
+                        | StandardCall::BoxPointer {
+                            consuming: true,
+                            ..
+                        }
+                        | StandardCall::MaybeUninitAssumeInit { .. }
                 )
             {
                 self.record_copy(
@@ -3231,14 +3291,16 @@ impl<'a> Checker<'a> {
         else {
             return None;
         };
-        if matches!(self.resolved.builtin_name(builtin), "Shared" | "Store")
-            && !self.resolved.semantic_revision.supports_owned_surface()
+        if matches!(
+            self.resolved.builtin_name(builtin),
+            "Shared" | "Store" | "MaybeUninit"
+        ) && !self.resolved.semantic_revision.supports_owned_surface()
         {
             return None;
         }
         if !matches!(
             self.resolved.builtin_name(builtin),
-            "Vec" | "Map" | "Set" | "Box" | "Shared" | "Store"
+            "Vec" | "Map" | "Set" | "Box" | "Shared" | "Store" | "MaybeUninit"
         ) {
             return None;
         }
@@ -3362,6 +3424,106 @@ impl<'a> Checker<'a> {
                     return None;
                 }
                 match (builtin_name, name, arguments.as_slice()) {
+                    ("Box", "pointer", [value])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Shared,
+                            target: *value,
+                        });
+                        Some((
+                            StandardCall::BoxPointer {
+                                boxed: receiver,
+                                value: *value,
+                                mutable: false,
+                                consuming: false,
+                            },
+                            Vec::new(),
+                            pointer,
+                            false,
+                        ))
+                    }
+                    ("Box", "pointer_var", [value])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Mutable,
+                            target: *value,
+                        });
+                        Some((
+                            StandardCall::BoxPointer {
+                                boxed: receiver,
+                                value: *value,
+                                mutable: true,
+                                consuming: false,
+                            },
+                            Vec::new(),
+                            pointer,
+                            true,
+                        ))
+                    }
+                    ("Box", "into_raw", [value])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Mutable,
+                            target: *value,
+                        });
+                        Some((
+                            StandardCall::BoxPointer {
+                                boxed: receiver,
+                                value: *value,
+                                mutable: true,
+                                consuming: true,
+                            },
+                            Vec::new(),
+                            pointer,
+                            false,
+                        ))
+                    }
+                    ("MaybeUninit", "pointer", [value])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        if !self.typed.is_abi_safe(*value) {
+                            self.diagnostics.push(
+                                Diagnostic::new(
+                                    Category::TypeSystem,
+                                    "`MaybeUninit.pointer` requires an ABI-safe value type",
+                                )
+                                .with_primary(span),
+                            );
+                        }
+                        let pointer = self.typed.types.intern(TypeKind::RawPointer {
+                            mutability: Mutability::Mutable,
+                            target: *value,
+                        });
+                        Some((
+                            StandardCall::MaybeUninitPointer {
+                                storage: receiver,
+                                value: *value,
+                            },
+                            Vec::new(),
+                            pointer,
+                            true,
+                        ))
+                    }
+                    ("MaybeUninit", "assume_init", [value])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        self.require_unsafe_context(
+                            span,
+                            "assuming that C initialized output storage",
+                        );
+                        Some((
+                            StandardCall::MaybeUninitAssumeInit {
+                                storage: receiver,
+                                value: *value,
+                            },
+                            Vec::new(),
+                            *value,
+                            false,
+                        ))
+                    }
                     ("File", "read_to_end", []) => {
                         let u8_type = self.typed.types.primitive(PrimitiveType::U8);
                         let vec_builtin = self.resolved.builtin_named("Vec")?;
@@ -3443,7 +3605,9 @@ impl<'a> Checker<'a> {
                         unit_type,
                         false,
                     )),
-                    ("ForeignRoot", "pointer", [target]) => {
+                    ("ForeignRoot", "pointer", [target])
+                        if !self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
                         let pointer = self.typed.types.intern(TypeKind::RawPointer {
                             mutability: Mutability::Shared,
                             target: *target,
@@ -3458,7 +3622,9 @@ impl<'a> Checker<'a> {
                             false,
                         ))
                     }
-                    ("ForeignRootMut", "pointer", [target]) => {
+                    ("ForeignRootMut", "pointer", [target])
+                        if !self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
                         let pointer = self.typed.types.intern(TypeKind::RawPointer {
                             mutability: Mutability::Mutable,
                             target: *target,
@@ -3473,12 +3639,16 @@ impl<'a> Checker<'a> {
                             false,
                         ))
                     }
-                    ("ForeignRoot" | "ForeignRootMut", "close", [_]) => Some((
-                        StandardCall::ForeignRootClose { handle: receiver },
-                        Vec::new(),
-                        unit_type,
-                        false,
-                    )),
+                    ("ForeignRoot" | "ForeignRootMut", "close", [_])
+                        if !self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        Some((
+                            StandardCall::ForeignRootClose { handle: receiver },
+                            Vec::new(),
+                            unit_type,
+                            false,
+                        ))
+                    }
                     ("Thread", "join", [result]) => Some((
                         StandardCall::ThreadJoin {
                             thread: receiver,

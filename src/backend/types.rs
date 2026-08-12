@@ -111,6 +111,14 @@ impl<'a> CEmitter<'a> {
                 }
                 let name = collection_type_name(ty);
                 match (builtin_name, arguments.as_slice()) {
+                    ("MaybeUninit", [value]) => {
+                        if let Some(value_type) = self.c_type(*value, span) {
+                            let _ = writeln!(
+                                self.output,
+                                "typedef union {name} {{ {value_type} value; unsigned char uninit; }} {name};\n"
+                            );
+                        }
+                    }
                     ("Vec", [element]) => {
                         if let Some(element_type) = self.c_type(*element, span) {
                             let _ = writeln!(
@@ -693,6 +701,7 @@ impl<'a> CEmitter<'a> {
                         "Vec"
                             | "Set"
                             | "Box"
+                            | "MaybeUninit"
                             | "Shared"
                             | "Weak"
                             | "Store"

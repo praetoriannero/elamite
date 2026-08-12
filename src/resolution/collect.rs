@@ -125,7 +125,10 @@ impl<'a> Resolver<'a> {
         }
         for (module, names) in [
             (io_module, &["print", "println"][..]),
-            (ffi_module, &["ForeignRoot", "ForeignRootMut", "CVoid"][..]),
+            (
+                ffi_module,
+                &["ForeignRoot", "ForeignRootMut", "MaybeUninit", "CVoid"][..],
+            ),
             (
                 thread_module,
                 &["Thread", "ScopedThread", "Scope", "spawn", "scope"][..],

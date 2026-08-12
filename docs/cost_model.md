@@ -1,9 +1,9 @@
 # Elamite implementation cost model
 
-> Version: 19
+> Version: 20
 >
 > Applies to: the 0.10.0-draft compatibility path and implemented
-> 0.11.0-draft phases through race-safe concurrency, on Linux x86
+> 0.11.0-draft phases through owned-model C interoperability, on Linux x86
 > and x86-64
 >
 > Status: non-normative implementation documentation
@@ -29,9 +29,9 @@ or automatically protect backing reached through external aliases.
 
 ## Implemented 0.11 owned-core costs
 
-The ordinary driver stops the 0.11 path before owned-model C interoperability,
-while the checked-to-C conformance path also implements owned race-safe
-concurrency. On that path:
+The ordinary driver stops the 0.11 path before owned-model tooling and final
+conformance, while the checked-to-C conformance path implements owned values,
+race-safe concurrency, and the ownership-aware C boundary. On that path:
 
 - `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
   a constant-size descriptor transfer; it allocates and copies no backing.
@@ -65,6 +65,28 @@ concurrency. On that path:
   A mutex guard is an inline two-word value; lock and guard destruction perform
   no allocation. `thread.scope` keeps its registry head on the stack and
   allocates one state, startup context, and registry node per scoped child.
+
+## Implemented 0.11 C-boundary costs
+
+- ABI-safe scalar, foreign-aggregate, raw-pointer, and raw-function-pointer
+  arguments use their ordinary C99 representation. An imported call adds no
+  marshalling allocation or implicit retain; any encoded buffer and owner are
+  explicit wrapper work.
+- `MaybeUninit[T]` is an inline C union aligned and sized for `T`. Construction,
+  pointer formation, and consuming `assume_init` allocate nothing. It schedules
+  no destruction until the initialized `T` has been produced.
+- `Box.pointer` and `pointer_var` copy only the nonowning address. `into_raw`
+  transfers that same address and suppresses Elamite cleanup; a successful
+  `from_raw` restores the one-pointer owner and its ordinary pointee/free drop
+  work. No operation moves or copies `T`.
+- A capture-free closure callback lowers directly to one C function pointer and
+  allocates no environment. Stateful callbacks pay only for the explicitly
+  selected `Box`/`Shared` context and foreign registration. Foreign resource
+  wrappers have their ordinary inline raw handle plus exactly the library
+  release work performed by `Drop`.
+- Foreign-thread entry adds no attachment allocation or root registration.
+  Synchronization required by callback context remains the wrapper's explicit
+  `Send`/`Sync` and native API cost.
 
 ## Implemented 0.11 inline-closure costs
 

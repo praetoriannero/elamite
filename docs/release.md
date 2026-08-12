@@ -72,7 +72,27 @@ expose protected data only through move-only guards, and atomic cells remain
 non-`Copy` and sequentially consistent through C99 pthread hooks. Focused
 generated-C runs pass ASan/UBSan; the compatibility concurrency suite retains
 its historical shallow behavior. The temporary boundary has advanced to
-owned-model C interoperability.
+owned-model C interoperability. That boundary is now implemented as well:
+foreign signatures admit only the reviewed C ABI-safe set, `MaybeUninit`
+provides explicit output storage, `Box` exposes visible raw ownership transfer,
+custom wrappers pair foreign handles with their exact `Drop` deleter, and
+capture-free callbacks can enter from C-created threads without collector
+attachment. The native harness passes strict C99 at `-O0` and `-O2` under
+ASan/UBSan and checks release counts explicitly. The temporary boundary now
+names owned-model tooling and final conformance.
+
+### Owned-C-interoperability baseline comparison
+
+The required `benchmarks/memory-cost-baseline.sh` run on 2026-08-12 UTC used
+Linux x86-64, rustc 1.89.0, and GCC 15.2. The compatibility corpus retained the
+race-safe-concurrency source hashes and deterministic totals:
+`aggregate_closure` 6/172, `cross_thread` 1,014/32,552, `function_loop` 2/82,
+`map_set_copy` 17/1,544, `string_copy` 2/257, and `vector_copy` 6/1,008
+allocations/bytes. All scanned counters stayed zero and `memcpy` counters stayed
+3/25, 8/32, 1/17, 12/720, 3/256, and 5/496. The new owned FFI operations are
+covered separately by the no-marshalling allocation contract, exact native
+deleter counter, and sanitizer-backed generated-C harness until the final
+tooling milestone exposes 0.11 through the ordinary benchmark driver.
 
 ### Race-safe-concurrency baseline comparison
 

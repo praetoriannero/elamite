@@ -379,6 +379,10 @@ pub const INTRINSICS: &[Intrinsic] = &[
         reason: "mutable foreign retained-pointer compatibility representation",
     },
     Intrinsic {
+        path: "std.ffi.MaybeUninit",
+        reason: "logically uninitialized, ABI-aligned C output storage",
+    },
+    Intrinsic {
         path: "std.ffi.CVoid",
         reason: "opaque C void correspondence",
     },

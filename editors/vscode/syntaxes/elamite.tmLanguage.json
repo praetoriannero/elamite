@@ -205,7 +205,7 @@
 
     "type-builtin": {
       "name": "support.type.builtin.elx",
-      "match": "\\b(ForeignRootMut|ForeignRoot|DirectoryEntry|TryReceiveError|TrySendError|NumericError|ProcessError|BuiltinTrap|RuntimeTrap|AtomicUsize|AtomicBool|AtomicI32|SystemTime|ExitStatus|ScopedThread|MutexGuard|SpawnError|SendError|ParseError|OpenMode|FileType|Formatter|Directory|Generator|Metadata|Receiver|Identity|Duration|Ordering|EnvError|Thread|Sender|Mutex|Scope|Instant|Output|Path|File|IoError|Option|Result|String|CVoid|Shared|Weak|Store|Handle|Vec|Map|Set|Box)\\b"
+      "match": "\\b(ForeignRootMut|ForeignRoot|MaybeUninit|DirectoryEntry|TryReceiveError|TrySendError|NumericError|ProcessError|BuiltinTrap|RuntimeTrap|AtomicUsize|AtomicBool|AtomicI32|SystemTime|ExitStatus|ScopedThread|MutexGuard|SpawnError|SendError|ParseError|OpenMode|FileType|Formatter|Directory|Generator|Metadata|Receiver|Identity|Duration|Ordering|EnvError|Thread|Sender|Mutex|Scope|Instant|Output|Path|File|IoError|Option|Result|String|CVoid|Shared|Weak|Store|Handle|Vec|Map|Set|Box)\\b"
     },
 
     "type-builtin-trait": {

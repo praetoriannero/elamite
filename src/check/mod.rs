@@ -159,9 +159,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after race-safe concurrency. Ordinary driver entry
-/// points stop before backend lowering until owned-model C interoperability
-/// replaces the compatibility ABI contracts.
+/// The temporary boundary after owned-model C interoperability. Ordinary
+/// driver entry points stop before backend lowering until tooling and final
+/// conformance remove the compatibility revision seam.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -170,8 +170,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft has race-safe concurrency, but owned-model C \
-                 interoperability is not implemented yet",
+                "semantic revision 0.11.0-draft has owned-model C interoperability, but \
+                 owned-model tooling and final conformance are not implemented yet",
             )
         })
 }
@@ -2486,10 +2486,28 @@ impl<'a> Checker<'a> {
             },
             _ => None,
         };
+        let target_raw_function = match self.typed.types.kind(target_resolved).clone() {
+            TypeKind::RawPointer { target, .. } => match self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(target))
+                .clone()
+            {
+                TypeKind::Function {
+                    safety: Safety::Safe,
+                    receiver: None,
+                    parameters,
+                    return_type,
+                    ..
+                } => Some((parameters, return_type)),
+                _ => None,
+            },
+            _ => None,
+        };
         // A capture-free owned closure has no environment state and may be
-        // named explicitly as its exact safe function reference. Capturing
-        // closures remain ordinary data objects and never masquerade as code
-        // pointers or foreign callbacks.
+        // named explicitly as its exact safe function reference or raw code
+        // pointer. Capturing closures remain ordinary data objects and never
+        // masquerade as code pointers or foreign callbacks.
         if self.resolved.semantic_revision.supports_owned_surface()
             && let TypeKind::Closure {
                 captures,
@@ -2524,6 +2542,45 @@ impl<'a> Checker<'a> {
                 Diagnostic::new(
                     Category::ExpressionType,
                     "a capture-free closure converts only to an exact safe function reference",
+                )
+                .with_primary(node.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        }
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && let TypeKind::Closure {
+                captures,
+                parameters: source_parameters,
+                return_type: source_return,
+                ..
+            } = self.typed.types.kind(source_resolved).clone()
+            && let Some((target_parameters, target_return)) = target_raw_function
+        {
+            if !captures.is_empty() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::ExpressionType,
+                        "a capturing closure cannot convert to a raw function pointer",
+                    )
+                    .with_primary(node.span),
+                );
+                return (self.typed.types.error(), PlaceKind::Value);
+            }
+            let exact = source_parameters.len() == target_parameters.len()
+                && source_parameters
+                    .iter()
+                    .zip(&target_parameters)
+                    .all(|(source, target)| {
+                        !target.variadic && self.typed.types.exactly_equal(*source, target.ty)
+                    })
+                && self.typed.types.exactly_equal(source_return, target_return);
+            if exact {
+                return (target_type, PlaceKind::Value);
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::ExpressionType,
+                    "a capture-free closure converts only to an exact raw function pointer",
                 )
                 .with_primary(node.span),
             );

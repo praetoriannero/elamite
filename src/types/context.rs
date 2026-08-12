@@ -1015,6 +1015,7 @@ pub(super) fn builtin_has_layout(name: &str) -> bool {
             | "Identity"
             | "ForeignRoot"
             | "ForeignRootMut"
+            | "MaybeUninit"
             | "Thread"
             | "ScopedThread"
             | "Scope"

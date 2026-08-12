@@ -1,12 +1,15 @@
 # Elamite toolchain
 
 > Current implementation baseline: generated programs are collector-free on
-> both semantic revisions. The temporary 0.11 boundary is race-safe concurrency.
+> both semantic revisions. The temporary 0.11 boundary is owned-model tooling
+> and final conformance.
 
 The temporary 0.11 frontend revision is selectable only through the compiler
-library and test harness. It deliberately stops after source-type lowering;
-there is no CLI flag or manifest field promising executable 0.11 packages
-during the ordered migration.
+library and test harness. It now reaches owned checking, control-flow lowering,
+runtime emission, concurrency, and C interoperability in focused conformance
+tests, but the ordinary driver still stops at the final tooling boundary; there
+is no CLI flag or manifest field promising executable 0.11 packages during the
+ordered migration.
 
 Elamite's current toolchain supports Linux on x86-64 and x86 (32-bit). The
 compiler itself may run on either architecture; `--target=x86` and
@@ -115,18 +118,19 @@ implementation-private and may change between compiler revisions:
 - `.elamite-meta` contents beyond its checked format version; and
 - the Rust compiler-library API.
 
-Do not treat a library package's relocatable object as a stable C ABI. Exported
-C entry points currently use the implemented 0.10 subset of the explicit FFI
-forms in `spec.md`.
+Do not treat a library package's relocatable object as a stable C ABI. Only an
+exact `@exportc` entry point has the reviewed C ABI; the focused owned path now
+enforces the complete explicit ownership-aware FFI contract in `spec.md`, but
+ordinary artifact production remains behind the temporary revision boundary.
 
 ## Current limitations
 
 - Package dependencies are local paths. There is no registry, Git resolver,
   version solver, or lockfile workflow.
-- Cooperative tasks, executors, futures, and async/await are unsupported. In
-  the current 0.10 compiler, threads, channels, and mutexes use shallow values
-  with programmer-managed race safety; 0.11 race-safe concurrency is not yet
-  implemented.
+- Cooperative tasks, executors, futures, and async/await are unsupported. The
+  compiling 0.10 path retains shallow programmer-managed race safety; the
+  focused 0.11 path implements structural `Send`/`Sync`, scoped borrowing,
+  moved messages, guarded mutation, and sequentially consistent atomics.
 - Raw data-pointer arithmetic, indexing, subtraction, compound offsets, and
   null-low relational ordering are implemented. Ordering two non-null pointers
   from different live extents remains undefined behavior.

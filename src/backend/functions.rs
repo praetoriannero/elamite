@@ -764,6 +764,38 @@ impl<'a> CEmitter<'a> {
                         .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value));
                     return Some(format!("el_foreign_root_close({receiver})"));
                 }
+                if matches!(operation, StandardCall::BoxPointer { .. }) {
+                    return Some(
+                        arguments
+                            .first()
+                            .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value)),
+                    );
+                }
+                if matches!(operation, StandardCall::BoxFromRaw { .. }) {
+                    return Some(
+                        arguments
+                            .first()
+                            .map_or_else(|| "NULL".to_string(), |value| temporary_name(*value)),
+                    );
+                }
+                if matches!(operation, StandardCall::MaybeUninitNew { .. }) {
+                    let c_type = self.c_type(destination_type, Some(span))?;
+                    return Some(format!("({c_type}){{ .uninit = 0U }}"));
+                }
+                if matches!(operation, StandardCall::MaybeUninitPointer { .. }) {
+                    let receiver = receiver_place.as_ref().map_or_else(
+                        || "NULL".to_string(),
+                        |place| format!("&{}.value", self.place_expression(place)),
+                    );
+                    return Some(receiver);
+                }
+                if matches!(operation, StandardCall::MaybeUninitAssumeInit { .. }) {
+                    let receiver = arguments.first().map_or_else(
+                        || "(el_unit){0}".to_string(),
+                        |value| format!("{}.value", temporary_name(*value)),
+                    );
+                    return Some(receiver);
+                }
                 if matches!(operation, StandardCall::FormatterWrite { .. }) {
                     let receiver = arguments
                         .first()

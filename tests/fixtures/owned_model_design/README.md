@@ -12,7 +12,7 @@ specification must not make the compiler pretend to implement later layers.
 | Compile-fail | `fail/use_after_move.elx`, `fail/borrow_conflict.elx` | Use-after-move is active; borrow conflict advances with provenance |
 | Run-pass | `run/owned_values.elx` | destruction and owned collection milestones |
 | Trap | `trap/stale_handle.elx` | explicit graph ownership milestone |
-| C harness | `ffi/callback.elx`, `ffi/callback_harness.c` | owned-model C interoperability |
+| C harness | `ffi/callback.elx`, `ffi/callback_harness.c` plus `tests/owned_c_interoperability.rs` | Active for exported foreign-thread entry, callbacks, output initialization, ownership transfer, and exact cleanup |
 | Target width | `target_width/handles.elx` | graph ownership plus final x86/x86-64 conformance |
 | Race-safe concurrency | focused compile/run cases in `tests/race_safe_concurrency.rs` | Active for structural capabilities, scopes, channels, guards, and atomics |
 

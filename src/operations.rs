@@ -328,6 +328,28 @@ pub enum StandardCall {
         boxed: TypeId,
         value: TypeId,
     },
+    BoxPointer {
+        boxed: TypeId,
+        value: TypeId,
+        mutable: bool,
+        consuming: bool,
+    },
+    BoxFromRaw {
+        boxed: TypeId,
+        value: TypeId,
+    },
+    MaybeUninitNew {
+        storage: TypeId,
+        value: TypeId,
+    },
+    MaybeUninitPointer {
+        storage: TypeId,
+        value: TypeId,
+    },
+    MaybeUninitAssumeInit {
+        storage: TypeId,
+        value: TypeId,
+    },
     IntegerMax {
         value: TypeId,
     },
@@ -615,6 +637,16 @@ impl StandardCall {
             Self::IntegerMax { value } => *value = map(*value),
             Self::BoxNew { boxed, value } => {
                 *boxed = map(*boxed);
+                *value = map(*value);
+            }
+            Self::BoxPointer { boxed, value, .. } | Self::BoxFromRaw { boxed, value } => {
+                *boxed = map(*boxed);
+                *value = map(*value);
+            }
+            Self::MaybeUninitNew { storage, value }
+            | Self::MaybeUninitPointer { storage, value }
+            | Self::MaybeUninitAssumeInit { storage, value } => {
+                *storage = map(*storage);
                 *value = map(*value);
             }
             Self::SharedNew { shared, value } | Self::SharedGet { shared, value } => {

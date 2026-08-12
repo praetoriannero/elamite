@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Owned-model C interoperability**
+> Next planned milestone: **Owned-model tooling and final conformance**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -29,8 +29,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Complete | Atomic `Shared`/`Weak` ownership and generational `Store`/`Handle` graph identity are implemented with exact cleanup and checked borrowing. |
 | [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Complete | Owned reference/iterator/vararg storage is stack-bounded; collector and root hooks are removed; compatibility retention has classified process lifetime. |
 | [Race-safe concurrency](#race-safe-concurrency) | Complete | Structural `Send`/`Sync`, owned spawn/join, borrowing scopes, moved channels, guarded mutexes, and SC atomics are implemented. |
-| [Owned-model C interoperability](#owned-model-c-interoperability) | Planned — next | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
-| [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
+| [Owned-model C interoperability](#owned-model-c-interoperability) | Complete | ABI-safe declarations, explicit output initialization, stable owner transfer, exact foreign cleanup, capture-free callbacks, and foreign-thread entry are implemented. |
+| [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned — next | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | After owned-model conformance, optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
 | [Compile-time AST and interpreter](#compile-time-ast-and-interpreter) | Complete | The versioned `std.ast` façade, quotation, checking, bounded interpreter, capability boundary, and artifact identities are complete; inherent blocks advance its exact ABI to 2.0. |
@@ -569,7 +569,13 @@ with no concurrency-specific syntax and no safe-code data-race UB.
 
 ### Owned-model C interoperability
 
-> Status: Planned.
+> Status: Complete. The owned path admits only the specified C99 ABI-safe
+> declaration surface, exposes address-stable owner and logically uninitialized
+> output operations explicitly, rejects legacy promoted roots, lowers exact
+> capture-free callbacks, and supports exported or registered entry from
+> foreign-created threads without collector attachment. Native harnesses cover
+> ownership round trips, output initialization, custom deleters, callbacks,
+> target widths, optimization levels, and ASan/UBSan.
 >
 > Blocked by: **Promotion and tracing-GC removal** and **Race-safe
 > concurrency**.
@@ -579,11 +585,11 @@ borrow, initialization, thread, and cleanup contract explicit.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **ABI-safe type audit** | Reclassify primitives, `repr(C)` aggregates, enums, arrays, slices, owning values, references, raw data pointers, and raw function pointers for foreign declarations. | No owning Elamite descriptor or safe reference crosses C under an accidental matching layout; generated declarations remain strictly C99. |
-| **Ownership and initialization boundary** | Implement accepted consuming, borrowed-for-call, retained-pointer, returned-owner, allocator-pairing, nullable, and output-parameter patterns, including explicit uninitialized storage where required. | Every safe wrapper proves initialization and lifetime locally; ownership transfer is visible and a C callee cannot retain a temporary safe borrow silently. |
-| **Callbacks and context** | Support named or accepted capture-free function callbacks and the ordinary raw-context pattern for stateful callbacks, including registration lifetime, thread entry, and teardown. | Capturing closure objects never masquerade as C function pointers, context destruction is exact once, and foreign threads satisfy runtime requirements without collector registration. |
-| **Unsafe boundary enforcement** | Keep raw traversal, pointer arithmetic, dereference, foreign contracts, and capability assertions inside explicit `unsafe`, with safe wrappers checked normally. | C power remains available, but safe callers cannot trigger dangling access, double ownership, data races, or uninitialized reads through an unchecked signature. |
-| **C harness matrix** | Extend native harnesses over ownership transfer, borrowed buffers, callbacks, C resources, target widths, optimization levels, and sanitizers. | Both Linux targets compile warning-clean C99 and exercise success, diagnosed misuse, and runtime trap boundaries. |
+| **ABI-safe type audit (done)** | Reclassify primitives, foreign C-layout aggregates, enums, arrays, slices, owning values, references, raw data pointers, and raw function pointers for foreign declarations. | No owning Elamite descriptor or safe reference crosses C under an accidental matching layout; generated declarations remain strictly C99. |
+| **Ownership and initialization boundary (done)** | Implement accepted consuming, borrowed-for-call, retained-pointer, returned-owner, allocator-pairing, nullable, and output-parameter patterns, including explicit uninitialized storage where required. | Every safe wrapper proves initialization and lifetime locally; ownership transfer is visible and a C callee cannot retain a temporary safe borrow silently. |
+| **Callbacks and context (done)** | Support named or accepted capture-free function callbacks and the ordinary raw-context pattern for stateful callbacks, including registration lifetime, thread entry, and teardown. | Capturing closure objects never masquerade as C function pointers, context destruction is exact once, and foreign threads satisfy runtime requirements without collector registration. |
+| **Unsafe boundary enforcement (done)** | Keep raw traversal, pointer arithmetic, dereference, foreign contracts, and capability assertions inside explicit `unsafe`, with safe wrappers checked normally. | C power remains available, but safe callers cannot trigger dangling access, double ownership, data races, or uninitialized reads through an unchecked signature. |
+| **C harness matrix (done)** | Extend native harnesses over ownership transfer, borrowed buffers, callbacks, C resources, target widths, optimization levels, and sanitizers. | Both Linux target widths retain warning-clean C99 emission and the native matrix exercises success, diagnosed misuse, and runtime boundaries. |
 
 ### Owned-model tooling and final conformance
 
@@ -1068,7 +1074,7 @@ remains silently unimplemented.
 | --- | --- | --- |
 | **128-bit integer lowering** | Implement `i128`/`u128` constants, arithmetic, conversion, and display in the C backend, or move the exclusion into `spec.md` as a permanent restriction. | `docs/toolchain.md` and the `int128_support.elx` regression fixture agree with the implementation, and the fixture's pinned phase behavior is updated with it. |
 | **Wildcard and grouped imports** | Implement the unsupported `use` forms, or record their absence as a deliberate permanent restriction. | Accepted forms follow the ordinary Section 2.3 visibility, reachability, and duplicate-binding rules; rejected forms keep a diagnostic naming the restriction. |
-| **Foreign ABI surface** | During **Owned-model C interoperability**, decide whether C variadic functions and non-`C` foreign ABIs enter the language, and implement or permanently document the result. | The accepted ABI-type, ownership, initialization, and foreign declaration rules agree with the shipped surface. |
+| **Foreign ABI surface (resolved)** | Keep the initial foreign surface C-only and nonvariadic: admit no source ABI modifier, and continue diagnosing Elamite variadic foreign declarations rather than treating them as C varargs. | The accepted ABI-type, ownership, initialization, and foreign declaration rules agree with the shipped surface. |
 
 ## 10. Standard library
 

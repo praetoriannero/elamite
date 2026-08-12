@@ -2,7 +2,8 @@
 
 > Current implementation baseline: ordinary driver APIs remain the shipped
 > 0.10 shallow compatibility library. The focused 0.11 path now implements
-> owned, race-safe concurrency and stops at **Owned-model C interoperability**.
+> owned C interoperability and stops at **Owned-model tooling and final
+> conformance**.
 
 The compiler ships the `std` package from `stdlib/src/`. These files pass
 through ordinary parsing, resolution, checking, and monomorphization. The
@@ -18,6 +19,32 @@ the compiler inventory exposes the structural `Copy`, `Send`, and `Sync`
 capabilities to owned-model analysis. The executable 0.10 path does not invoke
 `Drop` or infer owned collection behavior from those declarations; their
 runtime hooks remain gated by the ordered migration milestones.
+
+## Owned C interoperability
+
+The 0.11 path keeps `@importc` and `@exportc` restricted to the platform C ABI
+and the recursively audited ABI-safe type set. Safe references, slices,
+ordinary aggregates, owning descriptors, and closure objects do not cross by
+layout coincidence. Imported calls and ownership reconstruction remain
+explicitly `unsafe`; C variadics and non-C calling conventions are unsupported.
+
+`std.ffi.MaybeUninit[T]` provides move-only, ABI-aligned output storage for an
+ABI-safe `T`. `pointer()` requires a mutable place and yields `*var T` for the
+foreign call; `assume_init()` is unsafe and consumes the storage only after the
+wrapper has checked the C success condition. `Box[T].pointer()` and
+`pointer_var()` expose nonowning stable addresses. `into_raw()` visibly hands
+off destruction responsibility, while unsafe `Box[T].from_raw()` restores it
+only when the exact Elamite allocator contract still applies. Library-owned C
+resources instead use a move-only ordinary wrapper whose `Drop` calls that
+library's matching deleter. The compatibility-only `ForeignRoot` types are not
+callable on 0.11.
+
+Named functions, exact function references, and capture-free closures can be
+converted to matching raw callback pointers. Capturing callback state stays in
+an address-stable `Box` or `Shared` owner held until unregistration. Foreign
+threads may enter through an exported function or registered callback without
+collector attachment; the unsafe registration contract remains responsible
+for `Send`, `Sync`, synchronization, and lifetime obligations.
 
 ## System modules
 
