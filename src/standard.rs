@@ -387,8 +387,20 @@ pub const INTRINSICS: &[Intrinsic] = &[
         reason: "native thread identity and cached-result representation",
     },
     Intrinsic {
+        path: "std.thread.ScopedThread",
+        reason: "move-only scoped join identity and result storage",
+    },
+    Intrinsic {
+        path: "std.thread.Scope",
+        reason: "lexically bounded native child-thread registry",
+    },
+    Intrinsic {
         path: "std.thread.spawn",
-        reason: "native thread creation and shallow callable publication",
+        reason: "native thread creation and revision-selected callable transfer",
+    },
+    Intrinsic {
+        path: "std.thread.scope",
+        reason: "borrow-bounded native thread execution region",
     },
     Intrinsic {
         path: "std.fs.File",
@@ -409,6 +421,10 @@ pub const INTRINSICS: &[Intrinsic] = &[
     Intrinsic {
         path: "std.sync.Mutex",
         reason: "native synchronized shared-cell representation",
+    },
+    Intrinsic {
+        path: "std.sync.MutexGuard",
+        reason: "move-only lexical mutex ownership and borrowed protected access",
     },
     Intrinsic {
         path: "std.sync.AtomicBool",

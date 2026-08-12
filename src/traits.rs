@@ -42,6 +42,7 @@ pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> Tra
     let mut output = TraitOutput::default();
     check_derivations(resolved, typed, &mut output.diagnostics);
     check_inherent_implementations(resolved, typed, &mut output.diagnostics);
+    check_thread_capability_implementations(resolved, typed, &mut output.diagnostics);
     let implementations = collect(resolved, typed);
     for implementation in &implementations {
         check_unsafe_implementation(resolved, *implementation, &mut output.diagnostics);
@@ -50,6 +51,56 @@ pub fn check_traits(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> Tra
     check_coherence(resolved, typed, &implementations, &mut output.diagnostics);
     output.implementations = implementations;
     output
+}
+
+fn check_thread_capability_implementations(
+    resolved: &ResolvedProgram,
+    typed: &TypedProgram,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for block in &resolved.impls {
+        let Some(trait_type) = typed.impl_trait_types.get(&block.id).copied() else {
+            continue;
+        };
+        let capability = trait_type_name(resolved, typed, trait_type);
+        if !matches!(capability.as_str(), "Send" | "Sync") {
+            continue;
+        }
+        let marked_unsafe = crate::syntax::direct_tokens(&block.syntax)
+            .into_iter()
+            .any(|token| {
+                matches!(
+                    token.kind,
+                    crate::lexer::TokenKind::Keyword(crate::syntax::Keyword::Unsafe)
+                )
+            });
+        if !resolved.semantic_revision.supports_owned_surface() {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "manual `Send` and `Sync` implementations require semantic revision 0.11",
+                )
+                .with_primary(block.span),
+            );
+        } else if !marked_unsafe {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    format!("a manual `{capability}` implementation must be declared `unsafe`"),
+                )
+                .with_primary(block.span),
+            );
+        }
+        if !block.methods.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    format!("the `{capability}` capability implementation cannot declare methods"),
+                )
+                .with_primary(block.span),
+            );
+        }
+    }
 }
 
 fn check_inherent_implementations(

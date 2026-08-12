@@ -420,6 +420,25 @@ pub enum StandardCall {
     ThreadIsFinished {
         thread: TypeId,
     },
+    ThreadScope {
+        scope: TypeId,
+        callable: TypeId,
+        entry: DeclarationId,
+        closure_entry: bool,
+        return_type: TypeId,
+    },
+    ScopedThreadSpawn {
+        scope: TypeId,
+        thread: TypeId,
+        callable: TypeId,
+        entry: DeclarationId,
+        closure_entry: bool,
+        return_type: TypeId,
+    },
+    ScopedThreadJoin {
+        thread: TypeId,
+        return_type: TypeId,
+    },
     ChannelCreate {
         sender: TypeId,
         receiver: TypeId,
@@ -443,6 +462,16 @@ pub enum StandardCall {
     MutexNew {
         mutex: TypeId,
         value_type: TypeId,
+    },
+    MutexLock {
+        mutex: TypeId,
+        guard: TypeId,
+        value_type: TypeId,
+    },
+    MutexGuardGet {
+        guard: TypeId,
+        value_type: TypeId,
+        mutable: bool,
     },
     MutexRead {
         mutex: TypeId,
@@ -674,6 +703,35 @@ impl StandardCall {
                 *return_type = map(*return_type);
             }
             Self::ThreadIsFinished { thread } => *thread = map(*thread),
+            Self::ThreadScope {
+                scope,
+                callable,
+                return_type,
+                ..
+            } => {
+                *scope = map(*scope);
+                *callable = map(*callable);
+                *return_type = map(*return_type);
+            }
+            Self::ScopedThreadSpawn {
+                scope,
+                thread,
+                callable,
+                return_type,
+                ..
+            } => {
+                *scope = map(*scope);
+                *thread = map(*thread);
+                *callable = map(*callable);
+                *return_type = map(*return_type);
+            }
+            Self::ScopedThreadJoin {
+                thread,
+                return_type,
+            } => {
+                *thread = map(*thread);
+                *return_type = map(*return_type);
+            }
             Self::ChannelCreate {
                 sender,
                 receiver,
@@ -700,6 +758,21 @@ impl StandardCall {
             | Self::MutexRead { mutex, value_type }
             | Self::MutexReplace { mutex, value_type } => {
                 *mutex = map(*mutex);
+                *value_type = map(*value_type);
+            }
+            Self::MutexLock {
+                mutex,
+                guard,
+                value_type,
+            } => {
+                *mutex = map(*mutex);
+                *guard = map(*guard);
+                *value_type = map(*value_type);
+            }
+            Self::MutexGuardGet {
+                guard, value_type, ..
+            } => {
+                *guard = map(*guard);
                 *value_type = map(*value_type);
             }
             Self::MutexUpdate {

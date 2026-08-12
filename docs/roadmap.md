@@ -3,7 +3,7 @@
 > Status: Active — older completed work is summarized in the ledger; active,
 > candidate, and recently completed milestones use stable descriptive names
 >
-> Next planned milestone: **Promotion and tracing-GC removal**
+> Next planned milestone: **Owned-model C interoperability**
 >
 > Basis: implemented `spec.md` version 0.10.0-draft as the compatibility
 > baseline, followed by the accepted `spec.md` 0.11.0-draft owned model and its
@@ -28,8 +28,8 @@ Keep this table synchronized with the detailed status blocks below.
 | [Inline first-class closures](#inline-first-class-closures) | Complete | Nominal inline environments, capture ownership, structural clone/drop, shared calls, erasure, and capture-free conversion are implemented. |
 | [Explicit shared and graph ownership](#explicit-shared-and-graph-ownership) | Complete | Atomic `Shared`/`Weak` ownership and generational `Store`/`Handle` graph identity are implemented with exact cleanup and checked borrowing. |
 | [Promotion and tracing-GC removal](#promotion-and-tracing-gc-removal) | Complete | Owned reference/iterator/vararg storage is stack-bounded; collector and root hooks are removed; compatibility retention has classified process lifetime. |
-| [Race-safe concurrency](#race-safe-concurrency) | Planned — next | Rebuild threads, scopes, channels, mutexes, and atomics around ownership plus structural `Send` and `Sync`. |
-| [Owned-model C interoperability](#owned-model-c-interoperability) | Planned | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
+| [Race-safe concurrency](#race-safe-concurrency) | Complete | Structural `Send`/`Sync`, owned spawn/join, borrowing scopes, moved channels, guarded mutexes, and SC atomics are implemented. |
+| [Owned-model C interoperability](#owned-model-c-interoperability) | Planned — next | Define and implement explicit ownership, borrowing, callback, initialization, and cleanup rules at the C boundary. |
 | [Owned-model tooling and final conformance](#owned-model-tooling-and-final-conformance) | Planned | Migrate expansion, tooling, examples, targets, tests, cost evidence, and documentation, then delete compatibility scaffolding. |
 | [Post-conformance optimization](#post-conformance-optimization) | Candidate | After owned-model conformance, optional measured work includes specialization, devirtualization, incremental queries, artifact caching, parallel packages, source maps, and warnings. |
 | [Macro expansion foundations](#macro-expansion-foundations) | Complete | Token trees, provenance, fragment parsing, expansion identities, scheduling, resource accounting, and validation are complete. |
@@ -543,7 +543,14 @@ ordinary callable construction have no hidden allocation or collector cost.
 
 ### Race-safe concurrency
 
-> Status: Planned.
+> Status: Complete. The owned path enforces structural thread capabilities at
+> every publication boundary, consumes unscoped closures and join handles,
+> joins borrowing children at scope exit, moves channel messages, exposes
+> protected data only through lexical guards, and lowers sequentially
+> consistent cells through C99-compatible mutex hooks. Focused ASan/UBSan
+> runtime coverage and compile-fail capability cases live in
+> `tests/race_safe_concurrency.rs`; the compatibility path retains its 0.10
+> API and measured behavior.
 >
 > Blocked by: **Promotion and tracing-GC removal** and **Explicit shared and
 > graph ownership**.
@@ -553,12 +560,12 @@ with no concurrency-specific syntax and no safe-code data-race UB.
 
 | Task | Deliverable | Focused acceptance |
 | --- | --- | --- |
-| **Structural thread capabilities** | Compute and validate `Send` and `Sync` through owned, borrowed, shared, raw, foreign, generic, trait-object, and closure types, with explicit negative or unsafe implementations where accepted. | Raw or unsafely mutable state does not gain capabilities accidentally, recursive generic solving terminates, and diagnostics identify the blocking field or bound. |
-| **Owned spawn and join** | Rebuild unscoped spawn around an owned `Send` closure and owned result, with deterministic join, thread creation failure, and process-fatal trap behavior. | Borrowed stack data cannot escape to an unscoped thread, captures move exactly once, and repeated or detached join behavior matches the accepted API. |
-| **Borrowing thread scopes** | Implement `thread.scope` as an ordinary library-controlled region that admits scoped borrowing closures without a `scoped` keyword. | All child threads finish before borrowed data becomes unavailable, scope results have valid provenance, and attempted escape is rejected statically. |
-| **Channels and guarded mutation** | Make channels move `Send` messages; make `Mutex[T]` expose `T` only through a guard; integrate `Shared[Mutex[T]]`, closure captures, and poisoning or trap policy. | A message has one post-send owner, unlocked aliases cannot access protected mutable data, and contention stress is sanitizer-clean. |
-| **Atomic and memory-model runtime** | Provide the accepted sequentially consistent atomic cells and documented happens-before edges through C99-compatible runtime or compiler-intrinsic wrappers. | Start, join, channel, mutex, and atomic publication tests pass on x86 and x86-64 without relying on C11 syntax. |
-| **Race conformance replacement** | Replace the 0.10 programmer-managed-race contract, fixtures, standard-library documentation, and cost evidence. | Every safe concurrency run-pass test is TSan-clean; deliberate races require `unsafe` and are never executed as ordinary conformance tests. |
+| **Structural thread capabilities (done)** | Compute and validate `Send` and `Sync` through owned, borrowed, shared, raw, foreign, generic, trait-object, and closure types, with explicit unsafe implementations where accepted. | Raw or unsafely mutable state does not gain capabilities accidentally, recursive generic solving terminates, and diagnostics identify the blocking boundary or bound. |
+| **Owned spawn and join (done)** | Rebuild unscoped spawn around an owned `Send` closure and owned result, with deterministic join, thread creation failure, and process-fatal trap behavior. | Borrowed stack data cannot escape to an unscoped thread, captures move exactly once, and detached handles remain process-owned until shutdown. |
+| **Borrowing thread scopes (done)** | Implement `thread.scope` as an ordinary library-controlled region that admits scoped borrowing closures without a `scoped` keyword. | All child threads finish before borrowed data becomes unavailable, scope results retain provenance, and attempted escape is rejected statically. |
+| **Channels and guarded mutation (done)** | Make channels move `Send` messages; make `Mutex[T]` expose `T` only through a guard; integrate `Shared[Mutex[T]]` and closure captures. | A message has one post-send owner, endpoint clones are counted, and unlocked aliases cannot access protected mutable data. |
+| **Atomic and memory-model runtime (done)** | Provide the accepted sequentially consistent atomic cells and documented happens-before edges through C99-compatible runtime wrappers. | Start, join, channel, mutex, and atomic publication use pthread synchronization without C11 syntax or fixed pointer width. |
+| **Race conformance replacement (done)** | Retain the 0.10 programmer-managed-race contract only on the compatibility revision and add owned-path compile/run evidence. | Safe owned concurrency is capability-checked and sanitizer-clean; raw-pointer publication is rejected unless an explicit unsafe capability assertion owns the contract. |
 
 ### Owned-model C interoperability
 

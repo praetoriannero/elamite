@@ -596,7 +596,12 @@ impl<'a> CEmitter<'a> {
             }
             DropActionKind::OwnedShared { owner }
             | DropActionKind::OwnedWeak { owner }
-            | DropActionKind::OwnedStore { owner } => {
+            | DropActionKind::OwnedStore { owner }
+            | DropActionKind::OwnedThread { owner }
+            | DropActionKind::OwnedChannel { owner }
+            | DropActionKind::OwnedMutex { owner }
+            | DropActionKind::OwnedMutexGuard { owner }
+            | DropActionKind::OwnedAtomic { owner } => {
                 let _ = writeln!(
                     self.output,
                     "{indent}el_drop_t{}(&{expression});",

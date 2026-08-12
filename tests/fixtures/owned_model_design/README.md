@@ -14,6 +14,7 @@ specification must not make the compiler pretend to implement later layers.
 | Trap | `trap/stale_handle.elx` | explicit graph ownership milestone |
 | C harness | `ffi/callback.elx`, `ffi/callback_harness.c` | owned-model C interoperability |
 | Target width | `target_width/handles.elx` | graph ownership plus final x86/x86-64 conformance |
+| Race-safe concurrency | focused compile/run cases in `tests/race_safe_concurrency.rs` | Active for structural capabilities, scopes, channels, guards, and atomics |
 
 The authoritative integrated target remains
 `owned_spec_demo.elx`. Focused fixtures, rather than comments in that

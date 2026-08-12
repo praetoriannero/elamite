@@ -79,6 +79,13 @@ impl<'a> Checker<'a> {
             let required = self.typed.types.substitute(trait_type, &substitution);
             let satisfies = if trait_name == "Callable" {
                 self.satisfies_callable_signature(argument, required)
+            } else if matches!(trait_name.as_str(), "Send" | "Sync") {
+                let facts = crate::types::ownership_facts(self.resolved, self.typed, argument);
+                if trait_name == "Send" {
+                    facts.send.is_present()
+                } else {
+                    facts.sync.is_present()
+                }
             } else {
                 crate::traits::provides(self.resolved, self.typed, argument, &trait_name)
             };
@@ -1417,6 +1424,12 @@ impl<'a> Checker<'a> {
                     return self.check_thread_spawn(node.span, arguments);
                 }
                 NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))
+                    if self.resolved.builtin_name(builtin_id) == "scope"
+                        && self.resolved.semantic_revision.supports_owned_surface() =>
+                {
+                    return self.check_thread_scope(node.span, arguments);
+                }
+                NameTarget::Item(crate::resolution::ItemId::Builtin(builtin_id))
                     if matches!(
                         self.resolved.builtin_name(builtin_id),
                         "channel" | "unbounded_channel"
@@ -1677,6 +1690,47 @@ impl<'a> Checker<'a> {
                 return (self.typed.types.error(), PlaceKind::Value);
             }
         };
+        if self.resolved.semantic_revision.supports_owned_surface() {
+            let callable_facts = crate::types::ownership_facts(self.resolved, self.typed, callable);
+            if !callable_facts.send.is_present() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "the closure passed to `spawn` is not `Send`; a capture cannot cross a thread boundary",
+                    )
+                    .with_primary(body.span),
+                );
+            }
+            if callable_facts.contains_borrow != crate::operations::CapabilityState::Absent {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Borrow,
+                        "an unscoped thread closure cannot contain a borrowed value",
+                    )
+                    .with_primary(body.span),
+                );
+            }
+            let return_facts =
+                crate::types::ownership_facts(self.resolved, self.typed, return_type);
+            if !return_facts.send.is_present() {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::TypeSystem,
+                        "the result of a spawned closure must be `Send`",
+                    )
+                    .with_primary(body.span),
+                );
+            }
+            if return_facts.contains_borrow != crate::operations::CapabilityState::Absent {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        Category::Borrow,
+                        "an unscoped thread cannot return a borrowed value",
+                    )
+                    .with_primary(body.span),
+                );
+            }
+        }
         let Some(thread_builtin) = self.resolved.builtin_named("Thread") else {
             return (self.typed.types.error(), PlaceKind::Value);
         };
@@ -1696,6 +1750,173 @@ impl<'a> Checker<'a> {
             }),
         );
         (result, PlaceKind::Value)
+    }
+
+    fn check_thread_scope(
+        &mut self,
+        call_span: Span,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        if arguments.len() != 1 {
+            self.report_call_arity(call_span, arguments.len(), 1, false);
+        }
+        let Some(body) = arguments.first().copied() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let (callable, _) = self.check_expr(body, ExpectedType::None);
+        self.record_copy(
+            body.span,
+            LogicalCopyKind::Argument,
+            LogicalCopyLifetime::Callee,
+        );
+        for extra in arguments.iter().skip(1) {
+            self.check_expr(extra, ExpectedType::None);
+        }
+        let callable = self.typed.types.resolve_inference(callable);
+        let TypeKind::Closure {
+            declaration,
+            parameters,
+            return_type,
+            ..
+        } = self.typed.types.kind(callable).clone()
+        else {
+            self.diagnostics.push(
+                Diagnostic::new(Category::Call, "`thread.scope` requires a closure")
+                    .with_primary(body.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let scope = parameters.first().and_then(|parameter| {
+            let TypeKind::Reference {
+                mutability: Mutability::Mutable,
+                target,
+            } = self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(*parameter))
+            else {
+                return None;
+            };
+            let TypeKind::Builtin { builtin, arguments } = self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(*target))
+            else {
+                return None;
+            };
+            (self.resolved.builtin_name(*builtin) == "Scope" && arguments.is_empty())
+                .then_some(*target)
+        });
+        let Some(scope) = scope.filter(|_| parameters.len() == 1) else {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "`thread.scope` requires a closure taking exactly `&var std.thread.Scope`",
+                )
+                .with_primary(body.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::Standard(StandardCall::ThreadScope {
+                scope,
+                callable,
+                entry: declaration,
+                closure_entry: true,
+                return_type,
+            }),
+        );
+        (return_type, PlaceKind::Value)
+    }
+
+    fn check_scoped_thread_spawn(
+        &mut self,
+        call_span: Span,
+        scope: TypeId,
+        arguments: &[&SyntaxNode],
+    ) -> (TypeId, PlaceKind) {
+        if arguments.len() != 1 {
+            self.report_call_arity(call_span, arguments.len(), 1, false);
+        }
+        let Some(body) = arguments.first().copied() else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let (callable, _) = self.check_expr(body, ExpectedType::None);
+        self.record_copy(
+            body.span,
+            LogicalCopyKind::Argument,
+            LogicalCopyLifetime::Thread,
+        );
+        for extra in arguments.iter().skip(1) {
+            self.check_expr(extra, ExpectedType::None);
+        }
+        let callable = self.typed.types.resolve_inference(callable);
+        let TypeKind::Closure {
+            declaration,
+            parameters,
+            return_type,
+            ..
+        } = self.typed.types.kind(callable).clone()
+        else {
+            self.diagnostics.push(
+                Diagnostic::new(Category::Call, "`Scope.spawn` requires a closure")
+                    .with_primary(body.span),
+            );
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        if !parameters.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::Call,
+                    "`Scope.spawn` requires a zero-argument closure",
+                )
+                .with_primary(body.span),
+            );
+        }
+        if !crate::types::ownership_facts(self.resolved, self.typed, callable)
+            .send
+            .is_present()
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "the scoped thread closure is not `Send`",
+                )
+                .with_primary(body.span),
+            );
+        }
+        if !crate::types::ownership_facts(self.resolved, self.typed, return_type)
+            .send
+            .is_present()
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "the scoped thread result is not `Send`",
+                )
+                .with_primary(body.span),
+            );
+        }
+        let Some(thread_builtin) = self.resolved.builtin_named("ScopedThread") else {
+            return (self.typed.types.error(), PlaceKind::Value);
+        };
+        let thread = self.typed.types.intern(TypeKind::Builtin {
+            builtin: thread_builtin,
+            arguments: vec![return_type],
+        });
+        self.program.calls.insert(
+            call_span,
+            CheckedCall::Standard(StandardCall::ScopedThreadSpawn {
+                scope,
+                thread,
+                callable,
+                entry: declaration,
+                closure_entry: true,
+                return_type,
+            }),
+        );
+        (thread, PlaceKind::Value)
     }
 
     fn standard_result_type(&mut self, span: Span, ok: TypeId, error_name: &str) -> TypeId {
@@ -1750,6 +1971,20 @@ impl<'a> Checker<'a> {
             );
             self.typed.types.error()
         };
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && element != self.typed.types.error()
+            && !crate::types::ownership_facts(self.resolved, self.typed, element)
+                .send
+                .is_present()
+        {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Category::TypeSystem,
+                    "a channel message type must be `Send`",
+                )
+                .with_primary(call_span),
+            );
+        }
         let parameters = if bounded {
             vec![self.typed.types.primitive(PrimitiveType::Usize)]
         } else {
@@ -2376,7 +2611,36 @@ impl<'a> Checker<'a> {
         }
 
         let (base_type, base_place) = self.check_expr(base, ExpectedType::None);
-        if member_name == "update"
+        let scoped_scope = match self
+            .typed
+            .types
+            .kind(self.typed.types.resolve_inference(base_type))
+        {
+            TypeKind::Reference {
+                mutability: Mutability::Mutable,
+                target,
+            } => match self
+                .typed
+                .types
+                .kind(self.typed.types.resolve_inference(*target))
+            {
+                TypeKind::Builtin { builtin, arguments }
+                    if self.resolved.builtin_name(*builtin) == "Scope" && arguments.is_empty() =>
+                {
+                    Some(*target)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if self.resolved.semantic_revision.supports_owned_surface()
+            && member_name == "spawn"
+            && let Some(scope) = scoped_scope
+        {
+            return Some(self.check_scoped_thread_spawn(call_span, scope, arguments));
+        }
+        if !self.resolved.semantic_revision.supports_owned_surface()
+            && member_name == "update"
             && let TypeKind::Builtin {
                 builtin,
                 arguments: type_arguments,
@@ -2404,6 +2668,20 @@ impl<'a> Checker<'a> {
             }
             self.check_standard_arguments(call_span, &member_name, arguments, &parameters);
             self.record_standard_copy_arguments(operation, arguments);
+            if self.resolved.semantic_revision.supports_owned_surface()
+                && matches!(
+                    operation,
+                    StandardCall::ThreadJoin { .. }
+                        | StandardCall::ScopedThreadJoin { .. }
+                        | StandardCall::ChannelClose { .. }
+                )
+            {
+                self.record_copy(
+                    base.span,
+                    LogicalCopyKind::Argument,
+                    LogicalCopyLifetime::Callee,
+                );
+            }
             self.program
                 .calls
                 .insert(call_span, CheckedCall::Standard(operation));
@@ -3010,7 +3288,7 @@ impl<'a> Checker<'a> {
             TypeKind::Builtin { builtin, .. } => {
                 matches!(
                     self.resolved.builtin_name(*builtin),
-                    "Vec" | "Map" | "Set" | "Box" | "Shared" | "Weak"
+                    "Vec" | "Map" | "Set" | "Box" | "Shared" | "Weak" | "Sender" | "Receiver"
                 )
             }
             _ => false,
@@ -3216,6 +3494,19 @@ impl<'a> Checker<'a> {
                         bool_type,
                         false,
                     )),
+                    ("ScopedThread", "join", [result])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        Some((
+                            StandardCall::ScopedThreadJoin {
+                                thread: receiver,
+                                return_type: *result,
+                            },
+                            Vec::new(),
+                            *result,
+                            false,
+                        ))
+                    }
                     ("Sender", "send", [element]) => Some((
                         StandardCall::ChannelSend {
                             sender: receiver,
@@ -3274,24 +3565,87 @@ impl<'a> Checker<'a> {
                         unit_type,
                         false,
                     )),
-                    ("Mutex", "read", [value_type]) => Some((
-                        StandardCall::MutexRead {
-                            mutex: receiver,
-                            value_type: *value_type,
-                        },
-                        Vec::new(),
-                        *value_type,
-                        false,
-                    )),
-                    ("Mutex", "replace", [value_type]) => Some((
-                        StandardCall::MutexReplace {
-                            mutex: receiver,
-                            value_type: *value_type,
-                        },
-                        vec![*value_type],
-                        *value_type,
-                        false,
-                    )),
+                    ("Mutex", "lock", [value_type])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let guard_builtin = self.resolved.builtin_named("MutexGuard")?;
+                        let guard = self.typed.types.intern(TypeKind::Builtin {
+                            builtin: guard_builtin,
+                            arguments: vec![*value_type],
+                        });
+                        Some((
+                            StandardCall::MutexLock {
+                                mutex: receiver,
+                                guard,
+                                value_type: *value_type,
+                            },
+                            Vec::new(),
+                            guard,
+                            false,
+                        ))
+                    }
+                    ("MutexGuard", "get", [value_type])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let reference = self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Shared,
+                            target: *value_type,
+                        });
+                        Some((
+                            StandardCall::MutexGuardGet {
+                                guard: receiver,
+                                value_type: *value_type,
+                                mutable: false,
+                            },
+                            Vec::new(),
+                            reference,
+                            false,
+                        ))
+                    }
+                    ("MutexGuard", "get_var", [value_type])
+                        if self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        let reference = self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Mutable,
+                            target: *value_type,
+                        });
+                        Some((
+                            StandardCall::MutexGuardGet {
+                                guard: receiver,
+                                value_type: *value_type,
+                                mutable: true,
+                            },
+                            Vec::new(),
+                            reference,
+                            false,
+                        ))
+                    }
+                    ("Mutex", "read", [value_type])
+                        if !self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        Some((
+                            StandardCall::MutexRead {
+                                mutex: receiver,
+                                value_type: *value_type,
+                            },
+                            Vec::new(),
+                            *value_type,
+                            false,
+                        ))
+                    }
+                    ("Mutex", "replace", [value_type])
+                        if !self.resolved.semantic_revision.supports_owned_surface() =>
+                    {
+                        Some((
+                            StandardCall::MutexReplace {
+                                mutex: receiver,
+                                value_type: *value_type,
+                            },
+                            vec![*value_type],
+                            *value_type,
+                            false,
+                        ))
+                    }
                     ("AtomicBool", "load", []) => Some((
                         StandardCall::AtomicLoad {
                             atomic: receiver,

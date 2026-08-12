@@ -1,9 +1,9 @@
 # Elamite implementation cost model
 
-> Version: 18
+> Version: 19
 >
 > Applies to: the 0.10.0-draft compatibility path and implemented
-> 0.11.0-draft phases through promotion and tracing-GC removal, on Linux x86
+> 0.11.0-draft phases through race-safe concurrency, on Linux x86
 > and x86-64
 >
 > Status: non-normative implementation documentation
@@ -29,9 +29,9 @@ or automatically protect backing reached through external aliases.
 
 ## Implemented 0.11 owned-core costs
 
-The ordinary driver stops the 0.11 path before race-safe concurrency, while the
-checked-to-C conformance path implements the owned-core, inline-closure,
-explicit shared/graph, and collector-removal layers. On that path:
+The ordinary driver stops the 0.11 path before owned-model C interoperability,
+while the checked-to-C conformance path also implements owned race-safe
+concurrency. On that path:
 
 - `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` have one owner. Moving them is
   a constant-size descriptor transfer; it allocates and copies no backing.
@@ -53,6 +53,18 @@ explicit shared/graph, and collector-removal layers. On that path:
   index/descriptor state allocates nothing; early exit destroys unvisited
   elements exactly once. Slice iteration borrows and yields references without
   allocation.
+- Unscoped spawn allocates one thread state and one startup context. The moved
+  inline closure is destroyed after its single invocation; join moves the
+  result and releases state, while a detached result stays in the process
+  thread registry until normal shutdown.
+- Each channel owns one mutex/condition-variable state. Endpoint `clone()` is
+  a synchronized counter increment; each buffered message allocates one node,
+  and receive or final-receiver destruction frees the node and destroys its
+  still-owned value exactly once.
+- `Mutex[T]` and each atomic cell perform one address-stable state allocation.
+  A mutex guard is an inline two-word value; lock and guard destruction perform
+  no allocation. `thread.scope` keeps its registry head on the stack and
+  allocates one state, startup context, and registry node per scoped child.
 
 ## Implemented 0.11 inline-closure costs
 
@@ -164,7 +176,7 @@ inline-closure sections above.
 | Function references/pointers | Callable identity | One C function pointer | None | May be propagated in registers |
 | Closures | Construction shallow-copies captures once; callable copies preserve environment identity | One compatibility environment pointer; construction allocates one environment, ordinary copying copies only the pointer | One allocation at construction; none for a copy | Spawn copies the environment pointer directly; captureless environments may be optimized away |
 | `&Trait` | Explicit fat reference alias | Data pointer plus vtable pointer; copying preserves identity | None for coercion/copy once the referent exists | Coercing an address-taken local can trigger promotion |
-| `Identity[T]`, `ForeignRoot`, thread/channel/mutex/atomic handles | Shared identity | One managed/raw handle pointer; copying is constant-size and preserves synchronized or registered state | Constructors allocate state; handle copies do not | Ordinary shallow copying treats these like every other identity-bearing descriptor |
+| Compatibility `Identity[T]`, `ForeignRoot`, thread/channel/mutex/atomic handles | Shared identity | One raw handle pointer; copying is constant-size and preserves synchronized or registered state | Constructors allocate state; handle copies do not | This shallow row applies only to 0.10; owned concurrency handles are move-only except explicit endpoint clone |
 | Slices, including variadic parameter packs | Immutable view | Pointer plus length; compatibility variadics use process-lifetime backing | One compatibility backing allocation for a nonempty variadic pack; owned packs allocate nothing | Owned packs use caller-frame arrays proven not to escape |
 | `Duration`, `Instant`, `SystemTime`, `Generator` | Independent numeric state; clock domains remain nominally distinct | One inline `u64`; copying and clock reads are constant-size | None | Clock reads do not create synchronization edges; generator state advances only through its mutable receiver |
 | Filesystem paths and metadata | Ordinary shallow structs | A path contains one shared-backing `String` descriptor; metadata and status records are inline aggregates | Path construction allocates owned text; source-hosted lexical transformations may allocate a split vector and one or more concatenation results; metadata copying allocates nothing | Path copies share their string backing; operations never expose a reference into runtime backing |
@@ -340,23 +352,27 @@ Important consequences are:
 
 ## Synchronization costs
 
-Native threads are joinable pthreads. Thread creation allocates runtime state
-and a copied startup environment, and program shutdown joins every remaining
-Elamite-created thread. Channels use one mutex and condition variables around
-their queue; bounded sends can block, capacity zero performs a rendezvous, and
-unbounded sends allocate a node. Mutex values are copied while their lock is
-held, but this is only an immediate shallow representation assignment and does
-not recursively traverse backing. The three sequentially consistent atomic
-cell types currently use a native mutex per cell rather than C11 `_Atomic`,
-preserving the C99 target.
+Compatibility threads are joinable pthreads with shallow startup/result
+publication and process-lifetime state. Owned threads instead move an inline
+closure into startup state, move the result out on the single join, and release
+claimed state immediately; scope exit joins every borrowing child. Channels
+use one mutex and condition variables around their queue; bounded sends can
+block, capacity zero performs a rendezvous, and queued sends allocate one node.
+Compatibility messages remain shallow, while owned messages transfer one owner
+and are destroyed if the final receiver closes. Owned mutex values are never
+copied out: `lock` returns an inline move-only guard whose destruction unlocks.
+The three sequentially consistent atomic cell types use a native mutex per
+cell rather than C11 `_Atomic`, preserving the C99 target.
 
 These synchronization operations establish the normative ordering described
 by `spec.md`: `pthread_create` and `pthread_join` own thread start/completion,
 channel and mutex edges use their queue or value mutex, and every atomic cell
-operation is a synchronous mutex-protected linearization point. Correctly
-synchronized publication of ordinary shared backing is TSan-clean; unordered
-conflicting access remains undefined behavior and is never benchmarked or run
-as a conformance fixture. Wall time and fairness are intentionally unspecified.
+operation is a synchronous mutex-protected linearization point. On the owned
+path, structural `Send`/`Sync`, borrow provenance, moved messages, and guarded
+mutation prevent safe unordered conflicting access. Raw, foreign, or explicitly
+unsafe capability contracts can still introduce C data races if violated and
+are never executed as ordinary conformance fixtures. Wall time and fairness are
+intentionally unspecified.
 Standard output also takes a process-wide lock for each complete output call
 when concurrency is reachable.
 

@@ -1,8 +1,8 @@
 # Standard library
 
-> Current implementation baseline: the APIs below describe the shipped 0.10
-> shallow compatibility library on a collector-free runtime. Owned signatures
-> continue migrating through **Race-safe concurrency** before 0.11 conformance.
+> Current implementation baseline: ordinary driver APIs remain the shipped
+> 0.10 shallow compatibility library. The focused 0.11 path now implements
+> owned, race-safe concurrency and stops at **Owned-model C interoperability**.
 
 The compiler ships the `std` package from `stdlib/src/`. These files pass
 through ordinary parsing, resolution, checking, and monomorphization. The
@@ -87,3 +87,22 @@ accepts documented ASCII syntax and reports `Empty`, `InvalidSyntax`, or
 The current representation and operation costs are recorded in
 `cost_model.md`; they are implementation documentation rather than semantic
 complexity guarantees.
+
+## Owned concurrency
+
+The 0.11 path treats `Send` and `Sync` as structural capabilities. Raw pointers
+receive neither automatically; a nominal wrapper may assume either only with
+an explicit `unsafe impl`. `std.thread.spawn` consumes a borrow-free `Send`
+closure and produces one move-only `Thread[R]`; joining consumes the handle and
+moves `R`. Dropping the handle detaches it while normal process shutdown still
+waits for the child and destroys an unclaimed result.
+
+`std.thread.scope` passes `&var Scope` to an ordinary closure. `Scope.spawn`
+admits `Send` closures containing inferred scoped borrows, and scope exit joins
+every remaining child before those borrows can expire. Channels move `Send`
+messages and explicitly cloned endpoints increment synchronized endpoint
+counts. `Mutex[T].lock` yields a move-only `MutexGuard[T]`; only `get` and
+`get_var` expose the protected value, and guard destruction unlocks it.
+`AtomicBool`, `AtomicI32`, and `AtomicUsize` are non-`Copy` cells whose
+operations remain sequentially consistent through C99-compatible pthread
+mutex hooks.

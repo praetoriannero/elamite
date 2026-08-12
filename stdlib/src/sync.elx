@@ -12,6 +12,8 @@ pub enum TryReceiveError:
     Empty
     Closed
 
-// Channel endpoints, mutexes, atomics, and their constructors require native
-// representation and lowering hooks and are installed from the reviewed
-// intrinsic catalog.
+// Channel endpoints, mutex guards, atomics, and their constructors require
+// native representation and lowering hooks and are installed from the
+// reviewed intrinsic catalog. The owned revision moves `Send` messages,
+// exposes mutex contents only through a lexical guard, and keeps atomic cells
+// non-`Copy` and sequentially consistent.

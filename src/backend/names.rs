@@ -171,6 +171,21 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
         StandardCall::ThreadIsFinished { thread } => {
             return format!("el_thread_is_finished_t{}", thread.index());
         }
+        StandardCall::ThreadScope {
+            scope, callable, ..
+        } => return format!("el_thread_scope_t{}_t{}", scope.index(), callable.index()),
+        StandardCall::ScopedThreadSpawn {
+            thread, callable, ..
+        } => {
+            return format!(
+                "el_scoped_thread_spawn_t{}_t{}",
+                thread.index(),
+                callable.index()
+            );
+        }
+        StandardCall::ScopedThreadJoin { thread, .. } => {
+            return format!("el_scoped_thread_join_t{}", thread.index());
+        }
         StandardCall::ChannelCreate {
             element, bounded, ..
         } => {
@@ -214,6 +229,16 @@ pub(super) fn standard_call_name(operation: StandardCall) -> String {
             );
         }
         StandardCall::MutexNew { mutex, .. } => return format!("el_mutex_new_t{}", mutex.index()),
+        StandardCall::MutexLock { mutex, .. } => {
+            return format!("el_mutex_lock_t{}", mutex.index());
+        }
+        StandardCall::MutexGuardGet { guard, mutable, .. } => {
+            return format!(
+                "el_mutex_guard_get{}_t{}",
+                if mutable { "_var" } else { "" },
+                guard.index()
+            );
+        }
         StandardCall::MutexRead { mutex, .. } => {
             return format!("el_mutex_read_t{}", mutex.index());
         }

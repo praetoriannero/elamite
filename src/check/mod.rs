@@ -159,9 +159,9 @@ pub fn check(resolved: &ResolvedProgram, typed: &mut TypedProgram) -> CheckOutpu
     check_for_target(resolved, typed, 64)
 }
 
-/// The temporary boundary after promotion and tracing-GC removal. Ordinary
-/// driver entry points stop before backend lowering until race-safe
-/// concurrency replaces the 0.10 shared-memory contract.
+/// The temporary boundary after race-safe concurrency. Ordinary driver entry
+/// points stop before backend lowering until owned-model C interoperability
+/// replaces the compatibility ABI contracts.
 #[must_use]
 pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnostic> {
     resolved
@@ -170,8 +170,8 @@ pub fn semantic_revision_boundary(resolved: &ResolvedProgram) -> Option<Diagnost
         .then(|| {
             Diagnostic::new(
                 Category::SemanticRevision,
-                "semantic revision 0.11.0-draft is collector-free, but race-safe concurrency is \
-                 not implemented yet",
+                "semantic revision 0.11.0-draft has race-safe concurrency, but owned-model C \
+                 interoperability is not implemented yet",
             )
         })
 }
@@ -3195,7 +3195,14 @@ impl<'a> Checker<'a> {
                     })
                 }
                 ClosureCaptureKind::MutableReference => {
-                    if !source_place.is_mutable() {
+                    let reborrow = matches!(
+                        self.typed.types.kind(self.resolve_aliases(source_type)),
+                        TypeKind::Reference {
+                            mutability: Mutability::Mutable,
+                            ..
+                        }
+                    );
+                    if !source_place.is_mutable() && !reborrow {
                         self.diagnostics.push(
                             Diagnostic::new(
                                 Category::Place,
@@ -3204,10 +3211,14 @@ impl<'a> Checker<'a> {
                             .with_primary(capture.span),
                         );
                     }
-                    self.typed.types.intern(TypeKind::Reference {
-                        mutability: Mutability::Mutable,
-                        target: source_type,
-                    })
+                    if reborrow {
+                        source_type
+                    } else {
+                        self.typed.types.intern(TypeKind::Reference {
+                            mutability: Mutability::Mutable,
+                            target: source_type,
+                        })
+                    }
                 }
                 ClosureCaptureKind::SharedRawPointer => {
                     match self

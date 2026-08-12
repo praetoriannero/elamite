@@ -61,7 +61,7 @@ impl Query<'_> {
                 sync: CapabilityState::Present,
             };
         }
-        let facts = match self.typed.types.kind(ty).clone() {
+        let mut facts = match self.typed.types.kind(ty).clone() {
             TypeKind::Error | TypeKind::InferenceVariable(_) => OwnershipFacts::ERROR,
             TypeKind::Alias { target, .. } => self.facts(target),
             TypeKind::Never => plain(CapabilityState::Present),
@@ -113,9 +113,26 @@ impl Query<'_> {
                     OwnershipFacts::ERROR
                 }
             }
-            TypeKind::TraitObject { .. } | TypeKind::SelfType(_) => conditional(),
+            TypeKind::TraitObject { trait_type } => {
+                let capability = self.type_name(trait_type);
+                OwnershipFacts {
+                    copy: CapabilityState::Absent,
+                    clone: CapabilityState::Absent,
+                    needs_drop: CapabilityState::Absent,
+                    contains_borrow: CapabilityState::Present,
+                    send: state_if_bound(matches!(capability, Some("Send" | "Sync"))),
+                    sync: state_if_bound(capability == Some("Sync")),
+                }
+            }
+            TypeKind::SelfType(_) => conditional(),
             TypeKind::GenericParameter(parameter) => self.generic(parameter),
         };
+        if self.has_unsafe_capability_impl(ty, "Send") {
+            facts.send = CapabilityState::Present;
+        }
+        if self.has_unsafe_capability_impl(ty, "Sync") {
+            facts.sync = CapabilityState::Present;
+        }
         self.visiting.remove(&ty);
         self.cache.insert(ty, facts);
         facts
@@ -239,8 +256,7 @@ impl Query<'_> {
                 send: CapabilityState::Present,
                 sync: CapabilityState::Present,
             },
-            "ForeignRoot" | "ForeignRootMut" | "File" | "Directory" | "Thread" | "Sender"
-            | "Receiver" | "Mutex" => OwnershipFacts {
+            "ForeignRoot" | "ForeignRootMut" | "File" | "Directory" | "Thread" => OwnershipFacts {
                 copy: CapabilityState::Absent,
                 clone: CapabilityState::Absent,
                 needs_drop: CapabilityState::Present,
@@ -250,10 +266,46 @@ impl Query<'_> {
                 send: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
                 sync: conjunction(arguments.iter().map(|ty| self.facts(*ty).sync)),
             },
+            "Scope" | "ScopedThread" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Absent,
+                needs_drop: CapabilityState::Present,
+                contains_borrow: CapabilityState::Present,
+                send: CapabilityState::Absent,
+                sync: CapabilityState::Absent,
+            },
+            "Sender" | "Receiver" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Present,
+                needs_drop: CapabilityState::Present,
+                contains_borrow: disjunction(
+                    arguments.iter().map(|ty| self.facts(*ty).contains_borrow),
+                ),
+                send: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
+                sync: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
+            },
+            "Mutex" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Absent,
+                needs_drop: CapabilityState::Present,
+                contains_borrow: disjunction(
+                    arguments.iter().map(|ty| self.facts(*ty).contains_borrow),
+                ),
+                send: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
+                sync: conjunction(arguments.iter().map(|ty| self.facts(*ty).send)),
+            },
+            "MutexGuard" => OwnershipFacts {
+                copy: CapabilityState::Absent,
+                clone: CapabilityState::Absent,
+                needs_drop: CapabilityState::Present,
+                contains_borrow: CapabilityState::Present,
+                send: CapabilityState::Absent,
+                sync: conjunction(arguments.iter().map(|ty| self.facts(*ty).sync)),
+            },
             "AtomicBool" | "AtomicI32" | "AtomicUsize" => OwnershipFacts {
                 copy: CapabilityState::Absent,
                 clone: CapabilityState::Absent,
-                needs_drop: CapabilityState::Absent,
+                needs_drop: CapabilityState::Present,
                 contains_borrow: CapabilityState::Absent,
                 send: CapabilityState::Present,
                 sync: CapabilityState::Present,
@@ -339,6 +391,31 @@ impl Query<'_> {
             };
             self.type_name(trait_type) == Some(name) && self.typed.types.exactly_equal(target, ty)
         })
+    }
+
+    fn has_unsafe_capability_impl(&self, ty: TypeId, name: &str) -> bool {
+        self.resolved.semantic_revision.supports_owned_surface()
+            && self.resolved.impls.iter().any(|implementation| {
+                let marked_unsafe = crate::syntax::direct_tokens(&implementation.syntax)
+                    .into_iter()
+                    .any(|token| {
+                        matches!(
+                            token.kind,
+                            crate::lexer::TokenKind::Keyword(crate::syntax::Keyword::Unsafe)
+                        )
+                    });
+                marked_unsafe
+                    && self
+                        .typed
+                        .impl_trait_types
+                        .get(&implementation.id)
+                        .is_some_and(|trait_type| self.type_name(*trait_type) == Some(name))
+                    && self
+                        .typed
+                        .impl_target_types
+                        .get(&implementation.id)
+                        .is_some_and(|target| self.typed.types.exactly_equal(*target, ty))
+            })
     }
 
     fn type_name(&self, mut ty: TypeId) -> Option<&str> {

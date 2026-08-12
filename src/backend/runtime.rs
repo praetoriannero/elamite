@@ -9,7 +9,12 @@ fn collect_ownership_drop_types(action: &crate::ir::DropAction, types: &mut BTre
     match &action.kind {
         DropActionKind::OwnedShared { owner }
         | DropActionKind::OwnedWeak { owner }
-        | DropActionKind::OwnedStore { owner } => {
+        | DropActionKind::OwnedStore { owner }
+        | DropActionKind::OwnedThread { owner }
+        | DropActionKind::OwnedChannel { owner }
+        | DropActionKind::OwnedMutex { owner }
+        | DropActionKind::OwnedMutexGuard { owner }
+        | DropActionKind::OwnedAtomic { owner } => {
             types.insert(*owner);
         }
         DropActionKind::OwnedVec { elements } | DropActionKind::OwnedSet { elements } => {
@@ -108,11 +113,16 @@ impl<'a> CEmitter<'a> {
                                 operation: StandardCall::ThreadSpawn { .. }
                                     | StandardCall::ThreadJoin { .. }
                                     | StandardCall::ThreadIsFinished { .. }
+                                    | StandardCall::ThreadScope { .. }
+                                    | StandardCall::ScopedThreadSpawn { .. }
+                                    | StandardCall::ScopedThreadJoin { .. }
                                     | StandardCall::ChannelCreate { .. }
                                     | StandardCall::ChannelSend { .. }
                                     | StandardCall::ChannelReceive { .. }
                                     | StandardCall::ChannelClose { .. }
                                     | StandardCall::MutexNew { .. }
+                                    | StandardCall::MutexLock { .. }
+                                    | StandardCall::MutexGuardGet { .. }
                                     | StandardCall::MutexRead { .. }
                                     | StandardCall::MutexReplace { .. }
                                     | StandardCall::MutexUpdate { .. }
@@ -1356,9 +1366,6 @@ impl<'a> CEmitter<'a> {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        for ty in clone_types {
-            self.emit_clone_helper(ty);
-        }
         let mut ownership_drop_types = BTreeSet::new();
         for function in &self.program.functions {
             for block in &function.blocks {
@@ -1377,8 +1384,40 @@ impl<'a> CEmitter<'a> {
                 }
             }
         }
-        for ty in ownership_drop_types {
-            self.emit_drop_helper(ty);
+        for operation in calls.keys() {
+            if self.program.value_model == ValueModel::Owned
+                && let StandardCall::ThreadSpawn { callable, .. } = operation
+                && self.type_has_drop_glue(*callable)
+            {
+                ownership_drop_types.insert(*callable);
+            }
+            if self.program.value_model == ValueModel::Owned
+                && let StandardCall::ThreadScope { callable, .. }
+                | StandardCall::ScopedThreadSpawn { callable, .. } = operation
+                && self.type_has_drop_glue(*callable)
+            {
+                ownership_drop_types.insert(*callable);
+            }
+            if self.program.value_model == ValueModel::Owned
+                && let StandardCall::ScopedThreadSpawn { return_type, .. } = operation
+                && self.type_has_drop_glue(*return_type)
+            {
+                ownership_drop_types.insert(*return_type);
+            }
+            if self.program.value_model == ValueModel::Owned {
+                match operation {
+                    StandardCall::ChannelCreate {
+                        sender, receiver, ..
+                    } => {
+                        ownership_drop_types.insert(*sender);
+                        ownership_drop_types.insert(*receiver);
+                    }
+                    StandardCall::ChannelClose { handle, .. } => {
+                        ownership_drop_types.insert(*handle);
+                    }
+                    _ => {}
+                }
+            }
         }
         for operation in calls.keys() {
             if let StandardCall::BoxNew { boxed, value } = operation {
@@ -1452,10 +1491,17 @@ impl<'a> CEmitter<'a> {
         self.emit_text_helpers(&calls);
         self.emit_clock_helpers(&calls);
         self.emit_thread_helpers(&calls);
+        self.emit_scoped_thread_helpers(&calls);
         self.emit_channel_helpers(&calls);
         self.emit_mutex_helpers(&calls);
         self.emit_atomic_helpers(&calls);
         self.emit_shared_store_helpers(&calls);
+        for ty in clone_types {
+            self.emit_clone_helper(ty);
+        }
+        for ty in ownership_drop_types {
+            self.emit_drop_helper(ty);
+        }
         let literals = self.collection_literal_instances();
         let mut concatenated_types = BTreeSet::new();
         for function in &self.program.functions {
@@ -2814,17 +2860,44 @@ unavailable_error:
             return_type,
         });
         let finished_name = standard_call_name(StandardCall::ThreadIsFinished { thread });
+        let owned = self.program.value_model == ValueModel::Owned;
+        let drops_result = owned && self.type_has_drop_glue(return_type);
+        if drops_result {
+            let _ = writeln!(
+                self.output,
+                "static void el_drop_t{}({return_c} *value);",
+                return_type.index()
+            );
+        }
         let _ = writeln!(
             self.output,
             "struct {state_name} {{\n    pthread_t thread;\n    pthread_mutex_t join_lock;\n    pthread_mutex_t status_lock;\n    bool joined;\n    bool finished;\n    void *startup;\n    {return_c} result;\n}};\n\
              static void {join_name}_shutdown(void *raw) {{\n    {thread_c} state = ({thread_c})raw;\n    (void)pthread_mutex_lock(&state->join_lock);\n    if (!state->joined) {{ (void)pthread_join(state->thread, NULL); state->joined = true; }}\n    (void)pthread_mutex_unlock(&state->join_lock);\n    el_thread_unregister(state);\n}}\n"
         );
+        if owned {
+            let drop_result = if drops_result {
+                format!("el_drop_t{}(&state->result);", return_type.index())
+            } else {
+                String::new()
+            };
+            let _ = writeln!(
+                self.output,
+                "static void {join_name}_dispose_unclaimed(void *raw) {{\n    {thread_c} state = ({thread_c})raw; {join_name}_shutdown(state); {drop_result} (void)pthread_mutex_destroy(&state->status_lock); (void)pthread_mutex_destroy(&state->join_lock); free(state);\n}}\n"
+            );
+        }
         if needs_join {
             if !never {
-                let _ = writeln!(
-                    self.output,
-                    "static {return_c} {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state);\n    return state->result;\n}}\n"
-                );
+                if owned {
+                    let _ = writeln!(
+                        self.output,
+                        "static {return_c} {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    {return_c} result; if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state); result = state->result; (void)pthread_mutex_destroy(&state->status_lock); (void)pthread_mutex_destroy(&state->join_lock); free(state); return result;\n}}\n"
+                    );
+                } else {
+                    let _ = writeln!(
+                        self.output,
+                        "static {return_c} {join_name}({thread_c} state, const char *path, uint32_t line, uint32_t column) {{\n    if (pthread_equal(pthread_self(), state->thread)) el_trap(\"E-RUN-SELF-JOIN\", path, line, column);\n    {join_name}_shutdown(state);\n    return state->result;\n}}\n"
+                    );
+                }
             } else {
                 let _ = writeln!(
                     self.output,
@@ -2863,7 +2936,10 @@ unavailable_error:
             arguments: Vec::new(),
             self_type: None,
         });
-        let call = if closure_entry {
+        let owned = self.program.value_model == ValueModel::Owned;
+        let call = if closure_entry && owned {
+            format!("{entry_symbol}(&context->body)")
+        } else if closure_entry {
             format!("{entry_symbol}(context->body)")
         } else {
             format!("{entry_symbol}()")
@@ -2880,6 +2956,22 @@ unavailable_error:
             format!("{call}; state->result = (el_unit){{0}};")
         } else {
             format!("state->result = {call};")
+        };
+        let release_body = if owned && self.type_has_drop_glue(callable) {
+            let _ = writeln!(
+                self.output,
+                "static void el_drop_t{}({callable_c} *value);",
+                callable.index()
+            );
+            format!("el_drop_t{}(&context->body);", callable.index())
+        } else {
+            String::new()
+        };
+        let free_context = if owned { "free(context);" } else { "" };
+        let failed_cleanup = if owned {
+            "free(context); (void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock); free(state);"
+        } else {
+            "(void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock);"
         };
         let Some(ok_variant) = self.resolved.standard_variant("Result", "Ok") else {
             return;
@@ -2914,26 +3006,234 @@ unavailable_error:
         let _ = writeln!(
             self.output,
             "typedef struct {context_name} {{ {thread_c} state; {callable_c} body; }} {context_name};\n\
-             static void *{spawn_name}_entry(void *raw) {{\n    {context_name} *context = ({context_name} *)raw;\n    {thread_c} state = context->state;\n    state->startup = NULL;\n    {publish_result}\n    (void)pthread_mutex_lock(&state->status_lock); state->finished = true; (void)pthread_mutex_unlock(&state->status_lock);\n    return NULL;\n}}\n\
+             static void *{spawn_name}_entry(void *raw) {{\n    {context_name} *context = ({context_name} *)raw;\n    {thread_c} state = context->state;\n    state->startup = NULL;\n    {publish_result}\n    {release_body} {free_context}\n    (void)pthread_mutex_lock(&state->status_lock); state->finished = true; (void)pthread_mutex_unlock(&state->status_lock);\n    return NULL;\n}}\n\
              static {result_c} {spawn_name}({callable_c} body) {{\n    {thread_c} state; {context_name} *context; {result_c} outcome = {{0}}; int status;"
         );
-        self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::PointerBearing);
-        self.emit_runtime_allocate(
+        self.emit_collection_allocate("state", "sizeof(*state)", AllocationClass::PointerBearing);
+        self.emit_collection_allocate(
             "context",
             "sizeof(*context)",
             AllocationClass::PointerBearing,
         );
         let _ = writeln!(
             self.output,
-            "    state->joined = false; state->finished = false; context->state = state; context->body = body; state->startup = context;\n    (void)pthread_mutex_init(&state->join_lock, NULL); (void)pthread_mutex_init(&state->status_lock, NULL);\n    status = pthread_create(&state->thread, NULL, {spawn_name}_entry, context);\n    if (status != 0) {{\n        state->startup = NULL; (void)pthread_mutex_destroy(&state->join_lock); (void)pthread_mutex_destroy(&state->status_lock);\n        outcome.tag = UINT32_C({});\n        outcome.payload.{}.{} = ({error_c}){{ .tag = UINT32_C({}) }};\n        return outcome;\n    }}\n    el_thread_register(state, {join_name}_shutdown);\n    outcome.tag = UINT32_C({});\n    outcome.payload.{}.{} = state;\n    return outcome;\n}}\n",
+            "    state->joined = false; state->finished = false; context->state = state; context->body = body; state->startup = context;\n    (void)pthread_mutex_init(&state->join_lock, NULL); (void)pthread_mutex_init(&state->status_lock, NULL);\n    status = pthread_create(&state->thread, NULL, {spawn_name}_entry, context);\n    if (status != 0) {{\n        state->startup = NULL; {release_body} {failed_cleanup}\n        outcome.tag = UINT32_C({});\n        outcome.payload.{}.{} = ({error_c}){{ .tag = UINT32_C({}) }};\n        return outcome;\n    }}\n    el_thread_register(state, {});\n    outcome.tag = UINT32_C({});\n    outcome.payload.{}.{} = state;\n    return outcome;\n}}\n",
             err_variant.index(),
             variant_member_name(err_variant),
             field_name(*err_field),
             unavailable.index(),
+            if owned {
+                format!("{join_name}_dispose_unclaimed")
+            } else {
+                format!("{join_name}_shutdown")
+            },
             ok_variant.index(),
             variant_member_name(ok_variant),
             field_name(*ok_field),
         );
+    }
+
+    fn emit_scoped_thread_helpers(&mut self, calls: &BTreeMap<StandardCall, (TypeId, Span)>) {
+        let scoped = calls
+            .iter()
+            .filter(|(operation, _)| {
+                matches!(
+                    operation,
+                    StandardCall::ThreadScope { .. }
+                        | StandardCall::ScopedThreadSpawn { .. }
+                        | StandardCall::ScopedThreadJoin { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        if scoped.is_empty() {
+            return;
+        }
+        let scope = scoped.iter().find_map(|(operation, _)| match operation {
+            StandardCall::ThreadScope { scope, .. }
+            | StandardCall::ScopedThreadSpawn { scope, .. } => Some(*scope),
+            _ => None,
+        });
+        let Some(scope) = scope else {
+            return;
+        };
+        let Some(scope_c) = self.c_type(scope, None) else {
+            return;
+        };
+        let scope_state = format!("{}_data", collection_type_name(scope));
+        self.output.push_str(
+            "typedef void (*el_scoped_thread_dispose)(void *);\ntypedef struct el_scoped_thread_node { void *state; el_scoped_thread_dispose dispose; struct el_scoped_thread_node *next; } el_scoped_thread_node;\n",
+        );
+        let _ = writeln!(
+            self.output,
+            "struct {scope_state} {{ el_scoped_thread_node *children; }};\nstatic void el_thread_scope_finish({scope_c} scope) {{\n    el_scoped_thread_node *node = scope->children;\n    while (node != NULL) {{ el_scoped_thread_node *next = node->next; if (node->state != NULL) node->dispose(node->state); free(node); node = next; }}\n    scope->children = NULL;\n}}\n"
+        );
+
+        let mut emitted = BTreeSet::new();
+        for (operation, (_, span)) in &scoped {
+            let (thread, return_type) = match operation {
+                StandardCall::ScopedThreadSpawn {
+                    thread,
+                    return_type,
+                    ..
+                }
+                | StandardCall::ScopedThreadJoin {
+                    thread,
+                    return_type,
+                } => (*thread, *return_type),
+                _ => continue,
+            };
+            if !emitted.insert(thread) {
+                continue;
+            }
+            let (Some(thread_c), Some(return_c)) = (
+                self.c_type(thread, Some(*span)),
+                self.c_type(return_type, Some(*span)),
+            ) else {
+                continue;
+            };
+            let state = format!("{}_data", collection_type_name(thread));
+            let join = standard_call_name(StandardCall::ScopedThreadJoin {
+                thread,
+                return_type,
+            });
+            let drops_result = self.type_has_drop_glue(return_type);
+            if drops_result {
+                let _ = writeln!(
+                    self.output,
+                    "static void el_drop_t{}({return_c} *value);",
+                    return_type.index()
+                );
+            }
+            let _ = writeln!(
+                self.output,
+                "struct {state} {{ pthread_t thread; bool joined; el_scoped_thread_node *node; {return_c} result; }};\nstatic void {join}_dispose(void *raw) {{\n    {thread_c} state = ({thread_c})raw; if (!state->joined) {{ (void)pthread_join(state->thread, NULL); state->joined = true; }}"
+            );
+            if drops_result {
+                let _ = writeln!(
+                    self.output,
+                    "    el_drop_t{}(&state->result);",
+                    return_type.index()
+                );
+            }
+            self.output
+                .push_str("    state->node->state = NULL; free(state);\n}\n");
+            let _ = writeln!(
+                self.output,
+                "static {return_c} {join}({thread_c} state) {{\n    {return_c} result; if (!state->joined) {{ (void)pthread_join(state->thread, NULL); state->joined = true; }} result = state->result; state->node->state = NULL; free(state); return result;\n}}\n"
+            );
+        }
+
+        for (operation, (_, span)) in &scoped {
+            let StandardCall::ScopedThreadSpawn {
+                thread,
+                callable,
+                entry,
+                closure_entry,
+                return_type,
+                ..
+            } = operation
+            else {
+                continue;
+            };
+            let (Some(thread_c), Some(callable_c)) = (
+                self.c_type(*thread, Some(*span)),
+                self.c_type(*callable, Some(*span)),
+            ) else {
+                continue;
+            };
+            let symbol = self.function_symbol(&FunctionInstance {
+                declaration: *entry,
+                arguments: Vec::new(),
+                self_type: None,
+            });
+            let call = if *closure_entry {
+                format!("{symbol}(&context->body)")
+            } else {
+                format!("{symbol}()")
+            };
+            let publish = if matches!(
+                self.typed.types.kind(self.resolve_alias(*return_type)),
+                TypeKind::Primitive(PrimitiveType::Unit)
+            ) {
+                format!("{call}; state->result = (el_unit){{0}};")
+            } else {
+                format!("state->result = {call};")
+            };
+            let release = if self.type_has_drop_glue(*callable) {
+                let _ = writeln!(
+                    self.output,
+                    "static void el_drop_t{}({callable_c} *value);",
+                    callable.index()
+                );
+                format!("el_drop_t{}(&context->body);", callable.index())
+            } else {
+                String::new()
+            };
+            let spawn = standard_call_name(**operation);
+            let join = standard_call_name(StandardCall::ScopedThreadJoin {
+                thread: *thread,
+                return_type: *return_type,
+            });
+            let context = format!("{spawn}_context");
+            let _ = writeln!(
+                self.output,
+                "typedef struct {context} {{ {thread_c} state; {callable_c} body; }} {context};\nstatic void *{spawn}_entry(void *raw) {{\n    {context} *context = ({context} *)raw; {thread_c} state = context->state; {publish} {release} free(context); return NULL;\n}}\nstatic {thread_c} {spawn}({scope_c} *scope_ref, {callable_c} body) {{\n    {scope_c} scope = *scope_ref; {thread_c} state = ({thread_c})malloc(sizeof(*state)); {context} *context = ({context} *)malloc(sizeof(*context)); el_scoped_thread_node *node = (el_scoped_thread_node *)malloc(sizeof(*node)); int status;\n    if (state == NULL || context == NULL || node == NULL) el_out_of_memory();\n    state->joined = false; state->node = node; context->state = state; context->body = body; node->state = state; node->dispose = {join}_dispose; node->next = scope->children; scope->children = node;\n    status = pthread_create(&state->thread, NULL, {spawn}_entry, context);\n    if (status != 0) el_trap(\"E-RUN-SPAWN\", \"<thread.scope>\", UINT32_C(0), UINT32_C(0));\n    return state;\n}}\n"
+            );
+        }
+
+        for (operation, (_, span)) in scoped {
+            let StandardCall::ThreadScope {
+                callable,
+                entry,
+                closure_entry,
+                return_type,
+                ..
+            } = operation
+            else {
+                continue;
+            };
+            let (Some(callable_c), Some(return_c)) = (
+                self.c_type(*callable, Some(*span)),
+                self.c_type(*return_type, Some(*span)),
+            ) else {
+                continue;
+            };
+            let symbol = self.function_symbol(&FunctionInstance {
+                declaration: *entry,
+                arguments: Vec::new(),
+                self_type: None,
+            });
+            let call = if *closure_entry {
+                format!("{symbol}(&body, &scope)")
+            } else {
+                format!("{symbol}(&scope)")
+            };
+            let release = if self.type_has_drop_glue(*callable) {
+                let _ = writeln!(
+                    self.output,
+                    "static void el_drop_t{}({callable_c} *value);",
+                    callable.index()
+                );
+                format!("el_drop_t{}(&body);", callable.index())
+            } else {
+                String::new()
+            };
+            let name = standard_call_name(*operation);
+            if matches!(
+                self.typed.types.kind(self.resolve_alias(*return_type)),
+                TypeKind::Primitive(PrimitiveType::Unit)
+            ) {
+                let _ = writeln!(
+                    self.output,
+                    "static el_unit {name}({callable_c} body) {{\n    struct {scope_state} storage = {{0}}; {scope_c} scope = &storage; {call}; el_thread_scope_finish(scope); {release} return (el_unit){{0}};\n}}\n"
+                );
+            } else {
+                let _ = writeln!(
+                    self.output,
+                    "static {return_c} {name}({callable_c} body) {{\n    struct {scope_state} storage = {{0}}; {scope_c} scope = &storage; {return_c} result = {call}; el_thread_scope_finish(scope); {release} return result;\n}}\n"
+                );
+            }
+        }
     }
 
     fn channel_error_expression(
@@ -3036,7 +3336,7 @@ unavailable_error:
              struct {state} {{\n    pthread_mutex_t lock;\n    pthread_cond_t readable;\n    \
              pthread_cond_t writable;\n    uintptr_t capacity;\n    uintptr_t count;\n    \
              uintptr_t waiting_receivers;\n    bool unbounded;\n    bool sender_closed;\n    \
-             bool receiver_closed;\n    {node} *head;\n    {node} *tail;\n}};\n"
+             bool receiver_closed;\n    uintptr_t senders;\n    uintptr_t receivers;\n    {node} *head;\n    {node} *tail;\n}};\n"
         );
 
         for (operation, _, _, bounded, (result, _)) in creates {
@@ -3059,7 +3359,7 @@ unavailable_error:
                 "static {result_c} {name}({parameters}) {{\n    {sender_c} channel;\n    \
                  {result_c} result = {{0}};"
             );
-            self.emit_runtime_allocate(
+            self.emit_collection_allocate(
                 "channel",
                 "sizeof(*channel)",
                 AllocationClass::PointerBearing,
@@ -3072,6 +3372,7 @@ unavailable_error:
                  channel->capacity = {capacity}; channel->count = 0U; \
                  channel->waiting_receivers = 0U; channel->unbounded = {unbounded};\n    \
                  channel->sender_closed = false; channel->receiver_closed = false;\n    \
+                 channel->senders = 1U; channel->receivers = 1U;\n    \
                  channel->head = NULL; channel->tail = NULL;\n    result.v0 = channel;\n    \
                  result.v1 = ({receiver_c})channel;\n    return result;\n}}\n"
             );
@@ -3156,7 +3457,7 @@ unavailable_error:
             }
             let _ = writeln!(
                 self.output,
-                "    message = ({node} *)el_process_alloc(sizeof(*message));\n    \
+                "    message = ({node} *)el_value_alloc(sizeof(*message));\n    \
                  if (message == NULL) el_out_of_memory();\n    message->value = value; \
                  message->next = NULL;\n    if (channel->tail == NULL) channel->head = message; \
                  else channel->tail->next = message;\n    channel->tail = message; \
@@ -3234,12 +3535,17 @@ unavailable_error:
                      return {none}; }}"
                 );
             }
+            let release_message = if self.program.value_model == ValueModel::Owned {
+                "free(message);"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 self.output,
                 "    message = channel->head; channel->head = message->next; \
                  if (channel->head == NULL) channel->tail = NULL; --channel->count; \
                  value = message->value;\n    (void)pthread_cond_broadcast(&channel->writable); \
-                 (void)pthread_mutex_unlock(&channel->lock);"
+                 (void)pthread_mutex_unlock(&channel->lock); {release_message}"
             );
             let outcome = if *nonblocking {
                 self.result_expression(*result, "Ok", ("value", element))
@@ -3272,6 +3578,15 @@ unavailable_error:
                 continue;
             };
             let name = standard_call_name(*operation);
+            if self.program.value_model == ValueModel::Owned {
+                let _ = writeln!(
+                    self.output,
+                    "static void el_drop_t{}({handle_c} *value);\nstatic el_unit {name}({handle_c} channel) {{ el_drop_t{}(&channel); return (el_unit){{0}}; }}\n",
+                    handle.index(),
+                    handle.index()
+                );
+                continue;
+            }
             let field = if *closes_sender {
                 "sender_closed"
             } else {
@@ -3300,6 +3615,9 @@ unavailable_error:
         for operation in calls.keys() {
             match operation {
                 StandardCall::MutexNew { mutex, value_type }
+                | StandardCall::MutexLock {
+                    mutex, value_type, ..
+                }
                 | StandardCall::MutexRead { mutex, value_type }
                 | StandardCall::MutexReplace { mutex, value_type }
                 | StandardCall::MutexUpdate {
@@ -3328,7 +3646,7 @@ unavailable_error:
                     self.output,
                     "static {mutex_c} {name}({value_c} value) {{\n    {mutex_c} state;"
                 );
-                self.emit_runtime_allocate(
+                self.emit_collection_allocate(
                     "state",
                     "sizeof(*state)",
                     AllocationClass::PointerBearing,
@@ -3337,6 +3655,46 @@ unavailable_error:
                     self.output,
                     "    (void)pthread_mutex_init(&state->lock, NULL); state->value = \
                      value; return state;\n}}\n"
+                );
+            }
+            if let Some((operation, guard)) = calls.keys().find_map(|operation| match operation {
+                StandardCall::MutexLock {
+                    mutex: candidate,
+                    guard,
+                    value_type: candidate_value,
+                } if *candidate == mutex && *candidate_value == value_type => {
+                    Some((*operation, *guard))
+                }
+                _ => None,
+            }) {
+                let Some(guard_c) = self.c_type(guard, None) else {
+                    continue;
+                };
+                let _ = writeln!(
+                    self.output,
+                    "static {guard_c} {}({mutex_c} state) {{\n    {guard_c} guard; (void)pthread_mutex_lock(&state->lock); guard.state = state; guard.locked = true; return guard;\n}}\n",
+                    standard_call_name(operation)
+                );
+            }
+            for operation in calls.keys() {
+                let StandardCall::MutexGuardGet {
+                    guard,
+                    value_type: candidate_value,
+                    ..
+                } = operation
+                else {
+                    continue;
+                };
+                if *candidate_value != value_type {
+                    continue;
+                }
+                let Some(guard_c) = self.c_type(*guard, None) else {
+                    continue;
+                };
+                let _ = writeln!(
+                    self.output,
+                    "static {value_c} *{}({guard_c} guard) {{ return &guard.state->value; }}\n",
+                    standard_call_name(*operation)
                 );
             }
             let operation = StandardCall::MutexRead { mutex, value_type };
@@ -3438,7 +3796,11 @@ unavailable_error:
                     self.output,
                     "static {atomic_c} {name}({value_c} value) {{\n    {atomic_c} state;"
                 );
-                self.emit_runtime_allocate("state", "sizeof(*state)", AllocationClass::PointerFree);
+                self.emit_collection_allocate(
+                    "state",
+                    "sizeof(*state)",
+                    AllocationClass::PointerFree,
+                );
                 let _ = writeln!(
                     self.output,
                     "    (void)pthread_mutex_init(&state->lock, NULL); state->value = value; \
@@ -3850,6 +4212,17 @@ unavailable_error:
                     }
                 }
                 match (builtin, arguments.as_slice()) {
+                    ("Sender" | "Receiver", [_]) => {
+                        let field = if builtin == "Sender" {
+                            "senders"
+                        } else {
+                            "receivers"
+                        };
+                        let _ = writeln!(
+                            self.output,
+                            "static {c_type} {name}({c_type} value) {{\n    (void)pthread_mutex_lock(&value->lock); if (value->{field} == UINTPTR_MAX) {{ (void)pthread_mutex_unlock(&value->lock); el_out_of_memory(); }} ++value->{field}; (void)pthread_mutex_unlock(&value->lock); return value;\n}}\n"
+                        );
+                    }
                     ("Vec", [element]) => {
                         let element_c = self
                             .c_type(*element, None)
@@ -3959,7 +4332,22 @@ unavailable_error:
             }
             TypeKind::Builtin { builtin, .. } => matches!(
                 self.resolved.builtin_name(*builtin),
-                "Vec" | "Map" | "Set" | "Box" | "Shared" | "Weak" | "Store"
+                "Vec"
+                    | "Map"
+                    | "Set"
+                    | "Box"
+                    | "Shared"
+                    | "Weak"
+                    | "Store"
+                    | "Thread"
+                    | "ScopedThread"
+                    | "Sender"
+                    | "Receiver"
+                    | "Mutex"
+                    | "MutexGuard"
+                    | "AtomicBool"
+                    | "AtomicI32"
+                    | "AtomicUsize"
             ),
             _ => false,
         };
@@ -4179,6 +4567,53 @@ unavailable_error:
                             );
                         }
                         self.output.push_str("        }\n        free((*value)->slots); free((*value)->live_slots); free(*value); *value = NULL;\n    }\n");
+                    }
+                    ("Thread" | "ScopedThread", [result]) => {
+                        let _ = result;
+                        self.output.push_str("    *value = NULL;\n");
+                    }
+                    ("Sender" | "Receiver", [element]) => {
+                        let sender = self.resolved.builtin_name(builtin) == "Sender";
+                        let count = if sender { "senders" } else { "receivers" };
+                        let closed = if sender {
+                            "sender_closed"
+                        } else {
+                            "receiver_closed"
+                        };
+                        let node = format!("el_channel_t{}_node", element.index());
+                        let _ = writeln!(
+                            self.output,
+                            "    if (*value != NULL) {{\n        bool destroy = false; {node} *messages = NULL;\n        (void)pthread_mutex_lock(&(*value)->lock);\n        if ((*value)->{count} != 0U && --(*value)->{count} == 0U) (*value)->{closed} = true;\n        if ((*value)->receivers == 0U) {{ messages = (*value)->head; (*value)->head = NULL; (*value)->tail = NULL; (*value)->count = 0U; }}\n        destroy = (*value)->senders == 0U && (*value)->receivers == 0U;\n        (void)pthread_cond_broadcast(&(*value)->readable); (void)pthread_cond_broadcast(&(*value)->writable);\n        (void)pthread_mutex_unlock(&(*value)->lock);"
+                        );
+                        let _ = writeln!(
+                            self.output,
+                            "        while (messages != NULL) {{ {node} *next = messages->next;"
+                        );
+                        if self.type_has_drop_glue(*element) {
+                            let _ = writeln!(
+                                self.output,
+                                "            el_drop_t{}(&messages->value);",
+                                element.index()
+                            );
+                        }
+                        self.output.push_str("            free(messages); messages = next;\n        }\n        if (destroy) { (void)pthread_cond_destroy(&(*value)->readable); (void)pthread_cond_destroy(&(*value)->writable); (void)pthread_mutex_destroy(&(*value)->lock); free(*value); }\n        *value = NULL;\n    }\n");
+                    }
+                    ("Mutex", [item]) => {
+                        self.output.push_str("    if (*value != NULL) {\n");
+                        if self.type_has_drop_glue(*item) {
+                            let _ = writeln!(
+                                self.output,
+                                "        el_drop_t{}(&(*value)->value);",
+                                item.index()
+                            );
+                        }
+                        self.output.push_str("        (void)pthread_mutex_destroy(&(*value)->lock); free(*value); *value = NULL;\n    }\n");
+                    }
+                    ("MutexGuard", [_]) => {
+                        self.output.push_str("    if (value->locked) { (void)pthread_mutex_unlock(&value->state->lock); value->locked = false; value->state = NULL; }\n");
+                    }
+                    ("AtomicBool" | "AtomicI32" | "AtomicUsize", []) => {
+                        self.output.push_str("    if (*value != NULL) { (void)pthread_mutex_destroy(&(*value)->lock); free(*value); *value = NULL; }\n");
                     }
                     _ => {}
                 }

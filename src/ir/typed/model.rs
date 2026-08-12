@@ -548,6 +548,21 @@ pub enum DropActionKind {
     OwnedStore {
         owner: TypeId,
     },
+    OwnedThread {
+        owner: TypeId,
+    },
+    OwnedChannel {
+        owner: TypeId,
+    },
+    OwnedMutex {
+        owner: TypeId,
+    },
+    OwnedMutexGuard {
+        owner: TypeId,
+    },
+    OwnedAtomic {
+        owner: TypeId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

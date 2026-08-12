@@ -205,7 +205,7 @@
 
     "type-builtin": {
       "name": "support.type.builtin.elx",
-      "match": "\\b(ForeignRootMut|ForeignRoot|DirectoryEntry|TryReceiveError|TrySendError|NumericError|ProcessError|BuiltinTrap|RuntimeTrap|AtomicUsize|AtomicBool|AtomicI32|SystemTime|ExitStatus|SpawnError|SendError|ParseError|OpenMode|FileType|Formatter|Directory|Generator|Metadata|Receiver|Identity|Duration|Ordering|EnvError|Thread|Sender|Mutex|Instant|Output|Path|File|IoError|Option|Result|String|CVoid|Shared|Weak|Store|Handle|Vec|Map|Set|Box)\\b"
+      "match": "\\b(ForeignRootMut|ForeignRoot|DirectoryEntry|TryReceiveError|TrySendError|NumericError|ProcessError|BuiltinTrap|RuntimeTrap|AtomicUsize|AtomicBool|AtomicI32|SystemTime|ExitStatus|ScopedThread|MutexGuard|SpawnError|SendError|ParseError|OpenMode|FileType|Formatter|Directory|Generator|Metadata|Receiver|Identity|Duration|Ordering|EnvError|Thread|Sender|Mutex|Scope|Instant|Output|Path|File|IoError|Option|Result|String|CVoid|Shared|Weak|Store|Handle|Vec|Map|Set|Box)\\b"
     },
 
     "type-builtin-trait": {
@@ -215,7 +215,7 @@
 
     "function-builtin": {
       "name": "support.function.builtin.elx",
-      "match": "\\b(unbounded_channel|binary_search_vec|to_lowercase|to_uppercase|split_string|trim_string|binary_search|monotonic_now|system_now|current_dir|create_dir|remove_dir|remove_file|parse_bool|parse_i64|parse_u64|read_dir|metadata|rename|contains|split|trim|compare|sort|args|get|run|exit|open|find|println|channel|assert|spawn|print|panic|trap|drop|fail)\\b"
+      "match": "\\b(unbounded_channel|binary_search_vec|to_lowercase|to_uppercase|split_string|trim_string|binary_search|monotonic_now|system_now|current_dir|create_dir|remove_dir|remove_file|parse_bool|parse_i64|parse_u64|read_dir|metadata|rename|contains|split|trim|compare|sort|args|get|run|exit|open|find|println|channel|assert|spawn|scope|print|panic|trap|drop|fail)\\b"
     },
 
     "type-name": {

@@ -436,7 +436,7 @@ fn revision_is_selected_once_for_the_complete_dependency_graph() {
 }
 
 #[test]
-fn owned_packages_stop_after_promotion_and_tracing_gc_removal() {
+fn owned_packages_stop_after_race_safe_concurrency() {
     let package = TestPackage::new(
         "owned_boundary",
         "pub fn identity(value: String) -> String:\n    return value\n",
@@ -444,7 +444,7 @@ fn owned_packages_stop_after_promotion_and_tracing_gc_removal() {
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);
     let diagnostics = match check_frontend(&graph, &mut sources, Target::X86_64) {
-        Ok(_) => panic!("race-safe concurrency is not enabled yet"),
+        Ok(_) => panic!("owned-model C interoperability is not enabled yet"),
         Err(diagnostics) => diagnostics,
     };
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
@@ -453,7 +453,11 @@ fn owned_packages_stop_after_promotion_and_tracing_gc_removal() {
         Category::SemanticRevision,
         "{diagnostics:#?}"
     );
-    assert!(diagnostics[0].message.contains("race-safe concurrency"));
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("owned-model C interoperability")
+    );
 
     let mut sources = SourceManager::new();
     let graph = package.graph(&mut sources, SemanticRevision::V0_11);

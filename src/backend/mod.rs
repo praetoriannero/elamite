@@ -421,11 +421,16 @@ fn standard_collection_type(operation: StandardCall) -> Option<TypeId> {
         | StandardCall::ThreadSpawn { .. }
         | StandardCall::ThreadJoin { .. }
         | StandardCall::ThreadIsFinished { .. }
+        | StandardCall::ThreadScope { .. }
+        | StandardCall::ScopedThreadSpawn { .. }
+        | StandardCall::ScopedThreadJoin { .. }
         | StandardCall::ChannelCreate { .. }
         | StandardCall::ChannelSend { .. }
         | StandardCall::ChannelReceive { .. }
         | StandardCall::ChannelClose { .. }
         | StandardCall::MutexNew { .. }
+        | StandardCall::MutexLock { .. }
+        | StandardCall::MutexGuardGet { .. }
         | StandardCall::MutexRead { .. }
         | StandardCall::MutexReplace { .. }
         | StandardCall::MutexUpdate { .. }

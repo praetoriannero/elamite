@@ -126,7 +126,10 @@ impl<'a> Resolver<'a> {
         for (module, names) in [
             (io_module, &["print", "println"][..]),
             (ffi_module, &["ForeignRoot", "ForeignRootMut", "CVoid"][..]),
-            (thread_module, &["Thread", "spawn"][..]),
+            (
+                thread_module,
+                &["Thread", "ScopedThread", "Scope", "spawn", "scope"][..],
+            ),
             (fs_module, &["File", "Directory"][..]),
             (
                 sync_module,
@@ -134,6 +137,7 @@ impl<'a> Resolver<'a> {
                     "Sender",
                     "Receiver",
                     "Mutex",
+                    "MutexGuard",
                     "AtomicBool",
                     "AtomicI32",
                     "AtomicUsize",

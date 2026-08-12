@@ -252,6 +252,10 @@ impl MoveChecker<'_> {
                     state
                         .roots
                         .insert(root, StateNode::new(Transition::initialized(span)));
+                    state.roots.insert(
+                        OwnershipPlaceRoot::Local(*binding),
+                        StateNode::new(Transition::initialized(span)),
+                    );
                 }
             }
         }

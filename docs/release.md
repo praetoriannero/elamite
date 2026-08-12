@@ -63,7 +63,29 @@ on x86 and x86-64. Owned references, iterator state, and variadic packs now use
 stack storage proven by provenance. The collector strategy and every generated
 root, initialization, attachment, header, and link hook are removed; the 0.10
 path preserves shallow identity with a normal-exit process-lifetime registry.
-The temporary boundary has advanced to race-safe concurrency.
+Race-safe concurrency is now implemented on the focused owned path. Structural
+`Send`/`Sync` checks reject raw pointers and unscoped borrows at spawn/channel
+boundaries, while explicit `unsafe impl Send/Sync` remains a locally visible
+escape hatch. Spawn and join move closures/results, `thread.scope` joins every
+borrowing child, channels count cloned endpoints and move messages, mutexes
+expose protected data only through move-only guards, and atomic cells remain
+non-`Copy` and sequentially consistent through C99 pthread hooks. Focused
+generated-C runs pass ASan/UBSan; the compatibility concurrency suite retains
+its historical shallow behavior. The temporary boundary has advanced to
+owned-model C interoperability.
+
+### Race-safe-concurrency baseline comparison
+
+The required `benchmarks/memory-cost-baseline.sh` run on 2026-08-12 UTC used Linux
+x86-64, rustc 1.89.0, and GCC 15.2. The fixed corpus compiles the compatibility
+revision, so all source hashes and deterministic counters matched the
+collector-removal baseline: `aggregate_closure` 6/172, `cross_thread`
+1,014/32,552, `function_loop` 2/82, `map_set_copy` 17/1,544, `string_copy`
+2/257, and `vector_copy` 6/1,008 allocations/bytes. All scanned counters stayed
+zero and `memcpy` counters stayed 3/25, 8/32, 1/17, 12/720, 3/256, and 5/496.
+Owned concurrency costs are covered separately by exact-cleanup generated C
+and sanitizer execution until the final tooling milestone exposes the 0.11
+path through the ordinary benchmark driver.
 
 ### Owned-core baseline comparison
 

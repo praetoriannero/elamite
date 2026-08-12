@@ -722,6 +722,8 @@ impl BorrowChecker<'_> {
                 if matches!(
                     operation,
                     StandardCall::SharedGet { .. }
+                        | StandardCall::MutexLock { .. }
+                        | StandardCall::MutexGuardGet { .. }
                         | StandardCall::StoreGet { mutable: false, .. }
                         | StandardCall::StoreGet { mutable: true, .. }
                 ) && let Some(receiver) = arguments.first()
@@ -730,7 +732,11 @@ impl BorrowChecker<'_> {
                     value = self.create_loan(
                         expression.span,
                         place,
-                        if matches!(operation, StandardCall::StoreGet { mutable: true, .. }) {
+                        if matches!(
+                            operation,
+                            StandardCall::StoreGet { mutable: true, .. }
+                                | StandardCall::MutexGuardGet { mutable: true, .. }
+                        ) {
                             LoanKind::Exclusive
                         } else {
                             LoanKind::Shared
@@ -1194,6 +1200,7 @@ fn standard_call_exclusively_accesses_receiver(operation: StandardCall) -> bool 
     matches!(
         operation,
         StandardCall::VecGetVar { .. }
+            | StandardCall::MutexGuardGet { mutable: true, .. }
             | StandardCall::VecAppend { .. }
             | StandardCall::VecInsert { .. }
             | StandardCall::VecRemove { .. }

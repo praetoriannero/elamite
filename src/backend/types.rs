@@ -184,9 +184,23 @@ impl<'a> CEmitter<'a> {
                             element.index()
                         );
                     }
+                    ("MutexGuard", [value]) => {
+                        let mutex = self.resolved.builtin_named("Mutex").and_then(|builtin| {
+                            self.typed.types.id_for_kind(&TypeKind::Builtin {
+                                builtin,
+                                arguments: vec![*value],
+                            })
+                        });
+                        if let Some(mutex_c) = mutex.and_then(|ty| self.c_type(ty, span)) {
+                            let _ = writeln!(
+                                self.output,
+                                "typedef struct {name} {{ {mutex_c} state; bool locked; }} {name};\n"
+                            );
+                        }
+                    }
                     (
-                        "Thread" | "Mutex" | "AtomicBool" | "AtomicI32" | "AtomicUsize" | "File"
-                        | "Directory",
+                        "Thread" | "ScopedThread" | "Scope" | "Mutex" | "AtomicBool" | "AtomicI32"
+                        | "AtomicUsize" | "File" | "Directory",
                         _,
                     ) => {
                         let _ = writeln!(self.output, "typedef struct {name}_data *{name};\n");
@@ -685,14 +699,17 @@ impl<'a> CEmitter<'a> {
                             | "Handle"
                             | "Identity"
                             | "Thread"
+                            | "ScopedThread"
                             | "Sender"
                             | "Receiver"
-                            | "Mutex",
+                            | "Mutex"
+                            | "MutexGuard",
                         1
                     ) | ("Map", 2)
                         | (
                             "Formatter"
                                 | "AtomicBool"
+                                | "Scope"
                                 | "AtomicI32"
                                 | "AtomicUsize"
                                 | "File"

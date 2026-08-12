@@ -757,6 +757,17 @@ impl<'a> TypedLowerer<'a> {
                     ("Shared", [_]) => Some(DropActionKind::OwnedShared { owner: ty }),
                     ("Weak", [_]) => Some(DropActionKind::OwnedWeak { owner: ty }),
                     ("Store", [_]) => Some(DropActionKind::OwnedStore { owner: ty }),
+                    ("Thread" | "ScopedThread", [_]) => {
+                        Some(DropActionKind::OwnedThread { owner: ty })
+                    }
+                    ("Sender" | "Receiver", [_]) => {
+                        Some(DropActionKind::OwnedChannel { owner: ty })
+                    }
+                    ("Mutex", [_]) => Some(DropActionKind::OwnedMutex { owner: ty }),
+                    ("MutexGuard", [_]) => Some(DropActionKind::OwnedMutexGuard { owner: ty }),
+                    ("AtomicBool" | "AtomicI32" | "AtomicUsize", []) => {
+                        Some(DropActionKind::OwnedAtomic { owner: ty })
+                    }
                     _ => None,
                 };
                 actions.push(DropAction {
@@ -2475,6 +2486,7 @@ impl<'a> TypedLowerer<'a> {
                             | StandardCall::IdentityFrom { .. }
                             | StandardCall::ForeignRootRetain { .. }
                             | StandardCall::ThreadSpawn { .. }
+                            | StandardCall::ThreadScope { .. }
                             | StandardCall::ChannelCreate { .. }
                             | StandardCall::MutexNew { .. }
                             | StandardCall::AtomicNew { .. }
@@ -3237,16 +3249,24 @@ impl<'a> TypedLowerer<'a> {
             LogicalCopyLifetime::LexicalScope,
             LogicalCopyLifetime::Closure,
         );
+        let capture_index = self.closure_capture_index(capture.source);
+        let root = capture_index.map_or(
+            OwnershipPlaceRoot::Local(capture.source),
+            OwnershipPlaceRoot::ClosureCapture,
+        );
         let ownership = self.ownership_for_consumption(
             source_ty,
             context,
             Some(OwnershipPlace {
-                root: OwnershipPlaceRoot::Local(capture.source),
+                root,
                 projections: Vec::new(),
             }),
         );
         let source = TypedExpression {
-            kind: TypedExpressionKind::Local(capture.source),
+            kind: capture_index.map_or(
+                TypedExpressionKind::Local(capture.source),
+                TypedExpressionKind::ClosureCapture,
+            ),
             ty: source_ty,
             place: PlaceKind::Addressable,
             copy: matches!(
@@ -3280,12 +3300,49 @@ impl<'a> TypedLowerer<'a> {
             }
             ClosureCaptureKind::SharedReference | ClosureCaptureKind::MutableReference => {
                 let facts = crate::types::ownership_facts(self.resolved, self.typed, target_ty);
-                Some(TypedExpression {
-                    kind: TypedExpressionKind::AddressOf(Box::new(TypedPlace::Local {
+                if source_ty == target_ty
+                    && matches!(
+                        self.typed
+                            .types
+                            .kind(self.typed.types.resolve_inference(source_ty)),
+                        TypeKind::Reference { .. }
+                    )
+                {
+                    return Some(TypedExpression {
+                        kind: source.kind,
+                        ty: target_ty,
+                        place: PlaceKind::Value,
+                        copy: None,
+                        ownership: vec![OwnershipUse {
+                            kind: if capture.kind == ClosureCaptureKind::MutableReference {
+                                OwnershipUseKind::ReborrowExclusive
+                            } else {
+                                OwnershipUseKind::ReborrowShared
+                            },
+                            facts,
+                            place: Some(OwnershipPlace {
+                                root,
+                                projections: Vec::new(),
+                            }),
+                            legacy_copy: None,
+                        }],
+                        span: capture.span,
+                    });
+                }
+                let source_place = capture_index.map_or(
+                    TypedPlace::Local {
                         binding: capture.source,
                         ty: source_ty,
                         span: capture.span,
-                    })),
+                    },
+                    |index| TypedPlace::ClosureCapture {
+                        index,
+                        ty: source_ty,
+                        span: capture.span,
+                    },
+                );
+                Some(TypedExpression {
+                    kind: TypedExpressionKind::AddressOf(Box::new(source_place)),
                     ty: target_ty,
                     place: PlaceKind::Value,
                     copy: None,
@@ -3297,7 +3354,7 @@ impl<'a> TypedLowerer<'a> {
                         },
                         facts,
                         place: Some(OwnershipPlace {
-                            root: OwnershipPlaceRoot::Local(capture.source),
+                            root,
                             projections: Vec::new(),
                         }),
                         legacy_copy: None,
